@@ -10,6 +10,7 @@ import {
   compileActionCliFields,
   findCompiledActionCliCommand,
   listCompiledActionCliCommands,
+  actionCliCommandInputArgv,
 } from './compiledCommands';
 import { buildActionCliHelpModel } from './commandHelp';
 import { readActionCliServerId } from './actionServerTarget';
@@ -26,6 +27,18 @@ import {
   stripCliOwnedFlags,
   validateActionCliFlagCollisions,
 } from './parseCommandInput';
+
+it('accepts a matching interleaved Session selector with whole input but rejects a conflicting target', () => {
+  const argv = ['session', 'capabilities', 'session-1', 'add'];
+  const command = findCompiledActionCliCommand(argv)!;
+  const canonical = { sessionId: 'session-1', kind: 'mcp_server', id: 'linear', state: 'on' };
+  expect(parseActionCliInput(command, [...actionCliCommandInputArgv(command, argv), '--input-json', JSON.stringify(canonical)]))
+    .toMatchObject({ ok: true, canonicalBase: canonical, callerOverlay: {} });
+  expect(parseActionCliInput(command, [...actionCliCommandInputArgv(command, argv), '--input-json', JSON.stringify({ ...canonical, sessionId: 'other-session' })]))
+    .toMatchObject({ ok: false, code: 'invalid_arguments' });
+  expect(parseActionCliInput(command, [...actionCliCommandInputArgv(command, argv), 'mcp_server', 'linear', '--input-json', JSON.stringify(canonical)]))
+    .toMatchObject({ ok: false, code: 'invalid_arguments' });
+});
 
 const CallerSchema = z.object({
   sessionId: z.string().min(1),
@@ -70,6 +83,31 @@ function compileFixture(cli: NonNullable<ActionSpec['cli']> = SEND_CLI, override
 }
 
 describe('compileActionCliCommands', () => {
+  it('resolves registry aliases to the canonical compiled Actions and strict source input',()=>{
+    const commands=listCompiledActionCliCommands();
+    for(const [path,id]of [
+      [['registries','add'],'registries.sources.create'],[['registries','search'],'registries.items.list'],
+      [['registries','show'],'registries.items.read'],[['registries','sources','detect'],'registries.sources.detect'],
+    ] as const)expect(findCompiledActionCliCommand(path,commands)?.actionId).toBe(id);
+    const add=findCompiledActionCliCommand(['registries','add'],commands)!;
+    expect(parseActionCliInput(add,['https://github.com/a/b','--title','Team'])).toMatchObject({ok:true,callerOverlay:{url:'https://github.com/a/b',title:'Team'}});
+    const update=findCompiledActionCliCommand(['registries','sources','update'],commands)!;
+    expect(parseActionCliInput(update,['--source-id','team','--npm-registry-profile-id','machine-profile']).ok).toBe(false);
+  });
+  it('compiles the Skills leaves and keeps local byte/name adaptation outside Action mutations', () => {
+    const commands = listCompiledActionCliCommands();
+    for (const [path, id] of [
+      [['skills', 'list'], 'skills.list'], [['skills', 'show'], 'skills.read'], [['skills', 'create'], 'skills.create'],
+      [['skills', 'edit'], 'skills.update'], [['skills', 'install'], 'skills.install'], [['skills', 'updates', 'apply'], 'skills.updates.apply'],
+    ] as const) expect(findCompiledActionCliCommand(path, commands)?.actionId).toBe(id);
+    const create = findCompiledActionCliCommand(['skills', 'create'], commands)!;
+    expect(parseActionCliInput(create, ['sample', '--from', '/tmp/skill', '--off'])).toMatchObject({ ok: true, callerOverlay: { name: 'sample', from: '/tmp/skill', off: true } });
+    const apply = findCompiledActionCliCommand(['skills', 'updates', 'apply'], commands)!;
+    const parsed = parseActionCliInput(apply, ['sample', '--expected-revision', '1:1', '--keep-mine', 'SKILL.md']);
+    if (!parsed.ok) throw new Error(parsed.message);
+    expect(composeActionCliInput({ parsed, canonicalSchema: apply.spec.inputSchema, wholeInputSchema: apply.wholeInputSchema,
+      callerSchema: apply.callerSchema, bindInput: apply.spec.cli?.bindInput, context: { actionId: apply.actionId, invocationId: 'test', commandPath: apply.path, output: 'json' } })).toMatchObject({ ok: true, input: { skillId: 'sample', expectedRevision: '1:1', choices: { 'SKILL.md': 'mine' } } });
+  });
   it('parses contextual plugin origin discovery and addressed choices through the canonical commands', () => {
     const origin = { serverIdentityId: 'srv_one', sourceRef: { machineId: 'machine', pluginId: 'acme.plugin',
       sourceCustody: { kind: 'development', registeredRootId: 'root' } } };

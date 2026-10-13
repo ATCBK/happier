@@ -2,6 +2,7 @@ import { renderHelpPage } from '@happier-dev/cli-common/output';
 
 import {
   listCompiledActionCliCommands,
+  actionCliCommandUsagePath,
   type ActionCliField,
   type CompiledActionCliCommand,
 } from './compiledCommands';
@@ -157,7 +158,7 @@ export function buildActionCliInvokeHelpModel(options: ActionCliInvokeHelpOption
  */
 export function buildActionCliHelpModel(command: CompiledActionCliCommand): ActionCliHelpModel {
   const usageArguments = [
-    ...command.positionals.map((field) => `<${field.path}>`),
+    ...command.positionals.slice(command.positionalsBeforeLastSegment.length).map((field) => `<${field.path}>`),
     ...(command.variadicPositional ? [`<${command.variadicPositional.path}...>`] : []),
   ];
   const notes: string[] = [];
@@ -171,11 +172,12 @@ export function buildActionCliHelpModel(command: CompiledActionCliCommand): Acti
   }
   notes.push(`Canonical Action: ${command.actionId}.`);
   notes.push('Use --<field>-json for one nested value.');
+  if (command.positionalsBeforeLastSegment.length) notes.push('A command target repeated in --input-json must match its positional selector.');
 
   return Object.freeze({
     title: `happier ${command.path.join(' ')}`,
     subtitle: command.spec.description ?? command.spec.title,
-    usage: `happier ${command.path.join(' ')}${usageArguments.length ? ` ${usageArguments.join(' ')}` : ''} [options]`,
+    usage: `happier ${actionCliCommandUsagePath(command)}${usageArguments.length ? ` ${usageArguments.join(' ')}` : ''} [options]`,
     positionals: Object.freeze([
       ...command.positionals,
       ...(command.variadicPositional ? [command.variadicPositional] : []),
@@ -203,7 +205,7 @@ export function buildActionCliHelpModel(command: CompiledActionCliCommand): Acti
  */
 export function buildActionCliCommandUsageLine(command: CompiledActionCliCommand): string {
   const positionals = [
-    ...command.positionals.map((field) => `<${field.path}>`),
+    ...command.positionals.slice(command.positionalsBeforeLastSegment.length).map((field) => `<${field.path}>`),
     ...(command.variadicPositional ? [`<${command.variadicPositional.path}...>`] : []),
   ];
   const options = command.fields
@@ -220,7 +222,7 @@ export function buildActionCliCommandUsageLine(command: CompiledActionCliCommand
     ? ` (deprecated: use "${command.deprecated.replacement}")`
     : '';
   return [
-    `happier ${command.path.join(' ')}`,
+    `happier ${actionCliCommandUsagePath(command)}`,
     ...positionals,
     ...options,
     '[--json]',

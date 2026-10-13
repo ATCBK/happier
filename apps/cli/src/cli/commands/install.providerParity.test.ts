@@ -43,7 +43,7 @@ import type { CommandContext } from '@/cli/commandRegistry';
 import { runInstallCliCommand } from './install';
 
 describe('happier install provider contribution parity', () => {
-  it('passes an external Agent normalized CLI descriptor to the host installer', async () => {
+  it('plans an external Agent through the normalized CLI descriptor without installing it', async () => {
     const invokeAgentCliInstall = vi.fn(async () => ({
       ok: true as const,
       alreadyInstalled: false,
@@ -65,8 +65,8 @@ describe('happier install provider contribution parity', () => {
       },
     }));
     const context: CommandContext = {
-      args: ['install', 'provider', 'acme-agent'],
-      rawArgv: ['happier', 'install', 'provider', 'acme-agent'],
+      args: ['install', 'provider', 'acme-agent', '--dry-run'],
+      rawArgv: ['happier', 'install', 'provider', 'acme-agent', '--dry-run'],
       terminalRuntime: null,
     };
 

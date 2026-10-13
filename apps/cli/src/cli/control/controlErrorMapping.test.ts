@@ -18,7 +18,7 @@ describe('mapUnknownErrorToControlError', () => {
     const error = Object.assign(new Error('MCP server catalog is unavailable'), { code: 'mcp_catalog_unavailable' });
     expect(mapUnknownErrorToControlError(error)).toMatchObject({ code: 'mcp_catalog_unavailable', unexpected: false });
   });
-  it.each(['client_refused', 'no_machine_online', 'mcp_server_not_found', 'mcp_oauth_resource_requires_https'])('retains the MCP command domain refusal %s', code => {
+  it.each(['client_refused', 'no_machine_online', 'mcp_server_not_found', 'mcp_oauth_resource_requires_https', 'mcp_oauth_endpoints_require_https'])('retains the MCP command domain refusal %s', code => {
     expect(mapUnknownErrorToControlError(Object.assign(new Error('MCP command refused'), { code })))
       .toMatchObject({ code, unexpected: false });
   });

@@ -1,0 +1,29 @@
+import { describe, expect, it } from 'vitest';
+import { findCompiledActionCliCommand, listCompiledActionCliCommands } from './compiledCommands';
+import { composeActionCliInput, parseActionCliCommandInput } from './parseCommandInput';
+
+describe('marketplace spellings compile through registry Actions', () => {
+  it.each([
+    [['plugins', 'install'], ['/workspace/plugin'], 'plugins.install', { path: '/workspace/plugin' }],
+    [['plugins', 'uninstall'], ['acme.plugin'], 'plugins.uninstall', { pluginId: 'acme.plugin' }],
+    [['plugins', 'marketplace', 'install'], ['marketplace:team', 'acme.plugin', '--version', '1.0.0', '--machine-id', 'machine-1'], 'plugins.install', { machineId: 'machine-1', source: { kind: 'marketplace', sourceId: 'marketplace:team', pluginId: 'acme.plugin', version: '1.0.0' } }],
+    [['plugins', 'marketplace', 'sources', 'list'], [], 'registries.sources.list', { kind: 'plugin' }],
+    [['plugins', 'marketplace', 'sources', 'add'], ['https://catalog.example/plugins.json'], 'registries.sources.create', { url: 'https://catalog.example/plugins.json', kinds: ['plugin'] }],
+    [['plugins', 'marketplace', 'sources', 'enable'], ['marketplace:team'], 'registries.sources.update', { sourceId: 'marketplace:team', enabled: true }],
+    [['plugins', 'marketplace', 'sources', 'disable'], ['marketplace:team'], 'registries.sources.update', { sourceId: 'marketplace:team', enabled: false }],
+    [['plugins', 'marketplace', 'sources', 'remove'], ['marketplace:team'], 'registries.sources.delete', { sourceId: 'marketplace:team' }],
+    [['plugins', 'marketplace', 'list'], [], 'registries.items.list', { kind: 'plugin' }],
+    [['plugins', 'marketplace', 'show'], ['marketplace:team', 'acme.plugin'], 'registries.items.read', { sourceId: 'marketplace:team', itemId: 'acme.plugin', kind: 'plugin' }],
+  ] as const)('routes %j to its canonical owner', (path, args, actionId, input) => {
+    const command = findCompiledActionCliCommand(path, listCompiledActionCliCommands());
+    expect(command?.actionId).toBe(actionId);
+    if (!command) throw new Error('Expected generated marketplace alias');
+    expect(command.path).toEqual(path);
+    const parsed = parseActionCliCommandInput(command, [...path, ...args]);
+    if (!parsed.ok) throw new Error(parsed.message);
+    const composed = composeActionCliInput({ parsed, canonicalSchema: command.spec.inputSchema,
+      wholeInputSchema: command.wholeInputSchema, callerSchema: command.callerSchema, bindInput: command.spec.cli?.bindInput,
+      context: { actionId: command.actionId, invocationId: 'alias-test', commandPath: command.path, output: 'json' } });
+    expect(composed).toMatchObject({ ok: true, input });
+  });
+});

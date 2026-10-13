@@ -1,194 +1,168 @@
 import { mkdir, writeFile } from 'node:fs/promises';
 import { join } from 'node:path';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
+import { z } from 'zod';
+import { createActionExecutor } from '@happier-dev/protocol/actions/actionExecutor';
+import { isApprovalRequiredByActionsSettings } from '@happier-dev/protocol/actions/actionApprovalPolicy';
+import { DaemonAgentInstallStartRequestSchema, DaemonAgentInstallReadResponseSchema } from '@happier-dev/protocol/daemon/agent-install-jobs';
 import { getAgentCliRuntimeSpec, getAgentCliSetupRecommendedIds } from '@happier-dev/agents';
-
-import { reloadConfiguration } from '@/configuration';
-import { writeDaemonState } from '@/persistence';
+import { configuration, reloadConfiguration } from '@/configuration';
+import { updateSettings } from '@/persistence';
 import { createEnvKeyScope } from '@/testkit/env/envScope';
 import { createTempDir, removeTempDir } from '@/testkit/fs/tempDir';
 import { captureConsoleLogAndMuteStdout } from '@/testkit/logger/captureOutput';
+import type { ActionCliExecutionDeps } from '@/cli/actions/executeCommand';
 import { handleAgentsCommand } from './agents';
+import { tryHandleAgentCliCommand } from '@/cli/actions/adapters/agentsArgv';
+import { listCompiledActionCliCommands } from '@/cli/actions/compiledCommands';
 
-describe('happier agents daemon install jobs', () => {
+// Initialize the real, immutable command projection during source collection;
+// invocation budgets should not include its first cold source construction.
+listCompiledActionCliCommands();
+
+describe('Agent CLI compiled install jobs', () => {
   let home = '';
   let envScope = createEnvKeyScope(['HAPPIER_HOME_DIR', 'PATH']);
-  let requests: Array<{ path: string; body: Record<string, unknown>; token: string }>;
-  let outcome: Record<string, unknown>;
-
+  const invocations = new Set<Promise<void>>();
+  const controllers = new Set<AbortController>();
   beforeEach(async () => {
-    home = await createTempDir('happier-agents-install-jobs-');
+    home = await createTempDir('happier-agents-actions-');
     envScope = createEnvKeyScope(['HAPPIER_HOME_DIR', 'PATH']);
     envScope.patch({ HAPPIER_HOME_DIR: home, PATH: join(home, 'bin') });
     reloadConfiguration();
-    writeDaemonState({ pid: process.pid, httpPort: 49151, startedAt: Date.now(), startedWithCliVersion: 'test', controlToken: 'local-job-token' });
-    requests = [];
-    outcome = { kind: 'succeeded', version: '1.2.3' };
-    // The authenticated HTTP transport is the system boundary. All command,
-    // catalog, consent, cursor, and output logic underneath it remains real.
-    vi.spyOn(globalThis, 'fetch').mockImplementation(async (input, init) => {
-      const url = new URL(String(input));
-      if (url.origin !== 'http://127.0.0.1:49151') throw new Error('External downloads are forbidden in this fixture');
-      const body = JSON.parse(String(init?.body ?? '{}')) as Record<string, unknown>;
-      requests.push({ path: url.pathname, body, token: new Headers(init?.headers).get('x-happier-daemon-token') ?? '' });
-      const response = url.pathname.endsWith('/start')
-        ? { ok: true, jobId: 'install-job-1' }
-        : { ok: true, events: [], steps: [], progress: [], nextCursor: 0, done: true, outcome };
-      return new Response(JSON.stringify(response), { status: 200, headers: { 'content-type': 'application/json' } });
-    });
+    await updateSettings(settings => ({ ...settings,
+      machineIdByServerId: { [configuration.activeServerId]: 'current-machine' },
+      machineIdByServerIdByAccountId: { [configuration.activeServerId]: { account: 'current-machine' } },
+    }));
   });
-
   afterEach(async () => {
-    vi.restoreAllMocks();
-    process.exitCode = 0;
-    envScope.restore();
-    reloadConfiguration();
-    await removeTempDir(home);
+    for (const controller of controllers) controller.abort();
+    await Promise.allSettled([...invocations]);
+    controllers.clear();
+    vi.restoreAllMocks(); process.exitCode = 0;
+    envScope.restore(); reloadConfiguration(); await removeTempDir(home);
   });
 
-  it.each(['install', 'update'])('executes %s through the authenticated daemon and preserves the job outcome', async (intent) => {
-    const output = captureConsoleLogAndMuteStdout();
+  function fixture(requireApproval = false, fail = false, interrupted = false) {
+    const controller = new AbortController(); controllers.add(controller);
+    const requests: unknown[] = [];
+    let readCount = 0;
+    // Only machine transport and credential storage are replaced; the CLI
+    // compiler, strict schemas, approval policy and Action executor stay real.
+    const executor = createActionExecutor({
+      isActionApprovalRequired: (id, context) => isApprovalRequiredByActionsSettings(id, { v: 1,
+        approvalWaivedSurfaces: requireApproval ? {} : { 'machines.agents.install': ['cli'], 'machines.agents.uninstall': ['cli'], 'machines.agents.install.cancel': ['cli'] },
+      }, context),
+      machineAgentInstallStart: async request => {
+        const { machineId, serverId: _serverId, signal: _signal, ...job } = request;
+        requests.push({ machineId, ...DaemonAgentInstallStartRequestSchema.parse(job) });
+        return { ok: true, jobId: `job-${job.agentId}` };
+      },
+      machineAgentInstallRead: async request => {
+        requests.push({ machineId: request.machineId, jobId: request.jobId, cursor: request.cursor });
+        if (interrupted && readCount++ === 0) {
+          process.emit('SIGINT');
+          return DaemonAgentInstallReadResponseSchema.parse({ ok: true, events: [], steps: [], progress: [], nextCursor: 1,
+            done: false, outcome: null });
+        }
+        return DaemonAgentInstallReadResponseSchema.parse({ ok: true, events: [], steps: [], progress: [], nextCursor: 0,
+          done: true, outcome: fail ? { kind: 'failed', code: 'consent_required', stepId: 'cli.claude', message: 'Vendor consent required' }
+            : { kind: 'succeeded', version: '1.2.3' } });
+      },
+      machineAgentInstallCancel: async request => { requests.push({ machineId: request.machineId, cancelledJobId: request.jobId }); return { ok: true }; },
+    });
+    const deps: Partial<ActionCliExecutionDeps> = {
+      readCredentialsFn: async () => ({ token: 'header.eyJzdWIiOiJhY2NvdW50In0.signature', encryption: null }),
+      getServerProfileFn: async () => ({ id: 'cloud', name: 'Home', serverUrl: 'https://api.example.test',
+        webappUrl: 'https://app.example.test', createdAt: 1, updatedAt: 1, lastUsedAt: 1 }),
+      createExecutorFn: async () => ({ ...executor, async resolveSessionTarget() { throw new Error('Unexpected Session'); } }),
+    };
+    return { requests, deps, run: (args: string[]) => {
+      const invocation = handleAgentsCommand(args, { actionExecutionDeps: deps, signal: controller.signal });
+      invocations.add(invocation);
+      return invocation.finally(() => { invocations.delete(invocation); });
+    } };
+  }
+
+  it.each(['install', 'update'] as const)('dispatches %s with the current-machine default through the real Action executor', async intent => {
+    const owner = fixture(); const output = captureConsoleLogAndMuteStdout();
     try {
-      await handleAgentsCommand([intent, 'codex', '--json']);
-      const envelope = JSON.parse(output.logs.join('\n').trim());
-      expect(envelope).toMatchObject({ ok: true, kind: `agents_${intent}`, data: { agentId: 'codex', jobId: 'install-job-1', version: '1.2.3' } });
-      expect(requests).toEqual([
-        { path: '/agents/install/start', body: { agentId: 'codex', intent, consent: { vendorRecipe: false } }, token: 'local-job-token' },
-        { path: '/agents/install/read', body: { jobId: 'install-job-1', cursor: 0 }, token: 'local-job-token' },
+      await owner.run([intent, 'codex', '--json']);
+      expect(JSON.parse(output.logs.join('\n'))).toMatchObject({ ok: true, kind: `agents_${intent}`, data: { agentId: 'codex', jobId: 'job-codex', version: '1.2.3' } });
+      expect(owner.requests).toEqual([
+        { machineId: 'current-machine', agentId: 'codex', intent, consent: { vendorRecipe: false } },
+        { machineId: 'current-machine', jobId: 'job-codex', cursor: 0 },
       ]);
     } finally { output.restore(); }
   });
 
-  it('does not grant vendor recipe consent implicitly and retains the typed failure', async () => {
-    outcome = { kind: 'failed', code: 'consent_required', stepId: 'cli.claude', message: 'Vendor consent required' };
-    const output = captureConsoleLogAndMuteStdout();
+  it('retains consent, force, explicit targeting and definition identity', async () => {
+    const owner = fixture(); const output = captureConsoleLogAndMuteStdout();
     try {
-      await handleAgentsCommand(['install', 'claude', '--json']);
-      const envelope = JSON.parse(output.logs.join('\n').trim());
-      expect(envelope).toMatchObject({ ok: false, error: { code: 'consent_required' } });
-      expect(requests[0]?.body).toMatchObject({ consent: { vendorRecipe: false } });
+      await owner.run(['install', 'custom-acp', '--definition-id', 'goose', '--machine', 'remote', '--yes', '--force', '--json']);
+      expect(owner.requests[0]).toEqual({ machineId: 'remote', agentId: 'custom-acp', definitionId: 'goose', intent: 'install', consent: { vendorRecipe: true }, force: true });
+      expect(JSON.parse(output.logs.join('\n')).ok).toBe(true);
     } finally { output.restore(); }
   });
 
-  it.each(['install', 'update'])('reports the observed terminal version without claiming %s ran when adopting a shared job', async (intent) => {
+  it('dry-run through the dispatcher adapter never reads credentials or starts a job', async () => {
+    const readCredentialsFn = vi.fn(async () => null);
     const output = captureConsoleLogAndMuteStdout();
     try {
-      await handleAgentsCommand([intent, 'codex']);
-      const message = output.logs.join('\n');
-      expect(message).toContain('1.2.3');
-      expect(message).not.toMatch(/\b(?:installed|updated)\b/i);
+      expect(await tryHandleAgentCliCommand({ argv: ['agents', 'install', 'codex', '--dry-run', '--json'],
+        actionExecutionDeps: { readCredentialsFn } })).toBe(true);
+      expect(JSON.parse(output.logs.join('\n'))).toMatchObject({ ok: true, data: { plan: { agentId: 'codex' } } });
+      expect(readCredentialsFn).not.toHaveBeenCalled();
     } finally { output.restore(); }
   });
 
-  it('forwards explicit vendor consent and force to the daemon owner', async () => {
-    const output = captureConsoleLogAndMuteStdout();
+  it('keeps default CLI approval in front of every job', async () => {
+    const owner = fixture(true); const output = captureConsoleLogAndMuteStdout();
+    vi.spyOn(console, 'error').mockImplementation(() => {});
     try {
-      await handleAgentsCommand(['install', 'claude', '--yes', '--force', '--json']);
-      expect(JSON.parse(output.logs.join('\n').trim()).ok).toBe(true);
-      expect(requests[0]?.body).toEqual({ agentId: 'claude', intent: 'install', consent: { vendorRecipe: true }, force: true });
+      await owner.run(['install', 'codex', '--json']);
+      expect(owner.requests).toEqual([]);
+      expect(JSON.parse(output.logs.join('\n')).ok).toBe(false);
     } finally { output.restore(); }
   });
 
-  it('keeps dry-run planning local without sending a job or granting consent', async () => {
-    const output = captureConsoleLogAndMuteStdout();
+  it('preserves terminal owner failures without implying success', async () => {
+    const owner = fixture(false, true); const output = captureConsoleLogAndMuteStdout();
     try {
-      await handleAgentsCommand(['install', 'claude', '--dry-run', '--json']);
-      const envelope = JSON.parse(output.logs.join('\n').trim());
-      expect(envelope).toMatchObject({ ok: true, data: { plan: { agentId: 'claude', installMode: 'vendor_recipe' } } });
-      expect(requests).toEqual([]);
+      await owner.run(['install', 'claude', '--json']);
+      expect(JSON.parse(output.logs.join('\n'))).toMatchObject({ ok: false, error: { code: 'consent_required' } });
+      expect(process.exitCode).toBe(1);
     } finally { output.restore(); }
   });
 
-  it('reads the next event cursor until the daemon settles the job', async () => {
-    vi.mocked(globalThis.fetch).mockImplementation(async (input, init) => {
-      const path = new URL(String(input)).pathname;
-      const body = JSON.parse(String(init?.body)) as Record<string, unknown>;
-      requests.push({ path, body, token: new Headers(init?.headers).get('x-happier-daemon-token') ?? '' });
-      if (path.endsWith('/start')) return new Response(JSON.stringify({ ok: true, jobId: 'install-job-1' }));
-      return new Response(JSON.stringify(body.cursor === 0
-        ? { ok: true, events: [{ t: 'step', stepId: 'cli.codex', label: 'Codex', state: 'running' }], steps: [{ stepId: 'cli.codex', label: 'Codex', state: 'running' }], progress: [], nextCursor: 1, done: false, outcome: null }
-        : { ok: true, events: [], steps: [{ stepId: 'cli.codex', label: 'Codex', state: 'done' }], progress: [], nextCursor: 1, done: true, outcome }));
-    });
+  it('cancels through the compiled Action and preserves a racing successful terminal outcome', async () => {
+    const owner = fixture(false, false, true);
+    const listeners = process.listenerCount('SIGINT');
     const output = captureConsoleLogAndMuteStdout();
     try {
-      await handleAgentsCommand(['install', 'codex', '--json']);
-      expect(JSON.parse(output.logs.join('\n').trim()).ok).toBe(true);
-      expect(requests.filter((request) => request.path.endsWith('/read')).map((request) => request.body.cursor)).toEqual([0, 1]);
+      await owner.run(['install', 'codex', '--json']);
+      expect(owner.requests).toContainEqual({ machineId: 'current-machine', cancelledJobId: 'job-codex' });
+      expect(JSON.parse(output.logs.join('\n'))).toMatchObject({ ok: true, data: { jobId: 'job-codex', version: '1.2.3' } });
+      expect(process.listenerCount('SIGINT')).toBe(listeners);
     } finally { output.restore(); }
   });
 
-  it('cancels the daemon job on an interrupt and removes its signal listeners', async () => {
-    const initialListenerCount = process.listenerCount('SIGINT');
-    let cancelled = false;
-    vi.mocked(globalThis.fetch).mockImplementation(async (input, init) => {
-      const path = new URL(String(input)).pathname;
-      const body = JSON.parse(String(init?.body)) as Record<string, unknown>;
-      requests.push({ path, body, token: new Headers(init?.headers).get('x-happier-daemon-token') ?? '' });
-      if (path.endsWith('/start')) return new Response(JSON.stringify({ ok: true, jobId: 'install-job-1' }));
-      if (path.endsWith('/cancel')) {
-        cancelled = true;
-        return new Response(JSON.stringify({ ok: true }));
-      }
-      if (cancelled) return new Response(JSON.stringify({ ok: true, events: [], steps: [{ stepId: 'cli.codex', label: 'Codex', state: 'failed' }], progress: [], nextCursor: 0, done: true, outcome: { kind: 'failed', code: 'cancelled', stepId: 'cli.codex', message: 'Cancelled' } }));
-      process.emit('SIGINT');
-      return new Response(JSON.stringify({ ok: true, events: [], steps: [], progress: [], nextCursor: 0, done: false, outcome: null }));
-    });
-    const output = captureConsoleLogAndMuteStdout();
-    try {
-      await handleAgentsCommand(['install', 'codex', '--json']);
-      expect(JSON.parse(output.logs.join('\n').trim())).toMatchObject({ ok: false, error: { code: 'cancelled' } });
-      expect(requests.filter((request) => request.path.endsWith('/cancel'))).toEqual([{ path: '/agents/install/cancel', body: { jobId: 'install-job-1' }, token: 'local-job-token' }]);
-      expect(process.listenerCount('SIGINT')).toBe(initialListenerCount);
-    } finally { output.restore(); }
-  });
-
-  it('shares the daemon execution path with setup and verifies executable readiness afterward', async () => {
-    const fetch = globalThis.fetch;
-    vi.mocked(fetch).mockImplementationOnce(async (input, init) => {
-      requests.push({ path: new URL(String(input)).pathname, body: JSON.parse(String(init?.body)) as Record<string, unknown>, token: new Headers(init?.headers).get('x-happier-daemon-token') ?? '' });
-      await mkdir(join(home, 'bin'), { recursive: true });
-      await writeFile(join(home, 'bin', process.platform === 'win32' ? 'codex.cmd' : 'codex'), '#!/bin/sh\nexit 0\n', { mode: 0o755 });
-      return new Response(JSON.stringify({ ok: true, jobId: 'install-job-1' }));
-    });
-    const output = captureConsoleLogAndMuteStdout();
-    try {
-      await handleAgentsCommand(['setup', '--providers', 'codex', '--json']);
-      const envelope = JSON.parse(output.logs.join('\n').trim());
-      expect(envelope).toMatchObject({ ok: true, data: { agents: [{ agentId: 'codex', ok: true, installed: true, jobId: 'install-job-1' }] } });
-      expect(requests[0]?.path).toBe('/agents/install/start');
-    } finally { output.restore(); }
-  });
-
-  it('selects only the missing recommended agents under setup --yes', async () => {
-    const alreadyInstalled = getAgentCliSetupRecommendedIds()[0];
-    if (!alreadyInstalled) throw new Error('The setup fixture requires one recommended agent');
-    const binaryName = getAgentCliRuntimeSpec(alreadyInstalled).binaryName;
+  it('setup selects only missing recommended Agents and submits the same compiled jobs', async () => {
+    const existing = getAgentCliSetupRecommendedIds()[0];
+    if (!existing) throw new Error('Expected recommended Agent');
+    const binary = getAgentCliRuntimeSpec(existing).binaryName;
     await mkdir(join(home, 'bin'), { recursive: true });
-    await writeFile(join(home, 'bin', process.platform === 'win32' ? `${binaryName}.cmd` : binaryName), '#!/bin/sh\nexit 0\n', { mode: 0o755 });
-    const statusOutput = captureConsoleLogAndMuteStdout();
-    let expectedAgentIds: string[];
+    await writeFile(join(home, 'bin', process.platform === 'win32' ? `${binary}.cmd` : binary), '#!/bin/sh\nexit 0\n', { mode: 0o755 });
+    const owner = fixture(); const output = captureConsoleLogAndMuteStdout();
     try {
-      await handleAgentsCommand(['status', '--json']);
-      const status = JSON.parse(statusOutput.logs.join('\n').trim()) as { data: { agents: Array<{ id: string; installed: boolean }> } };
-      const installed = new Set(status.data.agents.filter((agent) => agent.installed).map((agent) => agent.id));
-      expect(installed.has(alreadyInstalled)).toBe(true);
-      expectedAgentIds = getAgentCliSetupRecommendedIds().filter((agentId) => !installed.has(agentId));
-    } finally { statusOutput.restore(); }
-    const output = captureConsoleLogAndMuteStdout();
-    try {
-      await handleAgentsCommand(['setup', '--yes', '--json']);
-      // These transport responses deliberately do not materialize executables;
-      // setup may fail readiness, but must still select exactly the missing set.
-      expect(requests.filter((request) => request.path.endsWith('/start')).map((request) => request.body.agentId)).toEqual(expectedAgentIds);
-    } finally { output.restore(); }
-  });
-
-  it('retains the typed setup refusal for an unsupported selection without starting jobs', async () => {
-    const output = captureConsoleLogAndMuteStdout();
-    try {
-      await handleAgentsCommand(['setup', '--providers', 'unknown-fixture-agent', '--json']);
-      expect(JSON.parse(output.logs.join('\n').trim())).toMatchObject({ ok: false, kind: 'agents_setup', error: { code: 'unsupported_agent', agentIds: ['unknown-fixture-agent'] } });
-      expect(requests).toEqual([]);
+      await owner.run(['list', '--json']);
+      const roster = z.object({ data: z.object({ agents: z.array(z.object({ id: z.string(), installed: z.boolean() }).passthrough()) }) })
+        .parse(JSON.parse(String(output.logs.at(-1)))).data.agents;
+      expect(roster.find(row => row.id === existing)?.installed).toBe(true);
+      await owner.run(['setup', '--yes', '--json']);
+      const starts = owner.requests.filter((value): value is { agentId: string } => !!value && typeof value === 'object' && 'agentId' in value);
+      expect(starts.map(row => row.agentId)).toEqual(getAgentCliSetupRecommendedIds().filter(id =>
+        roster.some(row => row.id === id && !row.installed) && getAgentCliRuntimeSpec(id).manualInstallKind !== 'none'));
     } finally { output.restore(); }
   });
 });

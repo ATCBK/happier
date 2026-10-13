@@ -29,6 +29,8 @@ export function mapUnknownErrorToControlError(error: unknown): ControlCliMappedE
     || rawCode === 'client_refused'
     || rawCode === 'no_machine_online'
     || rawCode === 'mcp_server_not_found'
+    || rawCode === 'mcp_oauth_resource_requires_https'
+    || rawCode === 'mcp_oauth_endpoints_require_https'
     || rawCode === 'connected_services_default_unavailable'
     || rawCode === 'invalid-mutation'
   ) {

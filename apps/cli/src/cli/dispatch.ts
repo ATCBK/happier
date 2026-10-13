@@ -462,9 +462,23 @@ export async function dispatchCli(params: Readonly<{
       if (await tryHandleTeamLogoFileCliCommand({ argv: args, ...(signal ? { signal } : {}) })) return;
     }
 
+    if (subcommand === 'agents' || subcommand === 'agent' || subcommand === 'install' && args[1] === 'provider') {
+      const { tryHandleAgentCliCommand } = await import('@/cli/actions/adapters/agentsArgv');
+      if (await tryHandleAgentCliCommand({ argv: args, ...(signal ? { signal } : {}) })) return;
+    }
+
     if (subcommand === 'mcp') {
       const { tryHandleMcpServerCliCommand } = await import('@/cli/actions/adapters/mcpServersArgv');
       if (await tryHandleMcpServerCliCommand({ argv: args, ...(signal ? { signal } : {}) })) return;
+    }
+
+    if (subcommand === 'registries') {
+      const { tryHandleRegistrySourceCliCommand } = await import('@/cli/actions/adapters/registrySourcesArgv');
+      if (await tryHandleRegistrySourceCliCommand({ argv: args, ...(signal ? { signal } : {}) })) return;
+    }
+    if (subcommand === 'skills') {
+      const { tryHandleSkillsCliCommand } = await import('@/cli/actions/skillsNameArgAdapter');
+      if (await tryHandleSkillsCliCommand({ argv: args, ...(signal ? { signal } : {}) })) return;
     }
 
     // An exact compiled Action leaf wins only once the one registry has resolved

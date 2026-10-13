@@ -142,6 +142,12 @@ export async function runInstallCliCommand(
         deps.log(usage(installableProviderRows));
         return;
       }
+      const flags = parseProviderInstallFlags(context.args.slice(3));
+      if (!flags.dryRun) {
+        const { handleAgentsCommand } = await import('@/cli/commands/agents');
+        await handleAgentsCommand(['install', ...context.args.slice(2)], { signal: context.signal });
+        return;
+      }
       const providerRow = installableProviderRows.find((row) => row.id === agentIdRaw);
       if (!providerRow) {
         deps.error(fail(`Unknown provider id: ${agentIdRaw}`));
@@ -150,7 +156,6 @@ export async function runInstallCliCommand(
         return;
       }
 
-      const flags = parseProviderInstallFlags(context.args.slice(3));
       // A dry run installs nothing, so it prints its plan instead of an install step.
       const steps = createStepPrinter({ enabled: !flags.dryRun });
       const result = await runAgentCliInstallStep(steps, providerRow.title, () => deps.invokeAgentCliInstall({

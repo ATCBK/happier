@@ -1,151 +1,91 @@
-import { beforeEach, describe, expect, it, vi } from 'vitest';
+import Fastify from 'fastify';
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
+import { getActionSpec } from '@happier-dev/protocol/actions/actionSpecs';
+import { ActionIdSchema } from '@happier-dev/protocol/actions/actionIds';
+import {
+  ExternalActionRequestEnvelopeV1Schema,
+  ExternalActionResponseEnvelopeV1Schema,
+  type ExternalActionRequestEnvelopeV1,
+} from '@happier-dev/protocol/actions/externalActionApi';
 
+import { reloadConfiguration } from '@/configuration';
+import { createEnvKeyScope } from '@/testkit/env/envScope';
+import { createTempDir, removeTempDir } from '@/testkit/fs/tempDir';
 import { captureConsoleJsonOutput } from '@/testkit/logger/captureOutput';
-
-const execute = vi.fn();
-const createCliActionExecutor = vi.fn(() => ({ execute }));
-const resolveSessionTarget = vi.fn();
-const createCliActionExecutorFromCredentials = vi.fn(() => ({
-  execute,
-  resolveSessionTarget,
-}));
-const fetchSessionById = vi.fn();
-const resolveSessionIdOrPrefix = vi.fn();
-const ensureCliActionPolicySettings = vi.fn();
-const fetchAccountEncryptionCurrentness = vi.fn();
-
-vi.mock('@/session/actions/createCliActionExecutor', () => ({
-  createCliActionExecutor,
-}));
-
-vi.mock('@/session/actions/createCliActionExecutorFromCredentials', () => ({
-  createCliActionExecutorFromCredentials,
-}));
-
-vi.mock('@/session/transport/http/sessionsHttp', () => ({
-  fetchSessionById,
-}));
-
-vi.mock('@/session/query/resolveSessionId', () => ({
-  resolveSessionIdOrPrefix,
-}));
-
-vi.mock('@/session/transport/encryption/sessionEncryptionContext', () => ({
-  resolveSessionEncryptionContextFromCredentials: vi.fn(() => ({ kind: 'legacy' })),
-  resolveSessionStoredContentEncryptionMode: vi.fn(() => 'legacy'),
-}));
-
-vi.mock('@/session/actions/ensureCliActionPolicySettings', () => ({
-  ensureCliActionPolicySettings,
-}));
-
-vi.mock('@/api/client/connectedServiceCredentialApi', () => ({
-  fetchAccountEncryptionCurrentness,
-}));
+import { cmdSessionVoiceAgentStart } from './start';
 
 describe('happier session voice-agent start command', () => {
-  beforeEach(() => {
-    execute.mockReset();
-    createCliActionExecutor.mockClear();
-    createCliActionExecutorFromCredentials.mockClear();
-    resolveSessionTarget.mockReset();
-    fetchSessionById.mockReset();
-    resolveSessionIdOrPrefix.mockReset();
-    ensureCliActionPolicySettings.mockReset();
-    fetchAccountEncryptionCurrentness.mockReset();
+  const sessionId = 'c123456789012345678901234';
+  const token = 'hap_v1_11111111-1111-4111-8111-111111111111_' + 'A'.repeat(43);
+  const requests: { actionId: string; envelope: ExternalActionRequestEnvelopeV1 }[] = [];
+  const envKeys = ['HAPPIER_HOME_DIR', 'HAPPIER_SERVER_URL', 'HAPPIER_WEBAPP_URL'] as const;
+  let envScope = createEnvKeyScope(envKeys);
+  let app: ReturnType<typeof Fastify>;
+  let homeDir = '';
 
-    resolveSessionIdOrPrefix.mockResolvedValue({ ok: true, sessionId: 'sess-voice-1' });
-    resolveSessionTarget.mockResolvedValue({ ok: true, sessionId: 'sess-voice-1' });
-    fetchSessionById.mockResolvedValue({
-      id: 'sess-voice-1',
-      dataEncryptionKey: null,
+  beforeEach(async () => {
+    requests.length = 0;
+    homeDir = await createTempDir('happier-voice-command-');
+    app = Fastify();
+    // Only the Home HTTP service is substituted. The command, selector,
+    // credentialed executor, option resolution and SDK schemas stay real.
+    app.post<{ Params: { actionId: string }; Body: unknown }>('/v1/actions/:actionId', async (request) => {
+      const actionId = request.params.actionId;
+      const envelope = ExternalActionRequestEnvelopeV1Schema.parse(request.body);
+      expect(request.headers.authorization).toBe('Bearer ' + token);
+      requests.push({ actionId, envelope });
+      const result = actionId === 'session.list'
+        ? { sessions: [{ id: sessionId, tag: 'sess-voice', createdAt: 1, updatedAt: 2,
+            active: true, activeAt: 2, share: null, encryption: null }], nextCursor: null, hasNext: false }
+        : actionId === 'action.options.resolve'
+          ? { actionId: 'voice_agent.start', fieldPath: 'backendTargetKeys',
+              optionsSourceId: 'execution.backends.enabled',
+              options: [{ value: 'agent:com.acme.agent/acme', label: 'Acme Agent' }] }
+          : actionId === 'voice_agent.start'
+            ? { results: [{ key: 'agent:com.acme.agent/acme' }] }
+            : (() => { throw new Error('Unexpected Action: ' + actionId); })();
+      const parsedResult = getActionSpec(ActionIdSchema.parse(actionId)).outputSchema.parse(result);
+      return ExternalActionResponseEnvelopeV1Schema.parse({
+        v: 1, actionId,
+        ...(envelope.requestId ? { requestId: envelope.requestId } : {}),
+        execution: { ok: true, result: parsedResult },
+      });
     });
-    fetchAccountEncryptionCurrentness.mockResolvedValue({ mode: 'plain' });
+    const origin = await app.listen({ host: '127.0.0.1', port: 0 });
+    envScope = createEnvKeyScope(envKeys);
+    envScope.patch({ HAPPIER_HOME_DIR: homeDir, HAPPIER_SERVER_URL: origin, HAPPIER_WEBAPP_URL: origin });
+    reloadConfiguration();
+  });
+
+  afterEach(async () => {
+    await app.close();
+    if (homeDir) await removeTempDir(homeDir);
+    envScope.restore();
+    reloadConfiguration();
   });
 
   it('resolves the requested backend through the voice action options source', async () => {
-    execute.mockImplementation(async (actionId: string) => {
-      if (actionId === 'action.options.resolve') {
-        return {
-          ok: true,
-          result: {
-            actionId: 'voice_agent.start',
-            fieldPath: 'backendTargetKeys',
-            optionsSourceId: 'execution.backends.enabled',
-            options: [{ value: 'agent:com.acme.agent/acme', label: 'Acme Agent' }],
-          },
-        };
-      }
-      return {
-        ok: true,
-        result: { results: [{ key: 'agent:com.acme.agent/acme' }] },
-      };
-    });
-
-    const { cmdSessionVoiceAgentStart } = await import('./start');
     const output = captureConsoleJsonOutput();
     try {
-      await cmdSessionVoiceAgentStart(
-        [
-          'voice-agent',
-          'start',
-          'sess-voice',
-          '--backends',
-          'Acme Agent',
-          '--instructions',
-          'Voice.',
-          '--machine-id',
-          'machine-voice',
-          '--json',
-        ],
-        {
-          readCredentialsFn: async () => ({
-            token: 'hap_v1_token_secret',
-            encryption: null,
-            credentialProvenance: 'api_token' as const,
-          }),
-        },
-      );
+      await cmdSessionVoiceAgentStart([
+        'voice-agent', 'start', 'sess-voice', '--backends', 'Acme Agent',
+        '--instructions', 'Voice.', '--machine-id', 'machine-voice', '--json',
+      ], { readCredentialsFn: async () => ({ token, encryption: null, credentialProvenance: 'api_token' }) });
 
-      expect(execute).toHaveBeenNthCalledWith(
-        1,
-        'action.options.resolve',
-        {
-          actionId: 'voice_agent.start',
-          fieldPath: 'backendTargetKeys',
-          optionsSourceId: 'execution.backends.enabled',
-          sessionId: 'sess-voice-1',
-          includeDisabled: true,
-        },
-        { surface: 'cli', defaultSessionId: 'sess-voice-1' },
-      );
-      expect(execute).toHaveBeenNthCalledWith(
-        2,
-        'voice_agent.start',
-        {
-          backendTargetKeys: ['agent:com.acme.agent/acme'],
-          instructions: 'Voice.',
-          permissionMode: 'read_only',
-          retentionPolicy: 'ephemeral',
-          runClass: 'long_lived',
-          ioMode: 'streaming',
-        },
-        { defaultSessionId: 'sess-voice-1' },
-      );
-      expect(createCliActionExecutorFromCredentials).toHaveBeenCalledTimes(1);
-      expect(createCliActionExecutorFromCredentials).toHaveBeenCalledWith({
-        credentials: expect.objectContaining({ credentialProvenance: 'api_token' }),
-        machineId: 'machine-voice',
+      expect(output.json()).toEqual({
+        v: 1, ok: true, kind: 'session_voice_agent_start',
+        data: { sessionId, results: [{ key: 'agent:com.acme.agent/acme' }] },
       });
-      expect(resolveSessionTarget).toHaveBeenCalledWith('sess-voice');
-      expect(createCliActionExecutor).not.toHaveBeenCalled();
-      expect(ensureCliActionPolicySettings).not.toHaveBeenCalled();
-      expect(resolveSessionIdOrPrefix).not.toHaveBeenCalled();
-      expect(fetchSessionById).not.toHaveBeenCalled();
-      expect(output.json()).toEqual(expect.objectContaining({
-        ok: true,
-        kind: 'session_voice_agent_start',
-      }));
+      expect(requests.filter(({ actionId }) => actionId === 'action.options.resolve').map(({ envelope }) => envelope)).toEqual([{
+        v: 1, target: { kind: 'machine', machineId: 'machine-voice' },
+        input: { actionId: 'voice_agent.start', fieldPath: 'backendTargetKeys',
+          optionsSourceId: 'execution.backends.enabled', sessionId, includeDisabled: true },
+      }]);
+      expect(requests.filter(({ actionId }) => actionId === 'voice_agent.start').map(({ envelope }) => envelope)).toEqual([{
+        v: 1, requestId: expect.any(String), target: { kind: 'machine', machineId: 'machine-voice' },
+        input: { sessionId, backendTargetKeys: ['agent:com.acme.agent/acme'], instructions: 'Voice.',
+          permissionMode: 'read_only', retentionPolicy: 'ephemeral', runClass: 'long_lived', ioMode: 'streaming' },
+      }]);
     } finally {
       output.restore();
     }
@@ -155,10 +95,9 @@ describe('happier session voice-agent start command', () => {
     ['unknown option', ['voice-agent', 'start', 'sess', '--backends', 'codex', '--instructions', 'Voice.', '--bogus']],
     ['missing machine value', ['voice-agent', 'start', 'sess', '--backends', 'codex', '--instructions', 'Voice.', '--machine-id', '--json']],
   ])('rejects %s before credential or Action work', async (_name, argv) => {
-    const { cmdSessionVoiceAgentStart } = await import('./start');
     const readCredentialsFn = vi.fn();
     await expect(cmdSessionVoiceAgentStart(argv, { readCredentialsFn })).rejects.toMatchObject({ code: 'invalid_arguments' });
     expect(readCredentialsFn).not.toHaveBeenCalled();
-    expect(createCliActionExecutorFromCredentials).not.toHaveBeenCalled();
+    expect(requests).toEqual([]);
   });
 });

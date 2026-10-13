@@ -12,6 +12,10 @@ import { FilesystemUploadInputSchema, FilesystemDownloadInputSchema } from '@hap
 import { createCredentialedFilesystemTransferClient } from '@/machines/transfer/createCredentialedFilesystemTransferClient';
 import { tryHandleApprovalRequestCreated } from '@/cli/commands/session/shared/tryHandleApprovalRequestCreated';
 import { expandHomeDirPath } from '@/utils/path/expandHomeDirPath';
+import {
+  isPrivateSecretCliWrite, needsSavedSecretsInputPreparation, prepareSavedSecretsCliInput,
+  SavedSecretsInputFailure, SavedSecretsInputReadApproval,
+} from '@/cli/actions/adapters/savedSecretsInput';
 
 import {
   compileActionCliFields,
@@ -161,6 +165,10 @@ function resolveInvokeActionInput(
   args: readonly string[],
   compiled: InvokeCompiledFields,
 ): unknown {
+  if (compiled.kind === 'local' && isPrivateSecretCliWrite(compiled.actionId)
+    && hasInvokeOption(args, ACTION_CLI_WHOLE_INPUT_FLAG)) {
+    invalidInvokeArguments('Secret values are read from stdin or a hidden prompt. --input-json is unavailable for this command.');
+  }
   const target = { fields: compiled.fields, positionals: [] as const };
   const flags = describeActionCliCommandFlags(target);
   // Unknown flags, missing values and surplus positionals fail here, before any
@@ -183,7 +191,7 @@ function resolveInvokeActionInput(
   if (compiled.kind === 'local') {
     const composed = composeActionCliInput({
       parsed,
-      canonicalSchema: compiled.spec.inputSchema,
+      canonicalSchema: needsSavedSecretsInputPreparation(compiled.actionId) ? compiled.callerSchema : compiled.spec.inputSchema,
       wholeInputSchema: compiled.wholeInputSchema,
       callerSchema: compiled.callerSchema,
       bindInput: compiled.bindInput,
@@ -371,9 +379,17 @@ async function execute(args: string[], deps: ActionsDeps, signal?: AbortSignal):
           );
           return null;
         }
+        let input: unknown;
+        try { input = resolveInvokeActionInput(args, invokeFields); }
+        catch (error) {
+          if (isPrivateSecretCliWrite(signedRootActionId.data)) {
+            invalidInvokeArguments('Invalid secret arguments. Values are read from stdin or a hidden prompt.');
+          }
+          throw error;
+        }
         return {
           actionId: signedRootActionId.data,
-          input: resolveInvokeActionInput(args, invokeFields),
+          input,
           requestId,
           requiresServerId: spec.cli?.requiresServerId === true,
         };
@@ -476,6 +492,28 @@ async function execute(args: string[], deps: ActionsDeps, signal?: AbortSignal):
     invocation = localInvocation!;
   }
   let resolvedInput = invocation.input;
+  if (!contributed && needsSavedSecretsInputPreparation(invocation.actionId)) {
+    if (!resolvedInput || typeof resolvedInput !== 'object' || Array.isArray(resolvedInput)) invalidInvokeArguments('Action input must be an object.');
+    try {
+      resolvedInput = await prepareSavedSecretsCliInput({ actionId: invocation.actionId,
+        input: resolvedInput as Readonly<Record<string, unknown>>, signal,
+        execute: (actionId, input) => executor.execute(actionId, input, { ...context, actionRequestId: randomUUID() }),
+      });
+    } catch (error) {
+      if (error instanceof SavedSecretsInputReadApproval) {
+        await tryHandleApprovalRequestCreated({ envelopeKind: 'actions_invoke', json, result: error.result, executionPlacement: 'account' });
+        return;
+      }
+      if (error instanceof SavedSecretsInputFailure) throw Object.assign(new Error(error.message), {
+        actionFailure: true, code: error.failure.errorCode,
+        ...(error.failure.details !== undefined ? { details: error.failure.details } : {}),
+      });
+      throw error;
+    }
+    const validated = getActionSpec(invocation.actionId).inputSchema.safeParse(resolvedInput);
+    if (!validated.success) invalidInvokeArguments('Invalid prepared Action input.');
+    resolvedInput = validated.data;
+  }
   let defaultSessionId: string | null = null;
   if (!contributed && resolvedInput && typeof resolvedInput === 'object' && !Array.isArray(resolvedInput)) {
     const candidateSessionId = (resolvedInput as Readonly<Record<string, unknown>>).sessionId;

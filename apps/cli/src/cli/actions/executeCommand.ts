@@ -28,7 +28,7 @@ import { projectRequesterSessionCredentialDisclosure } from '@happier-dev/protoc
 import { isInteractiveTerminal } from '@/terminal/prompts/promptInput';
 import { promptConfirmYesNo } from '@/terminal/prompts/promptConfirmYesNo';
 
-import type { CompiledActionCliCommand } from './compiledCommands';
+import { actionCliCommandInputArgv, type CompiledActionCliCommand } from './compiledCommands';
 import { renderActionCliCommandHelp } from './commandHelp';
 import {
   actionCliEnvelopeKind,
@@ -51,6 +51,9 @@ import {
   resolveActionCliCredentialTarget,
   type ActionCliFixedServerTarget,
 } from './actionServerTarget';
+import {
+  isPrivateSecretCliWrite, needsSavedSecretsInputPreparation, prepareSavedSecretsCliInput, SavedSecretsInputFailure, SavedSecretsInputReadApproval,
+} from './adapters/savedSecretsInput';
 
 type Executor = Pick<
   ReturnType<typeof createCliActionExecutorFromCredentials>,
@@ -224,9 +227,9 @@ async function reportFailure(params: Readonly<{
  * Runs one compiled friendly Action command end to end: parse, bind, canonical
  * validation, invocation, presentation.
  *
- * Everything before the executor is argument work, so an unknown flag, a
- * duplicate source or an input the Action schema rejects fails before any
- * credential is read. The command's own presenter, when it has one, only ever
+ * Friendly input is validated before authentication. Inputs that require live
+ * secret custody or authenticated metadata are prepared with that same executor
+ * and validated canonically before invocation. The command's presenter only
  * sees an already executed canonical result.
  */
 export async function runCompiledActionCliCommand(params: Readonly<{
@@ -237,6 +240,8 @@ export async function runCompiledActionCliCommand(params: Readonly<{
   deps?: Partial<ActionCliExecutionDeps>;
   /** Consume one already validated success without changing or replaying the Action. */
   consumeSuccess?: (payload: unknown) => boolean | Promise<boolean>;
+  /** The generated shell-bridge marker, resolved to this exact Session before invocation. */
+  agentBridgeSessionId?: string;
 }>): Promise<void> {
   const { command } = params;
   const json = hasFlagBeforeTerminator(params.argv, new Set([ACTION_CLI_JSON_OUTPUT_FLAG]));
@@ -252,16 +257,25 @@ export async function runCompiledActionCliCommand(params: Readonly<{
     console.log(help);
     return;
   }
+  if (isPrivateSecretCliWrite(command.actionId) && hasFlagBeforeTerminator(
+    actionCliCommandInputArgv(command, params.argv), new Set([ACTION_CLI_WHOLE_INPUT_FLAG]),
+  )) {
+    await reportFailure({ json, kind, failure: { errorCode: 'invalid_arguments',
+      errorMessage: 'Secret values are read from stdin or a hidden prompt. --input-json is unavailable for this command.' },
+      extraFields: null, humanSuffix: null, unexpected: false, help: json ? null : help });
+    return;
+  }
 
   const parsed = parseActionCliInput(
     command,
-    stripTransportTokens(command, params.argv.slice(command.path.length)),
+    stripTransportTokens(command, actionCliCommandInputArgv(command, params.argv)),
   );
   if (!parsed.ok) {
     await reportFailure({
       json,
       kind,
-      failure: { errorCode: parsed.code, errorMessage: parsed.message },
+      failure: { errorCode: parsed.code, errorMessage: isPrivateSecretCliWrite(command.actionId)
+        ? 'Invalid secret arguments. Values are read from stdin or a hidden prompt.' : parsed.message },
       extraFields: null,
       humanSuffix: null,
       unexpected: false,
@@ -271,9 +285,10 @@ export async function runCompiledActionCliCommand(params: Readonly<{
   }
 
   const invocationId = randomUUID();
+  const prepareInput = needsSavedSecretsInputPreparation(command.actionId);
   const composed = composeActionCliInput({
     parsed,
-    canonicalSchema: command.spec.inputSchema,
+    canonicalSchema: prepareInput ? command.callerSchema : command.spec.inputSchema,
     wholeInputSchema: command.wholeInputSchema,
     callerSchema: command.callerSchema,
     bindInput: command.spec.cli?.bindInput,
@@ -412,10 +427,31 @@ export async function runCompiledActionCliCommand(params: Readonly<{
       input = Object.freeze({ ...input, sessionId: resolved.sessionId });
       context = { command, json, input, callerInput };
     }
+    let bridgeSessionId: string | undefined;
+    if (params.agentBridgeSessionId) {
+      const resolved = await executor.resolveSessionTarget(params.agentBridgeSessionId);
+      if (!resolved.ok) throw Object.assign(new Error(resolved.code), { code: resolved.code });
+      bridgeSessionId = resolved.sessionId;
+    }
+    if (prepareInput) {
+      input = await prepareSavedSecretsCliInput({ actionId: command.actionId, input, signal: requestSignal,
+        execute: (actionId, readInput) => executor.execute(actionId, readInput, {
+          surface: bridgeSessionId ? 'agent' : 'cli', actionRequestId: randomUUID(),
+          defaultSessionId: bridgeSessionId ?? null,
+          ...(requestSignal ? { signal: requestSignal } : {}),
+          ...(fixedServer ? { serverId: fixedServer.serverId } : {}),
+          ...(serverIdentityId ? { serverIdentityId } : {}),
+        }),
+      });
+      const validated = command.spec.inputSchema.safeParse(input);
+      if (!validated.success) throw new SavedSecretsInputFailure({ errorCode: 'invalid_arguments', errorMessage: 'Invalid prepared Action input.' });
+      input = validated.data as Readonly<Record<string, unknown>>;
+      context = { command, json, input, callerInput };
+    }
     result = await executor.execute(command.actionId, input, {
-      surface: 'cli',
+      surface: bridgeSessionId ? 'agent' : 'cli',
       actionRequestId: invocationId,
-      defaultSessionId: typeof input.sessionId === 'string' ? input.sessionId : null,
+      defaultSessionId: bridgeSessionId ?? (typeof input.sessionId === 'string' ? input.sessionId : null),
       ...(requestSignal ? { signal: requestSignal } : {}),
       ...(fixedServer ? { serverId: fixedServer.serverId } : {}),
       ...(serverIdentityId ? { serverIdentityId } : {}),
@@ -426,6 +462,15 @@ export async function runCompiledActionCliCommand(params: Readonly<{
       } : {}),
     });
   } catch (error) {
+    if (error instanceof SavedSecretsInputReadApproval) {
+      await tryHandleApprovalRequestCreated({ envelopeKind: kind, json, result: error.result, executionPlacement: 'account' });
+      return;
+    }
+    if (error instanceof SavedSecretsInputFailure) {
+      await reportFailure({ json, kind, failure: error.failure, extraFields: null, humanSuffix: null,
+        unexpected: false, help: null });
+      return;
+    }
     const mapped = mapUnknownErrorToControlError(error);
     await reportFailure({
       json,

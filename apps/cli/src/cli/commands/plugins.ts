@@ -9,12 +9,13 @@ import {
 } from '@happier-dev/agents/process/shellCommand';
 
 import type { CommandContext } from '@/cli/commandRegistry';
+import { findCompiledActionCliCommand, listCompiledActionCliCommands } from '@/cli/actions/compiledCommands';
+import { runCompiledActionCliCommand } from '@/cli/actions/executeCommand';
 import {
   hasFlag,
   hasFlagValue,
   readCommandPositionals,
   readFlagValue,
-  readFlagValueUnlessFlagToken,
   readRepeatedFlagValues,
 } from '@/cli/commands/shared/argvFlags';
 import { wantsJson, printJsonEnvelope, writeJsonStdout } from '@/cli/output/jsonEnvelope';
@@ -27,16 +28,9 @@ import {
   type PluginCatalogEntryIntrospectionSnapshot,
 } from '@/plugins/projection/introspection/catalogSnapshot';
 import { readPluginDiagnosticDisplayMessage } from '@/plugins/projection/introspection/project';
-import {
-  COMMUNITY_NPM_MARKETPLACE_SOURCE,
-  createMarketplaceIndexService,
-  type MarketplaceIndexSourceConfig,
-} from '@/plugins/store/marketplace/service';
-import { createMarketplaceSourceRegistryStore } from '@/plugins/store/marketplace/sources/store';
 import { resolvePluginStorePaths } from '@/plugins/store/paths';
 import { createNpmRegistryProfileService } from '@/plugins/distribution/npm/profiles/service';
 import { createNpmRegistryProfileProbe } from '@/plugins/distribution/npm/profiles/probe';
-import { resolveArchiveExpectedIntegrity } from '@/plugins/distribution/archive/integrity';
 import { isInteractiveTerminal, promptSecretInput } from '@/terminal/prompts/promptInput';
 import { handlePluginsRegistryCommand, type PluginsRegistryCommandDeps } from './pluginsRegistry';
 import {
@@ -84,31 +78,14 @@ import {
   describeUserPluginChangeFailure as describePluginChangeFailure,
   requestUserPluginChange,
   readUserPluginChangeStatus,
-  resolvePluginChangeRequestClientPaths,
   resolveUserPluginChangeApproval,
   type UserPluginChangeDecisionResult,
   type UserPluginChangeResult,
   type UserPluginChangeStatusResult,
 } from '@/plugins/daemon/changeClient';
-import type {
-  PluginChangeRequest,
-} from '@/plugins/daemon/changeContract';
 import type { PluginChangePendingReviewResult } from '@happier-dev/protocol/marketplace/internal';
-import { PluginIdSchema } from '@happier-dev/protocol/plugins/plugin-id';
 import { PluginScaffoldTemplateSchema, PluginScaffoldUiModeSchema } from '@happier-dev/protocol/actions/actionSpecs';
-import type { MarketplaceIndexItemV1, MarketplaceSourceRegistryV1, MarketplaceSourceV1, PluginScaffoldUiMode } from '@happier-dev/protocol';
-import {
-  marketplaceInstallUnavailableReason,
-  queryAllMarketplaceSourceItems,
-  requestExactMarketplaceInstall,
-} from '@/plugins/store/marketplace/exactInstall';
-
-function projectMarketplaceIndexItemForCliOutput(
-  item: MarketplaceIndexItemV1,
-): Omit<MarketplaceIndexItemV1, 'manifestDigest'> {
-  const { manifestDigest: _manifestDigest, ...projected } = item;
-  return projected;
-}
+import type { PluginScaffoldUiMode } from '@happier-dev/protocol';
 
 type PluginsCommandDeps = Readonly<{
   ensureDaemon?: () => Promise<void>;
@@ -135,7 +112,6 @@ type PluginsCommandDeps = Readonly<{
     signal?: AbortSignal;
   }>) => Promise<MachinePluginInvocationLogReadResult>;
   pluginSettings?: PluginsSettingsCommandDeps;
-  marketplaceIndexService?: Pick<ReturnType<typeof createMarketplaceIndexService>, 'querySources' | 'queryExactListing'>;
 }>;
 
 type PluginsCommandRuntime = Readonly<{
@@ -182,186 +158,19 @@ function usage(): string {
       { label: `${pluginCommand} registry login <profileId> [--json]`, description: 'Store a registry token through a hidden prompt' },
       { label: `${pluginCommand} registry test|logout|remove <profileId> [--json]`, description: 'Test or change one private registry profile' },
       { label: `${pluginCommand} registry list [--json]`, description: 'List private registry profiles and paused sources' },
-      { label: `${pluginCommand} marketplace sources list [--json]`, description: 'List shared marketplace sources' },
-      { label: `${pluginCommand} marketplace sources add <catalogUrl> [--title <title>] [--description <description>] [--registry-profile <profileId>|--no-registry-profile] [--disabled] [--json]`, description: 'Persist a user marketplace source and optional private registry binding' },
-      { label: `${pluginCommand} marketplace sources enable <sourceRef> [--json]`, description: 'Enable a persisted marketplace source' },
-      { label: `${pluginCommand} marketplace sources disable <sourceRef> [--json]`, description: 'Disable a persisted marketplace source' },
-      { label: `${pluginCommand} marketplace sources remove <sourceRef> [--json]`, description: 'Remove a persisted marketplace source' },
-      { label: `${pluginCommand} marketplace list [<sourceRef>] [--json]`, description: 'List marketplace entries from the preferred persisted source' },
-      { label: `${pluginCommand} marketplace show [<sourceRef>] <pluginId> [--package <npmPackage>] [--json]`, description: 'Show one marketplace entry; Community npm requires its package coordinate' },
       { label: `${pluginCommand} marketplace install [<sourceRef>] <pluginId> [--package <npmPackage>] [--json]`, description: 'Install and trust one exact listing; Community npm requires the package shown by marketplace list' }
     ],
     notes: [
+      `Browse and manage Account registries with ${invoker} registries; marketplace list/show/source aliases use those Actions.`,
       'Plugins are machine-local, descriptor-backed plugins.',
       'Current install support covers local directories, reviewed npm packages, local/remote archives, and exact curated or community npm marketplace listings.',
       `Live authoring is local-path based: create a plugin, then run ${pluginCommand} dev from its directory.`,
       'Packed real-host testing uses a disposable authenticated daemon home and does not read or copy user credentials or installed-plugin state.',
       'Direct npm installation is staged behind the install-and-trust flow; private registry profiles are managed with the registry commands.',
       'Marketplace Install and trust rechecks exact version, integrity, manifest, source, and review facts; community code remains unreviewed until its staged Install & Trust decision.',
-      `Use ${cmd('community-npm')} as the short source reference for the built-in Community npm catalog; it resolves to the single synthesized source and is never persisted.`,
       `Use ${cmd(`${invoker} agents list`)} to see plugin-provided agent CLI surfaces after install.`,
     ],
   });
-}
-
-type PluginInstallSourceKind = 'path' | 'archive' | 'npm';
-
-function parseInstallFlags(args: readonly string[]): Readonly<{
-  dryRun: boolean;
-  sourceKind: PluginInstallSourceKind | null;
-  selector: string | null;
-  integrity: string | null;
-  dev: boolean;
-  sdkRegistryOrigin: string | null;
-}> {
-  if (args.some((argument) => argument === '--trust' || argument.startsWith('--trust='))) {
-    throw new Error('Unknown option: --trust');
-  }
-  const rawKind = readFlagValue(args, '--kind');
-  if (rawKind !== null && rawKind !== 'path' && rawKind !== 'archive' && rawKind !== 'npm') {
-    throw new Error(`Unknown plugin source kind: ${rawKind}`);
-  }
-  return {
-    dryRun: args.includes('--dry-run'),
-    sourceKind: rawKind,
-    selector: readFlagValue(args, '--selector'),
-    integrity: readFlagValue(args, '--integrity'),
-    dev: args.includes('--dev'),
-    sdkRegistryOrigin: normalizePluginSdkRegistryOrigin(readFlagValue(args, '--sdk-registry')),
-  };
-}
-
-function inferPluginInstallSourceKind(locator: string): Exclude<PluginInstallSourceKind, 'npm'> {
-  const path = (() => {
-    try {
-      return new URL(locator).pathname;
-    } catch {
-      return locator;
-    }
-  })().toLowerCase();
-  return ['.tar.gz', '.tgz', '.tar.xz', '.zip'].some((suffix) => path.endsWith(suffix))
-    ? 'archive'
-    : 'path';
-}
-
-async function createPluginInstallRequest(
-  locator: string,
-  flags: ReturnType<typeof parseInstallFlags>,
-): Promise<PluginChangeRequest> {
-  const kind = flags.sourceKind ?? inferPluginInstallSourceKind(locator);
-  if (kind === 'archive') {
-    const expectedIntegrity = await resolveArchiveExpectedIntegrity({
-      locator,
-      explicitIntegrity: flags.integrity,
-    });
-    return {
-      kind: 'installArchive',
-      locator,
-      ...(expectedIntegrity ? { expectedIntegrity } : {}),
-    };
-  }
-  if (flags.integrity) {
-    throw new Error('--integrity is only valid for archive plugin installs');
-  }
-  if (kind === 'npm') {
-    return {
-      kind: 'installNpm',
-      packageName: locator,
-      ...(flags.selector ? { selector: flags.selector } : {}),
-    };
-  }
-  return {
-    kind: 'installPath',
-    locator,
-  };
-}
-
-function readMarketplaceSourceReference(args: readonly string[], startIndex: number): string | null {
-  const positional = readCommandPositionals(args, { startIndex });
-  return positional[0] ?? null;
-}
-
-function readMarketplaceSelection(args: readonly string[], startIndex: number): Readonly<{
-  sourceRef: string | null;
-  pluginId: string | null;
-}> {
-  const positional = readCommandPositionals(args, { startIndex, valueFlags: ['--package'] });
-  if (positional.length === 1) {
-    return { sourceRef: null, pluginId: positional[0] ?? null };
-  }
-  if (positional.length >= 2) {
-    return { sourceRef: positional[0] ?? null, pluginId: positional[1] ?? null };
-  }
-  return { sourceRef: null, pluginId: null };
-}
-
-function readMarketplaceSourceUpsertInput(args: readonly string[]): Readonly<{
-  sourceUrl: string | null;
-  title: string | null;
-  description: string | null;
-  origin: 'user' | null;
-  registryProfileId: string | null | undefined;
-  enabled: boolean;
-}> {
-  const positional = readCommandPositionals(args, {
-    startIndex: 3,
-    valueFlags: ['--title', '--description', '--origin', '--registry-profile'],
-  });
-  const origin = readFlagValue(args, '--origin');
-  const registryProfileId = readFlagValue(args, '--registry-profile');
-  if (origin !== null && origin !== 'user') {
-    throw new Error(`Unknown marketplace source origin: ${origin}`);
-  }
-  if (registryProfileId !== null && args.includes('--no-registry-profile')) {
-    throw new Error('Choose either --registry-profile or --no-registry-profile');
-  }
-  return {
-    sourceUrl: positional[0] ?? null,
-    title: readFlagValue(args, '--title'),
-    description: readFlagValue(args, '--description'),
-    origin: origin as 'user' | null,
-    registryProfileId: args.includes('--no-registry-profile') ? null : registryProfileId ?? undefined,
-    enabled: args.includes('--disabled') ? false : true,
-  };
-}
-
-function describeMarketplaceSource(source: MarketplaceSourceV1): string {
-  const status = source.enabled ? 'enabled' : 'disabled';
-  return `${source.title} ${dim(source.sourceUrl)} ${dim(`(${status})`)}`;
-}
-
-const COMMUNITY_NPM_MARKETPLACE_SOURCE_CLI_ALIAS = 'community-npm';
-
-async function resolveMarketplaceSourceForCommand(store: Readonly<{
-  resolveSourceReference: (reference: string) => Promise<MarketplaceSourceV1 | null>;
-  resolvePreferredSource: () => Promise<MarketplaceSourceV1 | null>;
-}>, sourceRef: string | null): Promise<(MarketplaceIndexSourceConfig & Readonly<{
-  description?: string | null;
-}>) | null> {
-  if (sourceRef) {
-    if (
-      sourceRef === COMMUNITY_NPM_MARKETPLACE_SOURCE_CLI_ALIAS
-      || sourceRef === COMMUNITY_NPM_MARKETPLACE_SOURCE.id
-      || sourceRef === COMMUNITY_NPM_MARKETPLACE_SOURCE.sourceUrl
-    ) {
-      return COMMUNITY_NPM_MARKETPLACE_SOURCE;
-    }
-    return await store.resolveSourceReference(sourceRef);
-  }
-  return await store.resolvePreferredSource();
-}
-
-function missingMarketplaceSourceMessage(sourceRef: string | null): string {
-  if (sourceRef && /^[a-z][a-z0-9+.-]*:\/\//iu.test(sourceRef)) {
-    return `Marketplace catalog URLs must be persisted before browsing or installing. Run ${(resolveInvokerName() ?? 'happier')} plugins marketplace sources add <catalogUrl>, then use the persisted source.`;
-  }
-  return 'No enabled marketplace source is configured';
-}
-
-function formatMarketplaceContributionSummary(entry: Pick<MarketplaceIndexItemV1, 'summary'>): string {
-  return entry.summary.contributions.length > 0
-    ? entry.summary.contributions.join(', ')
-    : 'none';
 }
 
 function readContributionIdentityDisplayValue(
@@ -438,44 +247,6 @@ function printHumanList(entries: readonly PluginCatalogEntryIntrospectionSnapsho
   console.log(out.render());
 }
 
-function printHumanMarketplaceSources(registry: MarketplaceSourceRegistryV1): void {
-  const out = createOutputBuilder();
-  out.line(sectionTitle('Marketplace sources'));
-  if (registry.sources.length === 0) {
-    out.line(neutral('(no marketplace sources configured)'));
-    console.log(out.render());
-    return;
-  }
-
-  for (const source of registry.sources) {
-    out.line(describeMarketplaceSource(source));
-    out.line(`  ${dim('Source ID:')} ${source.id}`);
-    if (source.description) {
-      out.line(`  ${dim('Description:')} ${source.description}`);
-    }
-    if (source.registryProfileId) out.line(`  ${dim('Registry profile:')} ${source.registryProfileId}`);
-  }
-  console.log(out.render());
-}
-
-function printHumanMarketplaceSource(source: MarketplaceSourceV1, actionLabel: string): void {
-  const out = createOutputBuilder();
-  out.line(ok(`${actionLabel}: ${source.title}`));
-  out.line(`  ${dim('Source ID:')} ${source.id}`);
-  out.line(`  ${dim('URL:')} ${source.sourceUrl}`);
-  out.line(`  ${dim('Status:')} ${source.enabled ? 'enabled' : 'disabled'}`);
-  if (source.registryProfileId) out.line(`  ${dim('Registry profile:')} ${source.registryProfileId}`);
-  console.log(out.render());
-}
-
-function findPersistedMarketplaceSource(registry: MarketplaceSourceRegistryV1, reference: string): MarketplaceSourceV1 | null {
-  const normalized = String(reference ?? '').trim();
-  if (!normalized) return null;
-  const byId = registry.sources.find((entry) => entry.id === normalized) ?? null;
-  if (byId) return byId;
-  return registry.sources.find((entry) => entry.sourceUrl === normalized) ?? null;
-}
-
 function printHumanShow(entry: PluginCatalogEntryIntrospectionSnapshot): void {
   const out = createOutputBuilder();
   out.line(sectionTitle(entry.title));
@@ -503,53 +274,6 @@ function printHumanShow(entry: PluginCatalogEntryIntrospectionSnapshot): void {
     for (const diagnostic of entry.diagnostics) {
       out.line(`${fail('•')} ${readPluginDiagnosticDisplayMessage(diagnostic)}`);
     }
-  }
-  console.log(out.render());
-}
-
-function printHumanMarketplaceList(params: Readonly<{
-  title: string;
-  sourceUrl: string;
-  entries: readonly MarketplaceIndexItemV1[];
-  diagnostics: readonly { message: string }[];
-}>): void {
-  const out = createOutputBuilder();
-  out.line(sectionTitle(params.title));
-  out.line(`${dim('Source:')} ${params.sourceUrl}`);
-  if (params.entries.length === 0) {
-    out.line(neutral('(no marketplace entries)'));
-  }
-  for (const entry of params.entries) {
-    const installable = marketplaceInstallUnavailableReason(entry) === null ? ok('installable') : neutral('descriptor-only');
-    out.line(`${entry.display.title} ${dim(entry.pluginId)} ${dim(`(${entry.source.kind})`)} ${installable}`);
-    out.line(`  ${dim('Package:')} ${entry.distribution.packageName}`);
-    out.line(`  ${dim('Version:')} ${entry.distribution.version}`);
-    out.line(`  ${dim('Contributions:')} ${formatMarketplaceContributionSummary(entry)}`);
-  }
-  for (const diagnostic of params.diagnostics) {
-    out.line(`${fail('Diagnostics:')} ${diagnostic.message}`);
-  }
-  console.log(out.render());
-}
-
-function printHumanMarketplaceShow(params: Readonly<{
-  title: string;
-  sourceUrl: string;
-  entry: MarketplaceIndexItemV1;
-  diagnostics: readonly { message: string }[];
-}>): void {
-  const out = createOutputBuilder();
-  out.line(sectionTitle(params.entry.display.title));
-  out.line(`${dim('Marketplace:')} ${params.title}`);
-  out.line(`${dim('Source:')} ${params.sourceUrl}`);
-  out.line(`${dim('Plugin ID:')} ${params.entry.pluginId}`);
-  out.line(`${dim('Package:')} ${params.entry.distribution.packageName}`);
-  out.line(`${dim('Version:')} ${params.entry.distribution.version}`);
-  out.line(`${dim('Installable:')} ${marketplaceInstallUnavailableReason(params.entry) === null ? 'yes' : 'no'}`);
-  out.line(`${dim('Entry Source:')} ${params.entry.source.kind} ${params.entry.source.sourceUrl}`);
-  out.line(`${dim('Contributions:')} ${formatMarketplaceContributionSummary(params.entry)}`);
-  for (const diagnostic of params.diagnostics) {
-    out.line(`${fail('•')} ${diagnostic.message}`);
   }
   console.log(out.render());
 }
@@ -1136,120 +860,6 @@ async function runPluginsLogsCommand(
   }
 }
 
-async function runPluginsInstallCommand(args: readonly string[], deps: PluginsCommandDeps): Promise<void> {
-  const locator = String(args[1] ?? '').trim();
-  if (!locator || locator === 'help' || locator === '--help' || locator === '-h') {
-    console.log(usage());
-    return;
-  }
-
-  const flags = parseInstallFlags(args.slice(2));
-  if (flags.dev) {
-    const kind = flags.sourceKind ?? inferPluginInstallSourceKind(locator);
-    if (kind !== 'path') throw new Error('--dev is only valid for local path plugin sources');
-    if (flags.integrity) throw new Error('--integrity is only valid for archive plugin installs');
-    if (flags.selector) throw new Error('--selector is only valid for npm plugin installs');
-    const developmentRequest = {
-      kind: 'registerExplicit' as const,
-      rootPath: locator,
-      ...(flags.sdkRegistryOrigin ? { sdkRegistryOrigin: flags.sdkRegistryOrigin } : {}),
-    };
-    if (flags.dryRun) {
-      if (wantsJson(args)) {
-        await printJsonEnvelope({
-          ok: true,
-          kind: 'plugins_install',
-          data: { dryRun: true, request: developmentRequest },
-        });
-        return;
-      }
-      console.log(`Dry run: would register development root ${locator}.`);
-      return;
-    }
-    await (deps.ensureDaemon ?? ensureDaemonRunningForSessionCommand)();
-    const result = await (deps.controlPluginDevelopment ?? controlDaemonPluginDevelopment)(developmentRequest);
-    if (result.kind === 'failed') {
-      if (wantsJson(args)) {
-        await printJsonEnvelope({
-          ok: false,
-          kind: 'plugins_install',
-          error: { code: result.code, message: result.message },
-        }, { exitCode: 1 });
-        return;
-      }
-      console.error(errorFrame('Error:', [result.message]));
-      process.exitCode = 1;
-      return;
-    }
-    if (wantsJson(args)) {
-      await printJsonEnvelope({
-        ok: true,
-        kind: 'plugins_install',
-        data: { rootPath: locator, status: result.status },
-      });
-    } else {
-      printPluginDevelopmentStatus(result.status);
-    }
-    return;
-  }
-  // Preview the exact request the daemon will receive, including the
-  // client-resolved source path.
-  const request = resolvePluginChangeRequestClientPaths(
-    await createPluginInstallRequest(locator, flags),
-  );
-  if (flags.dryRun) {
-    if (wantsJson(args)) {
-      await printJsonEnvelope({ ok: true, kind: 'plugins_install', data: { dryRun: true, request } });
-      return;
-    }
-    console.log(`Dry run: would request ${request.kind} for ${locator}.`);
-    return;
-  }
-  const approval = request.kind === 'installPath'
-    ? 'explicitNonInteractiveTrust'
-    : resolveUserPluginChangeApproval({
-        interactive: (deps.isInteractiveTerminal ?? isInteractiveTerminal)(),
-        json: wantsJson(args),
-      });
-  const result = await requestUserPluginChange({ request, approval });
-
-  if (result.kind !== 'committed') {
-    await reportPluginChangeFailure(args, 'plugins_install', result);
-    return;
-  }
-  const catalog = await readDaemonPluginCatalog();
-  const entry = catalog.kind === 'available'
-    ? catalog.plugins.find((candidate) => candidate.pluginId === result.pluginId) ?? null
-    : null;
-
-  if (wantsJson(args)) {
-    await printJsonEnvelope({
-      ok: true,
-      kind: 'plugins_install',
-      data: {
-        pluginId: result.pluginId,
-        desiredGeneration: result.desiredGeneration,
-        appliedGeneration: result.appliedGeneration,
-        pendingSurfaces: result.pendingSurfaces,
-        ...(entry ? { plugin: projectPluginCatalogEntrySnapshot(entry) } : {}),
-      },
-    });
-    return;
-  }
-
-  const out = createOutputBuilder();
-  out.line(ok(`Installed ${entry?.title ?? result.pluginId}.`));
-  out.line(`  ${dim('Plugin ID:')} ${result.pluginId}`);
-  if (entry) {
-    out.line(`  ${dim('Manifest:')} ${entry.manifestPath}`);
-    out.line(`  ${dim('Contributions:')} ${formatInstalledContributionSummary(projectPluginCatalogEntrySnapshot(entry))}`);
-  }
-  if (result.pendingSurfaces.length > 0) {
-    out.line(neutral(`  Pending reconciliation: ${result.pendingSurfaces.join(', ')}`));
-  }
-  console.log(out.render());
-}
-
 function summarizePluginForCommand(entry: PluginCatalogEntry) {
   return projectPluginCatalogEntrySnapshot(entry);
 }
@@ -1298,129 +908,6 @@ async function runPluginsUpdateCommand(args: readonly string[], deps: PluginsCom
 
   const out = createOutputBuilder();
   out.line(ok(`Updated ${postEntry?.title ?? previousEntry?.title ?? result.pluginId}.`));
-  if (result.pendingSurfaces.length > 0) out.line(neutral(`  Pending reconciliation: ${result.pendingSurfaces.join(', ')}`));
-  console.log(out.render());
-}
-
-async function runPluginsDestructiveUninstallCommand(
-  args: readonly string[],
-  rawPluginId: string,
-): Promise<void> {
-  if (!args.includes('--yes') && !args.includes('-y')) {
-    const error = {
-      code: 'confirmation_required',
-      message: 'Destructive plugin data removal requires explicit --yes confirmation. The plugin remains installed and no data was changed.',
-    };
-    if (wantsJson(args)) {
-      await printJsonEnvelope({ ok: false, kind: 'plugins_uninstall', error }, { exitCode: 1 });
-      return;
-    }
-    console.error(errorFrame('Error:', [error.message]));
-    process.exitCode = 1;
-    return;
-  }
-
-  const parsedPluginId = PluginIdSchema.safeParse(rawPluginId);
-  if (!parsedPluginId.success) {
-    const error = {
-      code: 'plugin_data_removal_identity_invalid',
-      message: 'Destructive plugin data removal requires a canonical plugin id. No data was changed.',
-    };
-    if (wantsJson(args)) {
-      await printJsonEnvelope({ ok: false, kind: 'plugins_uninstall', error }, { exitCode: 1 });
-      return;
-    }
-    console.error(errorFrame('Error:', [error.message]));
-    process.exitCode = 1;
-    return;
-  }
-  const pluginId = parsedPluginId.data;
-  const entry = await readInstalledPluginCatalogEntry({ pluginId });
-  const result = await requestUserPluginChange({
-    request: {
-      kind: 'uninstallAndDeleteData',
-      pluginId,
-    },
-    approval: 'none',
-  });
-  if (result.kind !== 'committed') {
-    await reportPluginChangeFailure(args, 'plugins_uninstall', result);
-    return;
-  }
-  if (!result.dataRemoval) {
-    const error = {
-      code: 'plugin_data_removal_result_invalid',
-      message: 'The daemon did not return a destructive data-removal result. Inspect installed state before retrying.',
-    };
-    if (wantsJson(args)) {
-      await printJsonEnvelope({ ok: false, kind: 'plugins_uninstall', error }, { exitCode: 1 });
-      return;
-    }
-    console.error(errorFrame('Error:', [error.message]));
-    process.exitCode = 1;
-    return;
-  }
-
-  const data = {
-    pluginId,
-    alreadyUninstalled: result.dataRemoval.alreadyUninstalled,
-    ...(entry ? { plugin: summarizePluginForCommand(entry) } : {}),
-    removedData: {
-      daemonStorage: result.dataRemoval.removedData.daemonStorage,
-      secrets: result.dataRemoval.removedData.secrets,
-    },
-  };
-  if (wantsJson(args)) {
-    await printJsonEnvelope({ ok: true, kind: 'plugins_uninstall', data });
-    return;
-  }
-  const out = createOutputBuilder();
-  out.line(ok(`Removed plugin data for ${pluginId}.`));
-  out.line(`  ${dim('Uninstall:')} ${result.dataRemoval.alreadyUninstalled ? 'already absent' : 'completed'}`);
-  out.line(`  ${dim('Data:')} daemon-local and encrypted plugin-secret namespaces processed`);
-  console.log(out.render());
-}
-
-async function runPluginsUninstallCommand(args: readonly string[]): Promise<void> {
-  const pluginId = String(args[1] ?? '').trim();
-  if (!pluginId || pluginId === 'help' || pluginId === '--help' || pluginId === '-h') {
-    console.log(usage());
-    return;
-  }
-
-  if (args.includes('--delete-data')) {
-    await runPluginsDestructiveUninstallCommand(args, pluginId);
-    return;
-  }
-
-  const entry = await readInstalledPluginCatalogEntry({ pluginId });
-  const result = await requestUserPluginChange({
-    request: { kind: 'uninstall', pluginId },
-    approval: 'none',
-  });
-  if (result.kind !== 'committed') {
-    await reportPluginChangeFailure(args, 'plugins_uninstall', result);
-    return;
-  }
-
-  if (wantsJson(args)) {
-    await printJsonEnvelope({
-      ok: true,
-      kind: 'plugins_uninstall',
-      data: {
-        pluginId: result.pluginId,
-        ...(entry ? { plugin: summarizePluginForCommand(entry) } : {}),
-        desiredGeneration: result.desiredGeneration,
-        appliedGeneration: result.appliedGeneration,
-        pendingSurfaces: result.pendingSurfaces,
-      },
-    });
-    return;
-  }
-
-  const out = createOutputBuilder();
-  out.line(ok(`Uninstalled ${entry?.title ?? result.pluginId}.`));
-  out.line(`  ${dim('Plugin ID:')} ${result.pluginId}`);
   if (result.pendingSurfaces.length > 0) out.line(neutral(`  Pending reconciliation: ${result.pendingSurfaces.join(', ')}`));
   console.log(out.render());
 }
@@ -2407,489 +1894,20 @@ async function runPluginsReloadCommand(args: readonly string[], deps: PluginsCom
   }
   console.log(ok(`Reload requested for ${target.pluginId}.`));
 }
-async function runPluginsMarketplaceListCommand(
-  args: readonly string[],
-  deps: PluginsCommandDeps,
-): Promise<void> {
-  const sourceRef = readMarketplaceSourceReference(args, 2);
-  if (sourceRef === 'help' || sourceRef === '--help' || sourceRef === '-h') {
-    console.log(usage());
-    return;
-  }
-
-  const registryStore = createMarketplaceSourceRegistryStore();
-  const source = await resolveMarketplaceSourceForCommand(registryStore, sourceRef);
-  if (!source) {
-    const error = missingMarketplaceSourceMessage(sourceRef);
-    if (wantsJson(args)) {
-      await printJsonEnvelope(
-        {
-          ok: false,
-          kind: 'plugins_marketplace_list',
-          error: {
-            code: 'not_found',
-            message: error,
-          },
-        },
-        { exitCode: 1 },
-      );
-      return;
-    }
-    console.error(errorFrame('Error:', [error]));
-    process.exitCode = 1;
-    return;
-  }
-
-  const result = await queryAllMarketplaceSourceItems(source, deps.marketplaceIndexService);
-  if (wantsJson(args)) {
-    await printJsonEnvelope({
-      ok: true,
-      kind: 'plugins_marketplace_list',
-      data: {
-        source: {
-          id: source.id,
-          title: source.title,
-          sourceUrl: source.sourceUrl,
-          enabled: source.enabled,
-          origin: source.origin,
-          description: source.description ?? null,
-          registryProfileId: source.registryProfileId ?? null,
-        },
-        catalog: {
-          title: source.title,
-          description: source.description ?? null,
-          sourceUrl: source.sourceUrl,
-          cache: result.sources[0]?.freshness ?? null,
-        },
-        plugins: result.items.map((entry) => ({
-          pluginId: entry.pluginId,
-          title: entry.display.title,
-          description: entry.display.description,
-          version: entry.distribution.version,
-          distribution: entry.distribution,
-          source: entry.source,
-          review: entry.review,
-          admission: entry.admission,
-          contributions: entry.summary.contributions,
-        })),
-        diagnostics: result.diagnostics,
-      },
-    });
-    return;
-  }
-
-  printHumanMarketplaceList({
-    title: source.title,
-    sourceUrl: source.sourceUrl,
-    entries: result.items,
-    diagnostics: result.diagnostics,
-  });
-}
-
-async function runPluginsMarketplaceShowCommand(
-  args: readonly string[],
-  deps: PluginsCommandDeps,
-): Promise<void> {
-  const { sourceRef, pluginId } = readMarketplaceSelection(args, 2);
-  if (!pluginId || pluginId === 'help' || pluginId === '--help' || pluginId === '-h') {
-    console.log(usage());
-    return;
-  }
-
-  const registryStore = createMarketplaceSourceRegistryStore();
-  const source = await resolveMarketplaceSourceForCommand(registryStore, sourceRef);
-  if (!source) {
-    const error = missingMarketplaceSourceMessage(sourceRef);
-    if (wantsJson(args)) {
-      await printJsonEnvelope(
-        {
-          ok: false,
-          kind: 'plugins_marketplace_show',
-          error: {
-            code: 'not_found',
-            message: error,
-          },
-        },
-        { exitCode: 1 },
-      );
-      return;
-    }
-    console.error(errorFrame('Error:', [error]));
-    process.exitCode = 1;
-    return;
-  }
-
-  const packageName = readFlagValueUnlessFlagToken(args, '--package');
-  if (source.origin === 'community-npm' && !packageName) {
-    const message = 'Community npm lookup requires --package <npmPackage> from marketplace list.';
-    if (wantsJson(args)) {
-      await printJsonEnvelope({
-        ok: false,
-        kind: 'plugins_marketplace_show',
-        error: { code: 'package_required', message },
-      }, { exitCode: 1 });
-      return;
-    }
-    console.error(errorFrame('Error:', [message]));
-    process.exitCode = 1;
-    return;
-  }
-
-  // Showing one listing targets that source for that plugin. Walking every
-  // discovery page to find it would refetch the whole source to answer a
-  // single-item question.
-  const exact = await (deps.marketplaceIndexService ?? createMarketplaceIndexService()).queryExactListing({
-    sourceId: source.id,
-    pluginId,
-    ...(packageName ? { packageName } : {}),
-  });
-  const result = exact.ok ? exact.result : null;
-  const indexEntry = result?.items.find((entry) => entry.pluginId === pluginId) ?? null;
-  if (wantsJson(args)) {
-    if (!indexEntry) {
-      await printJsonEnvelope(
-        {
-          ok: false,
-          kind: 'plugins_marketplace_show',
-          error: {
-            code: 'not_found',
-            message: `Unknown marketplace plugin id: ${pluginId}`,
-          },
-        },
-        { exitCode: 1 },
-      );
-      return;
-    }
-
-    await printJsonEnvelope({
-      ok: true,
-      kind: 'plugins_marketplace_show',
-      data: {
-        source: {
-          id: source.id,
-          title: source.title,
-          sourceUrl: source.sourceUrl,
-          enabled: source.enabled,
-          origin: source.origin,
-          description: source.description ?? null,
-        },
-        catalog: {
-          title: source.title,
-          description: source.description ?? null,
-          sourceUrl: source.sourceUrl,
-          cache: result?.sources[0]?.freshness ?? null,
-        },
-        plugin: projectMarketplaceIndexItemForCliOutput(indexEntry),
-      },
-    });
-    return;
-  }
-
-  if (!indexEntry) {
-    console.error(errorFrame('Error:', [`Unknown marketplace plugin id: ${pluginId}`]));
-    process.exitCode = 1;
-    return;
-  }
-
-  printHumanMarketplaceShow({
-    title: source.title,
-    sourceUrl: source.sourceUrl,
-    entry: indexEntry,
-    diagnostics: result?.diagnostics ?? [],
-  });
-}
-
-async function reportMarketplaceInstallUnavailable(args: readonly string[], message: string): Promise<void> {
-  if (wantsJson(args)) {
-    await printJsonEnvelope(
-      {
-        ok: false,
-        kind: 'plugins_marketplace_install',
-        error: { code: 'install_unavailable', message },
-      },
-      { exitCode: 1 },
-    );
-    return;
-  }
-  console.error(errorFrame('Error:', [message]));
-  process.exitCode = 1;
-}
-
-async function runPluginsMarketplaceInstallCommand(args: readonly string[], _deps: PluginsCommandDeps): Promise<void> {
-  const { sourceRef, pluginId } = readMarketplaceSelection(args, 2);
-  if (!pluginId || pluginId === 'help' || pluginId === '--help' || pluginId === '-h') {
-    console.log(usage());
-    return;
-  }
-
-  const registryStore = createMarketplaceSourceRegistryStore();
-  const source = await resolveMarketplaceSourceForCommand(registryStore, sourceRef);
-  if (!source || !source.enabled) {
-    await reportMarketplaceInstallUnavailable(args, sourceRef && /^[a-z][a-z0-9+.-]*:\/\//iu.test(sourceRef)
-      ? missingMarketplaceSourceMessage(sourceRef)
-      : 'No enabled marketplace source is configured for this Install and trust action.');
-    return;
-  }
-
-  const packageName = readFlagValueUnlessFlagToken(args, '--package');
-  if (source.origin === 'community-npm' && !packageName) {
-    await reportMarketplaceInstallUnavailable(
-      args,
-      'Community npm installation requires --package <npmPackage> from the selected marketplace listing.',
-    );
-    return;
-  }
-
-  const exactInstall = await requestExactMarketplaceInstall({
-    happyHomeDir: configuration.happyHomeDir,
-    sourceId: source.id,
-    pluginId,
-    ...(packageName ? { packageName } : {}),
-    approval: resolveUserPluginChangeApproval({
-      interactive: (_deps.isInteractiveTerminal ?? isInteractiveTerminal)(),
-      json: wantsJson(args),
-    }),
-  }, {
-    marketplaceIndexService: _deps.marketplaceIndexService,
-  });
-  if (!exactInstall.ok) {
-    await reportMarketplaceInstallUnavailable(args, exactInstall.message);
-    return;
-  }
-  const { listing, change } = exactInstall;
-  if (change.kind !== 'committed') {
-    await reportPluginChangeFailure(args, 'plugins_marketplace_install', change);
-    return;
-  }
-
-  if (wantsJson(args)) {
-    await printJsonEnvelope({
-      ok: true,
-      kind: 'plugins_marketplace_install',
-      data: {
-        pluginId: change.pluginId,
-        desiredGeneration: change.desiredGeneration,
-        appliedGeneration: change.appliedGeneration,
-        pendingSurfaces: change.pendingSurfaces,
-      },
-    });
-    return;
-  }
-
-  const out = createOutputBuilder();
-  out.line(ok(`Installed and trusted ${listing.display.title}.`));
-  out.line(`  ${dim('Plugin ID:')} ${change.pluginId}`);
-  out.line(`  ${dim('Version:')} ${listing.distribution.version}`);
-  if (change.pendingSurfaces.length > 0) {
-    out.line(neutral(`  Pending reconciliation: ${change.pendingSurfaces.join(', ')}`));
-  }
-  console.log(out.render());
-}
-
-async function runPluginsMarketplaceSourcesListCommand(args: readonly string[]): Promise<void> {
-  if (wantsJson(args)) {
-    const registry = await createMarketplaceSourceRegistryStore().read();
-    await printJsonEnvelope({
-      ok: true,
-      kind: 'plugins_marketplace_sources_list',
-      data: {
-        sources: registry.sources.map((source) => ({
-          id: source.id,
-          title: source.title,
-          sourceUrl: source.sourceUrl,
-          enabled: source.enabled,
-          origin: source.origin,
-          description: source.description ?? null,
-          addedAtMs: source.addedAtMs ?? null,
-          updatedAtMs: source.updatedAtMs ?? null,
-        })),
-      },
-    });
-    return;
-  }
-
-  const registry = await createMarketplaceSourceRegistryStore().read();
-  printHumanMarketplaceSources(registry);
-}
-
-async function runPluginsMarketplaceSourcesAddCommand(args: readonly string[]): Promise<void> {
-  const input = readMarketplaceSourceUpsertInput(args);
-  if (!input.sourceUrl || input.sourceUrl === 'help' || input.sourceUrl === '--help' || input.sourceUrl === '-h') {
-    console.log(usage());
-    return;
-  }
-
-  const store = createMarketplaceSourceRegistryStore();
-  const source = await store.upsertSource({
-    sourceUrl: input.sourceUrl,
-    title: input.title ?? undefined,
-    description: input.description ?? undefined,
-    origin: input.origin ?? undefined,
-    enabled: input.enabled,
-    registryProfileId: input.registryProfileId,
-  });
-
-  if (wantsJson(args)) {
-    await printJsonEnvelope({
-      ok: true,
-      kind: 'plugins_marketplace_sources_add',
-      data: {
-        source: {
-          id: source.id,
-          title: source.title,
-          sourceUrl: source.sourceUrl,
-          enabled: source.enabled,
-          origin: source.origin,
-          description: source.description ?? null,
-          registryProfileId: source.registryProfileId ?? null,
-        },
-      },
-    });
-    return;
-  }
-
-  printHumanMarketplaceSource(source, 'Added marketplace source');
-}
-
-async function runPluginsMarketplaceSourcesSetEnabledCommand(args: readonly string[], enabled: boolean): Promise<void> {
-  const sourceRef = readMarketplaceSourceReference(args, 3);
-  if (!sourceRef || sourceRef === 'help' || sourceRef === '--help' || sourceRef === '-h') {
-    console.log(usage());
-    return;
-  }
-
-  const store = createMarketplaceSourceRegistryStore();
-  const registry = await store.read();
-  const source = findPersistedMarketplaceSource(registry, sourceRef);
-  if (!source) {
-    const error = `Unknown marketplace source reference: ${sourceRef}`;
-    if (wantsJson(args)) {
-      await printJsonEnvelope(
-        {
-          ok: false,
-          kind: enabled ? 'plugins_marketplace_sources_enable' : 'plugins_marketplace_sources_disable',
-          error: {
-            code: 'not_found',
-            message: error,
-          },
-        },
-        { exitCode: 1 },
-      );
-      return;
-    }
-    console.error(errorFrame('Error:', [error]));
-    process.exitCode = 1;
-    return;
-  }
-
-  const nextSource = await store.setSourceEnabled(source.id, enabled);
-  if (!nextSource) {
-    const error = `Unknown marketplace source reference: ${sourceRef}`;
-    if (wantsJson(args)) {
-      await printJsonEnvelope(
-        {
-          ok: false,
-          kind: enabled ? 'plugins_marketplace_sources_enable' : 'plugins_marketplace_sources_disable',
-          error: {
-            code: 'not_found',
-            message: error,
-          },
-        },
-        { exitCode: 1 },
-      );
-      return;
-    }
-    console.error(errorFrame('Error:', [error]));
-    process.exitCode = 1;
-    return;
-  }
-
-  if (wantsJson(args)) {
-    await printJsonEnvelope({
-      ok: true,
-      kind: enabled ? 'plugins_marketplace_sources_enable' : 'plugins_marketplace_sources_disable',
-      data: {
-        source: {
-          id: nextSource.id,
-          title: nextSource.title,
-          sourceUrl: nextSource.sourceUrl,
-          enabled: nextSource.enabled,
-          origin: nextSource.origin,
-          description: nextSource.description ?? null,
-        },
-      },
-    });
-    return;
-  }
-
-  printHumanMarketplaceSource(nextSource, enabled ? 'Enabled marketplace source' : 'Disabled marketplace source');
-}
-
-async function runPluginsMarketplaceSourcesRemoveCommand(args: readonly string[]): Promise<void> {
-  const sourceRef = readMarketplaceSourceReference(args, 3);
-  if (!sourceRef || sourceRef === 'help' || sourceRef === '--help' || sourceRef === '-h') {
-    console.log(usage());
-    return;
-  }
-
-  const store = createMarketplaceSourceRegistryStore();
-  const registry = await store.read();
-  const source = findPersistedMarketplaceSource(registry, sourceRef);
-  if (!source) {
-    const error = `Unknown marketplace source reference: ${sourceRef}`;
-    if (wantsJson(args)) {
-      await printJsonEnvelope(
-        {
-          ok: false,
-          kind: 'plugins_marketplace_sources_remove',
-          error: {
-            code: 'not_found',
-            message: error,
-          },
-        },
-        { exitCode: 1 },
-      );
-      return;
-    }
-    console.error(errorFrame('Error:', [error]));
-    process.exitCode = 1;
-    return;
-  }
-
-  const removed = await store.removeSource(source.id);
-  if (wantsJson(args)) {
-    await printJsonEnvelope({
-      ok: true,
-      kind: 'plugins_marketplace_sources_remove',
-      data: {
-        removed,
-        source: {
-          id: source.id,
-          title: source.title,
-          sourceUrl: source.sourceUrl,
-          enabled: source.enabled,
-          origin: source.origin,
-          description: source.description ?? null,
-        },
-      },
-    });
-    return;
-  }
-
-  if (removed) {
-    printHumanMarketplaceSource(source, 'Removed marketplace source');
-    return;
-  }
-
-  console.error(errorFrame('Error:', [`Unknown marketplace source reference: ${sourceRef}`]));
-  process.exitCode = 1;
-}
-
 export async function handlePluginsCommand(
   args: string[],
   deps: PluginsCommandDeps = defaultPluginsCommandDeps,
   runtime: PluginsCommandRuntime = {},
 ): Promise<void> {
+  const actionOwnedMutation = args[0] === 'install' || args[0] === 'uninstall'
+    || (args[0] === 'marketplace' && args[1] === 'install');
+  if (actionOwnedMutation) {
+    const argv = ['plugins', ...args];
+    const command = findCompiledActionCliCommand(argv, listCompiledActionCliCommands());
+    if (!command) throw new Error('Plugin mutation Action command is unavailable.');
+    await runCompiledActionCliCommand({ command, argv, ...(runtime.signal ? { signal: runtime.signal } : {}) });
+    return;
+  }
   const subcommand = String(args[0] ?? '').trim();
   if (!subcommand || subcommand === 'help' || subcommand === '--help' || subcommand === '-h') {
     console.log(usage());
@@ -2911,10 +1929,6 @@ export async function handlePluginsCommand(
     return;
   }
 
-  if (subcommand === 'install') {
-    await runPluginsInstallCommand(args, deps);
-    return;
-  }
 
   if (subcommand === 'update') {
     await runPluginsUpdateCommand(args, deps);
@@ -2931,10 +1945,6 @@ export async function handlePluginsCommand(
     return;
   }
 
-  if (subcommand === 'uninstall') {
-    await runPluginsUninstallCommand(args);
-    return;
-  }
 
   if (subcommand === 'create') {
     await runPluginsCreateCommand(args);
@@ -3023,60 +2033,6 @@ export async function handlePluginsCommand(
       return;
     }
 
-    if (marketplaceSubcommand === 'sources') {
-      const marketplaceSourcesSubcommand = String(args[2] ?? '').trim();
-      if (!marketplaceSourcesSubcommand || marketplaceSourcesSubcommand === 'help' || marketplaceSourcesSubcommand === '--help' || marketplaceSourcesSubcommand === '-h') {
-        console.log(usage());
-        return;
-      }
-
-      if (marketplaceSourcesSubcommand === 'list') {
-        await runPluginsMarketplaceSourcesListCommand(args);
-        return;
-      }
-
-      if (marketplaceSourcesSubcommand === 'add') {
-        await runPluginsMarketplaceSourcesAddCommand(args);
-        return;
-      }
-
-      if (marketplaceSourcesSubcommand === 'enable') {
-        await runPluginsMarketplaceSourcesSetEnabledCommand(args, true);
-        return;
-      }
-
-      if (marketplaceSourcesSubcommand === 'disable') {
-        await runPluginsMarketplaceSourcesSetEnabledCommand(args, false);
-        return;
-      }
-
-      if (marketplaceSourcesSubcommand === 'remove') {
-        await runPluginsMarketplaceSourcesRemoveCommand(args);
-        return;
-      }
-
-      await reportUnknownPluginsSubcommand(
-        args,
-        `plugins_marketplace_sources_${marketplaceSourcesSubcommand}`,
-        `Unknown plugins marketplace sources subcommand: ${marketplaceSourcesSubcommand}`,
-      );
-      return;
-    }
-
-    if (marketplaceSubcommand === 'list') {
-      await runPluginsMarketplaceListCommand(args, deps);
-      return;
-    }
-
-    if (marketplaceSubcommand === 'show') {
-      await runPluginsMarketplaceShowCommand(args, deps);
-      return;
-    }
-
-    if (marketplaceSubcommand === 'install') {
-      await runPluginsMarketplaceInstallCommand(args, deps);
-      return;
-    }
 
     await reportUnknownPluginsSubcommand(
       args,

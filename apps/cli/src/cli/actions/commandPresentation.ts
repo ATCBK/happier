@@ -75,6 +75,8 @@ export type ActionCliPresentation = Readonly<{
  * output module into a cold CLI start.
  */
 const PRESENTATION_LOADERS: Partial<Record<ActionId, () => Promise<ActionCliPresentation>>> = {
+  'plugins.install': async () => (await import('./pluginDevLoopPresentation')).PLUGIN_DEV_LOOP_CLI_PRESENTATION,
+  'plugins.uninstall': async () => (await import('./pluginDevLoopPresentation')).PLUGIN_DEV_LOOP_CLI_PRESENTATION,
   'localServices.inventory.list': async () => (await import('./localServicesPresentation')).LOCAL_SERVICES_PRESENTATION,
   'localServices.inventory.refresh': async () => (await import('./localServicesPresentation')).LOCAL_SERVICES_PRESENTATION,
   'localServices.launcher.snapshot': async () => (await import('./localServicesPresentation')).LOCAL_SERVICES_PRESENTATION,

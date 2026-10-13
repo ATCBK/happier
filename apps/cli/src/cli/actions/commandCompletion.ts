@@ -1,5 +1,7 @@
 import {
   findCompiledActionCliCommand,
+  actionCliCommandPattern,
+  actionCliCommandInputArgv,
   listCompiledActionCliCommands,
   type ActionCliField,
   type CompiledActionCliCommand,
@@ -269,14 +271,18 @@ export function resolveCompiledActionCliCompletionCandidates(
 
   for (const command of commands) {
     if (command.visibility === 'hidden') continue;
-    if (!context.committed.every((segment, index) => command.path[index] === segment)) continue;
-    const next = command.path[context.committed.length];
-    if (next?.startsWith(context.prefix)) candidates.add(next);
+    const pattern = actionCliCommandPattern(command);
+    if (!context.committed.every((word, index) => {
+      const segment = pattern[index];
+      return segment !== undefined && (typeof segment === 'string' ? segment === word : !word.startsWith('-'));
+    })) continue;
+    const next = pattern[context.committed.length];
+    if (typeof next === 'string' && next.startsWith(context.prefix)) candidates.add(next);
   }
 
   const exact = findCompiledActionCliCommand(context.committed, commands);
   if (exact && exact.path.length <= context.committed.length) {
-    const inputWords = context.committed.slice(exact.path.length);
+    const inputWords = actionCliCommandInputArgv(exact, context.committed);
     for (const candidate of resolveActionCliInputCompletionCandidates({
       target: exact,
       committed: inputWords,
@@ -317,7 +323,7 @@ export async function resolveCompiledActionCliCompletionCandidatesWithDynamicOpt
   const commands = context.commands ?? listCompiledActionCliCommands();
   const command = findCompiledActionCliCommand(context.committed, commands);
   if (!command) return Object.freeze([...candidates].sort());
-  const inputWords = context.committed.slice(command.path.length);
+  const inputWords = actionCliCommandInputArgv(command, context.committed);
   for (const value of await resolveActionCliInputCompletionCandidatesWithDynamicOptions({
     target: command,
     actionId: command.actionId,

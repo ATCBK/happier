@@ -52,6 +52,7 @@ export type CompiledActionCliCommand = Readonly<{
   visibility: 'canonical' | 'alias' | 'hidden';
   deprecated: ActionCliCommandBinding['deprecated'];
   positionals: readonly ActionCliField[];
+  positionalsBeforeLastSegment: readonly ActionCliField[];
   variadicPositional: ActionCliField | null;
   fields: readonly ActionCliField[];
   /** The schema the parsed caller value is validated against before binding. */
@@ -347,9 +348,17 @@ function compileDeclaredActionCliCommand(
     ],
   });
   const fieldsByPath = new Map(fields.map((field) => [field.path, field]));
-  const positionals = (binding.positionals ?? [])
+  const positionalsBeforeLastSegment = (binding.positionalsBeforeLastSegment ?? []).map(path => {
+    const field = fieldsByPath.get(path);
+    if (!field || !['string', 'enum', 'integer', 'number'].includes(field.kind)) {
+      throw new Error(`Action CLI interleaved positional ${path} must name a scalar caller field for ${spec.id}.`);
+    }
+    return field;
+  });
+  if (positionalsBeforeLastSegment.length && binding.path.length < 2) throw new Error(`Action CLI interleaved positionals require a nested path for ${spec.id}.`);
+  const positionals = [...positionalsBeforeLastSegment, ...(binding.positionals ?? [])
     .map((path) => fieldsByPath.get(path))
-    .filter((field): field is ActionCliField => Boolean(field));
+    .filter((field): field is ActionCliField => Boolean(field))];
   const variadicPositional = binding.variadicPositional
     ? fieldsByPath.get(binding.variadicPositional) ?? null
     : null;
@@ -390,6 +399,7 @@ function compileDeclaredActionCliCommand(
     visibility: binding.visibility,
     deprecated: binding.deprecated,
     positionals: Object.freeze(positionals),
+    positionalsBeforeLastSegment: Object.freeze(positionalsBeforeLastSegment),
     variadicPositional,
     fields,
     callerSchema,
@@ -457,16 +467,32 @@ export function listCompiledActionCliCommandDiagnostics(): readonly CompiledActi
   return compiledCommandsCache.diagnostics;
 }
 
-/** The longest declared friendly path that prefixes `words`, or `null`. */
+/** Literal command words with declared caller slots inserted at their actual argv position. */
+export function actionCliCommandPattern(command: CompiledActionCliCommand): readonly (string | ActionCliField)[] {
+  return [...command.path.slice(0, -1), ...command.positionalsBeforeLastSegment, command.path.at(-1)!];
+}
+
+export function actionCliCommandInputArgv(command: CompiledActionCliCommand, argv: readonly string[]): readonly string[] {
+  const before = command.path.length - 1;
+  const count = command.positionalsBeforeLastSegment.length;
+  return [...argv.slice(before, before + count), ...argv.slice(command.path.length + count)];
+}
+
+export function actionCliCommandUsagePath(command: CompiledActionCliCommand): string {
+  return actionCliCommandPattern(command).map(segment => typeof segment === 'string' ? segment : `<${segment.path}>`).join(' ');
+}
+
+/** The longest declared friendly pattern that prefixes `words`, or `null`. */
 export function findCompiledActionCliCommand(
   words: readonly string[],
   commands: readonly CompiledActionCliCommand[] = listCompiledActionCliCommands(),
 ): CompiledActionCliCommand | null {
   let best: CompiledActionCliCommand | null = null;
   for (const command of commands) {
-    if (command.path.length > words.length) continue;
-    if (!command.path.every((segment, index) => words[index] === segment)) continue;
-    if (!best || command.path.length > best.path.length) best = command;
+    const pattern = actionCliCommandPattern(command);
+    if (pattern.length > words.length) continue;
+    if (!pattern.every((segment, index) => typeof segment === 'string' ? words[index] === segment : Boolean(words[index] && !words[index]!.startsWith('-')))) continue;
+    if (!best || pattern.length > actionCliCommandPattern(best).length) best = command;
   }
   return best;
 }

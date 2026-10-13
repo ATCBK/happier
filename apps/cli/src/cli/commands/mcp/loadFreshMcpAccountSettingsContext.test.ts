@@ -10,7 +10,6 @@ import { loadFreshMcpAccountSettingsContext } from './loadFreshMcpAccountSetting
 import { createMcpServerActionExecuteV1, projectMcpServerActionFailureV1 } from '@happier-dev/protocol/mcp/servers/serverActionsV1';
 import { createCliMcpServerStore } from '@/settings/mcp/mcpServerStore';
 import { captureStdoutJsonOutput } from '@/testkit/logger/captureOutput';
-import { ensureMachineIdForCredentials } from '@/ui/auth';
 import type { Settings } from '@/persistence';
 
 // HTTP and cache-file I/O are boundaries. Catalog admission, semantic edits,
@@ -232,37 +231,4 @@ describe('MCP command catalog admission', () => {
     }
   });
 
-  it('refuses private tool names after same-Account reentry while the OS probe is in flight', async () => {
-    const { cmdMcpServersTest } = await import('./servers/test');
-    catalog.bindings = [{ id: 'probe-binding', serverId: server.id, enabled: true,
-      target: { t: 'allMachines' }, createdAt: 1, updatedAt: 1 }];
-    let markProbeStarted = () => {};
-    const probeStarted = new Promise<void>(resolve => { markProbeStarted = resolve; });
-    let releaseProbe = () => {};
-    const probeResult = new Promise<Awaited<ReturnType<McpCommandDeps['probeMcpStdioServerTools']>>>(resolve => {
-      releaseProbe = () => resolve([{ name: 'retired-account-private-tool' }]);
-    });
-    const output = captureStdoutJsonOutput<unknown>();
-    const command = cmdMcpServersTest(['--mcp-server', server.id, '--dir', '/workspace'], {
-      ...commandReadDeps(), ensureMachineIdForCredentials,
-      probeMcpStdioServerTools: async () => { markProbeStarted(); return probeResult; },
-    }, { json: true });
-    try {
-      await probeStarted;
-      const original = getActiveAccountSettingsSnapshot();
-      if (!original) throw new Error('Probe did not capture an Account');
-      setActiveAccountSettingsSnapshot({ ...original, scopeKey: 'retired-account' });
-      setActiveAccountSettingsSnapshot({ ...original });
-      releaseProbe();
-      await command;
-      const result = output.json();
-      expect(result).toMatchObject({ ok: false, kind: 'mcp_servers_test', error: { code: 'mcp_test_failed' } });
-      expect(JSON.stringify(result)).not.toContain('retired-account-private-tool');
-      expect(process.exitCode).toBe(1);
-    } finally {
-      releaseProbe();
-      await command;
-      output.restore();
-    }
-  });
 });

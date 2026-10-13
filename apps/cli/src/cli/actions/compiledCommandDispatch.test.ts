@@ -4,9 +4,10 @@ import { getActionSpec } from '@happier-dev/protocol';
 import { encodeTerminalStreamBytes, TerminalStreamReadOkResponseSchema } from '@happier-dev/protocol/terminal/stream';
 import { captureConsoleJsonOutput, captureConsoleText } from '@/testkit/logger/captureOutput';
 
-import { compileActionCliCommands, findCompiledActionCliCommand, listCompiledActionCliCommands } from './compiledCommands';
+import { actionCliCommandPattern, compileActionCliCommands, findCompiledActionCliCommand, listCompiledActionCliCommands } from './compiledCommands';
 import { renderActionCliCommandHelp } from './commandHelp';
 import { runCompiledActionCliCommand } from './executeCommand';
+import { resolveCompiledActionCliCompletionCandidates } from './commandCompletion';
 
 type Execution = Readonly<{ actionId: string; input: unknown }>;
 
@@ -28,7 +29,7 @@ function runState(runId: string, status: 'running' | 'succeeded') {
 
 function commandFor(path: readonly string[]) {
   const command = findCompiledActionCliCommand(path, listCompiledActionCliCommands());
-  if (!command || command.path.join(' ') !== path.join(' ')) {
+  if (!command || actionCliCommandPattern(command).length !== path.length) {
     throw new Error(`No compiled command for "${path.join(' ')}"`);
   }
   return command;
@@ -84,6 +85,17 @@ function harness() {
   return { executions, deps };
 }
 
+it('carries repeatable Profile skill flags through the generated save Action command', async () => {
+  const executions = await run(['launch_profiles', 'save'], ['--id', 'profile', '--expected-revision-json', '4',
+    '--profile-json', JSON.stringify({ v: 2, id: 'profile', name: 'Profile', createdAt: 1, updatedAt: 1 }),
+    '--skill', 'lint', '--skill', 'review']);
+  expect(executions).toEqual([{ actionId: 'launch_profiles.save', input: {
+    id: 'profile', expectedRevision: 4, profile: { v: 2, id: 'profile', name: 'Profile', createdAt: 1, updatedAt: 1,
+      extraEnvironmentVariables: [], defaultPermissionModeByTargetKey: {}, defaultPersistenceModeByTargetKey: {}, compatibilityByTargetKey: {} },
+    skillSeeds: ['lint', 'review'],
+  } }]);
+});
+
 async function run(path: readonly string[], rest: readonly string[]) {
   const { executions, deps } = harness();
   await runCompiledActionCliCommand({
@@ -101,6 +113,23 @@ function withoutLocalId(execution: Execution): Execution {
 }
 
 describe('compiled Action CLI command dispatch', () => {
+  it('dispatches session capability changes through compiled Actions', async () => {
+    const output = captureConsoleText();
+    try {
+      for (const [leaf, state] of [['add', 'on'], ['remove', 'off'], ['reset', 'inherit']] as const) {
+        expect(renderActionCliCommandHelp(commandFor(['session', 'capabilities', 'session-1', leaf])))
+          .toContain(`happier session capabilities <sessionId> ${leaf} <kind> <id>`);
+        expect(await run(['session', 'capabilities', 'session-1', leaf], ['mcp_server', 'linear']))
+          .toEqual([{ actionId: 'session.capabilities.set', input: { sessionId: 'session-1', kind: 'mcp_server', id: 'linear', state } }]);
+      }
+      expect(await run(['session', 'capabilities'], ['session-1']))
+        .toEqual([{ actionId: 'session.capabilities.get', input: { sessionId: 'session-1' } }]);
+      expect(await run(['session', 'capabilities', 'session-1', 'list'], []))
+        .toEqual([{ actionId: 'session.capabilities.get', input: { sessionId: 'session-1' } }]);
+      expect(resolveCompiledActionCliCompletionCandidates({ committed: ['session', 'capabilities', 'session-1'], prefix: 'a' }))
+        .toContain('add');
+    } finally { output.restore(); }
+  });
   it('dispatches skill names and ids through the compiled rules Action', async () => {
     const output = captureConsoleText();
     try {

@@ -30,6 +30,7 @@ import { resolveAccountSettingsScopeKeyForToken } from '@/settings/accountSettin
 import { resolveCliFeatureDecision } from '@/features/featureDecisionService';
 import type { CliServerFeaturesSnapshot } from '@/features/serverFeaturesClient';
 import { fail } from '@happier-dev/cli-common/output';
+import { resolveShellBridgeActionSurfaceV1 as resolveToolsCommandSurface } from '@/cli/actions/shellBridgeActionSurface';
 
 type BuiltInToolEntry = Awaited<ReturnType<typeof listBuiltInHappierTools>>[number];
 type CustomToolEntry = Awaited<ReturnType<typeof listResolvedCustomHappierTools>>['tools'][number];
@@ -99,9 +100,6 @@ function requireFlagValue(args: readonly string[], flag: string): string {
  * origins separate — reading stored credentials proves the process can reach the
  * account, not that a person asked for the call.
  */
-function resolveToolsCommandSurface(args: readonly string[]): 'cli' | 'agent' {
-  return args.includes('--agent-bridge') ? 'agent' : 'cli';
-}
 
 function resolveCommandKind(args: readonly string[]): string {
   const subcommand = String(args[0] ?? '').trim();

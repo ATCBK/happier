@@ -4,7 +4,7 @@ import type { ActionCliBindContext, ActionCliBindInput } from '@happier-dev/prot
 
 import { z } from 'zod';
 
-import type { ActionCliField, CompiledActionCliCommand } from './compiledCommands';
+import { actionCliCommandInputArgv, type ActionCliField, type CompiledActionCliCommand } from './compiledCommands';
 
 export type ActionCliParseFailure = Readonly<{
   ok: false;
@@ -323,6 +323,7 @@ export function stripCliOwnedFlags(
 export type ActionCliParseTarget = Readonly<{
   fields: readonly ActionCliField[];
   positionals: readonly ActionCliField[];
+  positionalsBeforeLastSegment?: readonly ActionCliField[];
   variadicPositional?: ActionCliField | null;
 }>;
 
@@ -551,7 +552,7 @@ export function parseActionCliCommandInput(
   command: CompiledActionCliCommand,
   argv: readonly string[],
 ): ActionCliParseResult {
-  return parseActionCliInput(command, argv.slice(command.path.length));
+  return parseActionCliInput(command, actionCliCommandInputArgv(command, argv));
 }
 
 export function parseActionCliInput(
@@ -680,10 +681,17 @@ export function parseActionCliInput(
   }
   for (const [index, positional] of positionalValues.slice(0, command.positionals.length).entries()) {
     const field = command.positionals[index]!;
-    const conflict = claim(field, `<${field.path}>`);
-    if (conflict) return conflict;
     const coerced = coerceScalar(field, positional);
     if (isParseFailure(coerced)) return coerced;
+    // An interleaved slot also selects the command's target. Whole JSON may
+    // repeat that selector only with the same value, never change its target.
+    if (inputJson !== null && index < (command.positionalsBeforeLastSegment?.length ?? 0)
+      && sources.get(field.path) === ACTION_CLI_WHOLE_INPUT_FLAG) {
+      if (readActionInputPath(inputJson, field.path) !== coerced) return failure(`Command selector ${field.path} conflicts with ${ACTION_CLI_WHOLE_INPUT_FLAG}.`);
+      continue;
+    }
+    const conflict = claim(field, `<${field.path}>`);
+    if (conflict) return conflict;
     value[field.path] = coerced;
   }
   const trailingPositionals = positionalValues.slice(command.positionals.length);

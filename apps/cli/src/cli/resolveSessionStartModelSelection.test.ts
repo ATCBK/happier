@@ -1,9 +1,32 @@
 import { describe, expect, it } from 'vitest';
-import { SessionModelSelectionV1Schema } from '@happier-dev/protocol';
+import { SessionModelSelectionV1Schema } from '@happier-dev/protocol/providers/model-selection';
 
 import { resolveSessionStartModelSelection } from './resolveSessionStartModelSelection';
 
 describe('resolveSessionStartModelSelection', () => {
+  it.each(['qa-a-acp-alpha', 'qa-c-exact-args'])('retains the admitted Custom ACP definition %s at model ingress', (definitionId) => {
+    const target = {
+      kind: 'agent' as const,
+      identity: { pluginId: 'happier.agent.custom-acp', localId: 'custom-acp' },
+      definitionId,
+    };
+    const selection = SessionModelSelectionV1Schema.parse({
+      v: 1,
+      updatedAt: 30,
+      ref: {
+        agentTargetKey: `agent:happier.agent.custom-acp/custom-acp:definition:${definitionId}`,
+        providerConnectionId: null,
+        modelId: 'ollama/qwen2.5:3b',
+      },
+    });
+    expect(resolveSessionStartModelSelection({ backendTarget: target, canonicalSelection: selection })).toEqual(selection);
+    expect(resolveSessionStartModelSelection({ backendTarget: target, legacyModelId: 'ollama/qwen2.5:3b', nowMs: 30 })).toEqual(selection);
+    expect(() => resolveSessionStartModelSelection({
+      backendTarget: { ...target, definitionId: 'another-definition' },
+      canonicalSelection: selection,
+    })).toThrowError(expect.objectContaining({ code: 'model_selection_agent_target_mismatch' }));
+  });
+
   it('binds separate model and provider-connection flags into one structured selection', () => {
     expect(resolveSessionStartModelSelection({
       backendTarget: { kind: 'backend', backendId: 'codex', sourceKind: 'built_in' },
@@ -40,7 +63,7 @@ describe('resolveSessionStartModelSelection', () => {
       v: 1,
       updatedAt: 30,
       ref: {
-        agentTargetKey: 'backend:review-bot:configured:review-bot',
+        agentTargetKey: 'agent:happier.agent.custom-acp/custom-acp:definition:review-bot',
         providerConnectionId: 'pc_gateway',
         modelId: 'vendor/model',
       },

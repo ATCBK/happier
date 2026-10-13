@@ -1,12 +1,19 @@
 import { createServer } from 'node:http';
+import type { ClientRequest, IncomingMessage } from 'node:http';
+import * as https from 'node:https';
+import { EventEmitter } from 'node:events';
+import { Readable } from 'node:stream';
 import { access, mkdir, mkdtemp, realpath, readFile, readdir, rm, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { basename, dirname, join, resolve } from 'node:path';
 import { createHash, randomUUID } from 'node:crypto';
 
 import * as tar from 'tar';
+import * as undici from 'undici';
+import fastify from 'fastify';
 import { PUBLIC_TOOLCHAIN_SCAFFOLD_BINDINGS_V1 } from '@happier-dev/plugin-sdk/ui/build';
-import { DEFAULT_CURATED_MARKETPLACE_SOURCE_URL, type MarketplaceIndexSourceSnapshotV1 } from '@happier-dev/protocol';
+import { createActionExecutor, createMarketplaceNpmDiscoveryProjectionV1, DEFAULT_CURATED_MARKETPLACE_SOURCE_URL, type MarketplaceIndexSourceSnapshotV1 } from '@happier-dev/protocol';
+import { createPluginCompatibilityProjectionV1 } from '@happier-dev/protocol/plugins/availability/v1';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
 import { configuration, reloadConfiguration } from '@/configuration';
@@ -23,8 +30,12 @@ import {
 } from '@/packagedRuntime/managedTools/pnpm/managedPnpm';
 import { managedJavaScriptRuntimeBinPath } from '@/packagedRuntime/js/managedJavaScriptRuntime';
 import { resolvePluginStorePaths } from '@/plugins/store/paths';
-import { createMarketplaceSourceRegistryStore } from '@/plugins/store/marketplace/sources/store';
-import { createMarketplaceIndex } from '@/plugins/store/marketplace/index';
+import { publishAccountRegistrySourcesFixture, accountMarketplaceUserSourceFixture, curatedMarketplaceSourceFixture, communityMarketplaceSourceFixture } from '@/plugins/testkit/accountRegistrySources';
+import { resetActiveAccountSettingsSnapshotForTests } from '@/settings/accountSettings/activeAccountSettingsSnapshot';
+import { createCliRegistryHostV1 } from '@/registries/createCliRegistryHost';
+import { createUnavailableActionTransportDeps } from '@/testkit/actionTransportDeps';
+import { findCompiledActionCliCommand, listCompiledActionCliCommands } from '@/cli/actions/compiledCommands';
+import { composeActionCliInput, parseActionCliCommandInput } from '@/cli/actions/parseCommandInput';
 import { createPluginManifestV2Fixture } from '@/plugins/testkit/manifestV2Fixture';
 import { packLocalPlugin } from '@/plugins/packaging/pack';
 import { sriSha512 } from '@/plugins/distribution/testkit/npmTarball';
@@ -39,8 +50,28 @@ import {
   type PluginReloadController,
 } from '@/plugins/runtime/reload/controller';
 import { writeExecutableShim } from '@/testkit/fs/executableShim';
+import { createPluginCliActionHost } from '@/plugins/testkit/pluginCliActionHost';
+import { PluginChangePendingReviewResultSchema } from '@happier-dev/protocol/marketplace/internal';
+import { PLUGIN_CHANGE_REQUEST_PATH, PLUGIN_CHANGE_DECISION_PATH, registerDaemonPluginChangeRoutes } from '@/plugins/daemon/controlRoutes';
 
 import { handlePluginsCommand } from './plugins';
+
+async function executeMarketplaceRegistryAlias(path: readonly string[], args: readonly string[] = []) {
+  const commandPath = ['plugins', 'marketplace', ...path];
+  const command = findCompiledActionCliCommand(commandPath, listCompiledActionCliCommands());
+  if (!command || command.path.join(' ') !== commandPath.join(' ')) throw new Error('Missing generated marketplace alias');
+  const parsed = parseActionCliCommandInput(command, [...commandPath, ...args]);
+  if (!parsed.ok) throw new Error(parsed.message);
+  const composed = composeActionCliInput({ parsed, canonicalSchema: command.spec.inputSchema,
+    wholeInputSchema: command.wholeInputSchema, callerSchema: command.callerSchema,
+    bindInput: command.spec.cli?.bindInput,
+    context: { actionId: command.actionId, invocationId: 'marketplace-alias', commandPath, output: 'json' } });
+  if (!composed.ok) throw new Error('Invalid generated marketplace input');
+  const host = createCliRegistryHostV1();
+  const executor = createActionExecutor({ ...createUnavailableActionTransportDeps(),
+    registryActionExecute: ({ actionId, input }) => host.execute(actionId, input) });
+  return executor.execute(command.actionId, composed.input, { surface: 'cli', authority: 'account_automation', bypassApprovals: true });
+}
 
 const daemonBoundary = vi.hoisted(() => ({
   ensureRunning: vi.fn(async () => undefined),
@@ -48,12 +79,14 @@ const daemonBoundary = vi.hoisted(() => ({
   decideChange: vi.fn(),
   readChangeStatus: vi.fn(),
   readCatalog: vi.fn(),
+  controlDevelopment: vi.fn(),
 }));
 const promptBoundary = vi.hoisted(() => ({
   confirm: vi.fn(),
 }));
 
-vi.mock('@/daemon/ensureDaemon', () => ({
+vi.mock('@/daemon/ensureDaemon', async original => ({
+  ...await original<typeof import('@/daemon/ensureDaemon')>(),
   ensureDaemonRunningForSessionCommand: daemonBoundary.ensureRunning,
 }));
 
@@ -63,13 +96,27 @@ vi.mock('@/daemon/controlClient', async (importOriginal) => ({
   decideDaemonPluginChange: daemonBoundary.decideChange,
   readDaemonPluginChangeStatus: daemonBoundary.readChangeStatus,
   readDaemonPluginCatalog: daemonBoundary.readCatalog,
+  controlDaemonPluginDevelopment: daemonBoundary.controlDevelopment,
 }));
 vi.mock('@/terminal/prompts/promptConfirmYesNo', () => ({
   promptConfirmYesNo: promptBoundary.confirm,
 }));
 
+// Acquisition and npm metadata use real owners beneath these OS/network boundaries.
+vi.mock('node:dns/promises', async original => ({ ...await original<typeof import('node:dns/promises')>(),
+  lookup: async () => [{ address: '93.184.216.34', family: 4 }] }));
+vi.mock('undici', async original => {
+  const actual = await original<typeof import('undici')>();
+  return { ...actual, fetch: vi.fn(actual.fetch) };
+});
+vi.mock('node:https', async original => {
+  const actual = await original<typeof import('node:https')>();
+  return { ...actual, request: vi.fn(actual.request) };
+});
+
 let activePluginChangeService: DaemonPluginChangeService | null = null;
 let activePluginReloadController: PluginReloadController | null = null;
+let activePluginCliActionHost: Awaited<ReturnType<typeof createPluginCliActionHost>> | null = null;
 const TEST_PLUGIN_SECRET_KEY = new Uint8Array(32).fill(7);
 let testPnpmCommand: string | null = null;
 
@@ -295,19 +342,13 @@ async function startLoopbackPluginSdkRegistry(sdkTarball: Buffer): Promise<Reado
 
 async function seedExactCuratedMarketplaceListing(params: Readonly<{
   happyHomeDir: string;
-  sourceUrl: string;
   reviewStatus?: 'approved' | 'withdrawn' | 'blocked';
   registryProfileId?: string;
   freshnessState?: 'fresh' | 'stale' | 'stale-offline';
   contributions?: readonly string[];
 }>) {
-  const source = (await createMarketplaceSourceRegistryStore({
-    happyHomeDir: params.happyHomeDir,
-    curatedSourceUrl: params.sourceUrl,
-  }).read()).sources[0];
-  if (!source || source.origin !== 'curated' || source.sourceUrl !== params.sourceUrl) {
-    throw new Error('Expected the configured curated marketplace source');
-  }
+  publishAccountRegistrySourcesFixture();
+  const source = curatedMarketplaceSourceFixture();
   const integrity = `sha512-${Buffer.alloc(64, 1).toString('base64')}`;
   const manifestDigest = `sha256:${'a'.repeat(64)}`;
   const fetchedAtMs = Date.now();
@@ -353,9 +394,11 @@ async function seedExactCuratedMarketplaceListing(params: Readonly<{
     JSON.stringify({
       t: 'happier_marketplace_index_source_cache_v1',
       sourceUrl: source.sourceUrl,
+      requestUrl: source.sourceUrl,
       fetchedAtMs,
       etag: null,
       lastModified: null,
+      communityNpmPage: null,
       snapshot,
     }),
     'utf8',
@@ -363,42 +406,45 @@ async function seedExactCuratedMarketplaceListing(params: Readonly<{
   return { sourceId: source.id, integrity, manifestDigest, snapshot };
 }
 
-function marketplaceIndexServiceForSnapshot(snapshot: MarketplaceIndexSourceSnapshotV1) {
-  const querySources = async (raw: unknown) => createMarketplaceIndex({ revision: 1, sources: [snapshot], query: raw });
-  return {
-    querySources,
-    // The exact-listing method is the one owner every single-listing command
-    // and the Install and Trust action reach; the double answers from the same
-    // seeded source rather than a second fixture path.
-    queryExactListing: vi.fn(async (query: Readonly<{ sourceId: string; pluginId: string; packageName?: string }>) => {
-      const exactSnapshot = snapshot.source.kind === 'community-npm'
-        ? {
-          ...snapshot,
-          entries: snapshot.entries.filter((entry) => entry.distribution.packageName === query.packageName),
-        }
-        : snapshot;
-      return {
-        ok: true as const,
-        source: {
-          id: snapshot.source.id,
-          title: snapshot.source.title,
-          sourceUrl: snapshot.source.sourceUrl,
-          enabled: true,
-          origin: snapshot.source.kind,
-        },
-        result: createMarketplaceIndex({
-          revision: 1,
-          sources: [exactSnapshot],
-          query: {
-            text: '',
-            cursor: null,
-            limit: 1,
-            filters: { sourceIds: [query.sourceId], pluginIds: [query.pluginId], includeUnavailable: true },
-          },
-        }),
-      };
-    }),
-  };
+function installMarketplaceHttpFixture(snapshot: MarketplaceIndexSourceSnapshotV1) {
+  if (snapshot.source.kind === 'community-npm') {
+    const entry = snapshot.entries[0];
+    if (!entry) throw new Error('Missing published community npm fixture');
+    const compatibility = createPluginCompatibilityProjectionV1({
+      manifest: { schemaVersion: 2, id: entry.pluginId, version: entry.distribution.version,
+        displayName: entry.display.title, engines: { happier: '>=0.0.0' }, runtime: { apiVersion: 1 },
+        entrypoints: { daemon: './daemon.mjs' }, hostAccess: { required: [], optional: [] }, contributes: {} },
+      uiArtifacts: { version: 2, entries: [] },
+    });
+    const metadata = { name: entry.distribution.packageName, version: entry.distribution.version,
+      happier: { compatibilityProjection: compatibility,
+        marketplaceDiscovery: createMarketplaceNpmDiscoveryProjectionV1({ compatibility, manifestDigest: entry.manifestDigest }) },
+      dist: { integrity: entry.distribution.integrity, tarball: 'https://registry.npmjs.org/sample.tgz' } };
+    vi.mocked(undici.fetch).mockImplementation(async () => new undici.Response(JSON.stringify({
+      total: 1, objects: [{ package: { name: metadata.name, version: metadata.version, publisher: { username: 'acme' } } }],
+    }), { status: 200 }));
+    // Native HTTPS is a genuine process boundary; the npm client, resolver and projection remain real.
+    const request = ((_options: https.RequestOptions, callback: (message: IncomingMessage) => void) => {
+      const emitter = new EventEmitter() as EventEmitter & { end(): void; destroy(error?: Error): void };
+      emitter.end = () => queueMicrotask(() => {
+        const message = Object.assign(Readable.from([JSON.stringify({ name: metadata.name,
+          'dist-tags': { latest: metadata.version }, versions: { [metadata.version]: metadata } })]),
+        { statusCode: 200, headers: { 'content-type': 'application/json' } });
+        callback(message as unknown as IncomingMessage);
+      });
+      emitter.destroy = error => { if (error) emitter.emit('error', error); };
+      return emitter as unknown as ClientRequest;
+    }) as typeof https.request;
+    vi.mocked(https.request).mockImplementation(request);
+  } else {
+    vi.mocked(undici.fetch).mockImplementation(async () => {
+      if (snapshot.freshness.state !== 'fresh') {
+        if (snapshot.freshness.state === 'stale-offline') throw Object.assign(new Error('Network unreachable'), { code: 'ENETUNREACH' });
+        return new undici.Response('', { status: 503 });
+      }
+      return new undici.Response(JSON.stringify(snapshot), { status: 200 });
+    });
+  }
 }
 
 async function writeDisposableActivationPlugin(rootDir: string, disposeMarkerPath: string): Promise<void> {
@@ -599,19 +645,31 @@ async function installPluginThroughPresentUserTerminal(
 ): Promise<void> {
   const previousExitCode = process.exitCode;
   process.exitCode = undefined;
-  promptBoundary.confirm.mockResolvedValueOnce(true);
-  const output = captureConsoleText();
+  const output = captureConsoleJsonOutput();
   try {
-    await handlePluginsCommand(
-      ['install', locator, ...flags],
-      { isInteractiveTerminal: () => true },
-    );
-    expect(output.text()).toContain('Installed ');
-    expect(process.exitCode).toBeUndefined();
+    await runCompiledPluginCommand(['install', locator, ...flags, '--json']);
+    const envelope = output.json<{ ok: boolean; error?: { code: string } }>();
+    if (!envelope.ok) {
+      expect(envelope.error?.code).toBe('review_required');
+      const request = daemonBoundary.requestChange.mock.results.at(-1);
+      if (!request || request.type !== 'return') throw new Error('Expected a prepared daemon candidate');
+      const review = PluginChangePendingReviewResultSchema.parse(await request.value);
+      // Test setup acts as the separately authenticated human host. The CLI
+      // command above must never issue this private decision itself.
+      expect(await daemonBoundary.decideChange({ pendingChangeId: review.pendingChangeId,
+        decision: 'installAndTrust', optionalSelections: review.reviewKind === 'installation'
+          ? review.review.optionalHostAccess.map(access => ({ accessId: access.id, selected: false })) : [],
+      })).toMatchObject({ kind: 'committed' });
+    }
   } finally {
     output.restore();
     process.exitCode = previousExitCode;
   }
+}
+
+async function runCompiledPluginCommand(args: readonly string[]): Promise<void> {
+  activePluginCliActionHost ??= await createPluginCliActionHost();
+  await activePluginCliActionHost.run(args);
 }
 
 describe('handlePluginsCommand', () => {
@@ -630,6 +688,7 @@ describe('handlePluginsCommand', () => {
     daemonBoundary.decideChange.mockReset();
     daemonBoundary.readChangeStatus.mockReset();
     daemonBoundary.readCatalog.mockReset();
+    daemonBoundary.controlDevelopment.mockReset();
     promptBoundary.confirm.mockReset();
     promptBoundary.confirm.mockResolvedValue(false);
     daemonBoundary.readCatalog.mockResolvedValue({
@@ -651,6 +710,12 @@ describe('handlePluginsCommand', () => {
   });
 
   afterEach(async () => {
+    await activePluginCliActionHost?.dispose();
+    activePluginCliActionHost = null;
+    resetActiveAccountSettingsSnapshotForTests();
+    vi.restoreAllMocks();
+    vi.mocked(undici.fetch).mockReset();
+    vi.mocked(https.request).mockReset();
     invokerNameScope?.restore();
     invokerNameScope = null;
     await activePluginChangeService?.shutdown();
@@ -683,9 +748,7 @@ describe('handlePluginsCommand', () => {
       expect(output.text()).toContain('happier plugins doctor [path] [--json]');
       expect(output.text()).toContain('happier plugins reload [developmentPluginId] [--json]');
       expect(output.text()).toContain('happier plugins logs <pluginId> [--machine <id>] [--generation <id>] [--correlation <id>] [--cursor <byteOffset>] [--limit <1-500>] [--follow] [--json]');
-      expect(output.text()).toContain('happier plugins marketplace sources list [--json]');
-      expect(output.text()).toContain('happier plugins marketplace list [<sourceRef>] [--json]');
-      expect(output.text()).toContain('community-npm');
+      expect(output.text()).toContain('happier registries');
       expect(output.text()).not.toContain('happier plugins call');
       expect(output.text()).not.toContain('happier plugins trust');
       expect(output.text()).not.toContain('--trust');
@@ -699,13 +762,17 @@ describe('handlePluginsCommand', () => {
   });
 
   it('rejects the retired --trust install option before contacting the daemon', async () => {
-    await expect(handlePluginsCommand([
-      'install',
-      '/tmp/acme-dev',
-      '--dev',
-      '--trust',
-      '--json',
-    ])).rejects.toThrow('Unknown option: --trust');
+    const previousExitCode = process.exitCode;
+    const output = captureConsoleJsonOutput();
+    try {
+      await runCompiledPluginCommand(['install', '/tmp/acme-dev', '--dev', '--trust', '--json']);
+      expect(output.json()).toMatchObject({ ok: false, kind: 'plugins_install', error: { code: 'invalid_arguments' } });
+      expect(daemonBoundary.requestChange).not.toHaveBeenCalled();
+      expect(daemonBoundary.decideChange).not.toHaveBeenCalled();
+    } finally {
+      output.restore();
+      process.exitCode = previousExitCode;
+    }
   });
 
   it('rejects the retired scaffold SDK-version override instead of silently ignoring it', async () => {
@@ -1121,101 +1188,21 @@ describe('handlePluginsCommand', () => {
     }
   });
 
-  it('boots the curated marketplace source into the shared registry and uses it without an explicit source reference', async () => {
-    const home = await createTempDir('happier-plugin-marketplace-curated-default-');
-    const envScope = createEnvKeyScope(['HAPPIER_HOME_DIR', 'PATH']);
-    envScope.patch({ HAPPIER_HOME_DIR: home, PATH: '' });
-    reloadConfiguration();
+  it('lists marketplace sources through the generated plugin alias and Account source owner', async () => {
+    const source = accountMarketplaceUserSourceFixture({ sourceUrl: 'https://catalog.example/team.json' });
+    const skill = { id: 'registry:skill-only', title: 'Skills only', format: 'git' as const,
+      kinds: ['skill' as const], url: 'https://github.com/acme/skills', enabled: true, addedAt: 0 };
+    const curated = curatedMarketplaceSourceFixture();
+    publishAccountRegistrySourcesFixture([source, skill], [curated.id]);
 
-    const marketplace = await createRemoteMarketplaceServer();
-    const sourceUrl = DEFAULT_CURATED_MARKETPLACE_SOURCE_URL;
-
-    try {
-      const sourcesOutput = captureConsoleJsonOutput();
-      try {
-        await handlePluginsCommand(['marketplace', 'sources', 'list', '--json']);
-
-        const parsed = sourcesOutput.json<{
-          v: 1;
-          ok: boolean;
-          kind: string;
-          data?: {
-            sources: Array<{
-              id: string;
-              title: string;
-              sourceUrl: string;
-              enabled: boolean;
-              origin: string;
-            }>;
-          };
-        }>();
-
-        expect(parsed.ok).toBe(true);
-        expect(parsed.kind).toBe('plugins_marketplace_sources_list');
-        expect(parsed.data?.sources).toHaveLength(1);
-        expect(parsed.data?.sources[0]).toMatchObject({
-          title: 'Happier curated marketplace',
-          sourceUrl,
-          enabled: true,
-          origin: 'curated',
-        });
-        expect(parsed.data?.sources[0].id).toMatch(/^marketplace:[0-9a-f]{12}$/);
-      } finally {
-        sourcesOutput.restore();
-      }
-
-      const installOutput = captureConsoleJsonOutput();
-      try {
-        await handlePluginsCommand(['marketplace', 'install', SAMPLE_PLUGIN_ID, '--json']);
-
-        const parsed = installOutput.json<{ v: 1; ok: boolean; kind: string; error?: { code: string } }>();
-
-        expect(parsed.ok).toBe(false);
-        expect(parsed.kind).toBe('plugins_marketplace_install');
-        expect(parsed.error?.code).toBe('install_unavailable');
-        expect(daemonBoundary.requestChange).not.toHaveBeenCalled();
-      } finally {
-        installOutput.restore();
-      }
-
-      const disableOutput = captureConsoleJsonOutput();
-      try {
-        await handlePluginsCommand(['marketplace', 'sources', 'disable', sourceUrl, '--json']);
-
-        const parsed = disableOutput.json<{
-          v: 1;
-          ok: boolean;
-          kind: string;
-          data?: {
-            source: {
-              id: string;
-              sourceUrl: string;
-              enabled: boolean;
-              origin: string;
-            };
-          };
-        }>();
-
-        expect(parsed.ok).toBe(true);
-        expect(parsed.kind).toBe('plugins_marketplace_sources_disable');
-        expect(parsed.data?.source).toMatchObject({
-          sourceUrl,
-          enabled: false,
-          origin: 'curated',
-        });
-      } finally {
-        disableOutput.restore();
-      }
-
-      const disabledRegistry = JSON.parse(await readFile(join(home, 'plugins', 'plugins', 'state', 'marketplace-source-registry.v1.json'), 'utf8')) as {
-        sources: Array<{ enabled: boolean }>;
-      };
-      expect(disabledRegistry.sources[0]?.enabled).toBe(false);
-    } finally {
-      await marketplace.close();
-      envScope.restore();
-      await removeTempDir(home);
-    }
+    const result = await executeMarketplaceRegistryAlias(['sources', 'list']);
+    expect(result).toMatchObject({ ok: true, result: { sources: [
+      expect.objectContaining({ id: curated.id, url: curated.sourceUrl, enabled: false, origin: { kind: 'built_in' } }),
+      expect.objectContaining({ format: 'happier-npm', origin: { kind: 'built_in' } }),
+      expect.objectContaining({ id: source.id, url: source.url, origin: { kind: 'user' }, removable: true }),
+    ] } });
+    expect(daemonBoundary.ensureRunning).not.toHaveBeenCalled();
+    expect(daemonBoundary.requestChange).not.toHaveBeenCalled();
   });
 
   it('creates a packable public SDK plugin template without internal imports', async () => {
@@ -2482,7 +2469,7 @@ describe('handlePluginsCommand', () => {
     try {
       const output = captureConsoleJsonOutput();
       try {
-        await handlePluginsCommand(['install', sourceRoot, '--dry-run', '--json']);
+        await runCompiledPluginCommand(['install', sourceRoot, '--dry-run', '--json']);
         const parsed = output.json<{
           ok: boolean;
           kind: string;
@@ -2561,193 +2548,67 @@ describe('handlePluginsCommand', () => {
     }
   });
 
-  it('persists marketplace sources and uses the registry when browsing without an explicit source reference', async () => {
-    const home = await createTempDir('happier-plugin-marketplace-registry-cli-');
-    const envScope = createEnvKeyScope(['HAPPIER_HOME_DIR', 'PATH']);
-    envScope.patch({ HAPPIER_HOME_DIR: home, PATH: '' });
-    reloadConfiguration();
-
-    const marketplace = await createRemoteMarketplaceServer();
-    const sourceUrl = DEFAULT_CURATED_MARKETPLACE_SOURCE_URL;
+  it('browses only the selected Account source through the generated marketplace alias', async () => {
+    const home = await createTempDir('happier-plugin-marketplace-alias-browse-');
     try {
-      const addOutput = captureConsoleJsonOutput();
-      try {
-        await handlePluginsCommand(['marketplace', 'sources', 'add', sourceUrl, '--title', 'Curated Marketplace', '--registry-profile', 'registry_private', '--json']);
-
-        const parsed = addOutput.json<{
-          v: 1;
-          ok: boolean;
-          kind: string;
-          data?: {
-            source: {
-              id: string;
-              title: string;
-              sourceUrl: string;
-              enabled: boolean;
-              origin: string;
-              registryProfileId: string | null;
-            };
-          };
-        }>();
-
-        expect(parsed.ok).toBe(true);
-        expect(parsed.kind).toBe('plugins_marketplace_sources_add');
-        expect(parsed.data?.source).toMatchObject({
-          title: 'Curated Marketplace',
-          sourceUrl,
-          enabled: true,
-          origin: 'curated',
-          registryProfileId: 'registry_private',
-        });
-        expect(parsed.data?.source.id).toMatch(/^marketplace:[0-9a-f]{12}$/);
-      } finally {
-        addOutput.restore();
-      }
-
-      const registryPath = join(home, 'plugins', 'plugins', 'state', 'marketplace-source-registry.v1.json');
-      const registry = JSON.parse(await readFile(registryPath, 'utf8')) as { sources: ReadonlyArray<{ sourceUrl: string; title: string; enabled: boolean; registryProfileId?: string | null }> };
-      expect(registry.sources).toHaveLength(1);
-      expect(registry.sources[0]).toMatchObject({
-        title: 'Curated Marketplace',
-        sourceUrl,
-        enabled: true,
-        registryProfileId: 'registry_private',
+      const listing = await seedExactCuratedMarketplaceListing({ happyHomeDir: home });
+      const source = accountMarketplaceUserSourceFixture({ sourceUrl: 'https://catalog.example/team.json' });
+      const unrelated = accountMarketplaceUserSourceFixture({ sourceUrl: 'https://catalog.example/unrelated.json' });
+      publishAccountRegistrySourcesFixture([source, unrelated]);
+      const catalog = { ...listing.snapshot, source: { id: source.id, title: source.title,
+        kind: 'user' as const, sourceUrl: source.url } };
+      const urls: string[] = [];
+      vi.spyOn(globalThis, 'fetch').mockImplementation(async input => {
+        const url = String(input);
+        urls.push(url);
+        if (url !== source.url) throw new Error('Unexpected source fetch');
+        return new Response(JSON.stringify(catalog), { status: 200 });
       });
 
-      const unbindOutput = captureConsoleJsonOutput();
-      try {
-        await handlePluginsCommand(['marketplace', 'sources', 'add', sourceUrl, '--no-registry-profile', '--json']);
-        expect(unbindOutput.json()).toMatchObject({
-          ok: true,
-          kind: 'plugins_marketplace_sources_add',
-          data: { source: { registryProfileId: null } },
-        });
-      } finally {
-        unbindOutput.restore();
-      }
-      const unboundRegistry = JSON.parse(await readFile(registryPath, 'utf8')) as { sources: ReadonlyArray<{ registryProfileId?: string }> };
-      expect(unboundRegistry.sources[0]).not.toHaveProperty('registryProfileId');
-
-      const sourcesOutput = captureConsoleJsonOutput();
-      try {
-        await handlePluginsCommand(['marketplace', 'sources', 'list', '--json']);
-
-        const parsed = sourcesOutput.json<{
-          v: 1;
-          ok: boolean;
-          kind: string;
-          data?: {
-            sources: Array<{
-              id: string;
-              title: string;
-              sourceUrl: string;
-              enabled: boolean;
-            }>;
-          };
-        }>();
-
-        expect(parsed.ok).toBe(true);
-        expect(parsed.kind).toBe('plugins_marketplace_sources_list');
-        expect(parsed.data?.sources).toHaveLength(1);
-        expect(parsed.data?.sources[0]).toMatchObject({
-          title: 'Curated Marketplace',
-          sourceUrl,
-          enabled: true,
-        });
-      } finally {
-        sourcesOutput.restore();
-      }
-
-      const listOutput = captureConsoleJsonOutput();
-      try {
-        await handlePluginsCommand(['marketplace', 'list', '--json']);
-
-        const parsed = listOutput.json<{
-          v: 1;
-          ok: boolean;
-          kind: string;
-          data?: {
-            source: {
-              sourceUrl: string;
-              title: string;
-            };
-            catalog: {
-              sourceUrl: string;
-            };
-          };
-        }>();
-
-        expect(parsed.ok).toBe(true);
-        expect(parsed.kind).toBe('plugins_marketplace_list');
-        expect(parsed.data?.source).toMatchObject({
-          title: 'Curated Marketplace',
-          sourceUrl,
-        });
-        expect(parsed.data?.catalog.sourceUrl).toBe(sourceUrl);
-      } finally {
-        listOutput.restore();
-      }
-    } finally {
-      await marketplace.close();
-      await removeTempDir(home).catch(() => undefined);
-    }
+      const result = await executeMarketplaceRegistryAlias(['list'], ['--source', source.id, '--query', 'Sample']);
+      expect(result).toMatchObject({ ok: true, result: { pages: [{
+        sourceId: source.id, status: { state: 'ok' }, nextCursor: null,
+        items: [{ sourceId: source.id, kind: 'plugin', itemId: SAMPLE_PLUGIN_ID, version: '1.0.0' }],
+      }] } });
+      expect(urls).toEqual([source.url]);
+      expect(await executeMarketplaceRegistryAlias(['list'], ['--source', source.id, '--query', 'absent']))
+        .toMatchObject({ ok: true, result: { pages: [{ sourceId: source.id, status: { state: 'ok' }, items: [] }] } });
+      expect(daemonBoundary.ensureRunning).not.toHaveBeenCalled();
+    } finally { await removeTempDir(home); }
   });
 
-  it('projects canonical marketplace contribution IDs in both human list and show output', async () => {
-    const home = await createTempDir('happier-plugin-marketplace-contribution-summary-');
-    const sourceUrl = 'https://marketplace.invalid/catalog.json';
-    const envScope = createEnvKeyScope(['HAPPIER_HOME_DIR', 'PATH']);
-    envScope.patch({
-      HAPPIER_HOME_DIR: home,
-      PATH: process.env.PATH ?? '',
-    });
-    reloadConfiguration();
-    const contributions = ['2-actions', '1-hooks', '3-ui', '4-targeted'];
-    const listing = await seedExactCuratedMarketplaceListing({ happyHomeDir: home, sourceUrl, contributions });
-    const marketplaceIndexService = marketplaceIndexServiceForSnapshot(listing.snapshot);
-
+  it('reads the published plugin payload through the generated marketplace show alias', async () => {
+    const home = await createTempDir('happier-plugin-marketplace-alias-show-');
     try {
-      const listOutput = captureConsoleText();
-      try {
-        await handlePluginsCommand(['marketplace', 'list'], { marketplaceIndexService });
-        expect(listOutput.text()).toContain(`Contributions: ${contributions.join(', ')}`);
-        expect(listOutput.text()).toContain('Package: @acme/sample');
-        expect(listOutput.text()).not.toContain('0 agents');
-      } finally {
-        listOutput.restore();
-      }
+      const contributions = ['2-actions', '1-hooks', '3-ui', '4-targeted'];
+      const listing = await seedExactCuratedMarketplaceListing({ happyHomeDir: home, contributions });
+      const source = accountMarketplaceUserSourceFixture({ sourceUrl: 'https://catalog.example/team.json' });
+      publishAccountRegistrySourcesFixture([source]);
+      const catalog = { ...listing.snapshot, source: { id: source.id, title: source.title,
+        kind: 'user' as const, sourceUrl: source.url } };
+      vi.spyOn(globalThis, 'fetch').mockImplementation(async () => new Response(JSON.stringify(catalog), { status: 200 }));
 
-      const showOutput = captureConsoleText();
-      try {
-        await handlePluginsCommand(['marketplace', 'show', SAMPLE_PLUGIN_ID], { marketplaceIndexService });
-        expect(showOutput.text()).toContain(`Contributions: ${contributions.join(', ')}`);
-        expect(showOutput.text()).toContain('Package: @acme/sample');
-        expect(showOutput.text()).not.toContain('0 Actions');
-      } finally {
-        showOutput.restore();
-      }
-
-      const jsonOutput = captureConsoleJsonOutput();
-      try {
-        await handlePluginsCommand(['marketplace', 'list', '--json'], { marketplaceIndexService });
-        expect(jsonOutput.json<{
-          data?: { plugins?: Array<{ contributions?: readonly string[] }> };
-        }>().data?.plugins).toEqual([
-          expect.objectContaining({ contributions }),
-        ]);
-      } finally {
-        jsonOutput.restore();
-      }
-    } finally {
-      envScope.restore();
-      reloadConfiguration();
-      await removeTempDir(home).catch(() => undefined);
-    }
+      expect(await executeMarketplaceRegistryAlias(['show'], [source.id, SAMPLE_PLUGIN_ID, '--version', '1.0.0']))
+        .toMatchObject({ ok: true, result: { item: {
+          summary: { sourceId: source.id, kind: 'plugin', itemId: SAMPLE_PLUGIN_ID, version: '1.0.0' },
+          payload: { kind: 'plugin', source: catalog.source, listing: {
+            distribution: { packageName: '@acme/sample', version: '1.0.0' },
+            summary: { contributions },
+          } },
+        } } });
+      // A user catalog cannot obtain curated trust by publishing a curated source kind.
+      vi.mocked(globalThis.fetch).mockImplementation(async () => new Response(JSON.stringify({
+        ...catalog, source: { ...catalog.source, kind: 'curated' },
+      }), { status: 200 }));
+      expect(await executeMarketplaceRegistryAlias(['list'], ['--source', source.id]))
+        .toMatchObject({ ok: true, result: { pages: [{ sourceId: source.id, status: { state: 'invalid_source' }, items: [] }] } });
+      expect(daemonBoundary.requestChange).not.toHaveBeenCalled();
+    } finally { await removeTempDir(home); }
   });
 
   it('sends an approved exact curated listing through the canonical daemon change request', async () => {
     const home = await createTempDir('happier-plugin-marketplace-exact-install-');
-    const sourceUrl = 'https://marketplace.invalid/catalog.json';
+    const sourceUrl = DEFAULT_CURATED_MARKETPLACE_SOURCE_URL;
     const envScope = createEnvKeyScope(['HAPPIER_HOME_DIR', 'PATH']);
     envScope.patch({
       HAPPIER_HOME_DIR: home,
@@ -2756,7 +2617,7 @@ describe('handlePluginsCommand', () => {
     reloadConfiguration();
     const previousExitCode = process.exitCode;
     process.exitCode = undefined;
-    const listing = await seedExactCuratedMarketplaceListing({ happyHomeDir: home, sourceUrl });
+    const listing = await seedExactCuratedMarketplaceListing({ happyHomeDir: home });
     daemonBoundary.requestChange.mockResolvedValueOnce({
       kind: 'committed',
       pluginId: SAMPLE_PLUGIN_ID,
@@ -2766,48 +2627,30 @@ describe('handlePluginsCommand', () => {
     });
 
     try {
-      const showOutput = captureConsoleJsonOutput();
-      try {
-        await handlePluginsCommand(['marketplace', 'show', SAMPLE_PLUGIN_ID, '--json'], {
-          marketplaceIndexService: marketplaceIndexServiceForSnapshot(listing.snapshot),
-        });
-
-        const parsed = showOutput.json<{
-          ok: boolean;
-          kind: string;
-          data?: {
-            plugin?: {
-              manifestDigest?: unknown;
-              summary?: { contributions?: readonly string[] };
-            };
-          };
-        }>();
-        expect(parsed.ok).toBe(true);
-        expect(parsed.kind).toBe('plugins_marketplace_show');
-        expect(parsed.data?.plugin).not.toHaveProperty('manifestDigest');
-        expect(parsed.data?.plugin?.summary?.contributions).toEqual(['actions']);
-      } finally {
-        showOutput.restore();
-      }
-
       const output = captureConsoleJsonOutput();
       try {
-        await handlePluginsCommand(['marketplace', 'install', SAMPLE_PLUGIN_ID, '--json'], {
-          marketplaceIndexService: marketplaceIndexServiceForSnapshot(listing.snapshot),
-        });
+        installMarketplaceHttpFixture(listing.snapshot);
+        await runCompiledPluginCommand(['marketplace', 'install', listing.sourceId, SAMPLE_PLUGIN_ID,
+          '--version', '1.0.0', '--machine', 'machine-1', '--json']);
 
         const parsed = output.json<{
           ok: boolean;
           kind: string;
-          data?: { pluginId?: string; desiredGeneration?: string };
+          data?: { change?: { pluginId?: string; desiredGeneration?: string } };
         }>();
 
         expect(parsed.ok).toBe(true);
         expect(parsed.kind).toBe('plugins_marketplace_install');
-        expect(parsed.data).toMatchObject({
+        expect(parsed.data?.change).toMatchObject({
           pluginId: SAMPLE_PLUGIN_ID,
           desiredGeneration: 'generation-marketplace-1',
         });
+        expect(activePluginCliActionHost?.delivered).toEqual([expect.objectContaining({
+          target: { kind: 'machine', machineId: 'machine-1' }, input: {
+            machineId: 'machine-1', source: { kind: 'marketplace', sourceId: listing.sourceId,
+              pluginId: SAMPLE_PLUGIN_ID, version: '1.0.0' },
+          },
+        })]);
       } finally {
         output.restore();
       }
@@ -2841,7 +2684,6 @@ describe('handlePluginsCommand', () => {
 
   it('requires the selected Community npm package name for exact install when it differs from the plugin id', async () => {
     const home = await createTempDir('happier-plugin-marketplace-community-install-');
-    const sourceUrl = 'https://marketplace.invalid/community-source.json';
     const envScope = createEnvKeyScope(['HAPPIER_HOME_DIR', 'PATH']);
     envScope.patch({
       HAPPIER_HOME_DIR: home,
@@ -2853,15 +2695,15 @@ describe('handlePluginsCommand', () => {
     const packageName = '@acme/npm-name-different-from-plugin-id';
     const seeded = await seedExactCuratedMarketplaceListing({
       happyHomeDir: home,
-      sourceUrl,
     });
+    const communitySource = communityMarketplaceSourceFixture();
     const communitySnapshot: MarketplaceIndexSourceSnapshotV1 = {
       ...seeded.snapshot,
       source: {
-        id: 'marketplace:community-npm',
-        title: 'Community npm',
-        kind: 'community-npm',
-        sourceUrl: 'https://registry.npmjs.org/-/v1/search',
+        id: communitySource.id,
+        title: communitySource.title,
+        kind: communitySource.origin,
+        sourceUrl: communitySource.sourceUrl,
       },
       entries: seeded.snapshot.entries.map((entry) => ({
         ...entry,
@@ -2870,7 +2712,7 @@ describe('handlePluginsCommand', () => {
         updatePolicy: 'allowed',
       })),
     };
-    const marketplaceIndexService = marketplaceIndexServiceForSnapshot(communitySnapshot);
+    installMarketplaceHttpFixture(communitySnapshot);
     daemonBoundary.requestChange.mockResolvedValueOnce({
       kind: 'committed',
       pluginId: SAMPLE_PLUGIN_ID,
@@ -2882,13 +2724,14 @@ describe('handlePluginsCommand', () => {
     try {
       const missingPackageOutput = captureConsoleJsonOutput();
       try {
-        await handlePluginsCommand([
+        await runCompiledPluginCommand([
           'marketplace',
           'install',
-          'community-npm',
+          communitySource.id,
           SAMPLE_PLUGIN_ID,
+          '--version', '1.0.0', '--machine', 'machine-1',
           '--json',
-        ], { marketplaceIndexService });
+        ]);
         expect(missingPackageOutput.json()).toMatchObject({
           ok: false,
           kind: 'plugins_marketplace_install',
@@ -2897,34 +2740,31 @@ describe('handlePluginsCommand', () => {
       } finally {
         missingPackageOutput.restore();
       }
-      expect(marketplaceIndexService.queryExactListing).not.toHaveBeenCalled();
+      expect(undici.fetch).not.toHaveBeenCalled();
 
       process.exitCode = undefined;
       const output = captureConsoleJsonOutput();
       try {
-        await handlePluginsCommand([
+        await runCompiledPluginCommand([
           'marketplace',
           'install',
-          'community-npm',
+          communitySource.id,
           SAMPLE_PLUGIN_ID,
           '--package',
           packageName,
+          '--version', '1.0.0', '--machine', 'machine-1',
           '--json',
-        ], { marketplaceIndexService });
+        ]);
         expect(output.json()).toMatchObject({
           ok: true,
           kind: 'plugins_marketplace_install',
-          data: { pluginId: SAMPLE_PLUGIN_ID },
+          data: { change: { pluginId: SAMPLE_PLUGIN_ID } },
         });
       } finally {
         output.restore();
       }
 
-      expect(marketplaceIndexService.queryExactListing).toHaveBeenCalledWith({
-        sourceId: 'marketplace:community-npm',
-        pluginId: SAMPLE_PLUGIN_ID,
-        packageName,
-      });
+      expect(undici.fetch).toHaveBeenCalled();
       expect(daemonBoundary.requestChange).toHaveBeenCalledWith(expect.objectContaining({
         kind: 'installNpm',
         packageName,
@@ -2937,85 +2777,33 @@ describe('handlePluginsCommand', () => {
     }
   });
 
-  it('maps the friendly Community npm source alias to the single synthesized source for list and show', async () => {
-    const packageName = '@acme/community-alias';
-    const home = await createTempDir('happier-plugin-marketplace-community-alias-');
-    const sourceUrl = 'https://marketplace.invalid/community-alias.json';
-    const envScope = createEnvKeyScope(['HAPPIER_HOME_DIR', 'PATH']);
-    envScope.patch({
-      HAPPIER_HOME_DIR: home,
-      PATH: process.env.PATH ?? '',
-    });
-    reloadConfiguration();
-    const previousExitCode = process.exitCode;
-    process.exitCode = undefined;
-    const seeded = await seedExactCuratedMarketplaceListing({
-      happyHomeDir: home,
-      sourceUrl,
-    });
-    const snapshot: MarketplaceIndexSourceSnapshotV1 = {
-      ...seeded.snapshot,
-      source: {
-        id: 'marketplace:community-npm',
-        title: 'Community npm',
-        kind: 'community-npm',
-        sourceUrl: 'https://registry.npmjs.org/-/v1/search',
-      },
-      entries: seeded.snapshot.entries.map((entry) => ({
-        ...entry,
-        distribution: { ...entry.distribution, packageName },
-        review: { status: 'unreviewed', reviewedAt: null },
-        updatePolicy: 'allowed',
-      })),
-    };
+  it('keeps source failures typed while another selected Account catalog still lists', async () => {
+    const home = await createTempDir('happier-plugin-marketplace-alias-unavailable-');
     try {
-      const marketplaceIndexService = marketplaceIndexServiceForSnapshot(snapshot);
-
-      const listOutput = captureConsoleJsonOutput();
-      try {
-        await handlePluginsCommand(['marketplace', 'list', 'community-npm', '--json'], { marketplaceIndexService });
-        expect(listOutput.json()).toMatchObject({
-          ok: true,
-          kind: 'plugins_marketplace_list',
-          data: { source: { id: 'marketplace:community-npm', origin: 'community-npm' } },
-        });
-      } finally {
-        listOutput.restore();
-      }
-
-      const showOutput = captureConsoleJsonOutput();
-      try {
-        await handlePluginsCommand(['marketplace', 'show', 'community-npm', SAMPLE_PLUGIN_ID, '--package', packageName, '--json'], { marketplaceIndexService });
-        expect(showOutput.json()).toMatchObject({
-          ok: true,
-          kind: 'plugins_marketplace_show',
-          data: { source: { id: 'marketplace:community-npm', origin: 'community-npm' } },
-        });
-      } finally {
-        showOutput.restore();
-      }
-
-      expect(marketplaceIndexService.queryExactListing).toHaveBeenCalledWith({
-        sourceId: 'marketplace:community-npm',
-        pluginId: SAMPLE_PLUGIN_ID,
-        packageName,
+      const listing = await seedExactCuratedMarketplaceListing({ happyHomeDir: home });
+      const source = accountMarketplaceUserSourceFixture({ sourceUrl: 'https://catalog.example/team.json' });
+      const unavailable = accountMarketplaceUserSourceFixture({ sourceUrl: 'https://unavailable.example/catalog.json' });
+      publishAccountRegistrySourcesFixture([source, unavailable]);
+      const catalog = { ...listing.snapshot, source: { id: source.id, title: source.title,
+        kind: 'user' as const, sourceUrl: source.url } };
+      vi.spyOn(globalThis, 'fetch').mockImplementation(async input => {
+        if (String(input) !== source.url) throw new TypeError('Network unavailable');
+        return new Response(JSON.stringify(catalog), { status: 200 });
       });
-    } finally {
-      process.exitCode = previousExitCode;
-      envScope.restore();
-      reloadConfiguration();
-      await removeTempDir(home);
-    }
+      expect(await executeMarketplaceRegistryAlias(['list'], ['--source', source.id, '--source', unavailable.id]))
+        .toMatchObject({ ok: true, result: { pages: [
+          { sourceId: source.id, status: { state: 'ok' }, items: [{ itemId: SAMPLE_PLUGIN_ID }] },
+          { sourceId: unavailable.id, status: { state: 'unreachable' }, items: [], nextCursor: null },
+        ] } });
+    } finally { await removeTempDir(home); }
   });
 
   it.each([
-    ['withdrawn review', { reviewStatus: 'withdrawn' as const }, /withdrawn|approved review/i],
-    ['unverified registry profile', { registryProfileId: 'registry:private' }, /registry profile|artifact access/i],
-    ['stale marketplace facts', { freshnessState: 'stale' as const }, /fresh marketplace|source facts/i],
-    ['stale-offline marketplace facts', { freshnessState: 'stale-offline' as const }, /fresh marketplace|source facts/i],
-  ])('fails closed for a curated listing with %s before contacting the daemon', async (_label, listingOverride, expectedMessage) => {
+    ['withdrawn review', { reviewStatus: 'withdrawn' as const }],
+    ['stale marketplace facts', { freshnessState: 'stale' as const }],
+    ['stale-offline marketplace facts', { freshnessState: 'stale-offline' as const }],
+  ])('fails closed for a curated listing with %s before contacting the daemon', async (_label, listingOverride) => {
     const home = await createTempDir('happier-plugin-marketplace-refused-install-');
-    const sourceUrl = 'https://marketplace.invalid/catalog.json';
     const envScope = createEnvKeyScope(['HAPPIER_HOME_DIR', 'PATH']);
     envScope.patch({
       HAPPIER_HOME_DIR: home,
@@ -3024,18 +2812,19 @@ describe('handlePluginsCommand', () => {
     reloadConfiguration();
     const previousExitCode = process.exitCode;
     process.exitCode = undefined;
-    const listing = await seedExactCuratedMarketplaceListing({ happyHomeDir: home, sourceUrl, ...listingOverride });
+    const listing = await seedExactCuratedMarketplaceListing({ happyHomeDir: home, ...listingOverride });
 
     try {
       const output = captureConsoleJsonOutput();
       try {
-        await handlePluginsCommand(['marketplace', 'install', SAMPLE_PLUGIN_ID, '--json'], {
-          marketplaceIndexService: marketplaceIndexServiceForSnapshot(listing.snapshot),
-        });
+        installMarketplaceHttpFixture(listing.snapshot);
+        await runCompiledPluginCommand(['marketplace', 'install', listing.sourceId, SAMPLE_PLUGIN_ID,
+          '--version', '1.0.0', '--machine', 'machine-1', '--json']);
         const parsed = output.json<{ ok: boolean; error?: { code?: string; message?: string } }>();
         expect(parsed.ok).toBe(false);
         expect(parsed.error).toMatchObject({ code: 'install_unavailable' });
-        expect(parsed.error?.message).toMatch(expectedMessage);
+        // Source facts and transport/cache currentness are classified by the
+        // canonical exact service, not wording reconstructed by this CLI.
       } finally {
         output.restore();
       }
@@ -3049,7 +2838,7 @@ describe('handlePluginsCommand', () => {
     }
   });
 
-  it('treats an explicit local-path install as the source-code trust action', async () => {
+  it('prepares an explicit local path through registered daemon review and commits only the authenticated human decision', async () => {
     const home = await createTempDir('happier-plugin-cli-');
     const envScope = createEnvKeyScope(['HAPPIER_HOME_DIR', 'PATH']);
     envScope.patch({ HAPPIER_HOME_DIR: home, PATH: '' });
@@ -3057,20 +2846,51 @@ describe('handlePluginsCommand', () => {
 
     const sourceRoot = await mkdtemp(join(tmpdir(), 'happier-plugin-source-'));
     await materializeSamplePluginFixture(sourceRoot);
+    const control = fastify({ logger: false });
+    const controlToken = 'fixture-private-plugin-control';
 
     try {
-      await installPluginThroughPresentUserTerminal(sourceRoot);
-      expect(promptBoundary.confirm).not.toHaveBeenCalled();
-      expect(daemonBoundary.requestChange).toHaveBeenCalledWith({
-        kind: 'installPath', locator: sourceRoot,
+      activePluginChangeService = await createPluginChangeService();
+      registerDaemonPluginChangeRoutes(control, {
+        service: activePluginChangeService,
+        requireAuth: (request, reply) => {
+          if (request.headers.authorization !== `Bearer ${controlToken}`) void reply.code(401).send({ error: 'unauthorized' });
+        },
       });
-      expect(daemonBoundary.decideChange).toHaveBeenCalledWith(expect.objectContaining({
-        decision: 'installAndTrust',
-      }));
+      await control.ready();
+      // HTTP/control-token custody is the boundary; registration, request parsing,
+      // candidate preparation, trust and durable installation stay real.
+      daemonBoundary.requestChange.mockImplementation(async request => {
+        const response = await control.inject({ method: 'POST', url: PLUGIN_CHANGE_REQUEST_PATH,
+          headers: { authorization: `Bearer ${controlToken}` }, payload: request });
+        expect(response.statusCode).toBe(200);
+        return response.json();
+      });
+      const output = captureConsoleJsonOutput();
+      try {
+        await runCompiledPluginCommand(['install', sourceRoot, '--json']);
+        expect(output.json()).toMatchObject({ ok: false, kind: 'plugins_install', error: { code: 'review_required' } });
+        expect(daemonBoundary.requestChange).toHaveBeenCalledWith({ kind: 'installPath', locator: sourceRoot });
+        expect(daemonBoundary.decideChange).not.toHaveBeenCalled();
+        expect((await createPluginStateStore({ happyHomeDir: home }).read()).plugins[SAMPLE_PLUGIN_ID]).toBeUndefined();
+        const issued = daemonBoundary.requestChange.mock.results[0];
+        if (!issued || issued.type !== 'return') throw new Error('Expected a daemon-issued review');
+        const pending = PluginChangePendingReviewResultSchema.parse(await issued.value);
+        const decision = { pendingChangeId: pending.pendingChangeId, decision: 'installAndTrust', optionalSelections: [] };
+        expect((await control.inject({ method: 'POST', url: PLUGIN_CHANGE_DECISION_PATH, payload: decision })).statusCode).toBe(401);
+        expect((await createPluginStateStore({ happyHomeDir: home }).read()).plugins[SAMPLE_PLUGIN_ID]).toBeUndefined();
+        const committed = await control.inject({ method: 'POST', url: PLUGIN_CHANGE_DECISION_PATH,
+          headers: { authorization: `Bearer ${controlToken}` }, payload: decision });
+        expect(committed.statusCode).toBe(200);
+        expect(committed.json()).toMatchObject({ kind: 'committed', pluginId: SAMPLE_PLUGIN_ID });
+        expect((await createPluginStateStore({ happyHomeDir: home }).read()).plugins[SAMPLE_PLUGIN_ID]).toBeDefined();
+      } finally { output.restore(); }
     } finally {
+      await control.close();
       envScope.restore();
       reloadConfiguration();
       await removeTempDir(home);
+      await removeTempDir(sourceRoot);
     }
   });
 
@@ -3081,21 +2901,16 @@ describe('handlePluginsCommand', () => {
     reloadConfiguration();
     const sourceRoot = await mkdtemp(join(tmpdir(), 'happier-plugin-source-'));
     await materializeSamplePluginFixture(sourceRoot);
-    daemonBoundary.requestChange.mockResolvedValueOnce({
-      kind: 'committed',
-      pluginId: SAMPLE_PLUGIN_ID,
-      desiredGeneration: 'generation-1',
-      appliedGeneration: null,
-      pendingSurfaces: ['runtime'],
-    });
-
     try {
+      await installPluginThroughPresentUserTerminal(sourceRoot);
+      daemonBoundary.requestChange.mockResolvedValueOnce({ kind: 'committed', pluginId: SAMPLE_PLUGIN_ID,
+        desiredGeneration: 'generation-1', appliedGeneration: null, pendingSurfaces: ['reconciliation'] });
       const output = captureConsoleJsonOutput();
       try {
-        await handlePluginsCommand(['install', sourceRoot, '--json']);
-        const parsed = output.json<{ ok: boolean; data?: { pendingSurfaces: readonly string[]; appliedGeneration: string | null } }>();
+        await runCompiledPluginCommand(['install', sourceRoot, '--force', '--json']);
+        const parsed = output.json<{ ok: boolean; data?: { change: { pendingSurfaces: readonly string[]; appliedGeneration: string | null } } }>();
         expect(parsed.ok).toBe(true);
-        expect(parsed.data).toMatchObject({ pendingSurfaces: ['runtime'], appliedGeneration: null });
+        expect(parsed.data?.change).toMatchObject({ pendingSurfaces: ['reconciliation'], appliedGeneration: null });
       } finally {
         output.restore();
       }
@@ -3130,7 +2945,7 @@ describe('handlePluginsCommand', () => {
 
       const output = captureConsoleJsonOutput();
       try {
-        await handlePluginsCommand(['uninstall', SAMPLE_PLUGIN_ID, '--json']);
+        await runCompiledPluginCommand(['uninstall', SAMPLE_PLUGIN_ID, '--json']);
 
         const parsed = output.json<{
           v: 1;
@@ -3141,9 +2956,7 @@ describe('handlePluginsCommand', () => {
               pluginId: string;
               source: { kind: string };
             };
-            desiredGeneration: string | null;
-            appliedGeneration: string | null;
-            pendingSurfaces: readonly string[];
+            change: { desiredGeneration: string | null; appliedGeneration: string | null; pendingSurfaces: readonly string[] };
           };
         }>();
 
@@ -3155,7 +2968,7 @@ describe('handlePluginsCommand', () => {
             kind: 'path',
           },
         });
-        expect(parsed.data).toMatchObject({
+        expect(parsed.data?.change).toMatchObject({
           desiredGeneration: null,
           appliedGeneration: null,
           pendingSurfaces: [],
@@ -3275,7 +3088,7 @@ describe('handlePluginsCommand', () => {
     try {
       const unconfirmed = captureConsoleJsonOutput();
       try {
-        await handlePluginsCommand(['uninstall', SAMPLE_PLUGIN_ID, '--delete-data', '--json']);
+        await runCompiledPluginCommand(['uninstall', SAMPLE_PLUGIN_ID, '--delete-data', '--json']);
         expect(unconfirmed.json<{ ok: boolean; error?: { code?: string } }>()).toMatchObject({
           ok: false,
           error: { code: 'confirmation_required' },
@@ -3295,7 +3108,7 @@ describe('handlePluginsCommand', () => {
       process.exitCode = undefined;
       const partial = captureConsoleJsonOutput();
       try {
-        await handlePluginsCommand(['uninstall', SAMPLE_PLUGIN_ID, '--delete-data', '--yes', '--json']);
+        await runCompiledPluginCommand(['uninstall', SAMPLE_PLUGIN_ID, '--delete-data', '--yes', '--json']);
         expect(partial.json<{ ok: boolean; error?: { code?: string; completed?: readonly string[]; pending?: readonly string[] } }>()).toMatchObject({
           ok: false,
           error: {
@@ -3322,7 +3135,7 @@ describe('handlePluginsCommand', () => {
       process.exitCode = undefined;
       const retry = captureConsoleJsonOutput();
       try {
-        await handlePluginsCommand(['uninstall', SAMPLE_PLUGIN_ID, '--delete-data', '--yes', '--json']);
+        await runCompiledPluginCommand(['uninstall', SAMPLE_PLUGIN_ID, '--delete-data', '--yes', '--json']);
         expect(retry.json<{ ok: boolean; data?: { pluginId?: string; alreadyUninstalled?: boolean } }>()).toMatchObject({
           ok: true,
           data: { pluginId: SAMPLE_PLUGIN_ID, alreadyUninstalled: true },
@@ -3342,7 +3155,7 @@ describe('handlePluginsCommand', () => {
   it('rejects an invalid destructive plugin identity before reading or mutating owned data', async () => {
     const output = captureConsoleJsonOutput();
     try {
-      await handlePluginsCommand(['uninstall', '../sibling.plugin', '--delete-data', '--yes', '--json']);
+      await runCompiledPluginCommand(['uninstall', '../sibling.plugin', '--delete-data', '--yes', '--json']);
       expect(output.json<{ ok: boolean; error?: { code?: string } }>()).toMatchObject({
         ok: false,
         error: { code: 'plugin_data_removal_identity_invalid' },
@@ -3367,7 +3180,7 @@ describe('handlePluginsCommand', () => {
       daemonBoundary.requestChange.mockResolvedValueOnce({ kind: 'unavailable', code: 'daemon_unavailable' });
       const output = captureConsoleJsonOutput();
       try {
-        await handlePluginsCommand(['uninstall', SAMPLE_PLUGIN_ID, '--json']);
+        await runCompiledPluginCommand(['uninstall', SAMPLE_PLUGIN_ID, '--json']);
 
         const parsed = output.json<{
           v: 1;
@@ -3651,7 +3464,7 @@ describe('handlePluginsCommand', () => {
     try {
       const installOutput = captureConsoleJsonOutput();
       try {
-        await handlePluginsCommand(['install', sourceRoot, '--dry-run', '--json']);
+        await runCompiledPluginCommand(['install', sourceRoot, '--dry-run', '--json']);
 
         const parsed = installOutput.json<{
           v: 1;
@@ -3947,8 +3760,7 @@ describe('handlePluginsCommand', () => {
   });
 
   it('routes the legacy install --dev spelling through daemon development-root registration', async () => {
-    const ensureDaemon = vi.fn(async () => undefined);
-    const controlPluginDevelopment = vi.fn(async () => ({
+    daemonBoundary.controlDevelopment.mockResolvedValue({
       kind: 'status' as const,
       status: {
         roots: [{
@@ -3959,17 +3771,17 @@ describe('handlePluginsCommand', () => {
         }],
         plugins: [],
       },
-    }));
+    });
     const output = captureConsoleJsonOutput();
     try {
-      await handlePluginsCommand([
+      await runCompiledPluginCommand([
         'install',
         '/fixture/plugin',
         '--dev',
         '--sdk-registry',
         'http://127.0.0.1:43127/',
         '--json',
-      ], { ensureDaemon, controlPluginDevelopment });
+      ]);
 
       expect(output.json()).toMatchObject({
         ok: true,
@@ -3980,12 +3792,11 @@ describe('handlePluginsCommand', () => {
           },
         },
       });
-      expect(ensureDaemon).toHaveBeenCalledOnce();
-      expect(controlPluginDevelopment).toHaveBeenCalledWith({
+      expect(daemonBoundary.controlDevelopment).toHaveBeenCalledWith({
         kind: 'registerExplicit',
         rootPath: '/fixture/plugin',
-        sdkRegistryOrigin: 'http://127.0.0.1:43127',
-      });
+        sdkRegistryOrigin: 'http://127.0.0.1:43127/',
+      }, {});
       expect(daemonBoundary.requestChange).not.toHaveBeenCalled();
     } finally {
       output.restore();
@@ -4003,49 +3814,17 @@ describe('handlePluginsCommand', () => {
     const marketplace = await createRemoteMarketplaceServer();
 
     try {
-      const listOutput = captureConsoleJsonOutput();
-      try {
-        await handlePluginsCommand(['marketplace', 'list', marketplace.catalogUrl, '--json']);
-
-        const parsed = listOutput.json<{ v: 1; ok: boolean; kind: string; error?: { code: string } }>();
-
-        expect(parsed.ok).toBe(false);
-        expect(parsed.kind).toBe('plugins_marketplace_list');
-        expect(parsed.error?.code).toBe('not_found');
-        expect((parsed as { error?: { message?: string } }).error?.message).toContain('plugins marketplace sources add');
-      } finally {
-        listOutput.restore();
-      }
-
-      const showOutput = captureConsoleJsonOutput();
-      try {
-        await handlePluginsCommand(['marketplace', 'show', marketplace.catalogUrl, SAMPLE_PLUGIN_ID, '--json']);
-
-        const parsed = showOutput.json<{
-          v: 1;
-          ok: boolean;
-          kind: string;
-          error?: { code: string };
-        }>();
-
-        expect(parsed.ok).toBe(false);
-        expect(parsed.kind).toBe('plugins_marketplace_show');
-        expect(parsed.error?.code).toBe('not_found');
-        expect((parsed as { error?: { message?: string } }).error?.message).toContain('plugins marketplace sources add');
-      } finally {
-        showOutput.restore();
-      }
-
       const installOutput = captureConsoleJsonOutput();
       try {
-        await handlePluginsCommand(['marketplace', 'install', marketplace.catalogUrl, SAMPLE_PLUGIN_ID, '--json']);
+        await runCompiledPluginCommand(['marketplace', 'install', marketplace.catalogUrl, SAMPLE_PLUGIN_ID,
+          '--version', '1.0.0', '--machine', 'machine-1', '--json']);
 
         const parsed = installOutput.json<{ v: 1; ok: boolean; kind: string; error?: { code: string } }>();
 
         expect(parsed.ok).toBe(false);
         expect(parsed.kind).toBe('plugins_marketplace_install');
         expect(parsed.error?.code).toBe('install_unavailable');
-        expect((parsed as { error?: { message?: string } }).error?.message).toContain('plugins marketplace sources add');
+        expect(daemonBoundary.requestChange).not.toHaveBeenCalled();
       } finally {
         installOutput.restore();
       }

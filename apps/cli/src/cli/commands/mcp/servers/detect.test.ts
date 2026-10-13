@@ -10,7 +10,6 @@ function createDeps(overrides?: Partial<McpCommandDeps>): McpCommandDeps {
     updateAccountSettingsV2WithRetry: vi.fn(async () => ({}) as any),
     ensureMachineIdForCredentials: vi.fn(async () => ({ machineId: 'machine-1' })),
     detectProviderMcpServers: vi.fn(async () => ({ servers: [], warnings: [] })),
-    probeMcpStdioServerTools: vi.fn(async () => []),
     randomUUID: vi.fn(() => 'uuid'),
     nowMs: vi.fn(() => 0),
     createExternalMcpServer: vi.fn(() => ({ mcp: { connect: vi.fn(async () => {}) }, toolNames: [] }) as any),

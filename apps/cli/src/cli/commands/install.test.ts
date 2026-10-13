@@ -279,129 +279,11 @@ describe('runInstallCliCommand', () => {
     expect(stdout.text()).not.toContain('Installing');
   });
 
-  it('passes force installs through as skipIfInstalled false', async () => {
-    const invokeAgentCliInstall = vi.fn().mockResolvedValue({
-      ok: true,
-      alreadyInstalled: false,
-      logPath: null,
-      plan: {
-        providerId: 'gemini',
-        title: 'Google Gemini CLI',
-        binaries: ['gemini'],
-        platform: 'linux',
-        docsUrl: 'https://goo.gle/gemini-cli-auth-docs',
-        commands: [],
-        requiresAdmin: false,
-        installMode: 'managed_package',
-        managedInstall: {
-          kind: 'managed_package',
-          packageName: '@google/gemini-cli',
-          binaryName: 'gemini',
-        },
-      },
-    });
-
-    await runInstallCliCommand(makeContext(['install', 'provider', 'gemini', '--force']), {
-      log: vi.fn(),
-      error: vi.fn(),
-      exit: vi.fn() as never,
-      runDoctorCommand: vi.fn(),
-      invokeAgentCliInstall,
-    });
-
-    expect(invokeAgentCliInstall).toHaveBeenCalledWith(
-      expect.objectContaining({
-        agentId: 'gemini',
-        params: { dryRun: false, skipIfInstalled: false },
-      }),
-    );
-  });
-
-  it('installs an external Agent from its normalized CLI descriptor', async () => {
-    const invokeAgentCliInstall = vi.fn().mockResolvedValue({
-      ok: true,
-      alreadyInstalled: false,
-      logPath: null,
-      plan: {
-        agentId: 'acme-agent',
-        title: 'Acme Agent CLI',
-        binaries: ['acme-agent'],
-        platform: 'linux',
-        docsUrl: null,
-        commands: [],
-        requiresAdmin: false,
-        installMode: 'managed_package',
-        managedInstall: {
-          kind: 'managed_package',
-          packageName: '@acme/agent-cli',
-          binaryName: 'acme-agent',
-        },
-      },
-    });
-    const stdout = captureStdout();
-    try {
-      await runInstallCliCommand(makeContext(['install', 'provider', 'acme-agent']), {
-        log: vi.fn(),
-        error: vi.fn(),
-        exit: vi.fn() as never,
-        runDoctorCommand: vi.fn(),
-        invokeAgentCliInstall,
-      });
-    } finally {
-      stdout.restore();
-    }
-
-    expect(invokeAgentCliInstall).toHaveBeenCalledWith(expect.objectContaining({
-      agentId: 'acme-agent',
-      runtimeSpec: expect.objectContaining({
-        id: 'acme-agent',
-        title: 'Acme Agent CLI',
-        binaryName: 'acme-agent',
-      }),
-    }));
-    // Non-TTY output: the install is a visible step that completes with its outcome.
-    expect(stdout.text()).toContain('- [..] Installing Acme Agent CLI\n- [✓] Installed Acme Agent CLI via a managed package\n');
-  });
-
-  it('defaults vendor recipe execution for explicit provider installs', async () => {
-    const invokeAgentCliInstall = vi.fn().mockResolvedValue({
-      ok: true,
-      alreadyInstalled: false,
-      logPath: null,
-      plan: {
-        providerId: 'claude',
-        title: 'Claude Code CLI',
-        binaries: ['claude'],
-        platform: 'linux',
-        docsUrl: 'https://claude.ai',
-        commands: [{ cmd: 'bash', args: ['-lc', 'curl -fsSL https://claude.ai/install.sh | bash'], requiresAdmin: false, note: null }],
-        requiresAdmin: false,
-        installMode: 'vendor_recipe',
-        managedInstall: null,
-      },
-    });
-
-    await runInstallCliCommand(makeContext(['install', 'provider', 'claude']), {
-      log: vi.fn(),
-      error: vi.fn(),
-      exit: vi.fn() as never,
-      runDoctorCommand: vi.fn(),
-      invokeAgentCliInstall,
-    });
-
-    expect(invokeAgentCliInstall).toHaveBeenCalledWith(
-      expect.objectContaining({
-        agentId: 'claude',
-        params: { dryRun: false, skipIfInstalled: true },
-      }),
-    );
-  });
-
   it('rejects unknown provider ids with a non-zero exit', async () => {
     const error = vi.fn();
     const exit = vi.fn();
 
-    await runInstallCliCommand(makeContext(['install', 'provider', 'not-a-provider']), {
+    await runInstallCliCommand(makeContext(['install', 'provider', 'not-a-provider', '--dry-run']), {
       log: vi.fn(),
       error,
       exit,
@@ -410,28 +292,6 @@ describe('runInstallCliCommand', () => {
     });
 
     expect(error).toHaveBeenCalledWith(expect.stringContaining('Unknown provider id: not-a-provider'));
-    expect(exit).toHaveBeenCalledWith(1);
-  });
-
-  it('surfaces unexpected provider install failures instead of rejecting silently', async () => {
-    const error = vi.fn();
-    const exit = vi.fn();
-
-    const stdout = captureStdout();
-    try {
-      await runInstallCliCommand(makeContext(['install', 'provider', 'codex']), {
-        log: vi.fn(),
-        error,
-        exit,
-        runDoctorCommand: vi.fn(),
-        invokeAgentCliInstall: vi.fn().mockRejectedValue(new Error('network stalled')),
-      });
-    } finally {
-      stdout.restore();
-    }
-
-    expect(stdout.text()).toMatch(/^- \[x\] Installing .+$/m);
-    expect(error).toHaveBeenCalledWith(expect.stringContaining('network stalled'));
     expect(exit).toHaveBeenCalledWith(1);
   });
 

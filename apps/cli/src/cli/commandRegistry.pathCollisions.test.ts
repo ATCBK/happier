@@ -3,9 +3,25 @@ import { describe, expect, it } from 'vitest';
 import {
   assertComposedCommandPathsAreUnambiguous,
   listCollidingAgentCommandRoots,
+  ensureMergedAgentCommandRegistryLoaded,
+  resolveAdmittedActionCliCommand,
 } from './commandRegistry';
 
 describe('composed CLI command path ownership', () => {
+  it('admits the real Action catalog alongside static commands at startup', async () => {
+    await expect(ensureMergedAgentCommandRegistryLoaded()).resolves.toBeUndefined();
+  });
+
+  it('dispatches the Found list default and its read leaf from the real Action catalog', async () => {
+    await ensureMergedAgentCommandRegistryLoaded();
+    expect(await resolveAdmittedActionCliCommand(['skills', 'found', '--machine', 'machine_1']))
+      .toMatchObject({ actionId: 'skills.found.list', path: ['skills', 'found'] });
+    expect(await resolveAdmittedActionCliCommand(['skills', 'found', 'show', 'review', '--machine', 'machine_1']))
+      .toMatchObject({ actionId: 'skills.found.read', path: ['skills', 'found', 'show'] });
+    expect(await resolveAdmittedActionCliCommand(['skills', 'adopt', 'review', '--machine', 'machine_1']))
+      .toMatchObject({ actionId: 'skills.found.adopt', path: ['skills', 'adopt'] });
+  });
+
   it('rejects exact and subtree collisions across Action, static workflow, Agent, and plugin claims', () => {
     expect(() => assertComposedCommandPathsAreUnambiguous([
       { source: 'static', ownerId: 'session history', path: ['session', 'history'] },

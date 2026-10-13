@@ -3,7 +3,6 @@ import type { McpCommandDeps } from '../deps';
 import { cmdMcpServersAdd } from './add';
 import { cmdMcpServersDetect } from './detect';
 import { cmdMcpServersList } from './list';
-import { cmdMcpServersTest } from './test';
 
 export async function runMcpServersSubcommand(
   subcommand: string,
@@ -27,7 +26,8 @@ export async function runMcpServersSubcommand(
     return true;
   }
   if (trimmed === 'test') {
-    await cmdMcpServersTest(argv, deps, opts);
+    const { tryHandleMcpServerCliCommand } = await import('@/cli/actions/adapters/mcpServersArgv');
+    await tryHandleMcpServerCliCommand({ argv: ['mcp', ...argv] });
     return true;
   }
 

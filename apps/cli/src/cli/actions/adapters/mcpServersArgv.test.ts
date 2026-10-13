@@ -1,12 +1,15 @@
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import { createActionExecutor } from '@happier-dev/protocol/actions/actionExecutor';
 import { createMcpServerActionExecuteV1 } from '@happier-dev/protocol/mcp/servers/serverActionsV1';
-import { loadMcpServerCatalogV1 } from '@happier-dev/protocol/mcp/servers/serverCatalogV1';
+import { commitMcpServerCatalogMutationV1, loadMcpServerCatalogV1 } from '@happier-dev/protocol/mcp/servers/serverCatalogV1';
+import type { McpServerCatalogV1 } from '@happier-dev/protocol/mcp/servers/serverRowsV1';
 import { executeConnectedServiceConfigurationActionV1, prepareConnectedServiceRevokeInputV1, type ConnectedServiceConfigurationActionHostV1 } from '@happier-dev/protocol/connect/execute-configuration-action';
 import { isApprovalRequiredByActionsSettings } from '@happier-dev/protocol/actions/actionApprovalPolicy';
 import { HOST_CONNECTED_ACCOUNT_SERVICE_REF_V1 as service } from '@happier-dev/protocol/connect/qualifiedConnectedAccountPersistence';
 import { MCP_SIGN_IN_CONNECTED_ACCOUNT_DESCRIPTOR } from '@/mcp/oauth/mcpSignInRuntime';
 import { tryHandleMcpServerCliCommand } from './mcpServersArgv';
+import { reloadConfiguration } from '@/configuration';
+import { captureConsoleJsonOutput } from '@/testkit/logger/captureOutput';
 
 const terminal = vi.hoisted(() => ({ prompt: vi.fn(), rpc: vi.fn(), inventory: vi.fn() }));
 vi.mock('axios', async importOriginal => {
@@ -19,7 +22,138 @@ vi.mock('@/terminal/prompts/promptInput', async importOriginal => ({
 vi.mock('@/session/transport/rpc/machineRpc', async importOriginal => ({
   ...await importOriginal<typeof import('@/session/transport/rpc/machineRpc')>(), callMachineRpc: terminal.rpc,
 }));
-afterEach(() => { terminal.prompt.mockReset(); terminal.inventory.mockReset(); vi.restoreAllMocks(); process.exitCode = 0; });
+afterEach(() => { terminal.prompt.mockReset(); terminal.inventory.mockReset(); vi.restoreAllMocks();
+  vi.unstubAllEnvs(); reloadConfiguration(); process.exitCode = 0; });
+
+describe('MCP compiled CLI tools', () => {
+  function fixture(changed?: 'account' | 'home', conflict = false, requireApproval = false) {
+    let catalog: McpServerCatalogV1 = { v: 1, bindings: [], servers: [
+      { id: 'decoy', name: 'server-id', transport: 'stdio', stdio: { command: 'fixture', args: [] },
+        env: {}, createdAt: 1, updatedAt: 1 },
+      { id: 'server-id', name: 'fixture', transport: 'stdio', stdio: { command: 'fixture', args: [] },
+        env: {}, createdAt: 1, updatedAt: 1, tools: { default: 'ask', overrides: { keep: 'off', read: 'ask' } } },
+    ] };
+    let revision = 9;
+    let reads = 0;
+    const writes: number[] = [];
+    // Only row persistence and credential reads are replaced. Loader, compiled
+    // CLI, Action executor, mutation reducer and catalog CAS stay real.
+    const mcpServerAction = createMcpServerActionExecuteV1({
+      readCatalog: () => loadMcpServerCatalogV1({ mode: 'plain', material: null, readRow: async () => {
+        if (changed === 'home') { vi.stubEnv('HAPPIER_SERVER_URL', 'https://changed-home.example.test'); reloadConfiguration(); }
+        return { status: 'present', revision, content: { t: 'plain', v: catalog } };
+      } }),
+      mutate: (change, expectedRevision) => commitMcpServerCatalogMutationV1({ catalog, revision, change, scope: null,
+        writeCatalog: async candidate => {
+          if (conflict || candidate.expectedRevision !== revision || expectedRevision !== revision) return { status: 'conflict', revision };
+          writes.push(expectedRevision); catalog = candidate.catalog;
+          return { status: 'updated', revision: ++revision, cursor: revision };
+        } }),
+      async machine() { throw new Error('Tools are Account-owned'); },
+    });
+    const executor = createActionExecutor({ mcpServerAction,
+      isActionApprovalRequired: (actionId, context) => isApprovalRequiredByActionsSettings(actionId, { v: 1,
+        approvalWaivedSurfaces: requireApproval ? {} : { 'mcp.servers.tools.set': ['cli'] } }, context) });
+    const output = captureConsoleJsonOutput<unknown>();
+    vi.spyOn(console, 'error').mockImplementation(() => {});
+    const deps = { readCredentialsFn: async () => ({ token: changed === 'account' && reads++ > 0 ? 'changed-token' : 'test-token', encryption: null }),
+      createExecutorFn: async () => ({ ...executor, async resolveSessionTarget() { throw new Error('Unexpected session'); } }) };
+    return { run: (argv: readonly string[]) => tryHandleMcpServerCliCommand({ argv, actionExecutionDeps: deps }),
+      current: () => catalog, revision: () => revision, writes, output };
+  }
+
+  it('resolves id before name and patches only named tools through the real catalog CAS', async () => {
+    const owner = fixture();
+    expect(await owner.run(['mcp', 'servers', 'tools', 'server-id', '--json'])).toBe(true);
+    expect(owner.output.json()).toMatchObject({ ok: true, data: { serverId: 'server-id' } });
+    expect(owner.writes).toEqual([]);
+    for (const setting of ['off', 'ask', 'allow', 'inherit']) {
+      expect(await owner.run(['mcp', 'servers', 'tools', 'server-id', 'set', 'read', setting, '--json'])).toBe(true);
+      expect(owner.current().servers[0]?.tools).toBeUndefined();
+      expect(owner.current().servers[1]?.tools).toEqual({ default: 'ask',
+        overrides: setting === 'inherit' ? { keep: 'off' } : { keep: 'off', read: setting } });
+    }
+    expect(owner.writes).toEqual([9, 10, 11, 12]);
+  });
+
+  it.each([['ask', 'ask'], ['read-only', 'allow_read_only'], ['all', 'allow_all']] as const)
+    ('maps the friendly default %s through the compiled caller binder', async (friendly, expected) => {
+      const owner = fixture();
+      expect(await owner.run(['mcp', 'servers', 'tools', 'fixture', 'default', friendly, '--json'])).toBe(true);
+      expect(owner.current().servers[1]?.tools).toEqual({ default: expected, overrides: { keep: 'off', read: 'ask' } });
+      expect(owner.revision()).toBe(10);
+    });
+
+  it.each(['account', 'home'] as const)('refuses a changed captured %s before mutation', async changed => {
+    const owner = fixture(changed);
+    expect(await owner.run(['mcp', 'servers', 'tools', 'fixture', 'set', 'read', 'allow', '--json'])).toBe(true);
+    expect(owner.writes).toEqual([]);
+    expect(owner.revision()).toBe(9);
+    expect(process.exitCode).toBe(1);
+  });
+
+  it('preserves CAS conflict refusal and normal compiler argument validation', async () => {
+    const owner = fixture(undefined, true);
+    expect(await owner.run(['mcp', 'servers', 'tools', 'fixture', 'set', 'read', 'allow', '--json'])).toBe(true);
+    expect(owner.writes).toEqual([]);
+    expect(process.exitCode).toBe(1);
+    for (const args of [['set', 'read', 'invalid'], ['default', 'invalid'], ['set', 'read', 'allow', 'extra']]) {
+      process.exitCode = 0;
+      expect(await owner.run(['mcp', 'servers', 'tools', 'fixture', ...args, '--json'])).toBe(true);
+      expect(process.exitCode).toBe(1);
+      expect(owner.writes).toEqual([]);
+    }
+    expect(owner.revision()).toBe(9);
+  });
+
+  it('leaves approval admission at the compiled Action and keeps raw whole-input paths', async () => {
+    const owner = fixture(undefined, false, true);
+    expect(await owner.run(['mcp', 'servers', 'tools', 'fixture', 'set', 'read', 'allow', '--json'])).toBe(true);
+    expect(owner.writes).toEqual([]);
+    expect(owner.revision()).toBe(9);
+    process.exitCode = 0;
+    expect(await owner.run(['mcp', 'servers', 'tools', 'list', '--input-json={"serverId":"server-id"}', '--json'])).toBe(true);
+    expect(process.exitCode).toBe(0);
+    expect(owner.writes).toEqual([]);
+  });
+});
+
+describe('MCP compiled CLI Test', () => {
+  it.each([
+    { argv: ['mcp', 'servers', 'test', '--mcp-server', 'fixture', '--dir', '/repo', '--machine-id', 'machine', '--json'], switchedHome: false, offline: false },
+    { argv: ['mcp', 'servers', 'test', 'fixture', '--directory', '/repo', '--machine-id', 'machine', '--json'], switchedHome: false, offline: false },
+    { argv: ['mcp', 'servers', 'test', 'fixture', '--directory', '/repo', '--machine-id', 'machine', '--json'], switchedHome: true, offline: false },
+    { argv: ['mcp', 'servers', 'test', 'fixture', '--directory', '/repo', '--machine-id', 'machine', '--json'], switchedHome: false, offline: true },
+  ])('preserves captured Home and explicitly requested Test (changed=$switchedHome, offline=$offline)', async ({ argv, switchedHome, offline }) => {
+    const requests: unknown[] = [];
+    terminal.inventory.mockResolvedValue({ data: [{ id: 'machine', active: !offline, revokedAt: null, replacedByMachineId: null }] });
+    const mcpServerAction = createMcpServerActionExecuteV1({
+      readCatalog: () => loadMcpServerCatalogV1({ mode: 'plain', material: null, readRow: async () => {
+        if (switchedHome) { vi.stubEnv('HAPPIER_SERVER_URL', 'https://changed-home.example.test'); reloadConfiguration(); }
+        return { status: 'present', revision: 1,
+        content: { t: 'plain', v: { v: 1, bindings: [], servers: [{ id: 'server-id', name: 'fixture', transport: 'stdio',
+          stdio: { command: 'fixture', args: [] }, env: {}, createdAt: 1, updatedAt: 1 }] } } }; } }),
+      async mutate() { throw new Error('Unexpected catalog write'); },
+      async machine(request) { requests.push(request); return { ok: true, toolCount: 1, toolNamesSample: ['echo'], durationMs: 1 }; },
+    });
+    const executor = createActionExecutor({ mcpServerAction,
+      isActionApprovalRequired: (actionId, context) => isApprovalRequiredByActionsSettings(actionId, { v: 1,
+        approvalWaivedSurfaces: { 'mcp.servers.test': ['cli'] } }, context) });
+    vi.spyOn(console, 'log').mockImplementation(() => {});
+    expect(await tryHandleMcpServerCliCommand({ argv, actionExecutionDeps: {
+      readCredentialsFn: async () => ({ token: 'test-token', encryption: null }),
+      createExecutorFn: async () => ({ ...executor, async resolveSessionTarget() { throw new Error('Unexpected session'); } }),
+    } })).toBe(true);
+    if (switchedHome) {
+      expect(requests).toEqual([]);
+      expect(process.exitCode).toBe(1);
+      expect(terminal.inventory.mock.calls.some(args => String(args[0]).includes('changed-home.example.test'))).toBe(false);
+      return;
+    }
+    expect(requests).toEqual([expect.objectContaining({ actionId: 'mcp.servers.test', machineId: 'machine',
+      input: { t: 'byId', machineId: 'machine', directory: '/repo', serverId: 'server-id' } })]);
+  });
+});
 
 describe('MCP compiled CLI sign-in journey', () => {
   it.each([

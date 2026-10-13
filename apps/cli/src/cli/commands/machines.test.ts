@@ -6,6 +6,18 @@ import { ExternalActionRequestEnvelopeV1Schema, ExternalActionResponseEnvelopeV1
 import { AccountApiTokenBearerV1Schema } from '@happier-dev/protocol/auth/accountApiTokens';
 
 const API_TOKEN = AccountApiTokenBearerV1Schema.parse(`hap_v1_00000000-0000-4000-8000-000000000001_${'A'.repeat(43)}`);
+const transportFault = vi.hoisted(() => ({ close: false }));
+// Preserve real HTTP and its parser; only fail the platform transport's finalization.
+vi.mock('../../../../../packages/sdk/src/http/fetchHttp', async importOriginal => {
+  const original = await importOriginal<typeof import('../../../../../packages/sdk/src/http/fetchHttp')>();
+  return { ...original, createHttpExchange: () => {
+    const http = original.createHttpExchange();
+    return { ...http, close: async () => {
+      await http.close();
+      if (transportFault.close) throw new Error('dependency exploded');
+    } };
+  } };
+});
 
 const credentialBoundary = vi.hoisted(() => ({ readStoredCredentials: vi.fn() }));
 vi.mock('@/persistence', async (importOriginal) => ({
@@ -39,6 +51,7 @@ let originalServerUrl = '';
 const requests: Array<{ path: string; input: unknown; authorization: string | undefined }> = [];
 
 beforeEach(async () => {
+  transportFault.close = false;
   requests.length = 0;
   app = Fastify();
   app.get('/v1/account/encryption', async () => ({ mode: 'plain', updatedAt: 1 }));
@@ -61,6 +74,7 @@ beforeEach(async () => {
 });
 
 afterEach(async () => {
+  transportFault.close = false;
   restoreHttp();
   await app.close();
   configuration.apiServerUrl = originalServerUrl;
@@ -133,16 +147,17 @@ describe('machines list through the canonical Action', () => {
     expect(process.exitCode).toBe(1);
   });
 
-  it('classifies an unexpected credential IO exception as exit 2', async () => {
-    // Disk credential IO is the genuine boundary; internal inventory failures
-    // now have a named machine_inventory_unavailable contract.
-    credentialBoundary.readStoredCredentials.mockRejectedValue(new Error('dependency exploded'));
+  it('classifies an unexpected execution transport exception as exit 2', async () => {
+    credentialBoundary.readStoredCredentials.mockResolvedValue({ token: API_TOKEN, encryption: null, credentialProvenance: 'api_token' });
+    // HTTP transport is the system boundary. Close the real HTTP transport before
+    // reporting its failure; exercise the execution catch, not credential lookup.
+    transportFault.close = true;
     vi.spyOn(console, 'error').mockImplementation(() => undefined);
 
     await runMachinesList([]);
 
     expect(process.exitCode).toBe(2);
-    expect(requests).toEqual([]);
+    expect(requests).toContainEqual({ path: '/v1/actions/machines.list', input: { limit: 200 }, authorization: `Bearer ${API_TOKEN}` });
   });
 });
 

@@ -4,21 +4,150 @@ import { HOST_CONNECTED_ACCOUNT_SERVICE_REF_V1 } from '@happier-dev/protocol/con
 import { sameStoredCredentials } from '@/persistence';
 import { configuration } from '@/configuration';
 import { normalizeServerHttpBaseUrl } from '@/api/client/serverHttpBaseUrl';
-import { resolveCurrentAccountAdministrationMachine } from '@/api/machine/resolveCurrentAccountMachineTarget';
+import { resolveCurrentAccountAdministrationMachine, resolveCurrentAccountMachineTarget } from '@/api/machine/resolveCurrentAccountMachineTarget';
 import { createConnectedAccountDaemonClient } from '@/cli/commands/connect/connectedAccountDaemonClient';
 import { continueConnectedAccountAuthentication } from '@/cli/commands/connect';
 import { parseConnectArgs } from '@/cli/commands/connect/parseConnectArgs';
 import { argvBeforeOptionTerminator } from '@/cli/commands/shared/argvFlags';
-import { findCompiledActionCliCommand, listCompiledActionCliCommands } from '../compiledCommands';
+import { findCompiledActionCliCommand, listCompiledActionCliCommands, type CompiledActionCliCommand } from '../compiledCommands';
 import { readActionCliServerId } from '../actionServerTarget';
 import { composeActionCliInput, parseActionCliInput } from '../parseCommandInput';
 import { type ActionCliExecutionDeps, readTransportMachineId, runCompiledActionCliCommand, stripTransportTokens } from '../executeCommand';
+
+function captureMcpAccountActionExecution(dependencies: Partial<ActionCliExecutionDeps> | undefined) {
+  const create = dependencies?.createExecutorFn ?? (async input =>
+    (await import('@/session/actions/createCliActionExecutorFromCredentials')).createCliActionExecutorFromCredentials(input));
+  let captured: { params: Parameters<ActionCliExecutionDeps['createExecutorFn']>[0]; homeId: string; homeUrl: string } | undefined;
+  const deps: Partial<ActionCliExecutionDeps> = { ...dependencies, createExecutorFn: async input => {
+    const homeId = input.serverId ?? configuration.activeServerId;
+    const homeUrl = normalizeServerHttpBaseUrl(input.serverApiUrl ?? configuration.apiServerUrl);
+    if (captured && (!sameStoredCredentials(captured.params.credentials, input.credentials)
+      || captured.homeId !== homeId || captured.homeUrl !== homeUrl
+      || captured.params.serverIdentityId !== input.serverIdentityId)) {
+      throw Object.assign(new Error('MCP Account or Home is no longer current'), { code: 'client_refused' });
+    }
+    captured ??= { params: input, homeId, homeUrl };
+    // Each compiled invocation constructs its own executor, as Test already did.
+    return create(input);
+  } };
+  return { deps, readCaptured: () => captured };
+}
+
+async function handleMcpServerToolsCliCommand(params: Readonly<{
+  argv: readonly string[]; signal?: AbortSignal; actionExecutionDeps?: Partial<ActionCliExecutionDeps>;
+}>): Promise<boolean> {
+  const commands = listCompiledActionCliCommands();
+  const list = findCompiledActionCliCommand(['mcp', 'servers', 'list'], commands);
+  const toolsList = findCompiledActionCliCommand(['mcp', 'servers', 'tools'], commands);
+  const toolsSet = findCompiledActionCliCommand(['mcp', 'servers', 'tools', 'set'], commands);
+  if (!list || !toolsList || !toolsSet) throw new Error('MCP Action command is unavailable');
+  const options = argvBeforeOptionTerminator(params.argv);
+  const hasWholeInput = options.some(token => token === '--input-json' || token.startsWith('--input-json='));
+  if (hasWholeInput && (params.argv[3] === 'list' || params.argv[3] === 'set')) {
+    const raw = findCompiledActionCliCommand(params.argv.slice(0, 4), commands);
+    if (!raw) throw new Error('MCP Action command is unavailable');
+    await runCompiledActionCliCommand({ command: raw, argv: params.argv, signal: params.signal, deps: params.actionExecutionDeps });
+    return true;
+  }
+  const tokens = stripTransportTokens(toolsList, params.argv.slice(3));
+  const parse = (command: CompiledActionCliCommand) => {
+    const parsed = parseActionCliInput(command, tokens);
+    return parsed.ok ? composeActionCliInput({ parsed, canonicalSchema: command.spec.inputSchema,
+      wholeInputSchema: command.wholeInputSchema, callerSchema: command.callerSchema, bindInput: command.spec.cli?.bindInput,
+      context: { actionId: command.actionId, invocationId: randomUUID(), commandPath: command.path,
+        output: options.includes('--json') ? 'json' : 'human' } }) : parsed;
+  };
+  const listed = parse(toolsList);
+  const command = listed.ok ? toolsList : toolsSet;
+  const composed = listed.ok ? listed : parse(toolsSet);
+  // Help, whole-object input and malformed arguments retain the normal compiler
+  // path. The adapter does not implement an independent parser or input policy.
+  if (!composed.ok || options.includes('--help') || options.includes('-h') || hasWholeInput) {
+    await runCompiledActionCliCommand({ command, argv: [...command.path, ...params.argv.slice(3)],
+      signal: params.signal, deps: params.actionExecutionDeps });
+    return true;
+  }
+  const requestedName = composed.callerInput.itemId;
+  const serverId = readActionCliServerId(params.argv, true);
+  const machineId = readTransportMachineId(command, params.argv);
+  const transport = [...(serverId ? ['--server-id', serverId] : []), ...(machineId ? ['--machine-id', machineId] : [])];
+  const captured = captureMcpAccountActionExecution(params.actionExecutionDeps);
+  let resolvedId: string | undefined;
+  await runCompiledActionCliCommand({ command: list, argv: [...list.path, ...transport], signal: params.signal,
+    deps: captured.deps, consumeSuccess: payload => {
+      const snapshot = MCP_SERVER_ACTION_OUTPUT_SCHEMAS_V1['mcp.servers.list'].parse(payload);
+      if (snapshot.status !== 'ready' || snapshot.authority !== 'active') throw Object.assign(new Error('MCP catalog is unavailable'), { code: 'mcp_catalog_unavailable' });
+      resolvedId = (snapshot.catalog.servers.find(server => server.id === requestedName)
+        ?? snapshot.catalog.servers.find(server => server.name === requestedName))?.id;
+      if (!resolvedId) throw Object.assign(new Error('MCP server was not found'), { code: 'mcp_server_not_found' });
+      return true;
+    } });
+  if (!captured.readCaptured() || !resolvedId) return true;
+  await runCompiledActionCliCommand({ command, argv: [...command.path, '--input-json', JSON.stringify({ ...composed.input, serverId: resolvedId }),
+    ...transport, ...(options.includes('--json') ? ['--json'] : [])], signal: params.signal, deps: captured.deps });
+  return true;
+}
+
+async function handleMcpServerTestCliCommand(params: Readonly<{
+  argv: readonly string[]; signal?: AbortSignal; actionExecutionDeps?: Partial<ActionCliExecutionDeps>;
+}>): Promise<boolean> {
+  const commands = listCompiledActionCliCommands();
+  const command = findCompiledActionCliCommand(['mcp', 'servers', 'test'], commands);
+  const list = findCompiledActionCliCommand(['mcp', 'servers', 'list'], commands);
+  if (!command || !list) throw new Error('MCP Action command is unavailable');
+  const options = argvBeforeOptionTerminator(params.argv);
+  if (options.includes('--help') || options.includes('-h') || options.includes('--input-json')) {
+    await runCompiledActionCliCommand({ command, argv: params.argv, signal: params.signal, deps: params.actionExecutionDeps });
+    return true;
+  }
+  // Exact 0.2 Test spelling only. Domain decisions stay in the compiled Actions.
+  const translated = params.argv.map(token => {
+    const equal = token.indexOf('=');
+    const name = equal < 0 ? token : token.slice(0, equal);
+    const canonical = name === '--mcp-server' || name === '--server' ? '--item-id'
+      : name === '--dir' ? '--directory' : name === '--machine' ? '--machine-id' : name;
+    return equal < 0 ? canonical : `${canonical}${token.slice(equal)}`;
+  });
+  const preferredMachineId = readTransportMachineId(list, translated);
+  const parsed = parseActionCliInput(command, stripTransportTokens(list, translated.slice(3)));
+  if (!parsed.ok) throw Object.assign(new Error(parsed.message), { code: parsed.code });
+  const itemId = parsed.callerOverlay.itemId;
+  if (typeof itemId !== 'string' || !itemId) throw Object.assign(new Error('Supply an MCP server name or id'), { code: 'invalid_arguments' });
+  const serverId = readActionCliServerId(translated, true);
+  const scope = captureMcpAccountActionExecution(params.actionExecutionDeps);
+  const deps = scope.deps;
+  let resolvedId: string | undefined;
+  await runCompiledActionCliCommand({ command: list, argv: [...list.path, ...(serverId ? ['--server-id', serverId] : [])],
+    signal: params.signal, deps, consumeSuccess: payload => {
+      const snapshot = MCP_SERVER_ACTION_OUTPUT_SCHEMAS_V1['mcp.servers.list'].parse(payload);
+      if (snapshot.status !== 'ready' || snapshot.authority !== 'active') throw Object.assign(new Error('MCP catalog is unavailable'), { code: 'mcp_catalog_unavailable' });
+      resolvedId = (snapshot.catalog.servers.find(server => server.id === itemId)
+        ?? snapshot.catalog.servers.find(server => server.name === itemId))?.id;
+      if (!resolvedId) throw Object.assign(new Error('MCP server was not found'), { code: 'mcp_server_not_found' });
+      return true;
+    } });
+  const captured = scope.readCaptured();
+  if (!captured || !resolvedId) return true;
+  const target = preferredMachineId ? await resolveCurrentAccountMachineTarget({ token: captured.params.credentials.token,
+    requestedMachineId: preferredMachineId, serverHttpBaseUrl: captured.homeUrl, signal: params.signal }) : null;
+  const machineId = target?.kind === 'selected' ? target.target.machineId : target ? null
+    : await resolveCurrentAccountAdministrationMachine({ token: captured.params.credentials.token,
+      serverHttpBaseUrl: captured.homeUrl, signal: params.signal });
+  if (!machineId) throw Object.assign(new Error('No machine is online'), { code: 'no_machine_online' });
+  await runCompiledActionCliCommand({ command, argv: [...command.path, '--input-json', JSON.stringify({ t: 'byId',
+    serverId: resolvedId, machineId, directory: parsed.callerOverlay.directory ?? process.cwd() }),
+    ...(serverId ? ['--server-id', serverId] : []), ...(options.includes('--json') ? ['--json'] : [])],
+    signal: params.signal, deps });
+  return true;
+}
 
 /** Terminal continuation only; the compiler and Connected Accounts own admission and authentication. */
 export async function tryHandleMcpServerCliCommand(params: Readonly<{
   argv: readonly string[]; signal?: AbortSignal; actionExecutionDeps?: Partial<ActionCliExecutionDeps>;
 }>): Promise<boolean> {
   const { argv } = params;
+  if (argv[0] === 'mcp' && argv[1] === 'servers' && argv[2] === 'tools') return handleMcpServerToolsCliCommand(params);
+  if (argv[0] === 'mcp' && argv[1] === 'servers' && argv[2] === 'test') return handleMcpServerTestCliCommand(params);
   if (argv[0] !== 'mcp' || argv[1] !== 'servers' || (argv[2] !== 'sign-in' && argv[2] !== 'sign-out')) return false;
   const path = argv.slice(0, 3);
   const command = findCompiledActionCliCommand(path, listCompiledActionCliCommands());

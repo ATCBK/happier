@@ -227,6 +227,16 @@ const ACTION_OWNED_STATIC_PATHS = new Set(['list', 'ls', 'send', 'stop', 'wait',
 const DEDICATED_STATIC_COMMAND_PATHS: readonly (readonly string[])[] = Object.freeze([
   Object.freeze(['browser', 'sandbox']),
   Object.freeze(['actions', 'invoke']),
+  Object.freeze(['agents', 'list']),
+  Object.freeze(['agents', 'status']),
+  Object.freeze(['agents', 'probe']),
+  Object.freeze(['agents', 'auth']),
+  Object.freeze(['agents', 'setup']),
+  Object.freeze(['agent', 'list']),
+  Object.freeze(['agent', 'status']),
+  Object.freeze(['agent', 'probe']),
+  Object.freeze(['agent', 'auth']),
+  Object.freeze(['agent', 'setup']),
   Object.freeze(['session', 'actions', 'describe']),
   Object.freeze(['session', 'actions', 'execute']),
   Object.freeze(['session', 'actions', 'list']),
@@ -274,19 +284,27 @@ function assertActionCommandPathsFitStaticRegistry(
     ownerId: path.join(' '),
     path,
   }));
-  const actionClaims: CliCommandPathClaim[] = commands.map((command) => ({
-    source: 'action',
-    ownerId: command.actionId,
-    path: command.path,
-    // Friendly spellings of the same Action and preview/execute-style family
-    // members may extend a path owned by that Action.
-    ...(commands.some((candidate) => (
-      candidate !== command
-      && (candidate.actionId === command.actionId || candidate.actionId.startsWith(`${command.actionId}.`))
-      && command.path.length < candidate.path.length
-      && command.path.every((segment, index) => candidate.path[index] === segment)
-    )) ? { allowsDescendants: true } : {}),
-  }));
+  const actionClaims: CliCommandPathClaim[] = commands.map((command) => {
+    const namespace = command.path.join('.');
+    const isNamespaceList = command.actionId === `${namespace}.list`;
+    return {
+      source: 'action',
+      ownerId: command.actionId,
+      path: command.path,
+      // Friendly spellings of the same Action and preview/execute-style family
+      // members may extend a path owned by that Action. A list Action declared
+      // at its own namespace is also the default beside that namespace's leaves;
+      // the compiler selects the longest matching path for their dispatch.
+      ...(commands.some((candidate) => (
+        candidate !== command
+        && (candidate.actionId === command.actionId
+          || candidate.actionId.startsWith(`${command.actionId}.`)
+          || (isNamespaceList && candidate.actionId.startsWith(`${namespace}.`)))
+        && command.path.length < candidate.path.length
+        && command.path.every((segment, index) => candidate.path[index] === segment)
+      )) ? { allowsDescendants: true } : {}),
+    };
+  });
   assertComposedCommandPathsAreUnambiguous([
     ...staticClaims,
     ...dedicatedClaims,
@@ -573,8 +591,7 @@ export async function resolveAdmittedActionCliCommand(
   if (words.length === 0) return null;
   const { listActionCliCommandDeclarations } = await import('@happier-dev/protocol/actions/actionSpecs');
   if (!listActionCliCommandDeclarations().some(({ binding }) => (
-    binding.path.length <= words.length
-    && binding.path.every((segment, index) => words[index] === segment)
+    binding.path[0] === words[0]
   ))) return null;
   const { findCompiledActionCliCommand } = await import('@/cli/actions/compiledCommands');
   return findCompiledActionCliCommand(words, await loadAdmittedActionCliCommands());

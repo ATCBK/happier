@@ -5,7 +5,7 @@ import type { CommandContext } from '@/cli/commandRegistry';
 import { argvBeforeOptionTerminator } from '@/cli/commands/shared/argvFlags';
 import { printJsonEnvelope, wantsJson } from '@/cli/output/jsonEnvelope';
 
-import { listCompiledActionCliCommands, type CompiledActionCliCommand } from './compiledCommands';
+import { actionCliCommandUsagePath, listCompiledActionCliCommands, type CompiledActionCliCommand } from './compiledCommands';
 import { actionCliEnvelopeKind } from './commandPresentation';
 import { ACTION_CLI_HELP_FLAGS } from './parseCommandInput';
 
@@ -26,12 +26,12 @@ export function renderActionCliRootHelp(root: string): string {
     title: `happier ${root}`,
     subtitle: `Action-backed ${root} commands`,
     usage: [...commands.map((command) => ({
-      label: `happier ${command.path.join(' ')}${
+      label: `happier ${actionCliCommandUsagePath(command)}${
         command.actionId === 'workflow.definition.import' ? ' <file|->'
         : command.actionId === 'workflow.definition.export' ? ' <definition-id> [file|-]'
         : command.positionals.length || command.variadicPositional
           ? ` ${[
-              ...command.positionals.map((field) => `<${field.path}>`),
+              ...command.positionals.slice(command.positionalsBeforeLastSegment.length).map((field) => `<${field.path}>`),
               ...(command.variadicPositional ? [`<${command.variadicPositional.path}...>`] : []),
             ].join(' ')}`
           : ''
