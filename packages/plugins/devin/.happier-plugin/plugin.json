@@ -22,6 +22,38 @@
               "resume"
             ]
           },
+          "skills": {
+            "delivery": "none",
+            "liveReload": "unsupported",
+            "nativeDisable": "unsupported",
+            "nativeRoots": {
+              "project": [
+                [
+                  ".devin",
+                  "skills"
+                ],
+                [
+                  ".agents",
+                  "skills"
+                ],
+                [
+                  ".windsurf",
+                  "skills"
+                ]
+              ],
+              "user": [
+                [
+                  ".config",
+                  "devin",
+                  "skills"
+                ],
+                [
+                  ".agents",
+                  "skills"
+                ]
+              ]
+            }
+          },
           "surfaces": [
             "terminal"
           ],
@@ -30,6 +62,9 @@
           }
         },
         "catalog": {
+          "acpRegistryIds": [
+            "devin"
+          ],
           "vendorResume": {
             "support": "supported"
           }
@@ -91,9 +126,6 @@
                     "Roaming"
                   ]
                 },
-                "linkedConfigRootEntries": [
-                  "cognition"
-                ],
                 "projectShadowPaths": [
                   ".devin/mcp_config.json",
                   ".devin/mcp_config.local.json"
@@ -232,6 +264,7 @@
     "projectNativeAdapters": [],
     "promptAssets": [],
     "providers": [],
+    "registrySources": [],
     "requestInterceptors": [],
     "resources": [],
     "roles": [],

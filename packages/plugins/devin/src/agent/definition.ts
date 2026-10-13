@@ -3,6 +3,7 @@ const DEVIN_AGENT_ID = 'devin';
 // IMPORTANT: this must stay JSON-serializable (data-only).
 export const AGENT_DEFINITION = Object.freeze({
   id: DEVIN_AGENT_ID,
+  acpRegistryIds: ['devin'] as const,
   core: {
     id: DEVIN_AGENT_ID,
     cliSubcommand: 'devin',
