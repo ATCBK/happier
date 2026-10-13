@@ -293,6 +293,7 @@ const harness = vi.hoisted(() => {
     sessionId: string;
     event: string;
     terminalStatus?: string;
+    turnId?: string;
   }) => Promise<unknown>) | null = null;
   let resolveSpawnSessionByNonceRef: ((spawnNonce: string) => Promise<unknown> | unknown) | null = null;
   let sessionRunnerStatusHandlerRef: ((input: { sessionId: string }) => Promise<any>) | null = null;
@@ -4225,15 +4226,36 @@ describe('startDaemon spawn resume wiring (integration)', () => {
     }
   });
 
-  it('restarts stale reattached runners onto the current CLI after startup when restartSessionRunnersOnUpdate is on', async () => {
+  type StaleRunnerOnUpdateScenario = Readonly<{
+    run: Promise<void>;
+    isSignalled: (pid: number) => boolean;
+    waitUntil: (condition: () => boolean, attempts?: number) => Promise<void>;
+    exitObservers: Array<(pid: number, exit: { reason: string; code: number | null; signal: string | null }) => void>;
+  }>;
+
+  async function runStaleRunnerOnUpdateScenario(
+    body: (scenario: StaleRunnerOnUpdateScenario) => Promise<void>,
+    options: Readonly<{
+      isPidSafe?: () => Promise<boolean>;
+      env?: Record<string, string>;
+      onStarted?: (sessions: Map<number, import('./types').TrackedSession>) => void;
+    }> = {},
+  ): Promise<void> {
     const exitSpy = vi.spyOn(process, 'exit').mockImplementation((() => undefined) as never);
     // OS boundaries only: process signalling, the pid identity probe, and the exit poller.
     const killSpy = vi.spyOn(process, 'kill').mockImplementation((() => true) as never);
     const pidSafetyModule = await import('@/daemon/pidSafety');
-    const pidSafetySpy = vi.spyOn(pidSafetyModule, 'isPidSafeHappySessionProcess').mockResolvedValue(true);
+    const pidSafetySpy = vi.spyOn(pidSafetyModule, 'isPidSafeHappySessionProcess')
+      .mockImplementation(options.isPidSafe ?? (async () => true));
+    const exitObservers: StaleRunnerOnUpdateScenario['exitObservers'] = [];
     const waitForExitModule = await import('./sessions/waitForExistingSessionExitIfStopRequested');
     const waitForExitSpy = vi.spyOn(waitForExitModule, 'waitForExistingSessionExitIfStopRequested')
-      .mockImplementation(async () => {});
+      .mockImplementation(async (params: any) => {
+        exitObservers.push((pid, exit) => {
+          params.onExitObserved?.(pid, exit);
+          params.pidToTrackedSession.delete(pid);
+        });
+      });
     const persistence = await import('@/persistence');
     vi.mocked(persistence.readSettings).mockResolvedValue({
       schemaVersion: 6,
@@ -4246,9 +4268,12 @@ describe('startDaemon spawn resume wiring (integration)', () => {
       filePath: process.execPath,
       args: ['/home/alice/.happier/cli/versions/0.2.11/package-dist/index.mjs', ...args],
     }));
-    const refreshEnvOriginal = process.env.HAPPIER_CONNECTED_SERVICES_REFRESH_ENABLED;
+    const envKeys = ['HAPPIER_CONNECTED_SERVICES_REFRESH_ENABLED', ...Object.keys(options.env ?? {})];
+    const envBackup = new Map(envKeys.map((key) => [key, process.env[key]]));
     process.env.HAPPIER_CONNECTED_SERVICES_REFRESH_ENABLED = 'false';
+    for (const [key, value] of Object.entries(options.env ?? {})) process.env[key] = value;
     let run: Promise<void> | null = null;
+    let finished = false;
 
     try {
       const reattachModule = await import('./sessions/reattachFromMarkers');
@@ -4281,27 +4306,26 @@ describe('startDaemon spawn resume wiring (integration)', () => {
             resume: 'claude-current-thread',
           },
         });
+        options.onStarted?.(pidToTrackedSession);
         return { orphanedDeadDaemonSessions: [], connectedServiceRestartIntents: [] };
       });
 
       const { startDaemon } = await import('./startDaemon');
-      run = startDaemon();
+      run = startDaemon().finally(() => {
+        finished = true;
+      });
 
       const isSignalled = (pid: number) => killSpy.mock.calls.some(
         ([target, signal]) => (target === pid || target === -pid) && signal === 'SIGTERM',
       );
-      for (let attempt = 0; attempt < 200 && !isSignalled(6480); attempt += 1) {
-        await new Promise((resolve) => setTimeout(resolve, 5));
-      }
-
-      expect(isSignalled(6480)).toBe(true);
-      expect(isSignalled(6481)).toBe(false);
-
-      harness.requestShutdown('happier-cli');
-      await run;
-      run = null;
+      const waitUntil = async (condition: () => boolean, attempts = 200) => {
+        for (let attempt = 0; attempt < attempts && !condition(); attempt += 1) {
+          await new Promise((resolve) => setTimeout(resolve, 5));
+        }
+      };
+      await body({ run, isSignalled, waitUntil, exitObservers });
     } finally {
-      if (run) {
+      if (run && !finished) {
         harness.requestShutdown('happier-cli');
         await run;
       }
@@ -4312,15 +4336,110 @@ describe('startDaemon spawn resume wiring (integration)', () => {
       }));
       vi.mocked(persistence.readSettings).mockResolvedValue({ schemaVersion: 6, onboardingCompleted: true });
       vi.mocked(buildHappyCliSubprocessLaunchSpec).mockReset();
-      if (refreshEnvOriginal === undefined) {
-        delete process.env.HAPPIER_CONNECTED_SERVICES_REFRESH_ENABLED;
-      } else {
-        process.env.HAPPIER_CONNECTED_SERVICES_REFRESH_ENABLED = refreshEnvOriginal;
+      for (const [key, value] of envBackup) {
+        if (value === undefined) delete process.env[key];
+        else process.env[key] = value;
       }
       waitForExitSpy.mockRestore();
       pidSafetySpy.mockRestore();
       killSpy.mockRestore();
       await restoreDaemonExitBoundary(exitSpy);
+    }
+  }
+
+  it('restarts stale reattached runners onto the current CLI after startup when restartSessionRunnersOnUpdate is on', async () => {
+    await runStaleRunnerOnUpdateScenario(async ({ run, isSignalled, waitUntil }) => {
+      await waitUntil(() => isSignalled(6480));
+
+      expect(isSignalled(6480)).toBe(true);
+      expect(isSignalled(6481)).toBe(false);
+
+      harness.requestShutdown('happier-cli');
+      await run;
+    });
+  });
+
+  it('does not signal a stale runner once shutdown begins during the final safety probe', async () => {
+    let probeStarted = false;
+    let probeFinished = false;
+    await runStaleRunnerOnUpdateScenario(async ({ run, isSignalled, waitUntil }) => {
+      await waitUntil(() => probeStarted);
+      harness.requestShutdown('happier-cli');
+      await run;
+      await waitUntil(() => probeFinished);
+      await new Promise((resolve) => setTimeout(resolve, 20));
+
+      expect(probeFinished).toBe(true);
+      expect(isSignalled(6480)).toBe(false);
+    }, {
+      isPidSafe: async () => {
+        probeStarted = true;
+        // Hold the awaited identity probe open until shutdown has begun.
+        await new Promise((resolve) => setTimeout(resolve, 50));
+        probeFinished = true;
+        return true;
+      },
+    });
+  });
+
+  it('keeps shutdown open until an already-signalled restart has respawned', async () => {
+    await runStaleRunnerOnUpdateScenario(async ({ run, isSignalled, waitUntil }) => {
+      await waitUntil(() => isSignalled(6480));
+      expect(isSignalled(6480)).toBe(true);
+
+      let shutdownFinished = false;
+      void run.then(() => {
+        shutdownFinished = true;
+      });
+      harness.requestShutdown('happier-cli');
+      await new Promise((resolve) => setTimeout(resolve, 200));
+      expect(shutdownFinished).toBe(false);
+
+      // The respawn manager is the mocked process-supervision boundary; report the replacement.
+      const manager = sessionRespawnManagerCapture.instances.at(-1);
+      manager?.__params.onRespawnSuccess?.({ sessionId: 'sess-stale-on-update', previousPid: 6480, result: {} });
+      await run;
+      expect(shutdownFinished).toBe(true);
+    }, { env: { HAPPIER_DAEMON_SHUTDOWN_SPAWN_DRAIN_GRACE_MS: '5000' } });
+  });
+
+  it('records a turn start as in flight before its marker write finishes', async () => {
+    const sessionRegistryModule = await import('./sessionRegistry');
+    let releaseMarkerWrite: (() => void) | null = null;
+    const markerSpy = vi.spyOn(sessionRegistryModule, 'updateSessionMarkerActiveTurn')
+      .mockImplementation(async () => {
+        // Persistent marker storage is the boundary; hold the write open.
+        await new Promise<void>((resolve) => {
+          releaseMarkerWrite = resolve;
+        });
+        return true;
+      });
+    try {
+      await runStaleRunnerOnUpdateScenario(async ({ run, waitUntil }) => {
+        await waitUntil(() => harness.getTurnLifecycleHandler() !== null && harness.getSessionRunnerStatusHandler() !== null);
+        const turnLifecycleHandler = harness.getTurnLifecycleHandler()!;
+        const statusHandler = harness.getSessionRunnerStatusHandler()!;
+
+        const lifecycle = turnLifecycleHandler({
+          sessionId: 'sess-current-on-update',
+          event: 'prompt_or_steer',
+          turnId: 'turn-1',
+        });
+        await waitUntil(() => releaseMarkerWrite !== null);
+
+        const status = await statusHandler({ sessionId: 'sess-current-on-update' });
+        expect(status.plannedRestart.disabledReason).toBe('turn_in_progress');
+
+        releaseMarkerWrite!();
+        await lifecycle;
+        harness.requestShutdown('happier-cli');
+        await run;
+      }, {
+        // Keep the startup pass from signalling so the scenario isolates turn-lifecycle ordering.
+        isPidSafe: async () => false,
+      });
+    } finally {
+      markerSpy.mockRestore();
     }
   });
 

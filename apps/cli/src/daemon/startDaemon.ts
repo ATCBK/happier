@@ -2259,18 +2259,25 @@ export async function startDaemon(options: Readonly<{ takeover?: boolean }> = {}
             await flushProviderAccountUsagePersistenceForShutdown();
 	            await flushDaemonServerWorkForShutdown();
             const initialInFlightSpawns = pidToAwaiter.size;
+            // A signalled planned restart has stopped its runner; let its replacement spawn within
+            // the same drain budget instead of exiting with the session left without a runner.
+            const hasPendingRunnerRestarts = () => sessionRunnerRestartCompletionWaiters.hasPending();
             const hasPendingRpcRequests = apiMachineForSessions !== null;
-            if (initialInFlightSpawns === 0 && !hasPendingRpcRequests) return;
+            if (initialInFlightSpawns === 0 && !hasPendingRunnerRestarts() && !hasPendingRpcRequests) return;
 
             logger.debug('[DAEMON RUN] Shutdown requested with in-flight work; deferring shutdown', {
               inFlightSpawns: initialInFlightSpawns,
+              pendingRunnerRestarts: hasPendingRunnerRestarts(),
               pendingRpcDrainEnabled: hasPendingRpcRequests,
               graceMs: shutdownSpawnDrainGraceMs,
               pollMs: shutdownSpawnDrainPollMs,
             });
 
             const start = Date.now();
-            while (pidToAwaiter.size > 0 && Date.now() - start < shutdownSpawnDrainGraceMs) {
+            while (
+              (pidToAwaiter.size > 0 || hasPendingRunnerRestarts())
+              && Date.now() - start < shutdownSpawnDrainGraceMs
+            ) {
               // eslint-disable-next-line no-await-in-loop
               await new Promise((resolve) => setTimeout(resolve, shutdownSpawnDrainPollMs));
             }
@@ -5240,7 +5247,10 @@ export async function startDaemon(options: Readonly<{ takeover?: boolean }> = {}
           deferral: { kind: 'none' },
           restartRequestedPids: connectedServicesRestartRequestedPids,
           pidToTrackedSession,
-          canSignal: () => resolveSessionRunnerActivityDisabledReason(input.sessionId) ?? true,
+          // Final gate after the awaited identity probe: never stop a runner once shutdown began.
+          canSignal: () => (shutdownInitiated || connectedServiceQuotaProducersQuiesced)
+            ? false
+            : resolveSessionRunnerActivityDisabledReason(input.sessionId) ?? true,
           requestSignal: async ({ shouldSignal, onSignalFailure, onProcessAlreadyMissing }) =>
             // K5:gated_restart version refresh uses the planned restart primitive without
             // connected-service deferral/target metadata; this call is only the signal adapter.
@@ -7176,6 +7186,15 @@ export async function startDaemon(options: Readonly<{ takeover?: boolean }> = {}
       runtimeAuthRecoveryScheduler: runtimeAuthRecoveryScheduler ?? undefined,
       handleConnectedServiceTurnLifecycle: async (input) => {
         const lifecycleObservedAtMs = Date.now();
+        // A starting turn must be visible to restart gates before the awaited marker write; turn
+        // ends keep their order so deferred switches run only after the marker is settled.
+        const isTurnStart = input.event === 'prompt_or_steer' || input.event === 'task_started';
+        if (isTurnStart) {
+          connectedServiceTurnDeferralQueue.recordTurnLifecycleEvent({
+            sessionId: input.sessionId,
+            event: input.event,
+          });
+        }
         const trackedTurnResult = await applyTrackedSessionTurnLifecycle({
           trackedSessions: getCurrentChildren(),
           sessionId: input.sessionId,
@@ -7185,10 +7204,12 @@ export async function startDaemon(options: Readonly<{ takeover?: boolean }> = {}
         if (trackedTurnResult.status === 'recorded') {
           await temporaryThrottleRecoveryScheduler.recordTurnLifecycle({ ...input, observedAtMs: lifecycleObservedAtMs });
         }
-        connectedServiceTurnDeferralQueue.recordTurnLifecycleEvent({
-          sessionId: input.sessionId,
-          event: input.event,
-        });
+        if (!isTurnStart) {
+          connectedServiceTurnDeferralQueue.recordTurnLifecycleEvent({
+            sessionId: input.sessionId,
+            event: input.event,
+          });
+        }
         // REV-1: failTurn emits `assistant_message_end` too — a FAILED turn (the
         // usage-limit interruption itself) is not provider-activity proof and must
         // not clear the recovery intents the failure report just armed.
