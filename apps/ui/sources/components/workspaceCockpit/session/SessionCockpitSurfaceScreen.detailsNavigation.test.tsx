@@ -9,14 +9,24 @@ import { loadSyncSingletonForTests } from '@/dev/testkit/harness/syncSingletonLo
 import type { WorkspaceNavigationContextValue } from '@/components/appShell/workspace/WorkspaceNavigationContext';
 
 const route = vi.hoisted(() => ({ params: {} as Record<string, string>, replace: vi.fn(), back: vi.fn(), href: '/session/s1/details' }));
+const routeListeners = new Set<() => void>();
 const Focus = React.createContext(true);
 vi.mock('socket.io-client', async importOriginal =>
     (await import('@/dev/testkit/harness/serverAccountConnectionHarness')).createSocketIoClientBoundary(importOriginal));
 installSessionFilesViewBoundaries();
 vi.doMock('expo-router', async () => (await import('@/dev/testkit/mocks/router')).createExpoRouterMock({
-    pathname: () => '/session/s1/details', params: () => route.params,
+    pathname: () => new URL(React.useSyncExternalStore(listener => {
+        routeListeners.add(listener);
+        return () => routeListeners.delete(listener);
+    }, () => route.href), 'https://happier.test').pathname,
+    params: () => route.params,
     router: {
-        replace: (href: unknown) => { route.href = String(href); route.replace(href); },
+        replace: (href: unknown) => {
+            route.href = String(href);
+            route.params = { id: 's1', ...Object.fromEntries(new URL(route.href, 'https://happier.test').searchParams) };
+            route.replace(href);
+            for (const listener of routeListeners) listener();
+        },
         canGoBack: () => true,
         back: () => { route.href = '/'; route.back(); },
     },
@@ -80,6 +90,7 @@ it.each([true, false])('leaves phone Details through the real comparison Back wi
     const { MainAppTabStateProvider } = await import('@/components/navigation/mobile/chrome/MainAppTabStateProvider');
     const tab = createSessionScmReviewDetailsTab({ comparison: { kind: 'workingTree' }, view: 'walkthrough' });
     route.params = { ...buildActiveDetailsRouteParams([tab], tab.key), serverId: fixture.home.id };
+    route.href = '/session/s1/details';
     let pane!: ReturnType<typeof useAppPaneScope>;
     function Probe() { pane = useAppPaneScope('session:s1'); return null; }
     const screen = await fixture.render(<MainAppTabStateProvider><SessionCockpitChromeRegistryProvider>
@@ -112,6 +123,85 @@ it.each([true, false])('leaves phone Details through the real comparison Back wi
     await screen.unmount();
 });
 
+it('opens the real phone Git walkthrough through workspace navigation and returns to the conversation', async () => {
+    const snapshot = fileViewSnapshot({ rootPath: '/tmp/repo' });
+    fixture = await createSessionFilesViewFixture({ rootPath: '/tmp/repo', rpc: request =>
+        request.method === 'scm.status.snapshot' ? { success: true, snapshot } : undefined,
+        request: async url => new URL(String(url)).pathname === '/v1/kv/bulk'
+            ? Response.json({ values: [] }) : Response.json({}, { status: 404 }),
+    });
+    fixture.setSnapshot(snapshot);
+    fixture.storage.getState().applySettingsLocal({ mobileWorkspaceExperienceV1: 'cockpit' });
+    fixture.storage.setState({ isDataReady: true, localSettings: {
+        ...fixture.storage.getState().localSettings, workspaceLayoutV1: {},
+    } });
+    const { useAppPaneScope } = await import('@/components/appShell/panes/hooks/useAppPaneScope');
+    const { createSessionPaneScopeId } = await import('@/components/sessions/panes/sessionPaneScopeId');
+    const { SessionDestinationBody } = await import('@/components/sessions/shell/SessionDestinationBody');
+    const { SessionDetailsDestinationBody } = await import('@/components/sessions/shell/SessionDetailsDestinationBody');
+    const { DestinationInstanceHost } = await import('@/components/appShell/workspace/DestinationInstanceHost');
+    const { WorkspaceProvider } = await import('@/components/appShell/workspace/WorkspaceProvider');
+    const { hrefForDestinationRef, resolveCompactAppDestinations } = await import('@/components/appShell/destinations/compactAppDestinationCatalog');
+    const { SessionCockpitChromeRegistryProvider } = await import('./SessionCockpitChromeRegistry');
+    const { MobileBottomChromeHost } = await import('@/components/navigation/mobile/chrome/MobileBottomChromeHost');
+    const { MainAppTabStateProvider } = await import('@/components/navigation/mobile/chrome/MainAppTabStateProvider');
+    const { parseSessionPaneUrlState } = await import('@/components/sessions/panes/url/sessionPaneUrlState');
+    route.params = { id: 's1', serverId: fixture.home.id, mobileSurface: 'git' };
+    route.href = `/session/s1?${new URLSearchParams(route.params)}`;
+    const catalog = resolveCompactAppDestinations({ pages: [], builtins: {
+        externalSessions: false, inbox: false, workflows: false, friends: false,
+    } });
+    let workspace!: WorkspaceNavigationContextValue;
+    let pane!: ReturnType<typeof useAppPaneScope>;
+    let instanceKey = '';
+    function Probe() { pane = useAppPaneScope(createSessionPaneScopeId('s1', fixture.home.id, instanceKey)); return null; }
+    const selectedTab = () => workspace.state.tabs[workspace.state.groups[workspace.state.focusedGroupId].activeTabId];
+    const screen = await fixture.render(<MainAppTabStateProvider><SessionCockpitChromeRegistryProvider>
+        <WorkspaceProvider enabled catalog={catalog}>{navigation => {
+            workspace = navigation;
+            const selected = selectedTab();
+            instanceKey = selected.id;
+            const href = hrefForDestinationRef(catalog, selected.target);
+            if (!href) throw new Error('The production workspace target must have a route');
+            return <DestinationInstanceHost tabId={selected.id} ref={selected.target}
+                pathname={new URL(href, 'https://happier.test').pathname} focused visible phone
+                navigation={navigation.navigationForTab(selected.id)}>
+                <Probe />{selected.target.kind === 'sessionDetails' ? <SessionDetailsDestinationBody /> : <SessionDestinationBody />}
+            </DestinationInstanceHost>;
+        }}</WorkspaceProvider><MobileBottomChromeHost />
+    </SessionCockpitChromeRegistryProvider></MainAppTabStateProvider>);
+    const measure = async () => act(async () => {
+        for (const host of screen.tree.findAll(node => typeof node.type === 'string' && typeof node.props.onLayout === 'function')) {
+            invokeTestInstanceHandler(host, 'onLayout', { nativeEvent: { layout: { x: 0, y: 0, width: 390, height: 844 } } });
+        }
+    });
+    await measure();
+    await flushHookEffects({ cycles: 20 });
+    expect(screen.findHostByTestId('session-rightpanel-git-walkthrough')).not.toBeNull();
+    await screen.pressByTestIdAsync('session-rightpanel-git-walkthrough');
+    await flushHookEffects({ cycles: 20 });
+    await measure();
+    await flushHookEffects({ cycles: 20 });
+    const detailsUrl = new URL(route.href, 'https://happier.test');
+    expect(detailsUrl.pathname).toBe('/session/s1/details');
+    expect(detailsUrl.searchParams.get('serverId')).toBe(fixture.home.id);
+    expect(parseSessionPaneUrlState(Object.fromEntries(detailsUrl.searchParams))?.details).toMatchObject({
+        kind: 'scmReview', comparison: { kind: 'workingTree' }, view: 'walkthrough',
+    });
+    expect(selectedTab().target).toMatchObject({ kind: 'sessionDetails', params: {
+        details: 'scmReview', comparison: 'workingTree', view: 'walkthrough',
+    } });
+    expect(screen.findHostByTestId('scm-comparison-phone-back')).not.toBeNull();
+    await screen.pressByTestIdAsync('scm-comparison-phone-back');
+    await flushHookEffects({ cycles: 20 });
+    await measure();
+    await flushHookEffects({ cycles: 20 });
+    expect(selectedTab().target).toMatchObject({ kind: 'session', params: { mobileSurface: 'chat' } });
+    expect(screen.findHostByTestId('agent-input-composer')).not.toBeNull();
+    expect(pane.scopeState?.details.tabs[0]?.resource).toMatchObject({ comparison: { kind: 'workingTree' }, view: 'walkthrough' });
+    await screen.unmount();
+});
+
 it.each(['classic', 'cockpit', 'hosted'] as const)('returns from the full %s phone Details route to its qualified Session when history leads Home', async (experience) => {
     const snapshot = fileViewSnapshot({ rootPath: '/tmp/repo' });
     fixture = await createSessionFilesViewFixture({ rootPath: '/tmp/repo', rpc: request =>
@@ -131,6 +221,7 @@ it.each(['classic', 'cockpit', 'hosted'] as const)('returns from the full %s pho
     const { createSessionPaneScopeId } = await import('@/components/sessions/panes/sessionPaneScopeId');
     const { useAppPaneScope } = await import('@/components/appShell/panes/hooks/useAppPaneScope');
     const { SessionDetailsDestinationBody } = await import('@/components/sessions/shell/SessionDetailsDestinationBody');
+    const { usePersistSessionLastMobileSurface } = await import('@/sync/domains/state/storage');
     const { SessionDestinationBody } = await import('@/components/sessions/shell/SessionDestinationBody');
     const { DestinationInstanceHost } = await import('@/components/appShell/workspace/DestinationInstanceHost');
     const { WorkspaceProvider } = await import('@/components/appShell/workspace/WorkspaceProvider');
@@ -144,7 +235,12 @@ it.each(['classic', 'cockpit', 'hosted'] as const)('returns from the full %s pho
     let instanceKey: string | null = null;
     let workspace!: WorkspaceNavigationContextValue;
     let pane!: ReturnType<typeof useAppPaneScope>;
-    function Probe() { pane = useAppPaneScope(createSessionPaneScopeId('s1', fixture.home.id, instanceKey)); return null; }
+    let persistSurface!: ReturnType<typeof usePersistSessionLastMobileSurface>;
+    function Probe() {
+        pane = useAppPaneScope(createSessionPaneScopeId('s1', fixture.home.id, instanceKey));
+        persistSurface = usePersistSessionLastMobileSurface();
+        return null;
+    }
     const body = <><Probe /><SessionDetailsDestinationBody /></>;
     const catalog = resolveCompactAppDestinations({ pages: [], builtins: {
         externalSessions: false, inbox: false, workflows: false, friends: false,
@@ -176,6 +272,7 @@ it.each(['classic', 'cockpit', 'hosted'] as const)('returns from the full %s pho
     await flushHookEffects({ cycles: 20 });
     expect(screen.findHostByTestId('scm-comparison-phone-back')).not.toBeNull();
     expect(pane.scopeState?.details.tabs[0]?.resource).toMatchObject({ comparison: { kind: 'workingTree' }, view: 'walkthrough' });
+    await act(async () => persistSurface('s1', 'tabs', fixture.home.id));
     route.replace.mockClear();
     route.back.mockClear();
     await screen.pressByTestIdAsync('scm-comparison-phone-back');
@@ -184,10 +281,12 @@ it.each(['classic', 'cockpit', 'hosted'] as const)('returns from the full %s pho
     expect(url.pathname).toBe('/session/s1');
     expect(url.searchParams.get('serverId')).toBe(fixture.home.id);
     expect(parseSessionPaneUrlState(Object.fromEntries(url.searchParams))?.details).toBeUndefined();
+    expect(url.searchParams.get('mobileSurface')).toBe('chat');
     if (experience === 'hosted') {
         expect(selectedWorkspaceTab()).toMatchObject({ id: originalInstanceKey, target: { kind: 'session', params: { id: 's1', serverId: fixture.home.id } } });
         expect(screen.tree.findAllByType(SessionDetailsDestinationBody)).toHaveLength(0);
         expect(screen.tree.findAllByType(SessionDestinationBody)).toHaveLength(1);
+        expect(screen.findHostByTestId('agent-input-composer')).not.toBeNull();
         await act(async () => { expect(workspace.openHref(detailsHref, { tabId: originalInstanceKey! })).toBe(true); });
         await flushHookEffects({ cycles: 20 });
         await measure();
