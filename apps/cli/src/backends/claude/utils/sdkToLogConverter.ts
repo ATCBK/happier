@@ -18,8 +18,8 @@ import { normalizeClaudeToolUseNamesInSdkMessage } from './normalizeClaudeToolUs
 import { providers } from '@happier-dev/agents'
 import { buildClaudeSdkResultUsageTelemetry } from './sdkResultUsageTelemetry'
 import { readNonBlankOpaqueIdentifier } from '@/utils/opaqueIdentifiers'
-import { formatClaudePeerMessageText, projectClaudePeerMessage } from '../attachments/claudePeerMessageProjection'
 import { createClaudeTaskNotificationToolResultProjector, readClaudeTaskLifecycleEnvelope } from '../taskNotifications/claudeTaskLifecycleEnvelope'
+import { formatClaudePeerMessageText, projectClaudePeerMessage } from '../attachments/claudePeerMessageProjection'
 
 /**
  * Context for converting SDK messages to log format
@@ -118,10 +118,9 @@ export class SDKToLogConverter {
      * Convert SDK message to log format
      */
     convert(sdkMessage: SDKMessage): RawJSONLines | null {
-        const rawType = (sdkMessage as any)?.type;
         const fact = readClaudeTaskLifecycleEnvelope(sdkMessage);
-        if (providers.claude.isClaudeInternalEventType(rawType) && rawType !== 'attachment'
-            && fact?.subtype !== 'task_notification') {
+        const rawType = (sdkMessage as any)?.type;
+        if (providers.claude.isClaudeInternalEventType(rawType) && rawType !== 'attachment') {
             return null;
         }
 
@@ -155,9 +154,10 @@ export class SDKToLogConverter {
             if (!isSidechain) this.lastMainUuid = uuid;
             return peerMessage;
         }
+        if (providers.claude.isClaudeInternalEventType(rawType)) return null;
+
         const taskResult = this.taskNotificationProjector.project({ ...sdkMessage, ...baseFields }, sidechainId ? { sidechainId } : undefined);
         if (taskResult || fact?.subtype === 'task_notification') return taskResult;
-        if (providers.claude.isClaudeInternalEventType(rawType)) return null;
 
         let logMessage: RawJSONLines | null = null
         let shouldUpdateLastMainUuid = true

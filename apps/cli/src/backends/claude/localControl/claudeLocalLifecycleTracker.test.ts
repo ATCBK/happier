@@ -64,15 +64,15 @@ describe('createClaudeLocalLifecycleTracker', () => {
     expect(handle.markUnknown).not.toHaveBeenCalled();
 
     tracker.observeLiveProviderActivityRow({
-      type: 'queue-operation',
-      operation: 'enqueue',
+      type: 'user',
+      origin: { kind: 'task-notification' },
       sessionId: 'provider-session',
-      content: [
+      message: { content: [
         '<task-notification>',
         '<task-id>agent_target</task-id>',
         '<status>completed</status>',
         '</task-notification>',
-      ].join(''),
+      ].join('') },
     } as unknown as RawJSONLines, 'provider-session');
     await vi.waitFor(() => expect(reports).toHaveLength(2));
     expect(reports.at(-1)).toEqual({ state: 'idle', activeCount: 0 });
@@ -133,6 +133,12 @@ describe('createClaudeLocalLifecycleTracker', () => {
       session_id: 'provider-session',
       agent_id: 'agent-1',
     });
+    await Promise.resolve();
+    expect(reports.at(-1)).toEqual({ state: 'active', activeCount: 1 });
+    tracker.observeLiveProviderActivityRow({
+      type: 'user', origin: { kind: 'task-notification' }, sessionId: 'provider-session',
+      message: { content: '<task-notification><task-id>agent-1</task-id><status>completed</status></task-notification>' },
+    } as unknown as RawJSONLines, 'provider-session');
     await vi.waitFor(() => expect(reports.at(-1)).toEqual({ state: 'idle', activeCount: 0 }));
     lifecycle.dispose();
   });

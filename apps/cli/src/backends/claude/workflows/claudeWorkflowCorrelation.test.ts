@@ -10,11 +10,12 @@ import {
 } from './claudeWorkflowCorrelation';
 
 describe('parseClaudeWorkflowFact', () => {
-  it('requires delivered native provenance instead of copied or enqueued task XML', () => {
-    const content = '<task-notification><task-id>task</task-id><tool-use-id>tool</tool-use-id><status>completed</status></task-notification>';
-    expect(parseClaudeWorkflowFact({ type: 'user', message: { content } })).toBeNull();
-    expect(parseClaudeWorkflowFact({ type: 'queue-operation', operation: 'enqueue', content })).toBeNull();
-    expect(parseClaudeWorkflowFact({ type: 'attachment', attachment: { type: 'queued_command', prompt: content } })).toBeNull();
+  it('retains the rich native task-start projection while presentation correlation reads its identity', () => {
+    expect(parseClaudeWorkflowFact({ type: 'system', subtype: 'task_started', task_id: 'native-start', tool_use_id: 'start-tool',
+      task_type: 'local_agent', description: 'Native task', start_time: 123, session_id: 'session' })).toMatchObject({
+      kind: 'task-lifecycle', subtype: 'task_started', taskId: 'native-start', toolUseId: 'start-tool',
+      taskType: 'local_agent', title: 'Native task', startedAt: 123,
+    });
   });
 
   it('extracts an explicit Workflow tool-use start without leaking the script body', () => {
@@ -456,7 +457,7 @@ await parallel([
     });
   });
 
-  it('ignores async_launched Agent tool results so background agents do not become workflow runs', () => {
+  it('normalizes async Agent acknowledgements as native lifecycle facts rather than synchronous completion', () => {
     const fact = parseClaudeWorkflowFact({
       type: 'user',
       session_id: 'claude-session-1',
@@ -483,7 +484,8 @@ await parallel([
       },
     });
 
-    expect(fact).toBeNull();
+    expect(fact).toMatchObject({ kind: 'task-lifecycle', subtype: 'async-launch', status: 'active',
+      taskId: 'a92c3cece749417e2', toolUseId: 'toolu_agent' });
   });
 
   it('extracts an async Workflow launch only when the result is explicitly a local workflow', () => {
@@ -806,7 +808,7 @@ await parallel([
       });
     });
 
-    it('yields nothing for an async-launch acknowledgement, which reports a start and not a result', () => {
+    it('learns native identity from an async-launch acknowledgement without reporting completion', () => {
       // OBSERVED (live session d85429b7): the `Agent` tool result returns ~3ms after the launch with
       // `{ isAsync: true, status: 'async_launched', agentId, outputFile }` while the agent runs for
       // hours. Reading it as a completion terminalises an agent that has only just started; the real
@@ -832,7 +834,7 @@ await parallel([
 
       expect(parseClaudeWorkflowFact(asyncLaunchAcknowledgement, {
         isKnownSubagentToolUseId: (id) => id === 'toolu_agent',
-      })).toBeNull();
+      })).toMatchObject({ kind: 'task-lifecycle', taskId: 'aec7336148831a599', toolUseId: 'toolu_agent', status: 'active' });
     });
 
     it('yields nothing for an identical result belonging to any other tool', () => {

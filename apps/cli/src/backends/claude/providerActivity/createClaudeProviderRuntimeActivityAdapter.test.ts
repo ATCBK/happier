@@ -1,6 +1,6 @@
 import { describe, expect, it, vi } from 'vitest';
 import type { SessionRuntimeActivityContribution } from '@/session/runtimeActivity/types';
-import { createClaudeProviderActivityLedger } from './createClaudeProviderActivityLedger';
+import { createClaudeProviderActivityLedger, readClaudeProviderTaskActivity } from './createClaudeProviderActivityLedger';
 import {
     createClaudeProviderRuntimeActivityAdapter,
     createClaudeProviderRuntimeActivityBindingOwner,
@@ -256,6 +256,35 @@ describe('createClaudeProviderRuntimeActivityAdapter', () => {
         expect(reports.at(-1)).toEqual({ state: 'active', activeCount: 2 });
         // Inventory evidence is preserved for blocker diagnostics; only the projection changes.
         expect(ledger.hasActiveProviderTasks()).toBe(true);
+        const reportsAfterLoss = [...reports];
+        await adapter.publishCurrent('later-inventory-refresh');
+        expect(reports).toEqual(reportsAfterLoss);
+
+        await adapter.observeActivity({
+            activity: { type: 'started', sessionId: 's1', taskId: 'workflow-1' }, evidence: 'historical-replay',
+        });
+        expect(reports).toEqual(reportsAfterLoss);
+        const handback = readClaudeProviderTaskActivity({
+            type: 'user', sessionId: 's1',
+            origin: { kind: 'peer', from: 'workflow-1', senderTaskId: 'workflow-1', handback: true },
+        });
+        if (!handback) throw new Error('expected native handback report delivery');
+        await adapter.observeActivity({ activity: handback, evidence: 'live' });
+        expect(reports).toEqual(reportsAfterLoss);
+        await adapter.observeActivity({
+            activity: { type: 'progress', sessionId: 's1', taskId: 'workflow-1' }, evidence: 'live',
+        });
+        expect(reports.at(-1)).toEqual({ state: 'active', activeCount: 1 });
+        await adapter.observeActivity({
+            activity: { type: 'terminal', sessionId: 's1', taskId: 'workflow-1' }, evidence: 'live',
+        });
+        expect(markUnknown).toHaveBeenCalledTimes(2);
+        expect(ledger.hasActiveProviderTask({ sessionId: 's1', taskId: 'subagent-1' })).toBe(true);
+
+        await adapter.observeActivity({
+            activity: { type: 'started', sessionId: 's1', taskId: 'subagent-1' }, evidence: 'live',
+        });
+        expect(reports.at(-1)).toEqual({ state: 'active', activeCount: 1 });
     });
 
     it('does not republish a projection after an in-flight observation loss already marked unknown', async () => {
@@ -356,6 +385,30 @@ describe('createClaudeProviderRuntimeActivityAdapter', () => {
         expect(report).toHaveBeenCalledTimes(2);
         expect(markUnknown).not.toHaveBeenCalled();
         expect(ledger.hasActiveProviderTasks()).toBe(false);
+    });
+
+    it('keeps an uncertain admitted invocation unknown without hiding a fresh sibling or unconfirming it', async () => {
+        const ledger = createClaudeProviderActivityLedger();
+        const states: Array<{ state: string; activeCount: number }> = [];
+        const adapter = createClaudeProviderRuntimeActivityAdapter({ providerActivityLedger: ledger,
+            contributionHandle: {
+                report: async (value) => { states.push(value); },
+                markUnknown: async () => { states.push({ state: 'unknown', activeCount: 0 }); },
+                dispose: async () => {},
+            },
+        });
+        await adapter.activateObservation('test');
+        await adapter.observeActivity({ activity: { type: 'started', source: 'hook-agent-resume',
+            confirmsActivity: false, sessionId: 's1', taskId: 'uncertain' }, evidence: 'live' });
+        expect(states.at(-1)).toEqual({ state: 'unknown', activeCount: 0 });
+        await adapter.observeActivity({ activity: { type: 'started', sessionId: 's1', taskId: 'fresh' }, evidence: 'live' });
+        await adapter.observeActivity({ activity: { type: 'started', source: 'hook-agent-resume',
+            confirmsActivity: false, sessionId: 's1', taskId: 'fresh' }, evidence: 'live' });
+        expect(states.at(-1)).toEqual({ state: 'active', activeCount: 1 });
+        await adapter.observeActivity({ activity: { type: 'terminal', sessionId: 's1', taskId: 'uncertain' }, evidence: 'live' });
+        expect(states.at(-1)).toEqual({ state: 'active', activeCount: 1 });
+        await adapter.observeActivity({ activity: { type: 'terminal', sessionId: 's1', taskId: 'fresh' }, evidence: 'live' });
+        expect(states.at(-1)).toEqual({ state: 'idle', activeCount: 0 });
     });
 
     it('keeps inventory truth when projection publication rejects', async () => {

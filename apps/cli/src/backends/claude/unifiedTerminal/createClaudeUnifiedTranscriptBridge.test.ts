@@ -13,6 +13,14 @@ import type { SessionHookData } from '../utils/startHookServer';
 import { createClaudeUnifiedAcceptedPromptTranscriptDiscovery } from './acceptedPromptTranscriptDiscovery';
 import { createClaudeUnifiedTranscriptBridge } from './createClaudeUnifiedTranscriptBridge';
 import { createReplayableHookSubscription } from './createReplayableHookSubscription';
+import { createClaudeWorkflowActivitySource } from '../workflows/claudeWorkflowActivitySource';
+import { completedNativeChildTranscript } from '../workflows/claudeWorkflowActivitySource.testkit';
+import type { SessionWorkflowRunSnapshotV1 } from '@happier-dev/protocol';
+import { createClaudeProviderActivityLedger } from '../providerActivity/createClaudeProviderActivityLedger';
+import { createClaudeProviderRuntimeActivityAdapter } from '../providerActivity/createClaudeProviderRuntimeActivityAdapter';
+import { createClaudeUnifiedInputArbiter } from './createClaudeUnifiedInputArbiter';
+import { createClaudeUnifiedHookLifecycleBridge } from './createClaudeUnifiedHookLifecycleBridge';
+import { doesClaudeUnifiedPromptBatchMatchAcceptedTranscript } from './acceptedPromptDeliveryIdentity';
 
 async function waitUntil(predicate: () => boolean, timeoutMs = 5_000): Promise<void> {
   const startedAt = Date.now();
@@ -48,6 +56,286 @@ function createDeferred<T>() {
 
 describe('createClaudeUnifiedTranscriptBridge', () => {
   const tempDirs: string[] = [];
+
+  it.each([false, true])('uses transcript authority after an ambiguous task XML submit hook (native: %s)', async (native) => {
+    const dir = await mkdtemp(join(tmpdir(), 'happier-claude-task-prompt-admission-'));
+    tempDirs.push(dir);
+    const sessionId = 'claude-session-1';
+    const transcriptPath = join(dir, `${sessionId}.jsonl`);
+    await writeFile(transcriptPath, '');
+    const prompt = '<task-notification><task-id>native-child</task-id><tool-use-id>child-tool</tool-use-id><status>completed</status><result>done</result></task-notification>';
+    const localId = 'd0c32266-56b9-4421-8b3a-56fcd6d1605b';
+    let emitHook: ((data: SessionHookData) => void) | undefined;
+    const replay = createReplayableHookSubscription(callback => { emitHook = callback; return () => {}; });
+    const discovery = createClaudeUnifiedAcceptedPromptTranscriptDiscovery({ acceptedPromptWindowMs: 5_000 });
+    const accepted: string[][] = [];
+    const thinking: boolean[] = [];
+    const visible: RawJSONLines[] = [];
+    let confirmation = Promise.resolve(false);
+    const arbiter = createClaudeUnifiedInputArbiter({
+      quietPeriodMs: 0,
+      // The terminal injector is the external boundary; admission and lifecycle stay real.
+      injectPrompt: async batch => {
+        emitHook?.({ hook_event_name: 'UserPromptSubmit', session_id: sessionId, prompt: batch.message, session_title: 'native title' });
+        return { status: 'injected', at: Date.now(), bytesWritten: batch.message.length };
+      },
+      onProviderAcceptancePending: batch => {
+        discovery.recordAcceptedPrompt({ message: batch.message, deliveryIdentity: { localIds: batch.userMessageLocalIds } });
+      },
+      onPromptAccepted: batch => { accepted.push([...(batch.userMessageLocalIds ?? [])]); },
+    });
+    const lifecycle = createClaudeUnifiedHookLifecycleBridge({
+      subscribeClaudeSessionHooks: replay.subscribe!, arbiter, completionQuiescenceMs: 0,
+      onThinkingChange: value => { thinking.push(value); },
+    });
+    const bridge = createClaudeUnifiedTranscriptBridge({
+      sessionId, transcriptPath, workingDirectory: dir, subscribeClaudeSessionHooks: replay.subscribe,
+      onStartupReplayComplete: () => replay.finishStartup(),
+      proveAcceptedMainTranscript: value => {
+        const match = discovery.findMatchingTranscript([value]);
+        if (!match) return false;
+        confirmation = arbiter.confirmPromptAcceptedByProviderIf(batch => (
+          doesClaudeUnifiedPromptBatchMatchAcceptedTranscript({ batch, match })
+        ));
+        return true;
+      },
+      onTranscriptMessage: message => { visible.push(message); lifecycle.observeTranscript(message); },
+      transcriptMissingWarningMs: 0,
+    });
+    try {
+      const abortSignal = new AbortController().signal;
+      lifecycle.start({ abortSignal });
+      await bridge.start({ abortSignal });
+      emitHook?.({ hook_event_name: 'SessionStart', session_id: sessionId, transcript_path: transcriptPath, cwd: dir });
+      arbiter.observeLifecycle({ type: 'turn_state', state: 'idle' });
+      arbiter.observeLifecycle({ type: 'output' });
+      await arbiter.enqueueUiMessage({ message: prompt, origin: { kind: 'ui_pending' }, userMessageLocalIds: [localId] });
+      await arbiter.drainWhenSafe();
+      expect(accepted).toEqual([]);
+      expect(thinking).toEqual([]);
+      await appendRawJsonl(transcriptPath, {
+        type: 'user', uuid: 'ambiguous-submit-transcript', sessionId, timestamp: new Date().toISOString(),
+        ...(native ? { origin: { kind: 'task-notification' }, promptSource: 'system', queueSkipAttachments: true, queueTranscriptOnly: true } : {}),
+        message: { role: 'user', content: prompt },
+      });
+      await waitUntil(() => visible.some(message => message.uuid === 'ambiguous-submit-transcript'));
+      await confirmation;
+      expect(accepted).toEqual(native ? [] : [[localId]]);
+      expect(thinking).toEqual(native ? [] : [true]);
+    } finally { lifecycle.dispose(); await bridge.dispose(); replay.dispose(); await arbiter.dispose(); }
+  });
+
+  it.each([
+    { label: 'admits an active async child', terminalBeforeAcknowledgement: false },
+    { label: 'keeps a trusted terminal before acknowledgement settled', terminalBeforeAcknowledgement: true },
+  ])('learns async Agent hook identity and $label while synchronous foreground work stays uncounted', async ({ terminalBeforeAcknowledgement }) => {
+    const dir = await mkdtemp(join(tmpdir(), 'happier-claude-agent-hook-admission-'));
+    tempDirs.push(dir);
+    const sessionId = 'claude-session-1';
+    const anchors = ['background', 'foreground'].map(id => ({
+      type: 'assistant', session_id: sessionId,
+      message: { content: [{ type: 'tool_use', id, name: 'Agent', input: { description: id, subagent_type: 'general-purpose' } }] },
+    }));
+    const transcriptPath = join(dir, `${sessionId}.jsonl`);
+    await writeFile(transcriptPath, anchors.map(row => JSON.stringify(row)).join('\n') + '\n');
+    let runtime: { state: string; activeCount: number } | undefined;
+    let latest: SessionWorkflowRunSnapshotV1 | undefined;
+    const liveRows: unknown[] = [];
+    const ledger = createClaudeProviderActivityLedger();
+    ledger.noteOwnedSessionId(sessionId);
+    const adapter = createClaudeProviderRuntimeActivityAdapter({
+      providerActivityLedger: ledger,
+      contributionHandle: {
+        report: async snapshot => { runtime = { state: snapshot.state, activeCount: snapshot.activeCount ?? 0 }; },
+        markUnknown: async () => { runtime = { state: 'unknown', activeCount: 0 }; }, dispose: async () => {},
+      },
+    });
+    const source = createClaudeWorkflowActivitySource({
+      backendId: 'claude', getCurrentClaudeSessionId: () => sessionId,
+      commitRecord: async snapshot => { latest = snapshot; }, writeHeadlines: () => {},
+      onProviderTaskActivity: activity => adapter.observeActivity({ activity, evidence: 'live' }),
+    });
+    let emitHook: ((data: SessionHookData) => void) | undefined;
+    const bridge = createClaudeUnifiedTranscriptBridge({
+      sessionId, transcriptPath, workingDirectory: dir,
+      subscribeClaudeSessionHooks: callback => { emitHook = callback; return () => {}; },
+      onRawTranscriptValue: (value, observation) => {
+        if (!observation.historicalReplay) liveRows.push(value);
+        source.observeTranscriptMessage(value, observation);
+      },
+      transcriptMissingWarningMs: 0,
+    });
+    try {
+      await bridge.start({ abortSignal: new AbortController().signal });
+      expect([...source.getWorkflowOwnedAgentToolUseIds()]).toEqual(expect.arrayContaining(['background', 'foreground']));
+      await adapter.activateObservation('async-agent-hook-observer-installed');
+      emitHook?.({ hook_event_name: 'PostToolUse', session_id: sessionId, tool_name: 'Agent', tool_use_id: 'foreground',
+        tool_response: { isAsync: false, agentId: 'native-foreground', content: 'finished synchronously' } });
+      await source.flush();
+      expect(runtime).toEqual({ state: 'idle', activeCount: 0 });
+      if (terminalBeforeAcknowledgement) {
+        await appendRawJsonl(transcriptPath, {
+          type: 'user', uuid: 'native-terminal-before-ack', sessionId,
+          timestamp: new Date().toISOString(), origin: { kind: 'task-notification' },
+          message: { content: [{ type: 'text', text: '<task-notification><task-id>native-background</task-id><status>completed</status></task-notification>' }] },
+        });
+        await waitUntil(() => liveRows.some(value => (
+          typeof value === 'object' && value !== null && 'uuid' in value && value.uuid === 'native-terminal-before-ack'
+        )));
+        await source.flush();
+        expect(runtime).toEqual({ state: 'idle', activeCount: 0 });
+      }
+      emitHook?.({ hook_event_name: 'PostToolUse', session_id: sessionId, tool_name: 'Agent', tool_use_id: 'background',
+        tool_response: { isAsync: true, status: 'async_launched', agentId: 'native-background' } });
+      await source.flush();
+      expect(runtime).toEqual(terminalBeforeAcknowledgement
+        ? { state: 'idle', activeCount: 0 } : { state: 'active', activeCount: 1 });
+      expect(ledger.getActiveProviderTaskBlockers()).toMatchObject(terminalBeforeAcknowledgement
+        ? [] : [{ taskId: 'native-background', sessionId }]);
+      if (terminalBeforeAcknowledgement) {
+        expect(latest?.agents.find(agent => agent.id === 'background')?.status).toBe('complete');
+      }
+    } finally { await bridge.dispose(); source.dispose(); }
+  });
+
+  it.each([
+    { label: 'newer than the saved terminal', terminalOffsetMs: -2000, expectedStatus: 'active', expectedCount: 1, expectedRuntime: 'active', foreground: false, freshSibling: false, childStatus: 'active' },
+    { label: 'older than the saved terminal', terminalOffsetMs: 1000, expectedStatus: 'complete', expectedCount: 0, expectedRuntime: 'idle', foreground: false, freshSibling: false, childStatus: 'complete' },
+    { label: 'tied with the saved terminal', terminalOffsetMs: 0, expectedStatus: 'unknown', expectedCount: 0, expectedRuntime: 'unknown', foreground: false, freshSibling: false, childStatus: 'unknown' },
+    { label: 'without a saved terminal timestamp', terminalOffsetMs: null, expectedStatus: 'unknown', expectedCount: 0, expectedRuntime: 'unknown', foreground: false, freshSibling: false, childStatus: 'unknown' },
+    { label: 'while a foreground prompt is active', terminalOffsetMs: -2000, expectedStatus: 'active', expectedCount: 1, expectedRuntime: 'active', foreground: true, freshSibling: false, childStatus: 'active' },
+    { label: 'tied while a sibling has fresh evidence', terminalOffsetMs: 0, expectedStatus: 'active', expectedCount: 1, expectedRuntime: 'active', foreground: false, freshSibling: true, childStatus: 'unknown' },
+  ] as const)('preserves a startup-buffered native start $label after transcript identity replay', async ({ terminalOffsetMs, expectedStatus, expectedCount, expectedRuntime, foreground, freshSibling, childStatus }) => {
+    // Only wall-clock receipt time is faked; scanner, filesystem, replay and publishers stay real.
+    vi.useFakeTimers({ toFake: ['Date'] });
+    const receiptAt = 1_800_000_000_000;
+    const sessionId = 'claude-session-1';
+    const terminalAt = terminalOffsetMs === null ? null : receiptAt + terminalOffsetMs;
+    const rows = completedNativeChildTranscript(sessionId).map((value, index) => {
+      const row = value as Record<string, unknown>;
+      const child = index < 3 ? 'a' : 'b';
+      if (row.type === 'attachment') return {
+        type: 'user', sessionId, origin: { kind: 'task-notification' },
+        ...(terminalAt !== null ? { timestamp: new Date(terminalAt).toISOString() } : {}),
+        message: { content: [{ type: 'text', text: `<task-notification><task-id>native-${child}</task-id><status>completed</status></task-notification>` }] },
+      };
+      return { ...row, timestamp: new Date(receiptAt - 4000 + index).toISOString() };
+    });
+    const dir = await mkdtemp(join(tmpdir(), 'happier-claude-buffered-native-start-'));
+    tempDirs.push(dir);
+    const transcriptPath = join(dir, `${sessionId}.jsonl`);
+    await writeFile(transcriptPath, rows.map(row => JSON.stringify(row)).join('\n') + '\n');
+    let durable: SessionWorkflowRunSnapshotV1 | undefined;
+    const previousSource = createClaudeWorkflowActivitySource({
+      backendId: 'claude', getCurrentClaudeSessionId: () => sessionId,
+      commitRecord: async snapshot => { durable = snapshot; }, writeHeadlines: () => {},
+    });
+    // The previous owner wrote this durable completed projection before its observer was replaced.
+    for (const row of rows) previousSource.observeTranscriptMessage(row);
+    await previousSource.flush();
+    previousSource.dispose();
+    expect(durable?.status).toBe('complete');
+
+    const ledger = createClaudeProviderActivityLedger();
+    ledger.noteOwnedSessionId(sessionId);
+    const reports: Array<{ state: string; activeCount: number }> = [];
+    const adapter = createClaudeProviderRuntimeActivityAdapter({
+      providerActivityLedger: ledger,
+      contributionHandle: {
+        report: async snapshot => { reports.push({ state: snapshot.state, activeCount: snapshot.activeCount ?? 0 }); },
+        markUnknown: async () => { reports.push({ state: 'unknown', activeCount: 0 }); }, dispose: async () => {},
+      },
+    });
+    const source = createClaudeWorkflowActivitySource({
+      backendId: 'claude', getCurrentClaudeSessionId: () => sessionId,
+      commitRecord: async snapshot => { durable = snapshot; }, writeHeadlines: () => {},
+      onProviderTaskActivity: activity => adapter.observeActivity({ activity, evidence: 'live' }),
+    });
+    let emitHook: ((data: SessionHookData) => void) | undefined;
+    const replay = createReplayableHookSubscription(callback => { emitHook = callback; return () => {}; });
+    vi.setSystemTime(receiptAt);
+    emitHook?.({ ...(foreground ? { eventName: 'SubagentStart' } : { hook_event_name: 'SubagentStart' }), session_id: sessionId, agent_id: 'native-a' });
+    vi.setSystemTime(receiptAt + 3000);
+    const arbiter = createClaudeUnifiedInputArbiter({ injectPrompt: async () => { throw new Error('No foreground prompt in startup fixture'); } });
+    const foregroundStates: boolean[] = [];
+    const lifecycle = createClaudeUnifiedHookLifecycleBridge({
+      subscribeClaudeSessionHooks: replay.subscribe!, arbiter, completionQuiescenceMs: 0,
+      providerActivityLedger: ledger, runtimeActivityAdapter: adapter,
+      onThinkingChange: thinking => { foregroundStates.push(thinking); },
+    });
+    const replayedRows: unknown[] = [];
+    const bridge = createClaudeUnifiedTranscriptBridge({
+      sessionId, transcriptPath, workingDirectory: dir, subscribeClaudeSessionHooks: replay.subscribe,
+      onRawTranscriptValue: (value, observation) => {
+        if (observation.historicalReplay) replayedRows.push(value);
+        source.observeTranscriptMessage(value, observation);
+      },
+      loadCommittedClaudeJsonlMessageBaseline: async () => ({ keys: new Set<string>(), complete: true, oldestCoveredAtMs: null }),
+      onStartupReplayComplete: () => replay.finishStartup(),
+      transcriptMissingWarningMs: 0,
+    });
+    try {
+      const abortSignal = new AbortController().signal;
+      lifecycle.start({ abortSignal });
+      if (foreground) {
+        emitHook?.({ hook_event_name: 'UserPromptSubmit', session_id: sessionId, prompt: 'continue foreground work' });
+        expect(foregroundStates.at(-1)).toBe(true);
+      }
+      await bridge.start({ abortSignal });
+      await waitUntil(() => replayedRows.length === rows.length);
+      expect([...source.getWorkflowOwnedAgentToolUseIds()]).toEqual(expect.arrayContaining(['a', 'b']));
+      if (freshSibling) emitHook?.({ hook_event_name: 'SubagentStart', session_id: sessionId, agent_id: 'native-b' });
+      await source.flush();
+      await adapter.activateObservation('startup-observers-installed');
+      await adapter.publishCurrent('startup-baseline-complete');
+      expect(foregroundStates).toEqual(foreground ? [true] : []);
+      // Operational identities survive uncertainty; only freshly observed execution is counted.
+      expect({
+        observedCount: ledger.getObservedActiveProviderTaskCount(), operationalCount: ledger.getActiveProviderTaskCount(),
+        runtime: reports.at(-1),
+        runStatus: durable?.status, agents: durable?.agents.map(agent => [agent.id, agent.status]),
+      }).toEqual({
+        observedCount: expectedCount, operationalCount: childStatus === 'unknown' ? 1 + Number(freshSibling) : expectedCount,
+        runtime: { state: expectedRuntime, activeCount: expectedCount },
+        runStatus: expectedStatus, agents: [['a', childStatus], ['b', freshSibling ? 'active' : 'complete']],
+      });
+    } finally {
+      lifecycle.dispose(); arbiter.dispose(); await bridge.dispose(); replay.dispose(); source.dispose(); vi.useRealTimers();
+    }
+  });
+
+  it('projects only live exact-session authenticated starts into completed native workflow children', async () => {
+    const dir = await mkdtemp(join(tmpdir(), 'happier-claude-unified-hook-workflow-'));
+    tempDirs.push(dir);
+    const transcriptPath = join(dir, 'claude-session-1.jsonl');
+    await writeFile(transcriptPath, '');
+    let latest: SessionWorkflowRunSnapshotV1 | undefined;
+    const source = createClaudeWorkflowActivitySource({
+      backendId: 'claude', getCurrentClaudeSessionId: () => 'claude-session-1',
+      commitRecord: async snapshot => { latest = snapshot; }, writeHeadlines: () => {},
+    });
+    for (const row of completedNativeChildTranscript()) source.observeTranscriptMessage(row);
+    await source.flush();
+    let emitHook: ((data: SessionHookData) => void) | undefined;
+    const onMessage = vi.fn();
+    const bridge = createClaudeUnifiedTranscriptBridge({
+      sessionId: 'claude-session-1', transcriptPath, workingDirectory: dir, onMessage,
+      subscribeClaudeSessionHooks: callback => { emitHook = callback; return () => {}; },
+      onRawTranscriptValue: (value, observation) => source.observeTranscriptMessage(value, observation),
+      transcriptMissingWarningMs: 0,
+    });
+    try {
+      await bridge.start({ abortSignal: new AbortController().signal });
+      emitHook?.({ hook_event_name: 'SubagentStart', session_id: 'other-session', agent_id: 'native-a' });
+      await source.flush();
+      expect(latest?.status).toBe('complete');
+      emitHook?.({ eventName: 'SubagentStart', session_id: 'claude-session-1', agent_id: 'native-a' });
+      await source.flush();
+      expect(latest?.agents.map(agent => [agent.id, agent.status])).toEqual([['a', 'active'], ['b', 'complete']]);
+      expect(latest?.status).toBe('active');
+      expect(onMessage).not.toHaveBeenCalled();
+    } finally { await bridge.dispose(); source.dispose(); }
+  });
 
   afterEach(async () => {
     for (const dir of tempDirs.splice(0)) {

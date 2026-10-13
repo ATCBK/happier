@@ -61,6 +61,22 @@ export function readClaudeTaskLifecycleEnvelope(value: unknown): ClaudeTaskLifec
   const hookResponse = hookName === 'PostToolUse' ? record(row.tool_response ?? row.toolResponse ?? row.toolUseResult ?? row.tool_use_result) : null;
   const toolName = text(row.tool_name ?? row.toolName);
   const resumeResponse = hookName === 'PostToolUse' && toolName === 'SendMessage' ? hookResponse : response;
+  // Claude 2.1.296 explicitly reports a user-stopped child in a failed SendMessage
+  // response, without a later task notification. Read native response metadata only;
+  // ordinary text or an arbitrary failed delivery cannot prove cancellation.
+  const stoppedTaskId = resumeResponse?.success === false
+    ? /^Agent (\S+) was stopped by the user and won't be resumed\./.exec(text(resumeResponse.message) ?? '')?.[1]
+    : undefined;
+  const nativeResultContent = record(row.message)?.content;
+  const hasNativeToolResult = Array.isArray(nativeResultContent)
+    && nativeResultContent.some(block => record(block)?.type === 'tool_result' && text(record(block)?.tool_use_id));
+  const stoppedTargetMatches = hookName === 'PostToolUse'
+    ? toolName === 'SendMessage' && text(record(row.tool_input ?? row.toolInput)?.to) === stoppedTaskId
+    : row.type === 'user' && hasNativeToolResult;
+  if (stoppedTaskId && stoppedTargetMatches) {
+    return { subtype: 'task_status', taskId: stoppedTaskId, toolUseId: null,
+      status: 'cancelled', summary: text(resumeResponse?.message) ?? undefined, ...identity };
+  }
   const resumedAgentId = text(resumeResponse?.resumedAgentId ?? resumeResponse?.resumed_agent_id);
   if (resumedAgentId && resumeResponse && resumeResponse.success !== false && resumeResponse.is_error !== true
     && resumeResponse.isError !== true && resumeResponse.error == null
@@ -98,10 +114,10 @@ export function readClaudeTaskLifecycleEnvelope(value: unknown): ClaudeTaskLifec
     return taskId ? { subtype: 'handback', taskId, toolUseId: null, status: 'active', ...identity } : null;
   }
   // Lifecycle decisions require native delivery provenance; presentation can still inspect copied XML.
-  const nativeNotification = origin?.kind === 'task-notification'
-    || (attachment?.type === 'queued_command' && attachment.commandMode === 'task-notification');
-  if (!nativeNotification) return null;
-  const xml = parseClaudeTaskNotificationXml(value);
+  const mayReadXml = row.type !== 'user' || origin?.kind === 'task-notification';
+  const nativeAttachment = attachment?.type !== 'queued_command' || origin?.kind === 'task-notification'
+    || attachment.commandMode === 'task-notification';
+  const xml = mayReadXml && nativeAttachment ? parseClaudeTaskNotificationXml(value) : null;
   const notificationOrigin = origin?.kind === 'task-notification' ? origin : null;
   if (!xml && !notificationOrigin) return null;
   const summary = text(notificationOrigin?.summary) ?? xml?.summary;
