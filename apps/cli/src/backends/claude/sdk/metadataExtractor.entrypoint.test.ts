@@ -24,6 +24,9 @@ it('applies Happier attribution to metadata probes and isolates cached catalogs 
         tools: [process.env.CLAUDE_CODE_ENTRYPOINT || 'default', process.env.CLAUDECODE || 'clean'],
         slash_commands: ['/help']
       }) + '\\n');
+      if (!process.argv.includes('--no-session-persistence')) {
+        require('node:fs').writeFileSync(require('node:path').join(process.env.CLAUDE_CONFIG_DIR, 'probe.jsonl'), 'hello');
+      }
     }
   `);
   vi.stubEnv('HAPPIER_HOME_DIR', join(root, 'happier'));
@@ -36,4 +39,5 @@ it('applies Happier attribution to metadata probes and isolates cached catalogs 
   expect(await extractSDKMetadata()).toMatchObject({ tools: ['default', 'clean'] });
   expect(await extractSDKMetadata({ claudeCodeIncludeInNativeHistory: true })).toMatchObject({ tools: ['happier', 'clean'] });
   expect(await extractSDKMetadata({ claudeCodeIncludeInNativeHistory: false })).toMatchObject({ tools: ['default', 'clean'] });
+  expect(await import('node:fs/promises').then(fs => fs.readdir(configDir))).not.toContain('probe.jsonl');
 });
