@@ -2618,7 +2618,9 @@ describe('createCliActionExecutor', () => {
 
     expect(result).toMatchObject({
       ok: true,
-      result: { type: 'error', code: 'spawn_failed', retryable: true },
+      result: { type: 'error', code: 'spawn_failed', retryable: true,
+        launchError: { code: SPAWN_SESSION_ERROR_CODES.CHILD_EXITED_BEFORE_WEBHOOK,
+          message: 'Failed to spawn session: Child process exited before session webhook (pid=1234, code=null, signal=SIGKILL)' } },
     });
     expect(JSON.stringify(result)).not.toContain('spawn_recovery_not_found');
     expect(JSON.stringify(result)).not.toContain('Deterministic spawn recovery');
@@ -2641,7 +2643,9 @@ describe('createCliActionExecutor', () => {
 
     expect(result).toMatchObject({
       ok: true,
-      result: { type: 'error', code: 'spawn_failed', retryable: true },
+      result: { type: 'error', code: 'spawn_failed', retryable: true,
+        launchError: { code: SPAWN_SESSION_ERROR_CODES.SPAWN_VALIDATION_FAILED,
+          message: 'OhMyPi has no available models. Set provider API keys before starting a session.' } },
     });
     expect(JSON.stringify(result)).not.toContain('incompatible_target');
     expect(JSON.stringify(result)).not.toContain('spawn_recovery_');

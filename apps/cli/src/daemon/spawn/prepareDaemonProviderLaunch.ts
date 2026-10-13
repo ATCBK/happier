@@ -155,6 +155,7 @@ export async function prepareDaemonProviderLaunch(input: Readonly<{
                 pluginRuntimeRegistry: appliedPluginRuntimeLease.registry,
                 options: optionsWithProviderIsolation,
                 resolvedAgentId: input.catalogAgentId,
+                savedSecretOperationContext: input.savedSecretOperationContext,
                 profileEnvironmentVariables: input.profileEnvironmentVariables,
                 daemonSpawnHooks: input.daemonSpawnHooks,
                 processEnv: input.processEnv,

@@ -14,6 +14,7 @@ import { SessionIdSchema } from '../idsV1.js';
 import { asProtocolZod } from "../../plugins/actions/internalProtocolZodAdapter.js";
 import { SessionFollowSourceKeyPreparationResultV1Schema } from '../follow/sessionFollowSourceKeyPreparationV1.js';
 import { SessionAttestedContextV1Schema } from './sessionAttestedContextV1.js';
+import { SessionSpawnLaunchErrorV1Schema } from '../spawnSession.js';
 import {
   SessionCreationOpaqueIdV1Schema,
   SessionExecutionTargetV1Schema,
@@ -123,7 +124,11 @@ export const SessionSpawnNewResultV1Schema = lazyZodSchema(() => z.union([
     agentId: z.string().refine((value) => value.trim().length > 0).optional(),
     providerError: ProviderErrorV1Schema.optional(),
     terminalHostError: TerminalHostUnavailableSpawnErrorDetailSchema.optional(),
+    launchError: SessionSpawnLaunchErrorV1Schema.optional(),
   }).strict().superRefine((value, context) => {
+    if (value.launchError && value.code !== 'spawn_failed') {
+      context.addIssue({ code: z.ZodIssueCode.custom, path: ['launchError'], message: 'Launch causes accompany spawn failures only.' });
+    }
     if (value.terminalHostError && (value.code !== 'incompatible_target' || value.retryable)) {
       context.addIssue({ code: z.ZodIssueCode.custom, path: ['terminalHostError'], message: 'Terminal host setup failures require a non-retryable incompatible target.' });
     }

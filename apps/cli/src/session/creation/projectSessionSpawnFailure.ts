@@ -1,0 +1,26 @@
+import { normalizeSpawnSessionNonceResolution } from '@happier-dev/protocol/sessions/spawnSessionNonce';
+import { SessionSpawnLaunchErrorV1Schema, SPAWN_SESSION_ERROR_CODES } from '@happier-dev/protocol/spawnSession';
+import type { SessionSpawnNewResultV1 } from '@happier-dev/protocol/sessions/creation/sessionSpawnNewResultV1';
+
+/** The creation adapter retains the daemon's redacted cause, not just its outcome. */
+export function projectSessionSpawnFailure(input: Readonly<{
+  errorCode: string;
+  errorMessage: unknown;
+  agentId?: unknown;
+  errorDetail?: unknown;
+}>): Extract<SessionSpawnNewResultV1, { type: 'error' }> {
+  const normalized = normalizeSpawnSessionNonceResolution({ status: 'error', ...input });
+  if (normalized.status === 'error' && normalized.agentId
+    && (normalized.errorCode === SPAWN_SESSION_ERROR_CODES.AGENT_CLI_MISSING
+      || normalized.errorCode === SPAWN_SESSION_ERROR_CODES.AGENT_SIGNED_OUT)) {
+    return { type: 'error', code: normalized.errorCode, agentId: normalized.agentId, retryable: false };
+  }
+  const detail = SessionSpawnLaunchErrorV1Schema.safeParse(input.errorDetail);
+  const fallback = SessionSpawnLaunchErrorV1Schema.safeParse({ kind: 'launch_error',
+    code: input.errorCode || SPAWN_SESSION_ERROR_CODES.SPAWN_FAILED,
+    message: typeof input.errorMessage === 'string' && input.errorMessage.trim()
+      ? input.errorMessage : 'Session launch failed' });
+  return { type: 'error', code: 'spawn_failed', retryable: true,
+    launchError: detail.success ? detail.data : fallback.success ? fallback.data
+      : { kind: 'launch_error', code: SPAWN_SESSION_ERROR_CODES.SPAWN_FAILED, message: 'Session launch failed' } };
+}

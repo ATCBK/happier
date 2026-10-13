@@ -63,6 +63,8 @@ import {
 } from '../spawn/commitDaemonLaunchSession';
 import { archiveSessionOnceInactive } from '@/session/services/archiveSessionOnceInactive';
 import { bindAgentCliLaunchSpec } from '@/packagedRuntime/managedTools/agentCliLaunchSpec';
+import { AgentCliNotFoundError } from '@/packagedRuntime/managedTools/agentCliNotFoundError';
+import { SessionSpawnLaunchErrorV1Schema } from '@happier-dev/protocol/spawnSession';
 import {
     prepareRunnerAgentSessionBootstrapForLease,
 } from '../spawn/prepareAgentRuntimeSessionBridge';
@@ -639,6 +641,9 @@ export async function executeSpawnSessionRequest(
             });
             const executionSurfaces = await resolveBackendExecutionSurfaces(effectiveBackendTargetV2, {
                 runtimeRegistry: appliedPluginRuntimeLease.registry,
+                agentTarget: options.agentTarget,
+                startupRuntimeDescriptorV1: options.runtimeDescriptorV1,
+                savedSecretOperationContext: acpOperationContext,
             });
             const selectedLaunchEnvironment = Object.fromEntries(Object.entries({
                 ...(params.processEnv ?? process.env),
@@ -663,11 +668,12 @@ export async function executeSpawnSessionRequest(
                     processEnv: selectedLaunchEnvironment });
                 selectedTerminalRequest = { requested: 'herdr', herdr: context };
             }
+            const startupRuntimeDescriptorV1 = terminalPresentation.runtimeDescriptorV1 ?? options.runtimeDescriptorV1;
             const runnerAgentSessionBootstrap =
                 await prepareRunnerAgentSessionBootstrapForLease({
                     target: effectiveBackendTargetV2,
                     lease: appliedPluginRuntimeLease,
-                    ...(terminalPresentation.runtimeDescriptorV1 ? { launch: { runtimeDescriptorV1: terminalPresentation.runtimeDescriptorV1 } } : {}),
+                    ...(startupRuntimeDescriptorV1 ? { launch: { runtimeDescriptorV1: startupRuntimeDescriptorV1 } } : {}),
                 });
             recordPreparationPhase('runner_bootstrap');
             if (runnerAgentSessionBootstrap) {
@@ -677,7 +683,7 @@ export async function executeSpawnSessionRequest(
             }
             const optionsWithProviderIsolation = {
                 ...daemonProviderLaunch.options, directory,
-                ...(terminalPresentation.runtimeDescriptorV1 ? { runtimeDescriptorV1: terminalPresentation.runtimeDescriptorV1 } : {}),
+                ...(startupRuntimeDescriptorV1 ? { runtimeDescriptorV1: startupRuntimeDescriptorV1 } : {}),
                 ...(terminalPresentation.environmentOverlay ? { environmentVariables: {
                     ...daemonProviderLaunch.options.environmentVariables,
                     ...terminalPresentation.environmentOverlay,
@@ -1021,6 +1027,7 @@ export async function executeSpawnSessionRequest(
                 });
             }
             const childEnvironment = await prepareDaemonSpawnChildEnvironment({
+                savedSecretOperationContext: acpOperationContext,
                 readMachineResourcesPolicy: params.readMachineResourcesPolicy,
                 options: effectiveOptionsForSpawn,
                 existingSessionMetadata: launchSessionAttachPayload?.snapshot?.metadata ?? null,
@@ -1258,6 +1265,8 @@ export async function executeSpawnSessionRequest(
             const terminalDetail = readSessionCreationTerminalSpawnErrorDetail(error)
                 ?? resolveTerminalHostUnavailableSpawnErrorDetail(error);
             const errorMessage = launchResourceScope.sanitize(error);
+            const rawCauseCode = error && typeof error === 'object' && 'code' in error && typeof error.code === 'string'
+                ? launchResourceScope.sanitize(error.code) : SPAWN_SESSION_ERROR_CODES.SPAWN_FAILED;
             let incompleteRetirement: string | null = null;
             if (!retainResourcesForUntrackedHostedChild) {
                 incompleteRetirement =
@@ -1266,12 +1275,21 @@ export async function executeSpawnSessionRequest(
             logger.debug('[DAEMON RUN] Session spawn failed after startup preparation', {
                 error: errorMessage,
             });
+            if (error instanceof AgentCliNotFoundError && !incompleteRetirement) {
+                return { type: 'error', errorCode: error.errorCode, agentId: error.agentId, errorMessage };
+            }
+            const launchCause = SessionSpawnLaunchErrorV1Schema.safeParse({ kind: 'launch_error',
+                code: incompleteRetirement ? 'STARTUP_RETIREMENT_INCOMPLETE' : rawCauseCode,
+                message: incompleteRetirement ?? errorMessage });
             return {
                 type: 'error',
                 errorCode: terminalDetail && !incompleteRetirement
                     ? SPAWN_SESSION_ERROR_CODES.SPAWN_VALIDATION_FAILED
                     : SPAWN_SESSION_ERROR_CODES.SPAWN_FAILED,
-                ...(terminalDetail && !incompleteRetirement ? { errorDetail: terminalDetail } : {}),
+                errorDetail: terminalDetail && !incompleteRetirement ? terminalDetail
+                    : launchCause.success ? launchCause.data : { kind: 'launch_error',
+                        code: SPAWN_SESSION_ERROR_CODES.SPAWN_FAILED,
+                        message: incompleteRetirement ?? errorMessage },
                 errorMessage:
                     incompleteRetirement
                     ?? (

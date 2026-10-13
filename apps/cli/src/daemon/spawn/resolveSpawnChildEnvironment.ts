@@ -37,7 +37,7 @@ import type { ConnectedServicesMaterializationDiagnostic } from '@/daemon/connec
 import { buildMissingAgentCliCommandErrorMessage } from '@/packagedRuntime/managedTools/requireAgentCliCommand';
 import { detectNativeAgentCliAuthStatus } from '@/capabilities/cliAuth/detectNativeAgentCliAuthStatus';
 import {
-  resolveAgentCliLaunchSpec,
+  resolveAgentCliLaunchSpecForSession,
   type AgentCliLaunchSpec,
 } from '@/packagedRuntime/managedTools/requireAgentCliLaunchSpec';
 import {
@@ -160,6 +160,7 @@ function chainCleanupCallbacks(
 }
 
 export async function resolveSpawnChildEnvironment(params: {
+  savedSecretOperationContext?: import('@/settings/secrets/hydrateSavedSecretCatalog').SavedSecretOperationContextV1;
   happyHomeDir?: string;
   pluginRuntimeRegistry?: ResolvedExecutablePluginRuntimeRegistry;
   options: SpawnSessionOptions;
@@ -202,6 +203,7 @@ export async function resolveSpawnChildEnvironment(params: {
 }
 
 async function resolveSpawnChildEnvironmentImpl(params: {
+  savedSecretOperationContext?: import('@/settings/secrets/hydrateSavedSecretCatalog').SavedSecretOperationContextV1;
   happyHomeDir?: string;
   pluginRuntimeRegistry?: ResolvedExecutablePluginRuntimeRegistry;
   options: SpawnSessionOptions;
@@ -458,25 +460,26 @@ async function resolveSpawnChildEnvironmentImpl(params: {
     `[DAEMON RUN] Final environment variable set prepared (${Object.keys(extraEnv).length} vars)`,
   );
 
-  function validateAgentCliLaunch(agentId: string, processEnv: NodeJS.ProcessEnv): Readonly<
+  async function validateAgentCliLaunch(agentId: string, processEnv: NodeJS.ProcessEnv): Promise<Readonly<
     | { ok: true; launchSpec: AgentCliLaunchSpec }
     | { ok: false; errorMessage: string }
-  > {
+  >> {
     // Every installed Agent is validated here, bundled or externally
     // contributed. An id the catalog no longer carries has no CLI runtime
     // metadata at all, which is the same "CLI unavailable" refusal rather than
     // an exception escaping the spawn path.
+    const resolutionOptions = {
+      processEnv,
+      ...(params.pluginRuntimeRegistry
+        ? { catalogSnapshot: params.pluginRuntimeRegistry.contributes }
+        : {}),
+    };
+    const launchSpec = await resolveAgentCliLaunchSpecForSession(agentId, { ...resolutionOptions,
+      options: params.options, savedSecretOperationContext: params.savedSecretOperationContext });
+    if (launchSpec !== null) {
+      return { ok: true, launchSpec };
+    }
     try {
-      const resolutionOptions = {
-        processEnv,
-        ...(params.pluginRuntimeRegistry
-          ? { catalogSnapshot: params.pluginRuntimeRegistry.contributes }
-          : {}),
-      };
-      const launchSpec = resolveAgentCliLaunchSpec(agentId, resolutionOptions);
-      if (launchSpec !== null) {
-        return { ok: true, launchSpec };
-      }
       return {
         ok: false,
         errorMessage: buildMissingAgentCliCommandErrorMessage(agentId, resolutionOptions),
@@ -493,7 +496,7 @@ async function resolveSpawnChildEnvironmentImpl(params: {
   if (resolvedAgentId) {
     // Admission precedes prerequisite hooks: dependency setup cannot substitute
     // for the Agent executable or start a download for a missing Agent.
-    const agentCliValidation = validateAgentCliLaunch(resolvedAgentId, {
+    const agentCliValidation = await validateAgentCliLaunch(resolvedAgentId, {
       ...params.processEnv,
       ...extraEnv,
       ...(params.happyHomeDir ? { HAPPIER_HOME_DIR: params.happyHomeDir } : {}),
@@ -733,7 +736,7 @@ async function resolveSpawnChildEnvironmentImpl(params: {
     }
   }
   if (resolvedAgentId) {
-    const validation = validateAgentCliLaunch(resolvedAgentId, effectiveAgentEnvironment);
+    const validation = await validateAgentCliLaunch(resolvedAgentId, effectiveAgentEnvironment);
     if (!validation.ok) {
       return {
         ok: false,
