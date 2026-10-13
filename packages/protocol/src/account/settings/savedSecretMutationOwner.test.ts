@@ -34,6 +34,36 @@ import { DEFAULT_PROVIDER_CONNECTIONS_CATALOG_V1, ProviderConnectionsCatalogV1Sc
 import { ConnectedConfigurationCatalogV1Schema } from '../../connect/connectedAccountConfigurationRowsV1.js';
 import { NotificationChannelCatalogRecordV1Schema } from './notificationChannelSchemasV1.js';
 import { SecretStringV1Schema } from '../../crypto/settingsSecretStringSchemasV1.js';
+import { RegistrySourcesRecordV1Schema } from '../../registries/registrySourcesV1.js';
+
+describe('registry token SavedSecret reference census', () => {
+  it('refuses a projected registry inventory that would hide a recognizable token carrier', () => {
+    const sources = [{ id: 'registry:private', title: 'Private', format: 'git', kinds: ['skill'],
+      url: 'https://github.com/acme/private', enabled: true, addedAt: 1, token: { secretRef: secret.id },
+      futureCredential: { secretRef: secret.id } }];
+    const registrySources = { v: 2, sources, disabledSourceIds: [] };
+    expect(() => listAccountSettingsSavedSecretReferences({}, secret.id, { profileRecords: [], registrySources }))
+      .toThrow(AccountSettingsSavedSecretMutationError);
+  });
+  it('blocks deletion and preserves token binding through personal promotion', () => {
+    const registrySources = RegistrySourcesRecordV1Schema.parse({ v: 2, disabledSourceIds: [], sources: [{
+      id: 'registry:private', title: 'Private', format: 'git', kinds: ['skill'], url: 'https://github.com/acme/private',
+      enabled: false, addedAt: 1, token: { secretRef: secret.id, header: { name: 'Authorization', scheme: 'Bearer' } },
+    }] });
+    const catalogs = { profileRecords: [], registrySources };
+    expect(listAccountSettingsSavedSecretReferences({}, secret.id, catalogs)).toEqual([
+      { owner: 'registrySource', path: 'registrySourcesCatalog.sources[0].token.secretRef' },
+    ]);
+    const reference = formatSharedSavedSecretRefV1('registry-token');
+    const promoted = promotePersonalSavedSecretReference({ secrets: [secret] }, { secretId: secret.id,
+      expectedUpdatedAt: secret.updatedAt, sharedSecretRef: reference }, catalogs);
+    const next = RegistrySourcesRecordV1Schema.parse(promoted.registrySources);
+    expect(next.sources[0].token).toEqual({ ...registrySources.sources[0].token, secretRef: reference });
+    expect(listAccountSettingsSavedSecretReferences({}, secret.id, { ...catalogs, registrySources: next })).toEqual([]);
+    expect(listAccountSettingsSavedSecretReferences({}, reference, { ...catalogs, registrySources: next })).toHaveLength(1);
+    expect(registrySources.sources[0].token?.secretRef).toBe(secret.id);
+  });
+});
 
 describe('Session-attested MCP reference census', () => {
   it('counts and rewrites template variables through the MCP catalog and retained source owners', () => {

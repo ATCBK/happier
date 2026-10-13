@@ -75,7 +75,6 @@ import { RolesV1Schema } from './rolesV1.js';
 import { PromptExternalLinksV1Schema } from '../../prompts/library/promptExternalLinksV1.js';
 import { PromptFoldersV1Schema } from '../../prompts/library/promptFoldersV1.js';
 import { PromptInvocationsV1Schema } from '../../prompts/library/promptInvocationsV1.js';
-import { PromptRegistrySourcesV1Schema } from '../../prompts/library/promptRegistriesV1.js';
 import { PromptStacksV1Schema } from '../../prompts/library/promptStacksV1.js';
 import {
   BuiltInLegacyConnectedServicesDefaultAuthByAgentIdV1IngressSchema,
@@ -954,7 +953,8 @@ const RETAINED_ACCOUNT_SETTINGS_ENTITY_SOURCES = {
     promptFoldersV1: PromptFoldersV1Schema,
     promptInvocationsV1: PromptInvocationsV1Schema,
     promptExternalLinksV1: PromptExternalLinksV1Schema,
-    promptRegistrySourcesV1: PromptRegistrySourcesV1Schema,
+    // Retained source custody only; registry-sources row admission is the sole domain reader.
+    promptRegistrySourcesV1: z.optional(z.unknown()),
     contextSelectionsV1: ContextSelectionsV1Schema,
     executionRunsGuidanceEntries: BoundedLegacyArraySchema,
 } as const;

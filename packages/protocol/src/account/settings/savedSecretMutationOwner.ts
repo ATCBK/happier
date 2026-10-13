@@ -72,9 +72,10 @@ import { AcpCatalogRecordV1Schema, listAcpCatalogSavedSecretRefsV1, rewriteAcpCa
 import { ProviderConnectionsCatalogV1Schema, listProviderConnectionsCatalogSavedSecretRefsV1, rewriteProviderConnectionsCatalogSavedSecretRefsV1, type ProviderConnectionsCatalogV1 } from '../../providers/connections/connectionRowsV1.js';
 import { ConnectedConfigurationCatalogV1Schema, ConnectedPurposeCatalogV1Schema, listConnectedConfigurationCatalogSavedSecretRefsV1, rewriteConnectedConfigurationCatalogSavedSecretRefsV1, type ConnectedConfigurationCatalogV1, type ConnectedPurposeCatalogV1 } from '../../connect/connectedAccountConfigurationRowsV1.js';
 import { McpServerCatalogV1Schema, listMcpServerCatalogSavedSecretRefsV1, rewriteMcpServerCatalogSavedSecretRefsV1, type McpServerCatalogV1 } from '../../mcp/servers/serverRowsV1.js';
-import { ValueRefV1Schema } from '../../valueRefs/valueRefV1.js';
+import { ValueRefV1Schema, listValueRefSavedSecretRefsV1 } from '../../valueRefs/valueRefV1.js';
 import { NotificationChannelCatalogRecordV1Schema, type NotificationChannelCatalogRecordV1 } from './notificationChannelSchemasV1.js';
 import { listNotificationChannelSavedSecretReferenceSlotsV1, rewriteNotificationChannelSavedSecretRefsV1 } from './notificationChannelRecordV1.js';
+import { RegistrySourcesRecordV1Schema, type RegistrySourcesRecordV1 } from '../../registries/registrySourcesV1.js';
 
 export { CONNECTED_ACCOUNT_SERVICE_CONFIGURATIONS_SETTINGS_KEY } from './connectedAccountServiceConfigurationsV1.js';
 
@@ -97,6 +98,7 @@ export type AccountSettingsSavedSecretReferenceOwner =
   | 'connectedAccountConfiguration'
   | 'remoteHost'
   | 'notificationChannel'
+  | 'registrySource'
   | 'unknown';
 
 export type AccountSettingsSavedSecretReference = Readonly<{
@@ -147,6 +149,7 @@ export type SavedSecretReferenceCatalogsV1 = Readonly<{
   connectedConfigurations?: ConnectedConfigurationCatalogV1 | null;
   connectedPurposes?: ConnectedPurposeCatalogV1 | null;
   notificationChannels?: NotificationChannelCatalogRecordV1 | null;
+  registrySources?: RegistrySourcesRecordV1 | null;
 }>;
 
 export type SavedSecretClassifiedSourceCatalogsV1 = Omit<SavedSecretReferenceCatalogsV1, 'profileRecords'> & Readonly<{
@@ -163,6 +166,7 @@ export type SavedSecretReferenceRewriteResultV1 = Readonly<{
   connectedConfigurations?: ConnectedConfigurationCatalogV1 | null;
   connectedPurposes?: ConnectedPurposeCatalogV1 | null;
   notificationChannels?: NotificationChannelCatalogRecordV1 | null;
+  registrySources?: RegistrySourcesRecordV1 | null;
 }>;
 
 export type SavedSecretImportSourceV1 =
@@ -1154,12 +1158,12 @@ function collectValueRefMapReferences(input: Readonly<{
   const valueRefMap = ownRecord(input.value);
   if (!valueRefMap) return;
   for (const [key, candidate] of Object.entries(valueRefMap)) {
-    const valueRef = ownRecord(candidate);
-    if (valueRef?.t === 'savedSecret' && valueRef.secretId === input.secretId) {
-      input.output.push(Object.freeze({
-        owner: input.owner,
-        path: `${input.path}${pathSegment(key)}`,
-      }));
+    const parsed = storedValueRef.safeParse(candidate);
+    if (!parsed.success) continue;
+    const path = `${input.path}${pathSegment(key)}`;
+    for (const reference of listValueRefSavedSecretRefsV1(parsed.data)) {
+      if (reference.secretId !== input.secretId) continue;
+      input.output.push(Object.freeze({ owner: input.owner, path: reference.path ? `${path}.${reference.path}` : path }));
     }
   }
 }
@@ -2108,7 +2112,7 @@ function validateSlotBindings(value: unknown, message: string): void {
   });
 }
 
-const storedMcpValueRef = createStoredReadSchema(ValueRefV1Schema);
+const storedValueRef = createStoredReadSchema(ValueRefV1Schema);
 
 function validateValueRefMap(
   value: unknown,
@@ -2128,8 +2132,8 @@ function validateValueRefMap(
           ? typeof valueRef.secretId !== 'string'
           : valueRef.t === 'literal'
             ? typeof valueRef.v !== 'string'
-            : valueRef.t === 'sessionAttested'
-              ? !storedMcpValueRef.safeParse(candidate).success
+            : valueRef.t === 'sessionAttested' || valueRef.t === 'template'
+              ? !storedValueRef.safeParse(candidate).success
             : true
       )
     ) {
@@ -2352,6 +2356,15 @@ export function listSavedSecretReferenceCatalogRefsV1(catalogs: SavedSecretRefer
     if (!parsed.success) invalidReferenceRoot('Notification channel SavedSecret reference inventory is invalid');
     add(catalogs.notificationChannels, listNotificationChannelSavedSecretReferenceSlotsV1(parsed.data), 'notificationChannel', 'notificationChannelsCatalog');
   }
+  if (catalogs.registrySources) {
+    const parsed = RegistrySourcesRecordV1Schema.safeParse(catalogs.registrySources);
+    if (!parsed.success) invalidReferenceRoot('Registry token SavedSecret reference inventory is invalid');
+    const references = parsed.data.sources.flatMap((source, index) => source.token
+      ? [{ path: `sources[${index}].token.secretRef`, secretId: source.token.secretRef }] : []);
+    for (const reference of references) try { parseSavedSecretRefV1(reference.secretId); }
+    catch { invalidReferenceRoot('Registry token SavedSecret reference is invalid'); }
+    add(catalogs.registrySources, references, 'registrySource', 'registrySourcesCatalog');
+  }
   if (catalogs.mcp) {
     const parsed = McpServerCatalogV1Schema.safeParse(catalogs.mcp);
     if (!parsed.success) invalidReferenceRoot('MCP SavedSecret reference inventory is invalid');
@@ -2459,6 +2472,9 @@ export function rewriteSavedSecretReferenceCatalogsV1(catalogs: SavedSecretRefer
     ...(catalogs.providerConnections ? { providerConnections: rewriteProviderConnectionsCatalogSavedSecretRefsV1(catalogs.providerConnections, sourceRef, targetRef) } : {}),
     ...(catalogs.connectedConfigurations ? { connectedConfigurations: rewriteConnectedConfigurationCatalogSavedSecretRefsV1(catalogs.connectedConfigurations, sourceRef, targetRef) } : {}),
     ...(catalogs.notificationChannels ? { notificationChannels: rewriteNotificationChannelSavedSecretRefsV1(catalogs.notificationChannels, sourceRef, targetRef) } : {}),
+    ...(catalogs.registrySources ? { registrySources: { ...catalogs.registrySources,
+      sources: catalogs.registrySources.sources.map(source => source.token?.secretRef === sourceRef
+        ? { ...source, token: { ...source.token, secretRef: targetRef } } : source) } } : {}),
   });
 }
 
@@ -2520,6 +2536,10 @@ function rewriteValueRefMapReferences(
   let changed = false;
   const rewritten = Object.fromEntries(Object.entries(record).map(([key, candidate]) => {
     const valueRef = ownRecord(candidate);
+    if (valueRef?.t === 'template') {
+      const vars = rewriteValueRefMapReferences(valueRef.vars, sourceRef, targetRef);
+      if (vars !== valueRef.vars) { changed = true; return [key, { ...valueRef, vars }]; }
+    }
     if (valueRef?.t !== 'savedSecret' || valueRef.secretId !== sourceRef) {
       return [key, candidate];
     }
@@ -2920,6 +2940,7 @@ function rewritePersonalSavedSecret(
     ...(nextCatalogs.connectedConfigurations === undefined ? {} : { connectedConfigurations: nextCatalogs.connectedConfigurations }),
     ...(nextCatalogs.connectedPurposes === undefined ? {} : { connectedPurposes: nextCatalogs.connectedPurposes }),
     ...(nextCatalogs.notificationChannels === undefined ? {} : { notificationChannels: nextCatalogs.notificationChannels }),
+    ...(nextCatalogs.registrySources === undefined ? {} : { registrySources: nextCatalogs.registrySources }),
   } : {}) });
 }
 

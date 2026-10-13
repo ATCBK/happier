@@ -16,6 +16,7 @@ import { ConnectedAccountCatalogRowMutationV1Schema, type ConnectedAccountCatalo
 import { parseSavedSecretRefV1 } from './savedSecretReferenceV1.js';
 import { RemoteHostCatalogRowMutationV1Schema } from '../../remoteHosts/remoteHostSchemasV1.js';
 import { NotificationChannelCatalogMutationV1Schema } from './notificationChannelSchemasV1.js';
+import { PromptLibraryRowMutationV1Schema } from '../../prompts/library/promptLibrarySchemasV1.js';
 
 import { SHARED_SAVED_SECRET_ACTION_IDS_V1, type SharedSavedSecretActionIdV1 } from './savedSecretResourceActionIdsV1.js';
 export { SHARED_SAVED_SECRET_ACTION_IDS_V1, type SharedSavedSecretActionIdV1 } from './savedSecretResourceActionIdsV1.js';
@@ -33,6 +34,7 @@ export const SavedSecretCatalogRevisionsV1Schema = lazyZodSchema(() => z.object(
   providerConnections: ProfileReferenceGuardRevisionV1Schema,
   connectedConfigurations: ProfileReferenceGuardRevisionV1Schema,
   connectedPurposes: ProfileReferenceGuardRevisionV1Schema,
+  registrySources: ProfileReferenceGuardRevisionV1Schema.optional(),
 }).strict());
 export type SavedSecretCatalogRevisionsV1 = z.infer<typeof SavedSecretCatalogRevisionsV1Schema>;
 
@@ -56,7 +58,7 @@ export const SavedSecretReferenceCensusV1Schema = lazyZodSchema(() => z.object({
   }).strict(),
   /** Only explicitly reached definitions, never the automatic shared catalog. */
   artifacts: z.array(ArtifactRevisionV1Schema.extend({ artifactId: z.string().min(1) }).strict()).optional(),
-  /** When catalog references are reached, all five authorities are captured. */
+  /** When catalog references are reached, all active catalog authorities are captured. */
   catalogs: SavedSecretCatalogRevisionsV1Schema.optional(),
   remoteHosts: SavedSecretRemoteHostReferenceCensusV1Schema.optional(),
   notificationChannels: SavedSecretNotificationChannelReferenceCensusV1Schema.optional(),
@@ -105,6 +107,11 @@ export const SavedSecretCatalogMutationsV1Schema = lazyZodSchema(() => z.object(
   providerConnections: ProviderConnectionsRowMutationV1Schema.optional(),
   connectedConfigurations: connectedCatalogSecretMutationSchema('configurations').optional(),
   connectedPurposes: connectedCatalogSecretMutationSchema('purposes').optional(),
+  registrySources: PromptLibraryRowMutationV1Schema.superRefine((mutation, context) => {
+    if (mutation.content?.t === 'plain' && mutation.content.v.key !== 'registry-sources') {
+      context.addIssue({ code: 'custom', path: ['content'], message: 'Registry token mutation must address registry sources' });
+    }
+  }).optional(),
 }).strict());
 export type SavedSecretCatalogMutationsV1 = z.infer<typeof SavedSecretCatalogMutationsV1Schema>;
 
@@ -178,7 +185,7 @@ export const SharedSavedSecretPromoteInputV1Schema = lazyZodSchema(() => SharedS
     context.addIssue({ code: 'custom', path: ['expectedSettingsVersion'], message: 'Full reference census requires captured Settings currentness' });
   }
   let mutationCount = 0;
-  for (const key of ['mcp', 'acp', 'providerConnections', 'connectedConfigurations', 'connectedPurposes'] as const) {
+  for (const key of ['mcp', 'acp', 'providerConnections', 'connectedConfigurations', 'connectedPurposes', 'registrySources'] as const) {
     const mutation = value.catalogMutations?.[key];
     const captured = value.referenceCensus.catalogs?.[key];
     if (mutation) {
