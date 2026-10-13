@@ -39,6 +39,9 @@ export function createSessionAccountActionExecutor(params: Readonly<{
       if (!builtIn.success || (executionPlacement !== 'account'
         && executionPlacement !== 'client'
         && builtIn.data !== 'session.spawn_new'
+        // Admission inspects the executing Machine's workspace and plugin
+        // runtime before sealing Account storage; a Session runner has neither.
+        && builtIn.data !== 'workflow.run.start'
         && !(Object.hasOwn(RoleActionInputSchemasV1, builtIn.data) && builtIn.data.startsWith('session.')))) {
         return await params.base.execute(actionId, input, context);
       }

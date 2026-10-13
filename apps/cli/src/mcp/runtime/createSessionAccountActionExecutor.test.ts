@@ -44,6 +44,10 @@ describe('Session MCP Account routing', () => {
       directory: { kind: 'path', path: '/workspace' },
       agentTarget: { kind: 'agent', identity: { pluginId: 'happier.agent.codex', localId: 'codex' } },
     }, uncertain: false },
+    { actionId: 'workflow.run.start' as const, input: {
+      runId: '11111111-1111-4111-8111-111111111111',
+      source: { kind: 'inline', definition: { version: 1, blocks: ['Work'] } },
+    }, uncertain: false },
     { actionId: 'ui.find' as const, input: { op: 'read' }, uncertain: false },
     { actionId: 'session.pending.next' as const, input: {}, uncertain: false },
     { actionId: 'workspace.tabs.list' as const, input: {}, uncertain: false },
