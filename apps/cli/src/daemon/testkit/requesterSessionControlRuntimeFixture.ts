@@ -3,6 +3,7 @@ import { join } from 'node:path';
 import { ApiClient } from '@/api/api';
 import { runWithServerHttpBaseUrl } from '@/api/client/serverHttpBaseUrl';
 import { configuration } from '@/configuration';
+import { readOrCreateInstallationIdentity } from '../identity/store';
 import type { StoredCredentials } from '@/persistence';
 import type { ConnectedServiceRuntimeRegistry } from '../connectedServices/runtimeRegistry/registry';
 import { createDaemonSessionMutationCustody } from '../connectedServices/usageLimitRecovery/createDaemonUsageLimitRecoveryMutationCustody';
@@ -24,6 +25,14 @@ export async function createRequesterSessionControlRuntimeFixture(input: Readonl
   trackedSessions: Map<number, TrackedSession>;
   getRequester(): RequesterSessionRuntimeContext | null;
   resolveQualifiedConnectedAccountV4Support: NonNullable<Parameters<typeof startDaemonSessionControlRuntime>[0]['resolveQualifiedConnectedAccountV4Support']>;
+  getApiMachineForSessions?: Parameters<typeof startDaemonSessionControlRuntime>[0]['getApiMachineForSessions'];
+  pidToAwaiter?: Parameters<typeof startDaemonSessionControlRuntime>[0]['pidToAwaiter'];
+  beforeStartup?: () => Promise<void>;
+  processEnv?: NodeJS.ProcessEnv;
+  startup?: Pick<Parameters<typeof startDaemonSessionControlRuntime>[0],
+    'resolveSessionSpawnDirectTargetTransport' | 'resolveCurrentMachineExecutionOriginContext'>
+    & Partial<Pick<Parameters<typeof startDaemonSessionControlRuntime>[0],
+      'deviceLocalSecretStorage' | 'onHappySessionWebhook' | 'createRequesterSessionRuntimeContext'>>;
 }>) {
   const previousConfiguration = {
     happyHomeDir: configuration.happyHomeDir,
@@ -61,8 +70,11 @@ export async function createRequesterSessionControlRuntimeFixture(input: Readonl
     }
   };
   try {
+    await input.beforeStartup?.();
+    const installation = input.startup ? await readOrCreateInstallationIdentity() : null;
     const api = await runWithServerHttpBaseUrl(input.serverHttpBaseUrl, () => ApiClient.create(input.credentials));
     runtime = await runWithServerHttpBaseUrl(input.serverHttpBaseUrl, () => startDaemonSessionControlRuntime({
+      ...input.startup,
       machineId: input.machineId,
       credentials: input.credentials,
       api,
@@ -73,13 +85,13 @@ export async function createRequesterSessionControlRuntimeFixture(input: Readonl
       connectedServicesMaterializationBaseDir: input.connectedServicesMaterializationBaseDir,
       connectedServiceRuntimeRegistry: input.registry,
       pidToTrackedSession: input.trackedSessions,
-      pidToAwaiter: new Map(),
+      pidToAwaiter: input.pidToAwaiter ?? new Map(),
       pidToSpawnResultResolver: new Map(),
       pidToSpawnWebhookTimeout: new Map(),
       spawnResourceCleanupByPid: new Map(),
       sessionAttachCleanupByPid: new Map(),
       connectedServicesRestartRequestedPids: new Set(),
-      getApiMachineForSessions: () => null,
+      getApiMachineForSessions: input.getApiMachineForSessions ?? (() => null),
       getConnectedServiceRefreshCoordinator: () => input.getRequester()?.connectedServiceRefreshCoordinator ?? null,
       getConnectedServiceQuotasCoordinator: () => input.getRequester()?.connectedServiceQuotasCoordinator ?? null,
       resolveRequesterSessionRuntimeContext: async sessionId => {
@@ -89,11 +101,12 @@ export async function createRequesterSessionControlRuntimeFixture(input: Readonl
       resolveQualifiedConnectedAccountV4Support: input.resolveQualifiedConnectedAccountV4Support,
       // Physical launch and whole-daemon shutdown are OS/lifetime boundaries.
       beforeShutdown: async () => {},
-      onHappySessionWebhook: async () => { throw new Error('Unexpected physical Session launch'); },
+      onHappySessionWebhook: input.startup?.onHappySessionWebhook
+        ?? (async () => { throw new Error('Unexpected physical Session launch'); }),
       requestShutdown: () => { throw new Error('Unexpected daemon shutdown request'); },
-      processEnv: {},
+      processEnv: input.processEnv ?? {},
     }));
-    return { runtime, dispose };
+    return { runtime, installation, dispose };
   } catch (error) {
     await dispose();
     throw error;
