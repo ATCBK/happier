@@ -117,6 +117,23 @@ describe('createSpawnedSession exact remote routing', () => {
     expect(boundary.spawn).not.toHaveBeenCalled();
   });
 
+  it('preserves the selected daemon rejection and its recovery details', async () => {
+    const errorDetail = { kind: 'terminal_host_unavailable', host: 'herdr', reason: 'installation_unavailable' };
+    answer = () => ({
+      type: 'error', errorCode: 'SPAWN_VALIDATION_FAILED',
+      errorMessage: 'Selected target refused the launch', errorDetail,
+    });
+    await expect(createSpawnedSession({
+      credentials, machineId: 'remote', directory: '/remote-only/repo',
+      backendTarget: { kind: 'builtInAgent', agentId: 'opencode' },
+    })).rejects.toMatchObject({
+      code: 'SPAWN_VALIDATION_FAILED', message: 'Selected target refused the launch',
+      details: { errorDetail },
+    });
+    expect(boundary.spawn).not.toHaveBeenCalled();
+    expect(calls.map((call) => call.method)).toEqual([`remote:${RPC_METHODS.SPAWN_HAPPY_SESSION_PROVIDER_SAFE}`]);
+  });
+
   it('keeps implicit local creation on the local control transport', async () => {
     const result = await createSpawnedSession({
       credentials, directory: '/local/repo',

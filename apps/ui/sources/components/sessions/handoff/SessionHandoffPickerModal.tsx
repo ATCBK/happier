@@ -1,5 +1,6 @@
 import * as React from 'react';
 import { View } from 'react-native';
+import { resolveAgentIdFromSessionMetadata } from '@happier-dev/agents';
 import { evaluateSessionHandoffWorkspaceTransferSourcePathSafety, getActionSpec } from '@happier-dev/protocol';
 import { StyleSheet, useUnistyles } from 'react-native-unistyles';
 
@@ -227,9 +228,12 @@ export function SessionHandoffPickerModal({ onClose, setChrome, onResolve, sessi
     }, []);
     const isSameMachine = Boolean(resolvedSourceMachineId && normalizeId(selectedMachineId) === resolvedSourceMachineId);
     const [transferSessionData, setTransferSessionData] = React.useState(true);
-    const existingStateAvailability = useSessionHandoffExistingStateAvailability({ serverId, sourceMachineId: resolvedSourceMachineId, targetMachineId: selectedMachineId });
+    const agentId = resolveAgentIdFromSessionMetadata(currentSession?.metadata);
+    const existingStateAvailability = useSessionHandoffExistingStateAvailability({ serverId, sourceMachineId: resolvedSourceMachineId, targetMachineId: selectedMachineId, agentId });
     const transferChoiceDisabled = awaitingAdmission || existingStateAvailability !== 'available';
-    const transferHintKey = existingStateAvailability === 'checking'
+    const transferHintKey = existingStateAvailability === 'unsupported_agent'
+        ? 'sessionHandoff.transferSessionData.agentRequiresTransfer'
+        : existingStateAvailability === 'checking'
         ? 'sessionHandoff.transferSessionData.checking'
         : 'sessionHandoff.transferSessionData.updateRequired';
     const normalizedSourcePath = normalizeLocalPathForComparison(sourcePath);

@@ -45,10 +45,12 @@ only when the exact Agent-native session is already there; Happier's shared tran
 alone is not enough.
 
 Turning it off also disables workspace copying. Both daemons must advertise compatible
-existing-state support, or the toggle stays on and disabled with an update hint. A missing
-target session keeps the dialog open with a remedy: turn **Transfer session data** on and
-submit again. Failed preflight does not stop the source session. Claude and Codex have
-development existing-state resolvers; unsupported Agents must use transfer.
+existing-state support, and the Agent must support that mode. Otherwise the toggle stays
+on and disabled. Claude and Codex have development existing-state resolvers; unsupported
+Agents must use transfer and are refused before the source stops. The target checks native
+state after the source stops. If that state is missing, the dialog stays open with a remedy:
+turn **Transfer session data** on and submit again. The source remains recoverable through
+the existing handoff recovery flow.
 
 The toggle is hidden for a same-machine directory move, which retains ordinary transfer.
 This is development behavior, not a released availability claim. The 0.2 and 0.3 daemon

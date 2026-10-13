@@ -8,7 +8,7 @@ import {
 import { createHttpStatusError } from '@/api/client/httpStatusError';
 
 import { createCoalescedWorkflowActivityPublisher } from './coalescedWorkflowActivityPublisher';
-import type { WorkflowActivityPublishInput } from './publishWorkflowActivitySnapshot';
+import type { SessionActivityHeadlineBundle, WorkflowActivityPublishInput } from './publishWorkflowActivitySnapshot';
 import { createWorkflowActivityPublisher } from './publishWorkflowActivitySnapshot';
 
 function runSnapshot(runId: string, status: SessionWorkflowRunSnapshotV1['status'] = 'active'): SessionWorkflowRunSnapshotV1 {
@@ -35,7 +35,7 @@ describe('createCoalescedWorkflowActivityPublisher', () => {
     vi.stubEnv('HAPPIER_SESSION_MUTATION_OUTBOX_MAX_RETRY_MS', '30000');
     vi.stubEnv('HAPPIER_SESSION_MUTATION_OUTBOX_JITTER_MS', '0');
   });
-  afterEach(() => { vi.useRealTimers(); vi.unstubAllEnvs(); });
+  afterEach(() => { vi.restoreAllMocks(); vi.useRealTimers(); vi.unstubAllEnvs(); });
 
   function setup() {
     const publishes: WorkflowActivityPublishInput[] = [];
@@ -119,6 +119,47 @@ describe('createCoalescedWorkflowActivityPublisher', () => {
     expect(records).toHaveLength(2);
     expect(records[1]?.runId).toBe('a');
     scheduler.dispose();
+  });
+
+  it('automatically publishes both headlines after an early retry wake without duplicating the durable record', async () => {
+    // Timers and the monotonic clock are independent system boundaries: a timer can wake early.
+    let monotonicNow = 0;
+    vi.spyOn(performance, 'now').mockImplementation(() => monotonicNow);
+    const records: SessionWorkflowRunSnapshotV1[] = [];
+    const headlines: SessionActivityHeadlineBundle[] = [];
+    let metadataAttempts = 0;
+    const publisher = createWorkflowActivityPublisher({
+      backendId: 'claude',
+      commitRecord: async (snapshot) => { records.push(snapshot); },
+      writeHeadlines: (bundle) => {
+        metadataAttempts += 1;
+        if (metadataAttempts === 1) throw createHttpStatusError(503, 'Busy');
+        headlines.push(bundle);
+      },
+    });
+    const scheduler = createCoalescedWorkflowActivityPublisher({
+      publisher, getSnapshots: () => new Map([['a', runSnapshot('a')]]), onError: () => {},
+    });
+    try {
+      scheduler.notify({ changedRunIds: ['a'], startedRunIds: ['a'], terminalRunIds: [], statusChangedRunIds: [] });
+      await vi.advanceTimersByTimeAsync(0);
+      expect(records).toHaveLength(1);
+      expect(metadataAttempts).toBe(1);
+
+      monotonicNow = 499;
+      await vi.advanceTimersByTimeAsync(500);
+      expect(metadataAttempts).toBe(1);
+      expect(headlines).toEqual([]);
+
+      monotonicNow = 500;
+      await vi.advanceTimersByTimeAsync(1);
+      expect(metadataAttempts).toBe(2);
+      expect(headlines[0]?.workflow.activeRuns.map((run) => run.runId)).toEqual(['a']);
+      expect(headlines[0]?.agentActivity.activeEntries.map((entry) => entry.entryId)).toEqual(['workflow_run:a']);
+      expect(records).toHaveLength(1);
+    } finally {
+      scheduler.dispose();
+    }
   });
 
   it('backs off failed runs across notifications and flushes while publishing healthy runs and recovering the latest state', async () => {

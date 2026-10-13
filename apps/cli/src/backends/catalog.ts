@@ -1,5 +1,5 @@
 import type { AgentId } from '@/agent/core';
-import { AGENTS_CORE } from '@happier-dev/agents';
+import { AGENTS_CORE, supportsExistingSessionHandoffState } from '@happier-dev/agents';
 import {
   type ConnectedServiceId,
   type DirectSessionsProviderId,
@@ -83,13 +83,23 @@ export function requireCatalogEntry(agentId: CatalogAgentId): AgentCatalogEntry 
   return entry;
 }
 
+export function resolveExistingSessionHandoffEligibilityThroughCatalog(metadata: unknown) {
+  const eligibility = resolveSessionHandoffEligibility({ metadata });
+  if (!eligibility.eligible) return eligibility;
+  if (!supportsExistingSessionHandoffState(eligibility.agentId)
+    || !requireCatalogEntry(eligibility.agentId).resolveExistingSessionHandoffState) {
+    return { eligible: false, reasonCode: 'existing_state_unsupported', agentId: eligibility.agentId } as const;
+  }
+  return eligibility;
+}
+
 export async function resolveExistingSessionHandoffStateThroughCatalog(params: Readonly<{
   metadata: unknown;
   targetPath: string;
   env?: NodeJS.ProcessEnv;
   sessionStorageMode?: 'direct' | 'persisted';
 }>): Promise<ImportedSessionHandoffBundle> {
-  const eligibility = resolveSessionHandoffEligibility({ metadata: params.metadata });
+  const eligibility = resolveExistingSessionHandoffEligibilityThroughCatalog(params.metadata);
   if (!eligibility.eligible) {
     throw new Error(`Session is not eligible for existing-state handoff: ${eligibility.reasonCode}`);
   }

@@ -4,6 +4,7 @@ import { basename, dirname } from 'node:path';
 import type { ExistingSessionHandoffStateResolver } from '@/backends/types';
 import { verifyResumeReachableClaude } from '@/backends/claude/connectedServices/verifyResumeReachableClaude';
 import { resolveConfiguredClaudeConfigDir } from '@/backends/claude/utils/resolveConfiguredClaudeConfigDir';
+import { ExistingSessionStateUnavailableError } from '@/session/handoff/sessionHandoffErrors';
 
 export const resolveExistingClaudeSessionHandoffState: ExistingSessionHandoffStateResolver = async (params) => {
   const reachability = await verifyResumeReachableClaude({
@@ -13,7 +14,7 @@ export const resolveExistingClaudeSessionHandoffState: ExistingSessionHandoffSta
   });
   if (!reachability.ok || !reachability.resolvedPath
     || !(await stat(reachability.resolvedPath).catch(() => null))?.isFile()) {
-    throw new Error('Claude existing native session is unreachable');
+    throw new ExistingSessionStateUnavailableError('Claude existing native session is unreachable');
   }
   const configDir = resolveConfiguredClaudeConfigDir({ env: params.env });
   return {

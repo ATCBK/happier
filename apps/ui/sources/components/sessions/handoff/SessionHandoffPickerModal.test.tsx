@@ -207,6 +207,15 @@ describe('SessionHandoffPickerModal', () => {
         expect(control.props.accessibilityHint).toBe('sessionHandoff.transferSessionData.updateRequired');
     });
 
+    it('keeps transfer enabled for an Agent without an existing-state resolver on capable peers', async () => {
+        sessionsByIdState.sess_1.metadata.flavor = 'opencode';
+        const { SessionHandoffPickerModal } = await import('./SessionHandoffPickerModal');
+        const screen = await renderScreen(<SessionHandoffPickerModal onClose={vi.fn()} setChrome={vi.fn()} onResolve={vi.fn()} sessionId="sess_1" serverId="server_a" />);
+        await act(async () => { invokeTestInstanceHandler(screen.tree.findByType('MachineSelector' as never), 'onSelect', allMachinesState[0]); });
+        await vi.waitFor(() => expect(screen.tree.findByProps({ testID: 'session-handoff-transfer-session-data' }).props.disabled).toBe(true));
+        expect(screen.tree.findByProps({ testID: 'session-handoff-transfer-session-data' }).props.value).toBe(true);
+    });
+
     it('shows the missing native history inline and hides the toggle for same-machine moves', async () => {
         const { SessionHandoffPickerModal } = await import('./SessionHandoffPickerModal');
         const screen = await renderScreen(<SessionHandoffPickerModal onClose={vi.fn()} setChrome={vi.fn()} onResolve={vi.fn()} sessionId="sess_1" serverId="server_a" inlineErrorCode="existing_session_state_unavailable" />);
