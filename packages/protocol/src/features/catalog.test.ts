@@ -197,7 +197,8 @@ describe('feature catalog', () => {
     expect(isFeatureId('agents.codex.appServer.permissionProfiles')).toBe(true);
     expect(FEATURE_CATALOG['agents.codex.appServer.goals']?.representation).toBe('client');
     expect(FEATURE_CATALOG['agents.codex.appServer.goals']?.dependencies).toEqual([]);
-    expect(FEATURE_CATALOG['agents.codex.appServer.plugins']?.dependencies).toContain('prompts.skills.registries');
+    expect(FEATURE_CATALOG['agents.codex.appServer.plugins']?.dependencies).toEqual(['sessions.direct']);
+    expect(isFeatureId('prompts.skills.registries')).toBe(false);
     expect(FEATURE_CATALOG['agents.codex.appServer.structuredInput']?.dependencies).toContain('attachments.uploads');
   });
 

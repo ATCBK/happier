@@ -596,12 +596,6 @@ const FEATURE_CATALOG_DEFINITION = {
     dependencies: ['prompts.library'],
     representation: 'client',
   },
-  'prompts.skills.registries': {
-    description: 'Prompt/skills registries and marketplace integrations (registry-of-registries).',
-    defaultFailMode: 'fail_closed',
-    dependencies: ['prompts.library', 'prompts.assets.external'],
-    representation: 'client',
-  },
   'auth.recovery.providerReset': {
     description: 'Auth provider reset support during recovery flows.',
     defaultFailMode: 'fail_closed',
@@ -875,7 +869,7 @@ const FEATURE_CATALOG_DEFINITION = {
   'agents.codex.appServer.plugins': {
     description: 'Codex app-server readonly vendor plugin catalog and structured mentions.',
     defaultFailMode: 'fail_closed',
-    dependencies: ['sessions.direct', 'prompts.skills.registries'],
+    dependencies: ['sessions.direct'],
     representation: 'client',
   },
   'agents.codex.appServer.structuredInput': {
