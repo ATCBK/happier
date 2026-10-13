@@ -2402,9 +2402,15 @@ function Ensure-Minisign {
   $extractDir = Join-Path $TempRoot "minisign-extract"
   New-Item -ItemType Directory -Path $extractDir -Force | Out-Null
   Expand-Archive -Path $zipPath -DestinationPath $extractDir -Force
-  $osArchitecture = [System.Runtime.InteropServices.RuntimeInformation]::OSArchitecture.ToString()
+  # Windows PowerShell 5.1 can return $null for RuntimeInformation::OSArchitecture,
+  # so fall back to the OS-reported architecture (W6432 is set for 32-bit hosts on 64-bit Windows).
+  $osArchitecture = [string][System.Runtime.InteropServices.RuntimeInformation]::OSArchitecture
+  if (-not $osArchitecture) {
+    $osArchitecture = if ($env:PROCESSOR_ARCHITEW6432) { $env:PROCESSOR_ARCHITEW6432 } else { [string]$env:PROCESSOR_ARCHITECTURE }
+  }
   $archiveArchitecture = switch ($osArchitecture) {
     "X64" { "x86_64" }
+    "AMD64" { "x86_64" }
     "Arm64" { "aarch64" }
     default { throw "Unsupported Windows architecture for bundled minisign: $osArchitecture" }
   }

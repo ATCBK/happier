@@ -39,7 +39,12 @@ test('release-owned windows installer enforces minisign verification defaults', 
   assert.match(installPs1, /Signature verified\./);
   assert.doesNotMatch(installPs1, /skip.*signature/i);
   assert.match(installPs1, /\[System.Runtime.InteropServices.RuntimeInformation\]::OSArchitecture/);
+  // Windows PowerShell 5.1 can return $null for OSArchitecture; dereferencing it crashed the bootstrap (#548).
+  assert.doesNotMatch(installPs1, /RuntimeInformation\]::OSArchitecture\s*\./);
+  assert.match(installPs1, /\$env:PROCESSOR_ARCHITEW6432/);
+  assert.match(installPs1, /\$env:PROCESSOR_ARCHITECTURE/);
   assert.match(installPs1, /"X64"\s*\{\s*"x86_64"\s*\}/);
+  assert.match(installPs1, /"AMD64"\s*\{\s*"x86_64"\s*\}/);
   assert.match(installPs1, /"Arm64"\s*\{\s*"aarch64"\s*\}/);
   assert.match(installPs1, /Join-Path[^\n]+\$archiveArchitecture[^\n]+"minisign.exe"/);
   assert.doesNotMatch(installPs1.match(/function Ensure-Minisign[\s\S]*?\n\}/)[0], /Get-ChildItem[^\n]+Select-Object -First 1/);
