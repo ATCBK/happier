@@ -156,7 +156,7 @@ describe('mounted entity drag owner', () => {
         const release = carry.release();
         expect(f.effects).toEqual([]);
         finishMeasurement();
-        expect(await release).toBeNull();
+        expect(await release).toMatchObject({ status: 'refused', reason: { code: 'target-missing' } });
         expect(f.effects).toEqual([]);
 
         f.setBounds({ x: 0, y: 0, width: 100, height: 100 });

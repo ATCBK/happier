@@ -197,6 +197,8 @@ export function createEntityDragDropRuntime(options: Readonly<{
         refresh();
     };
     const finishRelease = async (active: Carry): Promise<EntityDropOutcomeV1 | null> => {
+        const releasePreview = active.input === 'pointer' && snapshot.admission?.status === 'allowed' ? snapshot : null;
+        const releaseTarget = active.selected;
         captureSourceFeedback(active.source);
         const measuredTargets = matchingMeasurementTargets(active);
         if (measuredTargets.length > 0) {
@@ -215,6 +217,18 @@ export function createEntityDragDropRuntime(options: Readonly<{
         if (carry !== active) return null;
         const target = active.selected;
         const admission = snapshot.admission;
+        // A retired domain/Account must not retain its old release cue. Geometry loss
+        // under a still-current target is different from loss of that target's authority.
+        if (!target && releaseTarget?.isCurrent?.() === false) { cancel('target-retired'); return null; }
+        // A final remeasurement can remove an allowed release cue. Retain its feedback
+        // with an explicit refusal; a drop that never had that cue remains quiet.
+        if (releasePreview && (!target || !admission
+            || (admission.status === 'refused' && admission.reason.code === 'no-target'))) {
+            const outcome: EntityDropOutcomeV1 = { status: 'refused', reason: reason('target-missing') };
+            carry = null;
+            publish({ ...releasePreview, phase: 'settled', outcome });
+            return outcome;
+        }
         if (!target || !admission) { cancel(); return null; }
         if (active.input === 'pointer' && target.measureBounds && !measuredTargets.includes(target)) { cancel(); return null; }
         // Resolvers may observe retirement while reading current domain state.
