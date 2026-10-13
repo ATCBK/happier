@@ -1,4 +1,4 @@
-import type { RpcHandlerRegistrar } from '@/api/rpc/types';
+import type { RpcHandlerRegistrar, RpcHandlerContext } from '@/api/rpc/types';
 import { configuration } from '@/configuration';
 import { logger } from '@/ui/logger';
 
@@ -50,7 +50,7 @@ export function registerDownloadTransferLifecycleHandlers<TInitResponse>(params:
     finalize: string;
     abort: string;
   }>;
-  resolveInit: (data: unknown) => Promise<ResolvedDownloadInit<TInitResponse>> | ResolvedDownloadInit<TInitResponse>;
+  resolveInit: (data: unknown, context?: RpcHandlerContext) => Promise<ResolvedDownloadInit<TInitResponse>> | ResolvedDownloadInit<TInitResponse>;
   buildInitSuccessResponse: (input: Readonly<{
     session: DownloadSessionHandle;
     source: DownloadTransferSource;
@@ -62,9 +62,9 @@ export function registerDownloadTransferLifecycleHandlers<TInitResponse>(params:
     chunkSizeBytes: configuration.filesTransferChunkBytes,
   });
 
-  params.rpcHandlerManager.registerHandler(params.methods.init, async (data: unknown): Promise<TInitResponse> => {
+  params.rpcHandlerManager.registerHandler(params.methods.init, async (data: unknown, context): Promise<TInitResponse> => {
     try {
-      const resolved = await params.resolveInit(data);
+      const resolved = await params.resolveInit(data, context);
       if (resolved.kind === 'rejected') {
         return resolved.response;
       }
