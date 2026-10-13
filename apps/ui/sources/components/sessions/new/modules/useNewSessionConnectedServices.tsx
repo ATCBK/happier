@@ -61,7 +61,7 @@ import {
 import { parseConnectedServicesBindingsByServiceIdFromAgentOptionState } from '@/sync/domains/connectedServices/connectedServicesAgentOptionStateBindings';
 import { projectMachineAgentForCredential } from '@/agents/machineAgents/machineAgentModel';
 import type { MachineAgent } from '@/agents/machineAgents/machineAgentTypes';
-import type { AttentionBannerAction } from '@/components/ui/lists/AttentionBanner';
+import type { SessionInstrumentStripLineAction } from '@/components/sessions/agentInput/instrumentStrip';
 import { presentProviderModelRow } from '@/providers/models/presentProviderModelRow';
 
 export type NewSessionConnectedServicesResult = Readonly<{
@@ -75,7 +75,7 @@ export type NewSessionConnectedServicesResult = Readonly<{
   connectedServicesModelProbeCacheIdentity: string | null;
   connectedServicesAuthChip: AgentInputExtraActionChip | null;
   selectedCredentialMachineAgent: MachineAgent | null;
-  connectedServicesRecoveryAction: AttentionBannerAction | null;
+  connectedServicesRecoveryAction: SessionInstrumentStripLineAction | null;
 }>;
 
 function resolveDefaultAuthWarningLabel(warningCode: ConnectedServicesAuthWarningCode | undefined): string | undefined {
@@ -581,7 +581,7 @@ export function useNewSessionConnectedServices(params: Readonly<{
     groupOptionsByServiceId: connectedServiceAccountGroupOptionsByServiceId,
     teamCredentialResources: params.teamCredentialResources,
   }), [params.machineAgent, connectedServicesBindingsPayload, selectedProviderRoute, connectedServiceAccountGroupOptionsByServiceId, params.teamCredentialResources]);
-  const connectedServicesRecoveryAction = React.useMemo<AttentionBannerAction | null>(() => {
+  const connectedServicesRecoveryAction = React.useMemo<SessionInstrumentStripLineAction | null>(() => {
     if (connectedAccountDefaultsStatus !== 'ready' || selectedCredentialMachineAgent?.state !== 'needsSignIn'
         || selectedCredentialMachineAgent.signIn.native?.status !== 'signedOut'
         || Object.values(connectedServicesBindingsPayload?.bindingsByServiceId ?? {}).some((binding) => binding.source !== 'native')) return null;

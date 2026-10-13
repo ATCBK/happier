@@ -134,6 +134,7 @@ import { SessionModelRoutingHint } from '@/components/sessions/modelPicker/Sessi
 import { SessionModelSourceBrowseHandoffContext, type SessionModelSourceBrowseHandoff } from '@/components/sessions/modelPicker/SessionModelSourceBrowseHandoff';
 import {
     SessionInstrumentStrip,
+    type SessionInstrumentStripLineAction,
     type SessionInstrumentStripPermission,
     type SessionInstrumentStripQuota,
 } from './instrumentStrip';
@@ -476,7 +477,9 @@ interface AgentInputProps {
         /** An unavailable launch target is repaired through the existing machine picker. */
         recovery?: 'machine';
         /** The one trailing action the line offers (the guard's Keep running). */
-        action?: Readonly<{ label: string; onPress: () => void }>;
+        action?: SessionInstrumentStripLineAction;
+        /** A second, quieter way forward after the action (Sign in beside a connected account's switch). */
+        secondaryAction?: SessionInstrumentStripLineAction;
         /** The longer explanation behind the short line (a Provider binding's body), shown as its tooltip. */
         detail?: string;
         /** A coming stop: the line ends with a countdown to it, ticking in its own leaf. */

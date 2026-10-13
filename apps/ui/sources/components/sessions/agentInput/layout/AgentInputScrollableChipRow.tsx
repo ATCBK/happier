@@ -5,10 +5,10 @@ import { ScrollEdgeFades } from '@/components/ui/scroll/ScrollEdgeFades';
 import { ScrollEdgeIndicators } from '@/components/ui/scroll/ScrollEdgeIndicators';
 import { resolveHorizontalScrollEdgeMaskStyle } from '@/components/ui/scroll/resolveScrollEdgeMaskStyle';
 import { useScrollEdgeFades } from '@/components/ui/scroll/useScrollEdgeFades';
-import { useReducedMotionPreference } from '@/hooks/ui/useReducedMotionPreference';
 import { t } from '@/text';
 
 import { attachActionBarMouseDragScroll } from './attachActionBarMouseDragScroll';
+import { attachChipRailReveal } from './attachChipRailReveal';
 
 const ACTION_BAR_SCROLL_END_GUTTER_WIDTH = 24;
 
@@ -43,7 +43,6 @@ export type AgentInputScrollableChipRowProps = Readonly<{
 }>;
 
 export function AgentInputScrollableChipRow(props: AgentInputScrollableChipRowProps) {
-    const reducedMotion = useReducedMotionPreference();
     const fades = useScrollEdgeFades({
         enabledEdges: { left: true, right: true },
         overflowThreshold: 8,
@@ -159,10 +158,12 @@ export function AgentInputScrollableChipRow(props: AgentInputScrollableChipRowPr
         const animationFrameId = requestAnimationFrameSafe(() => {
             const node = getScrollNode() as any;
             if (!node || typeof node.addEventListener !== 'function') return;
-            cleanup = attachActionBarMouseDragScroll({
+            const detachDrag = attachActionBarMouseDragScroll({
                 node,
                 onScroll: () => reportWebScroll(node),
             });
+            const detachReveal = attachChipRailReveal({ node, onScroll: () => reportWebScroll(node) });
+            cleanup = () => { detachDrag(); detachReveal(); };
         });
 
         return () => {
@@ -195,16 +196,11 @@ export function AgentInputScrollableChipRow(props: AgentInputScrollableChipRowPr
                 : key === 'ArrowLeft'
                     ? Math.max(0, currentIndex < 0 ? controls.length - 1 : currentIndex - 1)
                     : Math.min(controls.length - 1, currentIndex < 0 ? 0 : currentIndex + 1);
-        const next = controls[nextIndex];
-        next?.focus?.();
-        next?.scrollIntoView?.({
-            behavior: reducedMotion ? 'auto' : 'smooth',
-            block: 'nearest',
-            inline: 'nearest',
-        });
+        // Focus reveals the control and its neighbours (`attachChipRailReveal`).
+        controls[nextIndex]?.focus?.();
         (event as any)?.preventDefault?.();
         (event as any)?.stopPropagation?.();
-    }, [getScrollNode, reducedMotion]);
+    }, [getScrollNode]);
 
     return (
         <View style={props.containerStyle}>
@@ -247,10 +243,8 @@ export function AgentInputScrollableChipRow(props: AgentInputScrollableChipRowPr
                     );
                 }}
                 onScroll={(event: any) => {
-                    if (Platform.OS === 'web') {
-                        reportWebScroll();
-                        return;
-                    }
+                    // Web reports its DOM scroll itself (`attachChipRailReveal`).
+                    if (Platform.OS === 'web') return;
                     const nativeEvent = event?.nativeEvent;
                     const contentSizeWidth = nativeEvent?.contentSize?.width;
                     if (typeof contentSizeWidth !== 'number') {

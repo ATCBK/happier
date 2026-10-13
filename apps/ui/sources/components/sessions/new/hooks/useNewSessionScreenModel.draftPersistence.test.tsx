@@ -1478,22 +1478,18 @@ describe('useNewSessionScreenModel (draft hydration)', () => {
             const model = hook.getCurrent();
             expect(model.variant).toBe('simple');
             if (model.variant !== 'simple') throw new Error('Expected the simple composer');
-            const screen = await renderScreen(<>{model.simpleProps.composerTopContent}</>);
-            expect(screen.findByTestId('new-session-agent-blocker.action')).not.toBeNull();
-            expect(screen.findByTestId('new-session-agent-blocker.action')?.props.disabled).toBe(true);
-            await screen.pressByTestIdAsync('new-session-agent-blocker.action');
+            // The blocker is the composer's status line; Sign in is its action (no connected account here).
+            expect(model.simpleProps.connectionStatus?.action).toMatchObject({ testID: 'new-session-agent-blocker.action', disabled: true });
+            await act(async () => { model.simpleProps.connectionStatus?.action?.onPress(); });
             expect(routerPushMock).not.toHaveBeenCalled();
-            await screen.unmount();
             targetServerState.targetServerId = profile.id;
             machineListByServerIdState.value = { [profile.id]: activeMachinesState.value };
             await hook.rerender();
             const resolvedModel = hook.getCurrent();
             if (resolvedModel.variant !== 'simple') throw new Error('Expected the simple composer');
-            const resolvedScreen = await renderScreen(<>{resolvedModel.simpleProps.composerTopContent}</>);
-            expect(resolvedScreen.findByTestId('new-session-agent-blocker.action')?.props.disabled).not.toBe(true);
-            await resolvedScreen.pressByTestIdAsync('new-session-agent-blocker.action');
+            expect(resolvedModel.simpleProps.connectionStatus?.action?.disabled).not.toBe(true);
+            await act(async () => { resolvedModel.simpleProps.connectionStatus?.action?.onPress(); });
             expect(routerPushMock).toHaveBeenLastCalledWith(machineCollectionHref({ machineId, serverId: profile.id }));
-            await resolvedScreen.unmount();
         } finally {
             await unmountAgent?.();
             await hook?.unmount();

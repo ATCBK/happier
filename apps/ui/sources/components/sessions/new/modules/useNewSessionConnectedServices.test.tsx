@@ -2,7 +2,7 @@ import { renderHook, renderScreen, standardCleanup } from '@/dev/testkit';
 import { projectMachineAgent } from '@/agents/machineAgents/machineAgentModel';
 import { projectMachineAgentConnectedServices } from '@/agents/machineAgents/machineAgentConnectedServices';
 import { isMachineAgentReady } from '@/agents/machineAgents/resolveMachineAgentState';
-import { AgentSessionStartBlocker } from '@/components/machines/agents/AgentSessionStartBlocker';
+import { resolveAgentSessionStartBlockLine } from '@/components/machines/agents/agentSessionStartBlockLine';
 import { getConnectedServiceRegistrySnapshot } from '@/sync/domains/connectedServices/connectedServiceRegistry';
 import { storage } from '@/sync/domains/state/storage';
 import { AccountProfileSchema, PluginProjectionV2Schema } from '@happier-dev/protocol';
@@ -498,23 +498,21 @@ describe('New Session purpose catalog authority', () => {
             expect(isMachineAgentReady(hook.getCurrent().selectedCredentialMachineAgent)).toBe(scenario.ready);
             // Aggregate Machine/Agent rows retain their "any usable credential" contract.
             expect(isMachineAgentReady(machineAgent)).toBe(scenario.connected || scenario.native === 'signedIn');
-            const screen = await renderScreen(<AgentSessionStartBlocker agent={hook.getCurrent().selectedCredentialMachineAgent}
-                machineName="Devbox" onSetUp={() => {}} connectedServicesRecoveryAction={hook.getCurrent().connectedServicesRecoveryAction} />);
-            try {
-                expect(Boolean(screen.findHostByTestId('new-session-agent-blocker'))).toBe(!scenario.ready);
-                const canRecover = scenario.native === 'signedOut' && scenario.connected && scenario.selected === 'native';
-                expect(Boolean(screen.findByTestId('new-session-agent-blocker.connected'))).toBe(canRecover);
-                if (canRecover) {
-                    expect(screen.findByTestId('new-session-agent-blocker.action')).not.toBeNull();
-                    await screen.pressByTestIdAsync('new-session-agent-blocker.connected');
-                    expect(isMachineAgentReady(hook.getCurrent().selectedCredentialMachineAgent)).toBe(true);
-                    expect(hook.getCurrent().agentNewSessionOptions).toMatchObject({ connectedServices: { bindingsByServiceId: {
-                        [CLAUDE_SERVICE_KEY]: { source: 'connected', selection: 'profile', profileId: 'work' },
-                    } } });
-                    const { getConnectedAccountCatalogValue } = await import('@/sync/store/settings/connectedAccountCatalogSnapshot');
-                    expect(getConnectedAccountCatalogValue(scope, 'purposes').value).toEqual(value);
-                }
-            } finally { await screen.unmount(); }
+            const line = resolveAgentSessionStartBlockLine({ agent: hook.getCurrent().selectedCredentialMachineAgent,
+                machineName: 'Devbox', onSetUp: () => {}, connectedServicesRecoveryAction: hook.getCurrent().connectedServicesRecoveryAction });
+            expect(line !== null).toBe(!scenario.ready);
+            const canRecover = scenario.native === 'signedOut' && scenario.connected && scenario.selected === 'native';
+            expect(line?.action.testID === 'new-session-agent-blocker.connected').toBe(canRecover);
+            if (line && canRecover) {
+                expect(line.secondaryAction?.testID).toBe('new-session-agent-blocker.action');
+                await act(async () => { line.action.onPress(); });
+                expect(isMachineAgentReady(hook.getCurrent().selectedCredentialMachineAgent)).toBe(true);
+                expect(hook.getCurrent().agentNewSessionOptions).toMatchObject({ connectedServices: { bindingsByServiceId: {
+                    [CLAUDE_SERVICE_KEY]: { source: 'connected', selection: 'profile', profileId: 'work' },
+                } } });
+                const { getConnectedAccountCatalogValue } = await import('@/sync/store/settings/connectedAccountCatalogSnapshot');
+                expect(getConnectedAccountCatalogValue(scope, 'purposes').value).toEqual(value);
+            }
         } finally { await hook.unmount(); await connection.dispose(); bridge.dispose(); }
     });
 

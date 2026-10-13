@@ -189,7 +189,7 @@ import {
 import { resolveNewSessionOperationalBackendTarget } from '@/components/sessions/new/modules/newSessionCapabilityProbeContext';
 import { buildNewSessionLaunchStatus } from '@/components/sessions/new/hooks/screenModel/newSessionLaunchStatusBadges';
 import { resolveNewSessionCreateAdmission } from '@/components/sessions/new/hooks/screenModel/newSessionCreateAdmission';
-import { resolveAgentSessionStartBlock, resolveMachineAgentStatus } from '@/components/machines/agents/machineAgentPresentation';
+import { resolveMachineAgentStatus } from '@/components/machines/agents/machineAgentPresentation';
 import { formatMachineAgentStatus } from '@/components/machines/agents/machineAgentCopy';
 import { describeTemporaryComputerLaunchBlock, describeTemporaryComputerUnavailability } from '@/components/sessions/new/hooks/temporaryComputerCopy';
 import type { NewSessionInstructionsCreationModel, NewSessionScreenModel } from '@/components/sessions/new/hooks/newSessionScreenModelTypes';
@@ -335,7 +335,7 @@ import {
     settlePersistedMaterializedTemporaryComputerSession,
 } from '@/components/sessions/new/navigation/settleMaterializedTemporaryComputerSession';
 import { getMachineDisplayName } from '@/utils/sessions/machineDisplayNames';
-import { AgentSessionStartBlocker } from '@/components/machines/agents/AgentSessionStartBlocker';
+import { resolveAgentSessionStartBlockLine } from '@/components/machines/agents/agentSessionStartBlockLine';
 import { resolveBackendEntryUnavailabilityReasonForNewSession } from '@/components/sessions/new/modules/newSessionAgentSelection';
 import { machineCollectionHref } from '@/components/settings/machines/collection/machineCollectionModel';
 
@@ -3967,17 +3967,25 @@ export function useNewSessionScreenModel(input?: Readonly<{
         draftChangeKey: launchIntentSignature,
     });
 
+    // Why the chosen agent can't start on the chosen machine, with its fix (lab agent-setup ST): the one
+    // inventory owner decides; the composer's status line says it once, Set up / Sign in opens the
+    // machine's Agents section.
+    const agentStartBlock = React.useMemo(() => selectedMachineId ? resolveAgentSessionStartBlockLine({
+        agent: selectedCredentialMachineAgent ?? null,
+        machineName: selectedMachineDisplayName ?? selectedMachineId,
+        onSetUp: targetServerId === null ? undefined : () => router.push(machineCollectionHref({ machineId: selectedMachineId, serverId: targetServerId }) as never),
+        connectedServicesRecoveryAction,
+    }) : null, [selectedMachineId, selectedCredentialMachineAgent, selectedMachineDisplayName, targetServerId, router, connectedServicesRecoveryAction]);
     const launchStatus = React.useMemo(
         () => buildNewSessionLaunchStatus({ isCreating: isCreating || temporaryComputerLaunchActive, launchPresentation,
             disabledReason: createAdmission.disabledReason, translate: t,
-            // The agent blocker banner says this cause, with its action, above the card.
-            causeShownElsewhere: selectedMachineId && resolveAgentSessionStartBlock(selectedCredentialMachineAgent ?? null) !== null ? agentLaunchBlockedReason : null,
+            agentStartBlock,
             requesterDisclosure: targetAccountScopeResolution.kind === 'bound' && selectedMachine?.access
                 && selectedMachine.access.custodian.accountId !== targetAccountScopeResolution.scope.accountId
                 ? { owner: selectedMachine.access.custodian.displayName || t('shareSheet.person'),
                     machine: selectedMachineDisplayName ?? selectedMachine.id, signIn: 'full', signInPurposes: requesterSignInPurposes }
                 : undefined }),
-        [isCreating, temporaryComputerLaunchActive, launchPresentation, createAdmission.disabledReason, agentLaunchBlockedReason, selectedCredentialMachineAgent, selectedMachineId, selectedMachine, selectedMachineDisplayName, targetAccountScopeResolution, requesterSignInPurposes],
+        [isCreating, temporaryComputerLaunchActive, launchPresentation, createAdmission.disabledReason, agentStartBlock, selectedMachine, selectedMachineDisplayName, targetAccountScopeResolution, requesterSignInPurposes],
     );
     // One cause, one line: the machine's own state leads (it is the cause of a blocked launch), then the
     // launch's blocker or progress, on the status line above the card where a session states its status.
@@ -3985,7 +3993,8 @@ export function useNewSessionScreenModel(input?: Readonly<{
         if (connectionStatus || !launchStatus.line) return connectionStatus;
         return launchStatus.line.kind === 'blocked'
             ? { text: launchStatus.line.text, color: theme.colors.state.warning.textForeground,
-                dotColor: theme.colors.state.warning.foreground, isPulsing: false }
+                dotColor: theme.colors.state.warning.foreground, isPulsing: false,
+                detail: launchStatus.line.detail, action: launchStatus.line.action, secondaryAction: launchStatus.line.secondaryAction }
             : { text: launchStatus.line.text, color: theme.colors.text.secondary,
                 dotColor: theme.colors.status.connecting, isPulsing: true };
     }, [connectionStatus, launchStatus.line, theme]);
@@ -3994,17 +4003,6 @@ export function useNewSessionScreenModel(input?: Readonly<{
         [input?.statusBadges, launchStatus.badges],
     );
 
-    // Why the chosen agent can't start on the chosen machine, with its fix (lab agent-setup ST):
-    // the one inventory owner decides; Set up / Sign in opens the machine's Agents section.
-    const selectedMachineAgent = selectedCredentialMachineAgent;
-    const agentStartBlocker = selectedMachineAgent && selectedMachineId ? (
-        <AgentSessionStartBlocker
-            agent={selectedMachineAgent}
-            connectedServicesRecoveryAction={connectedServicesRecoveryAction}
-            machineName={selectedMachineDisplayName ?? selectedMachineId}
-            onSetUp={targetServerId === null ? undefined : () => router.push(machineCollectionHref({ machineId: selectedMachineId, serverId: targetServerId }) as never)}
-        />
-    ) : null;
     // Instructions before the first input (plans 60 §2, 61 I61-1): a Bot draft offers them; any draft
     // that already carries a document or retained authoring shows it, so nothing is sent unseen.
     const draftInstructions = draftScope ? (
@@ -4015,8 +4013,8 @@ export function useNewSessionScreenModel(input?: Readonly<{
             getName={sessionNameStore.getPrompt}
         />
     ) : null;
-    const composerTopContent = agentStartBlocker || input?.composerTopContent || draftInstructions
-        ? <>{input?.composerTopContent}{agentStartBlocker}{draftInstructions}</>
+    const composerTopContent = input?.composerTopContent || draftInstructions
+        ? <>{input?.composerTopContent}{draftInstructions}</>
         : undefined;
 
     const {

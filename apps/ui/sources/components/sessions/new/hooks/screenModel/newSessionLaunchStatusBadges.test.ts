@@ -29,13 +29,18 @@ describe('buildNewSessionLaunchStatus', () => {
             .toEqual({ line: null, badges: [] });
     });
 
-    it('does not say again a cause the composer already shows as its own banner', () => {
-        const reason = 'Claude · Needs sign-in';
-        // The agent blocker banner above the card says it with its action: the status line stays out of it.
-        expect(buildNewSessionLaunchStatus({ isCreating: false, disabledReason: reason, causeShownElsewhere: reason, translate: (key) => key }).line).toBeNull();
-        // Another cause is still said.
-        expect(buildNewSessionLaunchStatus({ isCreating: false, disabledReason: 'No path selected', causeShownElsewhere: reason, translate: (key) => key }).line)
-            .toEqual({ kind: 'blocked', text: 'No path selected' });
+    it('says an agent that cannot start once, with its actions, instead of the generic disabled reason', () => {
+        const action = { label: 'Use Claude (work)', onPress: vi.fn() };
+        const secondaryAction = { label: 'Sign in', onPress: vi.fn() };
+        const line = buildNewSessionLaunchStatus({
+            isCreating: false, disabledReason: 'Claude · Needs sign-in',
+            agentStartBlock: { text: 'Claude needs to sign in on Devbox.', action, secondaryAction },
+            translate: (key) => key,
+        }).line;
+        expect(line).toEqual({ kind: 'blocked', text: 'Claude needs to sign in on Devbox.', action, secondaryAction });
+        // Once creation is underway, progress replaces the blocker.
+        expect(buildNewSessionLaunchStatus({ isCreating: true, agentStartBlock: { text: 'x', action }, translate: (key) => key }).line)
+            .toEqual({ kind: 'starting', text: 'newSession.startingSession' });
     });
 
     it('keeps the requester disclosure as a badge with its detail popover', () => {

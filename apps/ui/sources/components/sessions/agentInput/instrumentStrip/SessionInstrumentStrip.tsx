@@ -34,12 +34,22 @@ const COMPACT_WIDTH = 360;
 /** Below this available width, the cluster collapses behind a "•••" popover. */
 const COLLAPSE_WIDTH = 300;
 
+/** One action ending the composer's status line, drawn by the shared text link. */
+export type SessionInstrumentStripLineAction = Readonly<{
+    label: string;
+    onPress: () => void;
+    disabled?: boolean;
+    testID?: string;
+}>;
+
 export type SessionInstrumentStripConnectionStatus = Readonly<{
     text: string;
     color: string;
     dotColor: string;
     isPulsing?: boolean;
-    action?: Readonly<{ label: string; onPress: () => void }>;
+    action?: SessionInstrumentStripLineAction;
+    /** A second way forward after the action (Sign in beside a connected account's one-tap switch); quiet. */
+    secondaryAction?: SessionInstrumentStripLineAction;
     /** The longer explanation behind a short line: the shared tooltip on hover/focus, and read with the line. */
     detail?: string;
     /** A coming stop (plan 50 G3-5): the text is followed by a countdown that ticks in its own leaf. */
@@ -330,11 +340,22 @@ export const SessionInstrumentStrip = React.memo(function SessionInstrumentStrip
                     {/* The status line's one recovery ends its sentence (lab `b-ask E`), drawn by the shared text link. */}
                     {props.connectionStatus.action ? (
                         <TextLinkButton
-                            testID="agent-input-connection-recovery"
+                            testID={props.connectionStatus.action.testID ?? 'agent-input-connection-recovery'}
                             tone="strong"
                             size="meta"
                             label={props.connectionStatus.action.label}
                             onPress={props.connectionStatus.action.onPress}
+                            disabled={props.connectionStatus.action.disabled}
+                        />
+                    ) : null}
+                    {props.connectionStatus.action && props.connectionStatus.secondaryAction ? (
+                        <TextLinkButton
+                            testID={props.connectionStatus.secondaryAction.testID ?? 'agent-input-connection-secondary'}
+                            tone="quiet"
+                            size="meta"
+                            label={props.connectionStatus.secondaryAction.label}
+                            onPress={props.connectionStatus.secondaryAction.onPress}
+                            disabled={props.connectionStatus.secondaryAction.disabled}
                         />
                     ) : null}
                 </Animated.View>

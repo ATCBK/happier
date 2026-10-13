@@ -176,6 +176,22 @@ describe('SessionInstrumentStrip', () => {
         expect(restart).toHaveBeenCalledTimes(1);
     });
 
+    it('ends the line with the primary action, then a quieter second way forward; a disabled one cannot fire', () => {
+        const switchAccount = vi.fn();
+        const signIn = vi.fn();
+        const status = { text: 'Claude needs sign-in on Devbox', color: '#b60', dotColor: '#b60',
+            action: { label: 'Use Claude (work)', onPress: switchAccount, testID: 'primary' },
+            secondaryAction: { label: 'Sign in', onPress: signIn, testID: 'secondary' } };
+        act(() => { tree = create(<SessionInstrumentStrip connectionStatus={status} />); });
+        const links = ['primary', 'secondary'].map((id) => tree!.root.findAll((n) => n.props?.testID === id)[0]!);
+        expect(links.map((n) => [n.props.testID, n.props.tone])).toEqual([['primary', 'strong'], ['secondary', 'quiet']]);
+        act(() => { links[0]!.props.onPress(); links[1]!.props.onPress(); });
+        expect(switchAccount).toHaveBeenCalledTimes(1);
+        expect(signIn).toHaveBeenCalledTimes(1);
+        act(() => { tree!.update(<SessionInstrumentStrip connectionStatus={{ ...status, secondaryAction: undefined }} />); });
+        expect(tree!.root.findAll((n) => n.props?.testID === 'secondary')).toHaveLength(0);
+    });
+
     it('cross-fades the line when the guard moment changes, and simply shows the first line', () => {
         const line = () => tree!.root.findAll((n) => n.props?.style === undefined ? false : n.props?.testID === undefined
             && n.findAll((c) => c.props?.testID === 'agent-input-connection-status-text').length > 0 && 'entering' in n.props)[0]!;

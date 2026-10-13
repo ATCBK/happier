@@ -306,67 +306,64 @@ describe('New Session selected credential launch gate', () => {
                     accessibilityLabel: expect.stringContaining(statusLabel),
                 });
             }
-            const screen = await renderScreen(<>{model.simpleProps.composerTopContent}</>);
-            try {
-                // Unknown Provider admission uses the status badge, not a native
-                // sign-in recovery banner that cannot admit the selected route.
-                expect(Boolean(screen.findHostByTestId('new-session-agent-blocker')), observedAdmission)
-                    .toBe(!scenario.ready && scenario.selected !== 'provider-unconfirmed');
-                if (!scenario.ready && scenario.connected) {
-                    await screen.pressByTestIdAsync('new-session-agent-blocker.connected');
-                    await act(async () => { await flushHookEffects(); });
-                    const recovered = hook.getCurrent();
-                    if (recovered.variant !== 'simple') throw new Error('Expected recovered simple launcher');
-                    expect(recovered.simpleProps.canCreate).toBe(true);
-                    expect(recovered.simpleProps.statusBadges?.some((badge) => badge.key === 'new-session-create-blocked')).toBe(false);
-                    if (scenario.selected === 'native' && scenario.native === 'signedOut') {
-                        const authoredPath = '/repo/authored-before-send';
-                        const renderPathContent = recovered.simpleProps.pathPopover?.renderContent;
-                        const pathContent = typeof renderPathContent === 'function'
-                            ? renderPathContent({ requestClose: () => {}, maxHeight: 600 }) : renderPathContent;
-                        if (!React.isValidElement<NewSessionPathSelectionContentProps>(pathContent)) {
-                            throw new Error('Expected the real folder picker');
-                        }
-                        await act(async () => {
-                            pathContent.props.onChangeSelectedPath(authoredPath);
-                            recovered.simpleProps.setModelMode?.('haiku');
-                        });
-                        await act(async () => {
-                            const lifetime = captureActiveServerAccountScopeLifetime();
-                            if (!lifetime) throw new Error('Expected the current credential Account');
-                            await refreshMachineAgents({ serverId: scope.serverId, machineId: machine.id,
-                                accountLifetime: lifetime });
-                        });
-                        const refreshed = hook.getCurrent();
-                        if (refreshed.variant !== 'simple') throw new Error('Expected refreshed simple launcher');
-                        expect(refreshed.simpleProps.canCreate).toBe(true);
-                        expect(refreshed.simpleProps.selectedPath).toBe(authoredPath);
-                        expect(refreshed.simpleProps.modelMode).toBe('haiku');
-                        await act(async () => { await refreshed.simpleProps.handleCreateSession(); });
-                        const submitted = readNewSessionDraftFromRepository({ scope, draftId });
-                        expect(submitted).toMatchObject({ selectedPath: authoredPath,
-                            modelSelection: { ref: { modelId: 'haiku' } },
-                            backendNewSessionOptionStateByTargetKey: {
-                                [agentTargetKey]: { connectedServicesBindingsByServiceId: {
-                                    'happier.agent.claude/claude-subscription': { source: 'connected', profileId: 'work' },
-                                } },
-                            },
-                        });
-                        await hook.unmount();
-                        // Reopening the stored draft carries no new folder intent.
-                        authoringRoute.directory = undefined;
-                        const reopened = await renderHook(() => useNewSessionScreenModel({ draftId }));
-                        try {
-                            await flushHookEffects();
-                            const restored = reopened.getCurrent();
-                            if (restored.variant !== 'simple') throw new Error('Expected reopened simple launcher');
-                            expect(restored.simpleProps.canCreate).toBe(true);
-                            expect(restored.simpleProps.selectedPath).toBe(authoredPath);
-                            expect(restored.simpleProps.modelMode).toBe('haiku');
-                        } finally { await reopened.unmount(); }
+            // Unknown Provider admission uses the status badge, not a native
+            // sign-in recovery line that cannot admit the selected route.
+            expect(model.simpleProps.connectionStatus?.action?.testID?.startsWith('new-session-agent-blocker.') === true, observedAdmission)
+                .toBe(!scenario.ready && scenario.selected !== 'provider-unconfirmed');
+            if (!scenario.ready && scenario.connected) {
+                await act(async () => { model.simpleProps.connectionStatus?.action?.onPress(); });
+                await act(async () => { await flushHookEffects(); });
+                const recovered = hook.getCurrent();
+                if (recovered.variant !== 'simple') throw new Error('Expected recovered simple launcher');
+                expect(recovered.simpleProps.canCreate).toBe(true);
+                expect(recovered.simpleProps.statusBadges?.some((badge) => badge.key === 'new-session-create-blocked')).toBe(false);
+                if (scenario.selected === 'native' && scenario.native === 'signedOut') {
+                    const authoredPath = '/repo/authored-before-send';
+                    const renderPathContent = recovered.simpleProps.pathPopover?.renderContent;
+                    const pathContent = typeof renderPathContent === 'function'
+                        ? renderPathContent({ requestClose: () => {}, maxHeight: 600 }) : renderPathContent;
+                    if (!React.isValidElement<NewSessionPathSelectionContentProps>(pathContent)) {
+                        throw new Error('Expected the real folder picker');
                     }
+                    await act(async () => {
+                        pathContent.props.onChangeSelectedPath(authoredPath);
+                        recovered.simpleProps.setModelMode?.('haiku');
+                    });
+                    await act(async () => {
+                        const lifetime = captureActiveServerAccountScopeLifetime();
+                        if (!lifetime) throw new Error('Expected the current credential Account');
+                        await refreshMachineAgents({ serverId: scope.serverId, machineId: machine.id,
+                            accountLifetime: lifetime });
+                    });
+                    const refreshed = hook.getCurrent();
+                    if (refreshed.variant !== 'simple') throw new Error('Expected refreshed simple launcher');
+                    expect(refreshed.simpleProps.canCreate).toBe(true);
+                    expect(refreshed.simpleProps.selectedPath).toBe(authoredPath);
+                    expect(refreshed.simpleProps.modelMode).toBe('haiku');
+                    await act(async () => { await refreshed.simpleProps.handleCreateSession(); });
+                    const submitted = readNewSessionDraftFromRepository({ scope, draftId });
+                    expect(submitted).toMatchObject({ selectedPath: authoredPath,
+                        modelSelection: { ref: { modelId: 'haiku' } },
+                        backendNewSessionOptionStateByTargetKey: {
+                            [agentTargetKey]: { connectedServicesBindingsByServiceId: {
+                                'happier.agent.claude/claude-subscription': { source: 'connected', profileId: 'work' },
+                            } },
+                        },
+                    });
+                    await hook.unmount();
+                    // Reopening the stored draft carries no new folder intent.
+                    authoringRoute.directory = undefined;
+                    const reopened = await renderHook(() => useNewSessionScreenModel({ draftId }));
+                    try {
+                        await flushHookEffects();
+                        const restored = reopened.getCurrent();
+                        if (restored.variant !== 'simple') throw new Error('Expected reopened simple launcher');
+                        expect(restored.simpleProps.canCreate).toBe(true);
+                        expect(restored.simpleProps.selectedPath).toBe(authoredPath);
+                        expect(restored.simpleProps.modelMode).toBe('haiku');
+                    } finally { await reopened.unmount(); }
                 }
-            } finally { await screen.unmount(); }
+            }
         } finally {
             pendingAcpRead.resolve(Response.json({ status: 'present', revision: 1, content: { t: 'plain', v: acpRecord } }));
             await hook.unmount();
