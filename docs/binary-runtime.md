@@ -32,6 +32,12 @@ Before adding or changing a provider/runtime/install/update flow, classify it as
 
 Provider detection, install status, daemon validation, runtime spawning, and UI/installables must reuse the same source of truth. Backend CLIs should prefer user/system installs by default over Happier-managed installs unless an explicit setting says otherwise.
 
+In current development source, vendor installers preserve the Windows process
+environment's `Path` spelling; cloning that environment and replacing it with an
+empty `PATH` prevents executable resolution. Only POSIX recipes prepend user
+install directories. Windows recipes declare `powershell.exe` in the shared
+provider catalog, which also supplies the copyable installation guidance.
+
 In current development source, Pi's vendor-managed launcher is a system-install candidate
 in the shared provider resolver: `PI_CODING_AGENT_DIR/bin/pi`, then `~/.pi/agent/bin/pi`,
 when `PATH` has no matching executable. Explicit `HAPPIER_PI_PATH` remains exclusive and

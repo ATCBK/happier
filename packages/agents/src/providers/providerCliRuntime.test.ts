@@ -9,6 +9,7 @@ import {
   resolveProviderCliLatestVersionSource,
   resolveProviderCliNpmPackageName,
 } from './providerCliRuntime.js';
+import { getProviderCliManualInstallSummaryLines } from './providerCliInstallGuidance.js';
 
 const cursorAgentId = 'cursor' as AgentId;
 
@@ -148,7 +149,7 @@ describe('PROVIDER_CLI_RUNTIME_SPECS', () => {
     const droid = getProviderCliRuntimeSpec('droid');
     expect(droid.manualInstallRecipes?.win32).toEqual([
       {
-        cmd: 'powershell',
+        cmd: 'powershell.exe',
         args: [
           '-NoProfile',
           '-ExecutionPolicy',
@@ -232,6 +233,24 @@ describe('PROVIDER_CLI_RUNTIME_SPECS', () => {
       ],
       alternativeBinaryNames: ['agent'],
     });
+  });
+
+  it('uses directly spawnable Windows PowerShell executables for every vendor recipe', () => {
+    for (const providerId of AGENT_IDS) {
+      for (const command of getProviderCliRuntimeSpec(providerId).manualInstallRecipes?.win32 ?? []) {
+        if (command.args.includes('-Command')) {
+          expect(command.cmd, providerId).toBe('powershell.exe');
+        }
+      }
+    }
+  });
+
+  it('uses the official native Windows Cursor installer and preserves copyable PowerShell guidance', () => {
+    const command = getProviderCliRuntimeSpec(cursorAgentId).manualInstallRecipes?.win32?.[0];
+    expect(command?.args.at(-1)).toBe("irm 'https://cursor.com/install?win32=true' | iex");
+    expect(getProviderCliManualInstallSummaryLines(cursorAgentId)).toContain(
+      "  Windows (PowerShell): irm 'https://cursor.com/install?win32=true' | iex",
+    );
   });
 
   it('filters Cursor fallback binary aliases when the fallback env var is disabled', () => {
