@@ -3,7 +3,7 @@ import { mkdtemp, readFile, readdir, rm } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 
-import type { BrowserCommandV1, BrowserEventV1 } from '@happier-dev/protocol';
+import type { BrowserCommandV1, BrowserEventV1, MachineVitalsSampleV1 } from '@happier-dev/protocol';
 import { describe, expect, it } from 'vitest';
 import { createTransferPathAllowanceRegistry } from '@/transfers/targets/createTransferPathAllowanceRegistry';
 
@@ -87,7 +87,10 @@ describe('product browser session isolation', () => {
             },
         });
         try {
-            const result = await factory({ machineId: 'machine' });
+            const factoryInput = { machineId: 'machine', readMachineMemory: (): MachineVitalsSampleV1['memory'] => ({ reported: true,
+                totalBytes: 8 * 1024 ** 3, availableBytes: 8 * 1024 ** 3, usedBytes: 0,
+                pressure: { level: 'calm', source: 'none' } }) };
+            const result = await factory(factoryInput);
             expect(result.ok).toBe(true);
             if (!result.ok) return;
             const unboundSessions: string[] = [];

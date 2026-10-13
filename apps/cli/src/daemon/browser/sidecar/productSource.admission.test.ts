@@ -1,9 +1,17 @@
 import { EventEmitter } from 'node:events';
 import { PassThrough } from 'node:stream';
 import { totalmem } from 'node:os';
+import { join } from 'node:path';
+import { readFile, readdir, readlink } from 'node:fs/promises';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { readMachineResourcesPolicyV1SnapshotFromMetadata } from '@happier-dev/protocol/machines/resources/machineResourcesPolicyV1';
 import { BrowserCommandDispatchResultV1Schema } from '@happier-dev/protocol/browser/control/v1';
+import { MachineVitalsSampleV1Schema } from '@happier-dev/protocol/machines/vitals/machineVitalsSampleV1';
+import type { MachineVitalsSampleV1 } from '@happier-dev/protocol';
+import { createLinuxVitalsFixture } from '../../vitals/readers/linux.testkit';
+import { createLinuxMachineVitalsReader } from '../../vitals/readers/linux';
+import { createMachineVitalsSampler } from '../../vitals/createMachineVitalsSampler';
+import { createMinuteHistoryStore } from '../../vitals/history/minuteHistoryStore';
 import { installLocalServiceCensusFixture } from '../../local/services/inventory/platform/censusFixture.testkit';
 import { createBrowserProfileStore } from '../profiles/store';
 import { createBrowserStoragePartitionOwner } from '../storage/partitions';
@@ -17,15 +25,20 @@ vi.mock('node:fs/promises', async original => {
     const actual = await original<typeof import('node:fs/promises')>();
     return { ...actual, readFile: vi.fn(actual.readFile), readdir: vi.fn(actual.readdir), readlink: vi.fn(actual.readlink) };
 });
-beforeEach(() => {
-    installLocalServiceCensusFixture([{ pid: 42, ppid: process.pid, command: ['chromium'] }]);
+beforeEach(async () => {
+    const fs = await vi.importActual<typeof import('node:fs/promises')>('node:fs/promises');
+    vi.mocked(readFile).mockImplementation(fs.readFile);
+    vi.mocked(readdir).mockImplementation(fs.readdir);
+    vi.mocked(readlink).mockImplementation(fs.readlink);
     vi.mocked(totalmem).mockReturnValue(4 * 1024 ** 3);
 });
 afterEach(() => vi.clearAllMocks());
 
 async function host(initialOverride: number | null = null,
     openPage = async () => ({ targetId: 'target', sessionId: 'cdp' }),
-    dispatchPageCommand = async () => ({})) {
+    dispatchPageCommand = async () => ({}),
+    readMachineMemory: () => MachineVitalsSampleV1['memory'] | null = () => ({ reported: true,
+        totalBytes: 4 * 1024 ** 3, availableBytes: 4 * 1024 ** 3, usedBytes: 0, pressure: { level: 'calm', source: 'none' } })) {
     let override = initialOverride;
     let failTransportDisposal = false;
     let deferredExit: (() => void) | undefined;
@@ -34,7 +47,7 @@ async function host(initialOverride: number | null = null,
         partitionOwner: createBrowserStoragePartitionOwner({ storageRootDirectory: '/unused/admission' }),
         removeDirectory: async () => {},
     });
-    const runtime = await createProductBrowserSidecarControlAdapterFactory({
+    const factory = createProductBrowserSidecarControlAdapterFactory({
         featureEnabled: true, profileStore: profiles,
         readMachineResourcesPolicy: () => readMachineResourcesPolicyV1SnapshotFromMetadata({
             metadata: { resourcesPolicyV1: { v: 1, processes: { browserMaxConcurrent: override } } },
@@ -45,6 +58,7 @@ async function host(initialOverride: number | null = null,
                 pinnedVersion: '127.0.6533.88', channel: 'stable', integrityDigest: `sha256:${'a'.repeat(64)}`, license: 'BSD-3-Clause' } }),
         createLaunchOwnerFactory: input => createBrowserSidecarLaunchOwnerControlAdapterFactory({ ...input,
             spawnProcess: () => {
+                installLocalServiceCensusFixture([{ pid: 42, ppid: process.pid, command: ['chromium'] }]);
                 const child = new EventEmitter();
                 const stderr = new PassThrough();
                 children.push(child);
@@ -61,7 +75,9 @@ async function host(initialOverride: number | null = null,
             }, transport: { openPage,
                 dispatchPageCommand, dispatchBrowserCommand: async () => ({ success: true }) } }),
         }),
-    })({ machineId: 'machine' });
+    });
+    const factoryInput = { machineId: 'machine', readMachineMemory };
+    const runtime = await factory(factoryInput);
     if (!runtime.ok) throw new Error(runtime.disabledReason);
     const open = (session: string, viewId = 'view') => runtime.adapter.dispatchCommand({ kind: 'openView', commandId: `open_${session}_${viewId}`,
         browserSessionId: session, viewId, platform: 'web', focus: true,
@@ -72,6 +88,39 @@ async function host(initialOverride: number | null = null,
 }
 
 describe('browser session memory admission', () => {
+    it('keeps one usable engine when memory is unreported and honors an explicit override', async () => {
+        const h = await host(null, undefined, undefined, () => null);
+        try {
+            expect(await h.open('first')).toMatchObject({ status: 'dispatched' });
+            expect(await h.open('second')).toMatchObject({ status: 'failed', error: { code: 'waiting_for_memory' } });
+            h.setOverride(2);
+            expect(await h.open('second')).toMatchObject({ status: 'dispatched' });
+        } finally { await h.runtime.dispose?.(); }
+    });
+
+    it('uses the sampler effective cgroup total instead of physical host RAM', async () => {
+        vi.mocked(totalmem).mockReturnValue(128 * 1024 ** 3);
+        const fixture = await createLinuxVitalsFixture();
+        await fixture.put('/proc/meminfo', 'MemTotal: 134217728 kB\nMemAvailable: 67108864 kB\n');
+        await fixture.put('/proc/self/mountinfo', '1 0 0:1 / /sys/fs/cgroup rw - cgroup2 cgroup rw\n');
+        await fixture.put('/sys/fs/cgroup/memory.max', String(8 * 1024 ** 3));
+        await fixture.put('/sys/fs/cgroup/memory.current', String(1024 ** 3));
+        await fixture.put('/sys/fs/cgroup/memory.stat', 'inactive_file 0\n');
+        const sampler = createMachineVitalsSampler({ readers: createLinuxMachineVitalsReader({ root: fixture.root }),
+            historyStore: await createMinuteHistoryStore({ directory: join(fixture.root, 'history') }) });
+        let h: Awaited<ReturnType<typeof host>> | undefined;
+        try {
+            await sampler.start();
+            const sample = MachineVitalsSampleV1Schema.parse(sampler.latest());
+            expect(sample.memory).toMatchObject({ reported: true, totalBytes: 8 * 1024 ** 3, limitSource: 'cgroup' });
+            h = await host(null, undefined, undefined, () => sampler.latest()?.memory ?? null);
+            expect(await h.open('first')).toMatchObject({ status: 'dispatched' });
+            expect(await h.open('second')).toMatchObject({ status: 'dispatched' });
+            expect(BrowserCommandDispatchResultV1Schema.parse(await h.open('third')))
+                .toMatchObject({ status: 'failed', error: { code: 'waiting_for_memory', retryable: true } });
+        } finally { await h?.runtime.dispose?.(); await sampler.stop(); await fixture.cleanup(); }
+    });
+
     it('releases an engine with no usable views after a failed first open so a waiting session can recover', async () => {
         let failOpen = true;
         const h = await host(null, async () => {
@@ -106,8 +155,9 @@ describe('browser session memory admission', () => {
 
     it.each([[4, 1], [8 - 1 / 1024 ** 3, 1], [8, 2], [12 - 1 / 1024 ** 3, 2], [12, 3], [16 - 1 / 1024 ** 3, 3], [16, 4], [128, 4]])(
         'admits up to the derived bound on %s GiB, including concurrent starts and existing-session views', async (ram, limit) => {
-            vi.mocked(totalmem).mockReturnValue(ram * 1024 ** 3);
-            const h = await host();
+            const h = await host(null, undefined, undefined, () => ({ reported: true,
+                totalBytes: ram * 1024 ** 3, availableBytes: ram * 1024 ** 3, usedBytes: 0,
+                pressure: { level: 'calm', source: 'none' } }));
             try {
                 const opened = await Promise.all(Array.from({ length: limit + 1 }, (_, i) => h.open(`session_${i}`)));
                 expect(opened.slice(0, limit).every(result => result.status === 'dispatched')).toBe(true);
