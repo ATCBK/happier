@@ -13,7 +13,7 @@ import { mapAiLaunchProfileToListItemV1 } from './listProjection.js';
 import { getBuiltInBackendProfile } from './builtInBackendProfiles.js';
 import { AccountSettingsPersistedObjectSchema } from '../account/settings/accountSettingsPersistedObject.js';
 import type { ArtifactRevisionV1 } from '../artifacts/artifactActionsV1.js';
-import { applyPromptStackIntentV1, type PromptStackIntentV1 } from '../prompts/library/promptStacksV1.js';
+import { applyPromptStackIntentV1, PromptStackEntryAuthoringV1Schema, type PromptStackIntentV1 } from '../prompts/library/promptStacksV1.js';
 import { LaunchProfileArtifactV1Schema, readLaunchProfileArtifactV1 } from '../launchProfiles/launchProfileArtifactV1.js';
 
 /** Preserve the incumbent favorite order and the empty machine-environment identity. */
@@ -100,7 +100,7 @@ export function createProfileDuplicateDraftV1(input: Readonly<{
     if (artifactId && !resource?.revision) return { status: 'invalid', reason: 'invalid-definition', id: input.profile.id };
     const effectiveBindings = readEffectiveProfileSecretBindingsV1(record, { artifactsById: new Map() });
     if (!effectiveBindings) return { status: 'invalid', reason: 'invalid-definition', id: input.profile.id };
-    return { status: 'draft', profile: { ...record.definition.profile, enabled: record.enabled, promptStack: record.promptStack,
+    return { status: 'draft', profile: { ...record.definition.profile, enabled: record.enabled, promptStack: record.promptStack, skillSeeds: record.skillSeeds,
       secretBindings: effectiveBindings },
       secretBindings: record.secretBindings, legacyCloneSource: { id: sourceRow.record.id, revision: sourceRow.revision,
         ...(artifactId && resource?.revision ? { artifactRevision: { artifactId, ...resource.revision } } : {}) } };
@@ -122,7 +122,7 @@ export function createProfileDuplicateDraftV1(input: Readonly<{
     if (binding === null) secretBindings[envName] = null;
   }
   return { status: 'draft', profile: { ...body.data, name: input.name,
-    ...(sourceRow ? { enabled: sourceRow.record.enabled, promptStack: [...sourceRow.record.promptStack] } : {}),
+    ...(sourceRow ? { enabled: sourceRow.record.enabled, promptStack: [...sourceRow.record.promptStack], skillSeeds: [...sourceRow.record.skillSeeds] } : {}),
     ...(input.profile.secretBindings !== undefined ? { secretBindings: { ...input.profile.secretBindings } } : {}),
   }, secretBindings };
 }
@@ -195,7 +195,7 @@ export function createProfileOperations(ports: ProfileOperationsPorts) {
       if (builtin) {
         const record = ProfileRecordV1Schema.parse(change({ v: 1, id: builtin.id,
           definition: { kind: 'legacy', profile: builtin }, enabled: readAiLaunchProfileEnabledV1(builtin, ports.readEnabledPreferences?.() ?? {}),
-          promptStack: [], secretBindings: {} }));
+          promptStack: [], skillSeeds: [], secretBindings: {} }));
         return ports.writeRecord({ record, expectedRevision: 'absent', operation: 'attach-builtin',
           ...(input.savedSecretRevisions ? { savedSecretRevisions: input.savedSecretRevisions } : {}) });
       }
@@ -208,7 +208,7 @@ export function createProfileOperations(ports: ProfileOperationsPorts) {
       if (!source?.artifactId) return admitted;
       if (opened.profiles.some(profile => profile.id !== source.id && profile.name.trim() === source.name.trim())) return invalid('duplicate-name', input.id);
       const record = ProfileRecordV1Schema.parse(change({ v: 1, id: input.id,
-        definition: { kind: 'artifact', artifactId: source.artifactId }, enabled: true, promptStack: [], secretBindings: {} }));
+        definition: { kind: 'artifact', artifactId: source.artifactId }, enabled: true, promptStack: [], skillSeeds: [], secretBindings: {} }));
       return ports.writeRecord({ record, expectedRevision: 'absent', operation: 'create',
         ...(input.savedSecretRevisions ? { savedSecretRevisions: input.savedSecretRevisions } : {}) });
     }
@@ -284,7 +284,7 @@ export function createProfileOperations(ports: ProfileOperationsPorts) {
       return { status: 'listed' as const, records: opened.rows.filter(row => ids.has(row.record.id)),
         profiles, complete: true as const };
     },
-    save: async (input: Readonly<{ profile: AiLaunchProfile; secretBindings?: ProfileRecordV1['secretBindings']; expectedRevision?: number | 'absent'; expectedArtifactRevision?: ArtifactRevisionV1; savedSecretRevisions?: ProfileRowMutationV1['savedSecretRevisions']; legacyCloneSource?: ProfileLegacyCloneSourceV1 }>): Promise<ProfileOperationResult> => {
+    save: async (input: Readonly<{ profile: AiLaunchProfile; skillSeeds?: readonly string[]; secretBindings?: ProfileRecordV1['secretBindings']; expectedRevision?: number | 'absent'; expectedArtifactRevision?: ArtifactRevisionV1; savedSecretRevisions?: ProfileRowMutationV1['savedSecretRevisions']; legacyCloneSource?: ProfileLegacyCloneSourceV1 }>): Promise<ProfileOperationResult> => {
       const opened = inventory();
       if (opened.status !== 'ready') return opened;
       const id = input.profile.id;
@@ -338,6 +338,10 @@ export function createProfileOperations(ports: ProfileOperationsPorts) {
           return invalid('invalid-definition', id);
         if (bodyChanged && !ports.writeArtifactProfile) return { status: 'unavailable', reason: 'profile_artifact_edit_unavailable' };
         let record = existing.record;
+        if (input.skillSeeds !== undefined) {
+          const skillSeeds = [...new Set(input.skillSeeds)];
+          if (!sameStrictJsonValue(skillSeeds, record.skillSeeds)) record = ProfileRecordV1Schema.parse({ ...record, skillSeeds });
+        }
         if (input.secretBindings !== undefined) {
           const proposedBindings = input.secretBindings;
           const unchanged = (bindings: Readonly<Record<string, string | null>>) =>
@@ -371,6 +375,9 @@ export function createProfileOperations(ports: ProfileOperationsPorts) {
       }
       const artifactId = !existing ? input.profile.artifactId : undefined;
       if (artifactId && !opened.profiles.some(profile => profile.id === id && profile.artifactId === artifactId)) return invalid('invalid-definition', id);
+      // A new private stack is authored here; captured legacy clone custody and existing rows retain their stored placements.
+      if (!existing && !input.legacyCloneSource && input.profile.promptStack?.some(entry => !PromptStackEntryAuthoringV1Schema.safeParse(entry).success))
+        return invalid('invalid-definition', id);
       const definition = artifactId ? { kind: 'artifact' as const, artifactId }
         : isLaunchProfileV2(input.profile)
         ? { kind: 'inline' as const, profile: inlineSchema.parse(source.data) }
@@ -378,6 +385,7 @@ export function createProfileOperations(ports: ProfileOperationsPorts) {
       const record = ProfileRecordV1Schema.parse({ v: 1, id, definition,
         enabled: existing?.record.enabled ?? input.profile.enabled ?? true,
         promptStack: existing?.record.promptStack ?? input.profile.promptStack ?? [],
+        skillSeeds: [...new Set(input.skillSeeds ?? existing?.record.skillSeeds ?? input.profile.skillSeeds ?? [])],
         secretBindings: input.secretBindings ?? existing?.record.secretBindings ?? (artifactId ? {} : input.profile.secretBindings ?? {}) });
       if (input.legacyCloneSource) {
         if (existing) return invalid('invalid-definition', id);

@@ -1,14 +1,120 @@
 import { describe, expect, it } from 'vitest';
 import { loadProfileCatalogV1 } from './profileCatalogV1.js';
-import type { ProfileRecordV1, ProfileRowsListResponseV1 } from './profileRecordV1.js';
+import { ProfileRecordV1Schema, StoredProfileRecordV1Schema, ProfileRowMutationV1Schema, ProfileRowsListResponseV1Schema, type ProfileRecordV1, type ProfileRowsListResponseV1 } from './profileRecordV1.js';
 import type { ProfileTransferRowReadResponseV1 } from './profileTransferV1.js';
+import capturedPicker from '../../fixtures/0.2-picker-skill-instructions-stack.json';
 
-const record = (id: string): ProfileRecordV1 => ({
+const record = (id: string): ProfileRecordV1 => ProfileRecordV1Schema.parse({
   v: 1, id, enabled: true, promptStack: [], secretBindings: {},
   definition: { kind: 'artifact', artifactId: `artifact-${id}` },
 });
 
 describe('complete opened Profile catalog', () => {
+  it('adds enabled Profile skill seeds at load while retaining the full legacy stack for Session exclusions', async () => {
+    let stored = ProfileRecordV1Schema.parse({ ...record('profile'), skillSeeds: ['existing'], promptStack: [
+      { id: 'skill-entry', enabled: true, placement: 'skill_instructions', ref: { kind: 'bundle', artifactId: 'skill' } },
+      { id: 'repeated-skill', enabled: true, placement: 'system_append', ref: { kind: 'bundle', artifactId: 'skill' } },
+      { id: 'disabled-skill', enabled: false, placement: 'system_append', ref: { kind: 'bundle', artifactId: 'disabled' } },
+      { id: 'generic-entry', enabled: true, placement: 'system_append', ref: { kind: 'bundle', artifactId: 'generic' } },
+      { id: 'doc-entry', enabled: true, placement: 'system_append', ref: { kind: 'doc', artifactId: 'doc' } },
+    ] });
+    const retainedStack = stored.promptStack;
+    let revision = 4;
+    let writes = 0;
+    const input = { mode: 'plain' as const, material: null,
+      readPage: async () => ({ status: 'listed' as const, rows: [{ id: stored.id, revision, content: { t: 'plain' as const, v: stored } }],
+        nextCursor: null, complete: true, diagnostics: [], referenceGuardRevision: 1, transferControl: { status: 'absent' as const } }),
+      readReferenceGuard: async () => ({ status: 'ready' as const, revision: 1 }),
+      readTransfer: async () => ({ status: 'absent' as const }), readSource: async () => ({}),
+      skillMigration: {
+        readArtifact: async (ref: Readonly<{ artifactId: string }>) => ({ header: {
+          v: 1, kind: 'prompt_bundle.v2', title: 'Bundle', bundleSchemaId: ref.artifactId === 'generic' ? 'bundle.generic_v1' : 'skills.skill_md_v1' } }),
+        writeRecord: async (next: ProfileRecordV1, expectedRevision: number) => {
+          expect(expectedRevision).toBe(revision);
+          const mutation = ProfileRowMutationV1Schema.parse({ id: next.id, operation: 'update', expectedRevision,
+            content: { t: 'plain', v: next }, referencedSavedSecretIds: [] });
+          if (mutation.content?.t !== 'plain') throw new Error('Expected the real plaintext producer');
+          stored = mutation.content.v; revision++; writes++;
+          return { status: 'updated' as const, revision };
+        },
+      },
+    };
+    const catalog = await loadProfileCatalogV1(input);
+    expect(catalog).toMatchObject({ status: 'ready', records: [{ revision: 5, record: { skillSeeds: ['existing', 'skill'] } }] });
+    expect(stored.promptStack.map(entry => entry.id)).toEqual(retainedStack.map(entry => entry.id));
+    expect((await loadProfileCatalogV1(input)).status).toBe('ready');
+    expect(writes).toBe(1);
+    // A user removes the seed without an explicit Off. Kept exclusion custody
+    // must not act as a second seed writer on the next two catalog loads.
+    stored = ProfileRecordV1Schema.parse({ ...stored, skillSeeds: ['existing'] });
+    revision++;
+    for (let pass = 0; pass < 2; pass++) {
+      expect((await loadProfileCatalogV1(input)).status).toBe('ready');
+      expect(stored.skillSeeds).toEqual(['existing']);
+      expect(writes).toBe(1);
+    }
+    stored = ProfileRecordV1Schema.parse({ ...stored, promptStack: [{ id: 'unreadable', enabled: true,
+      placement: 'system_append', ref: { kind: 'bundle', artifactId: 'missing' } }] });
+    const unavailable = { ...input, skillMigration: { ...input.skillMigration, readArtifact: async () => null } };
+    expect(await loadProfileCatalogV1(unavailable))
+      .toMatchObject({ status: 'unavailable' });
+    expect(writes).toBe(1);
+  });
+  it('consumes the real predecessor picker once even when its seed already exists', async () => {
+    let stored = StoredProfileRecordV1Schema.parse({ ...record('golden'), skillSeeds: ['session-control-skill'],
+      promptStack: capturedPicker.stacks.surfaces.coding });
+    let revision = 1;
+    let writes = 0;
+    let artifactReadable = true;
+    const load = () => loadProfileCatalogV1({ mode: 'plain', material: null,
+      readPage: async () => ({ status: 'listed', rows: [{ id: stored.id, revision, content: { t: 'plain', v: stored } }],
+        nextCursor: null, complete: true, diagnostics: [], referenceGuardRevision: revision, transferControl: { status: 'absent' } }),
+      readReferenceGuard: async () => ({ status: 'ready', revision }), readTransfer: async () => ({ status: 'absent' }),
+      readSource: async () => ({}), skillMigration: {
+        readArtifact: async ref => artifactReadable ? capturedPicker.artifacts.find(artifact => artifact.id === ref.artifactId) ?? null : null,
+        writeRecord: async (next, expectedRevision) => {
+          expect(expectedRevision).toBe(revision);
+          const mutation = ProfileRowMutationV1Schema.parse({ id: next.id, operation: 'update', expectedRevision,
+            content: { t: 'plain', v: next }, referencedSavedSecretIds: [] });
+          if (mutation.content?.t !== 'plain') throw new Error('Golden mutation must be plain');
+          stored = mutation.content.v; writes++; revision++;
+          return { status: 'updated', revision };
+        },
+      },
+    });
+    expect((await load()).status).toBe('ready');
+    expect(writes).toBe(1);
+    stored = ProfileRecordV1Schema.parse({ ...stored, skillSeeds: [] });
+    revision++;
+    artifactReadable = false;
+    for (let pass = 0; pass < 2; pass++) {
+      expect((await load()).status).toBe('ready');
+      expect(stored.skillSeeds).toEqual([]);
+      expect(writes).toBe(1);
+      expect(stored.promptStack.map(entry => entry.id)).toEqual(capturedPicker.stacks.surfaces.coding.map(entry => entry.id));
+    }
+  });
+  it('keeps a failed or partial source census read-only, including an otherwise migratable preceding row', async () => {
+    const rows = ['available', 'missing'].map(id => ({ id, revision: 1, content: { t: 'plain' as const,
+      v: ProfileRecordV1Schema.parse({ ...record(id), promptStack: [{ id: `${id}-entry`, enabled: true,
+        placement: 'system_append', ref: { kind: 'bundle', artifactId: id } }] }) } }));
+    let writes = 0;
+    const input = { mode: 'plain' as const, material: null,
+      readPage: async () => ProfileRowsListResponseV1Schema.parse({ status: 'listed', rows, nextCursor: null,
+        complete: true, diagnostics: [], referenceGuardRevision: 1, transferControl: { status: 'absent' } }),
+      readReferenceGuard: async () => ({ status: 'ready' as const, revision: 1 }),
+      readTransfer: async () => ({ status: 'absent' as const }), readSource: async () => ({}),
+      skillMigration: { readArtifact: async (ref: Readonly<{ artifactId: string }>) => ref.artifactId === 'missing' ? null
+        : { header: { v: 1, kind: 'prompt_bundle.v2', title: 'Skill', bundleSchemaId: 'skills.skill_md_v1' } },
+        writeRecord: async () => { writes++; return { status: 'updated' as const, revision: 2 }; } },
+    };
+    expect(await loadProfileCatalogV1(input)).toEqual({ status: 'unavailable', reason: 'invalid-stored-content' });
+    expect(await loadProfileCatalogV1({ ...input, readPage: async () => ({ ...await input.readPage(), complete: false }) }))
+      .toMatchObject({ status: 'partial' });
+    expect(await loadProfileCatalogV1({ ...input, readSource: async () => ({ profiles: [] }) }))
+      .toMatchObject({ status: 'ready', source: 'legacy' });
+    expect(writes).toBe(0);
+  });
   it('admits a captured native source only across the same census/control cut and skips stale raw source after activation', async () => {
     const active: ProfileTransferRowReadResponseV1 = { status: 'present', revision: 2, content: { t: 'plain', v: {
       v: 1, phase: 'active', sourceSettingsVersion: 4, migratedLogicalRevision: 4, inventory: [],

@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest';
 import { createProfileActionExecuteV1, parseProfileActionRequestV1, PROFILE_ACTION_INPUT_SCHEMAS_V1, PROFILE_ACTION_OUTPUT_SCHEMAS_V1 } from './profileActionsV1.js';
-import { createProfileOperations } from './profileOperations.js';
+import { createProfileOperations, createProfileDuplicateDraftV1 } from './profileOperations.js';
 import { LaunchProfileV2Schema } from './v2/schema.js';
 import type { ProfileRecordV1 } from './profileRecordV1.js';
 import { ProfileRecordV1Schema } from './profileRecordSchemaV1.js';
@@ -8,11 +8,119 @@ import { getBuiltInBackendProfile } from './builtInBackendProfiles.js';
 import { readAiLaunchProfileRecords } from './read.js';
 import type { ArtifactSharingResourceV1 } from '../artifacts/artifactSharingV1.js';
 import { SAVED_SECRET_REF_MAX_LENGTH_V1, SHARED_SAVED_SECRET_REF_V1_PREFIX, formatSharedSavedSecretRefV1 } from '../account/settings/savedSecretReferenceV1.js';
+import { readSkillLibraryCatalog } from '../prompts/library/skills/readSkillLibraryCatalog.js';
 
 const activeAuthority = { source: 'destination' as const, authority: 'active' as const, controlRevision: 1, control: { revision: 1,
   record: { v: 1 as const, phase: 'active' as const, sourceSettingsVersion: 0, migratedLogicalRevision: 0, inventory: [] } } };
 
 describe('Profile Action host demand', () => {
+  it('admits only current placements on newly supplied stacks while preserving captured duplicates and existing rows', async () => {
+    const profile = LaunchProfileV2Schema.parse({ v: 2, id: 'stack-source', name: 'Stack source', createdAt: 1, updatedAt: 1 });
+    const source = ProfileRecordV1Schema.parse({ v: 1, id: profile.id, definition: { kind: 'inline', profile },
+      enabled: true, secretBindings: {}, promptStack: [{ id: 'retained-skill', enabled: true, placement: 'skill_instructions',
+        ref: { kind: 'bundle', artifactId: 'skill' } }] });
+    const legacySource = ProfileRecordV1Schema.parse({ ...source, id: 'legacy-stack-source', definition: { kind: 'legacy',
+      profile: { id: 'legacy-stack-source', name: 'Legacy stack source', authMode: 'machineLogin', createdAt: 1, updatedAt: 1 } } });
+    const artifactProfile = { ...profile, id: 'granted-stack', name: 'Granted stack' };
+    const artifact: ArtifactSharingResourceV1 = { artifactId: 'granted-stack-artifact', access: 'edit',
+      header: { kind: 'launch-profile.v1', profileId: artifactProfile.id, name: artifactProfile.name },
+      body: JSON.stringify({ kind: 'launch-profile.v1', profile: artifactProfile, secretBindings: {} }),
+      revision: { headerVersion: 1, bodyVersion: 1 } };
+    const artifactsById = new Map([[artifact.artifactId, artifact]]);
+    const writes: ProfileRecordV1[] = [];
+    const operations = createProfileOperations({
+      readCatalog: () => ({ ...activeAuthority, status: 'ready', records: [{ record: source, revision: 4 }, { record: legacySource, revision: 4 }],
+        diagnostics: [], referenceGuardRevision: 1 }),
+      artifactsById: () => artifactsById,
+      writeRecord: async input => { writes.push(input.record); return { status: 'updated', id: input.record.id, revision: 5 }; },
+      deleteRecord: async () => { throw new Error('Unexpected deletion'); },
+    });
+    const execute = createProfileActionExecuteV1({ operations });
+    for (const placement of ['skill_instructions', 'provider_asset', 'composer_insert'] as const) {
+      const authored = { ...profile, id: `new-${placement}`, name: `New ${placement}`,
+        promptStack: [{ ...source.promptStack[0]!, placement }] };
+      const result = await execute(parseProfileActionRequestV1('launch_profiles.save', {
+        id: authored.id, expectedRevision: 'absent', profile: authored,
+      }), {});
+      expect(result).toMatchObject({ ok: true, result: { status: 'invalid', reason: 'invalid-definition' } });
+    }
+    expect(writes).toEqual([]);
+    const granted = { ...artifactProfile, artifactId: artifact.artifactId, revision: artifact.revision,
+      promptStack: source.promptStack };
+    expect(await execute(parseProfileActionRequestV1('launch_profiles.save', { id: granted.id,
+      expectedRevision: 'absent', profile: granted }), {}))
+      .toMatchObject({ ok: true, result: { status: 'invalid', reason: 'invalid-definition' } });
+    expect(writes).toEqual([]);
+    expect(await operations.duplicate({ id: source.id, expectedRevision: 4, newProfileId: 'captured-copy', name: 'Captured copy', now: 2 }))
+      .toMatchObject({ status: 'updated' });
+    expect(writes[0]?.promptStack).toEqual(source.promptStack);
+    expect(await execute(parseProfileActionRequestV1('launch_profiles.save', { id: source.id,
+      expectedRevision: 4, profile: { ...profile, name: 'Edited source', promptStack: source.promptStack } }), {}))
+      .toMatchObject({ ok: true, result: { status: 'updated' } });
+    expect(writes[1]?.promptStack).toEqual(source.promptStack);
+    const authored = { ...profile, id: 'current-stack', name: 'Current stack',
+      promptStack: [{ ...source.promptStack[0]!, placement: 'system_append' as const }] };
+    const result = await execute(parseProfileActionRequestV1('launch_profiles.save', {
+      id: authored.id, expectedRevision: 'absent', profile: authored,
+    }), {});
+    expect(result).toMatchObject({ ok: true, result: { status: 'updated' } });
+    if (!result.ok) throw new Error('Expected current stack Save');
+    expect(PROFILE_ACTION_OUTPUT_SCHEMAS_V1['launch_profiles.save'].safeParse(result.result).success).toBe(true);
+    expect(writes[2]?.promptStack[0]?.placement).toBe('system_append');
+    expect(await execute(parseProfileActionRequestV1('launch_profiles.save', { id: granted.id,
+      expectedRevision: 'absent', profile: { ...granted, promptStack: authored.promptStack } }), {}))
+      .toMatchObject({ ok: true, result: { status: 'updated' } });
+    expect(writes[3]).toMatchObject({ definition: { kind: 'artifact', artifactId: artifact.artifactId },
+      promptStack: [{ placement: 'system_append' }] });
+    const opened = operations.read({ id: legacySource.id });
+    if (opened.status !== 'present') throw new Error('Expected captured legacy Profile');
+    const draft = createProfileDuplicateDraftV1({ profile: opened.profile, sourceRow: { record: legacySource, revision: 4 },
+      newProfileId: 'legacy-stack-copy', name: 'Legacy stack copy', now: 2 });
+    if (draft.status !== 'draft' || !draft.legacyCloneSource) throw new Error('Expected source-preserving clone');
+    expect(await execute(parseProfileActionRequestV1('launch_profiles.save', { id: draft.profile.id,
+      expectedRevision: 'absent', profile: draft.profile, legacyCloneSource: draft.legacyCloneSource,
+      secretBindings: draft.secretBindings }), {})).toMatchObject({ ok: true, result: { status: 'updated' } });
+    expect(writes[4]?.promptStack).toEqual(legacySource.promptStack);
+  });
+  it('saves private skill seeds and exposes them through the strict Profile reader without changing instructions', async () => {
+    const profile = LaunchProfileV2Schema.parse({ v: 2, id: 'seed-profile', name: 'Seeds', createdAt: 1, updatedAt: 1 });
+    let record = ProfileRecordV1Schema.parse({ v: 1, id: profile.id, definition: { kind: 'inline', profile },
+      enabled: true, promptStack: [], secretBindings: {} });
+    let revision = 4;
+    const operations = createProfileOperations({
+      readCatalog: () => ({ status: 'ready', records: [{ record, revision }], diagnostics: [], referenceGuardRevision: 1, ...activeAuthority }),
+      writeRecord: async input => {
+        expect(input.expectedRevision).toBe(revision);
+        record = ProfileRecordV1Schema.parse(input.record); revision++;
+        return { status: 'updated', id: record.id, revision };
+      },
+      deleteRecord: async () => { throw new Error('Unexpected deletion'); },
+    });
+    const execute = createProfileActionExecuteV1({ operations, readSkillLibrary: signal => readSkillLibraryCatalog({
+      list: async () => ({ coverage: 'complete', items: [['lint-skill', 'lint'], ['review-skill', 'review']].map(([id, name]) => ({
+        artifactId: id!, header: { v: 1, kind: 'prompt_bundle.v2', title: name!, bundleSchemaId: 'skills.skill_md_v1' },
+        body: JSON.stringify({ v: 1, createdAtMs: 1, updatedAtMs: 1, entries: [{ path: 'SKILL.md', contentKind: 'utf8',
+          contentBase64: Buffer.from(`---\nname: ${name}\n---\nUse it.`).toString('base64') }] }),
+      })) }),
+    }, signal) });
+    const request = parseProfileActionRequestV1('launch_profiles.save', { id: profile.id, expectedRevision: revision,
+      profile, skillSeeds: ['lint', 'review-skill', 'lint-skill'] });
+    expect(await execute(request, {})).toMatchObject({ ok: true, result: { status: 'updated', revision: 5 } });
+    expect(record).toMatchObject({ skillSeeds: ['lint-skill', 'review-skill'], promptStack: [] });
+    const read = await execute(parseProfileActionRequestV1('launch_profiles.read', { id: profile.id }), {});
+    if (!read.ok) throw new Error('Expected Profile read');
+    expect(PROFILE_ACTION_OUTPUT_SCHEMAS_V1['launch_profiles.read'].parse(read.result))
+      .toMatchObject({ profile: { skillSeeds: ['lint-skill', 'review-skill'] } });
+    await execute(parseProfileActionRequestV1('launch_profiles.save', { id: profile.id, expectedRevision: revision,
+      profile }), {});
+    expect(record).toMatchObject({ skillSeeds: ['lint-skill', 'review-skill'] });
+    await execute(parseProfileActionRequestV1('launch_profiles.save', { id: profile.id, expectedRevision: revision,
+      profile, skillSeeds: [] }), {});
+    expect(record).toMatchObject({ skillSeeds: [] });
+    expect(await execute(parseProfileActionRequestV1('launch_profiles.save', { id: profile.id, expectedRevision: revision,
+      profile, skillSeeds: ['missing'] }), {})).toMatchObject({ ok: false, errorCode: 'not_found' });
+    expect(record).toMatchObject({ skillSeeds: [] });
+  });
   it('applies a captured binding batch in one row CAS and refuses stale or invalid batches without partial changes', async () => {
     const profile = LaunchProfileV2Schema.parse({ v: 2, id: 'batch-profile', name: 'Batch', createdAt: 1, updatedAt: 1 });
     let record = ProfileRecordV1Schema.parse({ v: 1, id: profile.id, definition: { kind: 'inline', profile },

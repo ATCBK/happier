@@ -1,7 +1,7 @@
 import { describe, expect, it } from 'vitest';
 import { cleanupTransferredProfileSourcesV1, transferLegacyProfilesV1, type LegacyProfileTransferInputV1, type ProfileTransferSourceCleanupInputV1 } from './transferLegacyProfilesV1.js';
-import type { ProfileCatalogSnapshotV1 } from './profileCatalogV1.js';
-import { prepareLegacyProfileRecordsV1 } from './read.js';
+import { loadProfileCatalogV1, type ProfileCatalogSnapshotV1 } from './profileCatalogV1.js';
+import { prepareLegacyProfileRecordsV1, removeTransferredProfileSourcesV1 } from './read.js';
 import { openProfileRecordContentV1 } from './profileRecordV1.js';
 import { openProfileTransferContentV1, type ProfileTransferMutationV1 } from './profileTransferV1.js';
 import { parseSavedSecretCatalogReferenceV1 } from '../account/settings/savedSecretCatalogV1.js';
@@ -40,6 +40,32 @@ function harness(raw: Readonly<Record<string, unknown>>, mode: 'plain' | 'e2ee' 
 }
 
 describe('consumed predecessor Profile transfer', () => {
+  it('retains legacy skill entry custody after Profile transfer and source cleanup, then adds canonical seeds', async () => {
+    const stack = [{ id: 'retained-exclusion-id', ref: { kind: 'bundle', artifactId: 'skill' }, enabled: true,
+      placement: 'skill_instructions' }];
+    const raw = { profiles: [source('old')], promptStacksV1: { v: 1, surfaces: { profilesById: { old: stack } } } };
+    const h = harness(raw);
+    expect(await transferLegacyProfilesV1(h.input)).toMatchObject({ status: 'active' });
+    const cleaned = removeTransferredProfileSourcesV1(raw, ['old']);
+    expect(cleaned.profiles).toBeUndefined();
+    let stored = h.read().records[0]!;
+    expect(stored.record.promptStack).toEqual(stack);
+    const transferControl = { status: 'absent' as const };
+    const loaded = await loadProfileCatalogV1({ mode: 'plain', material: null,
+      readPage: async () => ({ status: 'listed', rows: [{ id: stored.record.id, revision: stored.revision,
+        content: { t: 'plain', v: stored.record } }], complete: true, nextCursor: null, diagnostics: [],
+        referenceGuardRevision: stored.revision, transferControl }),
+      readReferenceGuard: async () => ({ status: 'ready', revision: stored.revision }),
+      readTransfer: async () => transferControl, readSource: async () => cleaned,
+      skillMigration: { readArtifact: async () => ({ header: { v: 1, kind: 'prompt_bundle.v2', title: 'Skill', bundleSchemaId: 'skills.skill_md_v1' } }),
+        writeRecord: async (record, expectedRevision) => {
+          expect(expectedRevision).toBe(stored.revision);
+          stored = { record, revision: stored.revision + 1 };
+          return { status: 'updated', revision: stored.revision };
+        } },
+    });
+    expect(loaded).toMatchObject({ status: 'ready', records: [{ record: { skillSeeds: ['skill'], promptStack: stack } }] });
+  });
   it('retains explicit secret unbinding without requesting a null resource', async () => {
     const h = harness({ profiles: [{ ...source('old'), environmentVariables: [
       { name: 'ANTHROPIC_API_KEY', value: '${TOKEN}', isSecret: true },

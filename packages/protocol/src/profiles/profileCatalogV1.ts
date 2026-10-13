@@ -3,6 +3,13 @@ import type { ProfileRecordV1, ProfileRowsListResponseV1 } from './profileRecord
 import { ProfileReferenceGuardReadResponseV1Schema, openProfileRecordContentV1 } from './profileRecordV1.js';
 import { openProfileTransferContentV1, type ProfileTransferControlV1, type ProfileTransferRowReadResponseV1 } from './profileTransferV1.js';
 import { resolveProfileCatalogAuthorityV1 } from './read.js';
+import { convertStackSkillEntriesV1, readStackSkillIdsV1 } from '../prompts/library/skills/convertStackSkillEntriesV1.js';
+
+type ProfileSkillMigrationV1 = Readonly<{
+  readArtifact: Parameters<typeof readStackSkillIdsV1>[1]['readArtifact'];
+  writeRecord(record: ProfileRecordV1, expectedRevision: number): Promise<
+    Readonly<{ status: 'updated'; revision: number }> | Readonly<{ status: 'unavailable' | 'conflict' }>>;
+}>;
 
 export type ProfileCatalogRecordV1 = Readonly<{ record: ProfileRecordV1; revision: number }>;
 export type ProfileCatalogTombstoneV1 = Readonly<{ id: string; revision: number }>;
@@ -44,6 +51,8 @@ export async function loadProfileCatalogV1(input: Readonly<{
   readTransfer(): Promise<ProfileTransferRowReadResponseV1>;
   /** Genuine captured predecessor baseline; omitted for pure conversion/reference censuses. */
   readSource?: () => Promise<unknown>;
+  /** Runtime projections opt in; reference/transfer censuses remain read-only. */
+  skillMigration?: ProfileSkillMigrationV1;
   signal?: AbortSignal;
 }>): Promise<ProfileCatalogSnapshotV1> {
   if (input.mode === 'e2ee' && input.material === null) {
@@ -138,6 +147,29 @@ export async function loadProfileCatalogV1(input: Readonly<{
       return { status: 'unavailable', reason: 'reference-conflict' };
     }
     source = resolveProfileCatalogAuthorityV1({ rawSettings, control: control?.record ?? null });
+  }
+  if (complete && diagnostics.length === 0 && input.skillMigration
+    && (source === 'destination' || control?.record.phase === 'active')) {
+    const updates: ProfileCatalogRecordV1[] = [];
+    for (const row of records) {
+      const classified = await readStackSkillIdsV1(row.record.promptStack.filter(entry => entry.skillMigrationV1 !== true), input.skillMigration);
+      if (input.signal?.aborted) return { status: 'unavailable', reason: 'cancelled' };
+      if (classified.status !== 'ready') return { status: 'unavailable', reason: 'invalid-stored-content' };
+      const converted = convertStackSkillEntriesV1(row.record.promptStack, { kind: 'profile' }, classified);
+      const skillSeeds = [...new Set([...row.record.skillSeeds, ...converted.skillIds])];
+      if (JSON.stringify(skillSeeds) === JSON.stringify(row.record.skillSeeds)
+        && converted.remainingEntries.every((entry, index) => entry === row.record.promptStack[index])) continue;
+      // Retained entry ids are the start/attach authority for old Session exclusions.
+      updates.push({ revision: row.revision, record: { ...row.record, skillSeeds, promptStack: converted.remainingEntries } });
+    }
+    for (const row of updates) {
+      if (input.signal?.aborted) return { status: 'unavailable', reason: 'cancelled' };
+      const written = await input.skillMigration.writeRecord(row.record, row.revision);
+      if (written.status !== 'updated') return { status: 'unavailable', reason: written.status === 'conflict' ? 'reference-conflict' : 'unreachable' };
+    }
+    // Updates advance the reference guard. Admit a fresh full census, rather than
+    // pairing new records with the pre-write reference/transfer capture.
+    if (updates.length > 0) return loadProfileCatalogV1(input);
   }
   return {
     status: complete && diagnostics.length === 0 ? 'ready' : 'partial', records, tombstones, diagnostics,

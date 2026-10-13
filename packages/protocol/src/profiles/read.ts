@@ -33,6 +33,7 @@ export type AiLaunchProfileSourceV1 = Readonly<{
   revision?: Readonly<{ headerVersion: number; bodyVersion: number }>;
   enabled?: boolean;
   promptStack?: readonly PromptStackEntryV1[];
+  skillSeeds?: readonly string[];
   profileRecordRevision?: number;
 }>;
 export type AiLaunchProfile = (HistoricalAiBackendProfileV1 | LaunchProfileV2) & AiLaunchProfileSourceV1;
@@ -46,6 +47,7 @@ export const AiLaunchProfileV1Schema = lazyZodSchema(() => {
     revision: ArtifactRevisionV1Schema.readonly().optional(),
     enabled: z.boolean().optional(),
     promptStack: z.array(PromptStackEntryV1Schema).readonly().optional(),
+    skillSeeds: z.array(z.string().min(1)).readonly().optional(),
     profileRecordRevision: ProfileRowRevisionV1Schema.optional(),
   };
   return z.union([
@@ -304,6 +306,7 @@ export function readAiLaunchProfileRecords(raw: readonly unknown[], options?: Re
     }
     const profileRecordRevision = options?.recordRevisionsById?.get(record.id);
     const source = { enabled: record.enabled, promptStack: record.promptStack,
+      ...(record.skillSeeds.length > 0 ? { skillSeeds: record.skillSeeds } : {}),
       secretBindings: resolveEffectiveProfileSecretBindingsV1(entry.profile.secretBindings ?? {}, record.secretBindings),
       ...(profileRecordRevision === undefined ? {} : { profileRecordRevision }) };
     if (entry.kind === 'legacy') entries.push({ ...entry, raw: value, profile: { ...entry.profile, ...source }, ...source });

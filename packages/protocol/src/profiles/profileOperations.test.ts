@@ -18,6 +18,30 @@ const activeAuthority = { source: 'destination' as const, authority: 'active' as
   record: { v: 1 as const, phase: 'active' as const, sourceSettingsVersion: 0, migratedLogicalRevision: 0, inventory: [] } } };
 
 describe('Profile semantic operations', () => {
+  it('changes only private seeds on an Artifact Profile without rewriting its body', async () => {
+    let record = ProfileRecordV1Schema.parse({ ...row, definition: { kind: 'artifact', artifactId: 'published-seeds' } });
+    const artifact = { artifactId: 'published-seeds', header: { kind: 'launch-profile.v1', profileId: profile.id, name: profile.name },
+      body: JSON.stringify({ kind: 'launch-profile.v1', profile, secretBindings: {} }),
+      access: 'edit' as const, revision: { headerVersion: 2, bodyVersion: 3 } };
+    const artifactsById = new Map([[artifact.artifactId, artifact]]);
+    const owner = createProfileOperations({
+      readCatalog: () => ({ ...activeAuthority, status: 'ready', records: [{ record, revision: 4 }], diagnostics: [], referenceGuardRevision: 5 }),
+      artifactsById: () => artifactsById,
+      writeRecord: async input => {
+        expect(input.expectedArtifactRevision).toEqual(artifact.revision);
+        record = ProfileRecordV1Schema.parse(input.record);
+        return { status: 'updated', id: record.id, revision: 5 };
+      },
+      deleteRecord: async () => { throw new Error('Unexpected deletion'); },
+      writeArtifactProfile: async () => { throw new Error('A private seed edit must not publish the Artifact'); },
+    });
+    const entry = readAiLaunchProfileRecords([record], { artifactsById }).entries[0];
+    if (!entry || entry.kind === 'opaque') throw new Error('Expected opened Profile');
+    expect(await owner.save({ profile: entry.profile, expectedRevision: 4, skillSeeds: ['lint'] }))
+      .toEqual({ status: 'updated', id: record.id, revision: 5 });
+    expect(record).toMatchObject({ skillSeeds: ['lint'], secretBindings: row.secretBindings, promptStack: row.promptStack });
+    expect(JSON.parse(artifact.body)).not.toHaveProperty('skillSeeds');
+  });
   it('sets favorite intent without toggling twice or erasing the default environment marker and neighboring preferences', () => {
     const raw = { favoriteProfiles: ['', 'kept', 'kept'], profileEnabledById: { kept: false }, futurePreference: { keep: true } };
     const next = setProfileFavoritePreferenceV1(raw, 'private', true);

@@ -85,6 +85,7 @@ const CreateInput = lazyZodSchema(() => z.object({
 const SaveInput = lazyZodSchema(() => CapturedRowAddress.extend({
   profile: AiLaunchProfileV1Schema,
   secretBindings: ProfileSecretBindingOverridesV1Schema.optional(),
+  skillSeeds: z.array(z.string().min(1)).optional(),
   legacyCloneSource: ProfileLegacyCloneSourceV1Schema.optional(),
   expectedArtifactRevision: ArtifactRevisionV1Schema.optional(),
 }).strict().superRefine((input, context) => {
@@ -209,6 +210,7 @@ type HostOperation<TId extends ProfileActionIdV1> = (input: ProfileActionInputBy
   => Promise<ProfileActionOutputByIdV1[TId] | ActionExecuteFailure>;
 export type ProfileActionHostPortsV1 = Readonly<{
   operations: ProfileOperations | (() => Promise<ProfileOperations>);
+  readSkillLibrary?: (signal?: AbortSignal) => Promise<readonly Readonly<{ id: string; name: string }>[] >;
   select?: HostOperation<'launch_profiles.select'>;
   favorite?: HostOperation<'launch_profiles.favorite.set'>;
   edit?: HostOperation<'launch_profiles.edit'>;
@@ -230,7 +232,21 @@ export function createProfileActionExecuteV1(ports: ProfileActionHostPortsV1) {
       case 'launch_profiles.read': result = (await resolveOperations()).read(request.input); break;
       case 'launch_profiles.search': result = (await resolveOperations()).search(request.input); break;
       case 'launch_profiles.create': result = await (await resolveOperations()).save(request.input); break;
-      case 'launch_profiles.save': result = await (await resolveOperations()).save(request.input); break;
+      case 'launch_profiles.save': {
+        let input = request.input;
+        if (input.skillSeeds?.length && ports.readSkillLibrary) {
+          const items = await ports.readSkillLibrary(context.signal);
+          const skillSeeds: string[] = [];
+          for (const reference of input.skillSeeds) {
+            const byId = items.find(item => item.id === reference);
+            const matches = byId ? [byId] : items.filter(item => item.name === reference);
+            if (matches.length !== 1) return { ok: false, errorCode: 'not_found', error: 'not_found' };
+            skillSeeds.push(matches[0]!.id);
+          }
+          input = { ...input, skillSeeds: [...new Set(skillSeeds)] };
+        }
+        result = await (await resolveOperations()).save(input); break;
+      }
       case 'launch_profiles.duplicate': result = await (await resolveOperations()).duplicate(request.input); break;
       case 'launch_profiles.enabled.set': result = await (await resolveOperations()).setEnabled(request.input); break;
       case 'launch_profiles.delete': result = await (await resolveOperations()).remove(request.input); break;

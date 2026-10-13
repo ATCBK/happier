@@ -52,6 +52,7 @@ export const ProfileRecordV1Schema = lazyZodSchema(() => z.object({
     z.object({ kind: z.literal('legacy'), profile: AIBackendProfileSchema.strict() }).strict(),
   ]),
   enabled: z.boolean(), promptStack: z.array(PromptStackEntryV1Schema),
+  skillSeeds: z.array(z.string().min(1)).default([]),
   secretBindings: ProfileSecretBindingOverridesV1Schema,
 }).strict().superRefine((record, context) => {
   if (record.definition.kind !== 'artifact' && record.definition.profile.id !== record.id) {

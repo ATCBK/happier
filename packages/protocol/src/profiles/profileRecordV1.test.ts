@@ -11,7 +11,7 @@ import { prepareLegacyProfileRecordsV1 } from './read.js';
 import { ProfileTransferControlV1Schema } from './profileTransferV1.js';
 
 const record = {
-  v: 1, id: 'profile-a', enabled: true, promptStack: [], secretBindings: {},
+  v: 1, id: 'profile-a', enabled: true, promptStack: [], skillSeeds: [], secretBindings: {},
   definition: { kind: 'inline', profile: {
     v: 2, id: 'profile-a', name: 'Example', extraEnvironmentVariables: [],
     defaultPermissionModeByTargetKey: {}, defaultPersistenceModeByTargetKey: {},
