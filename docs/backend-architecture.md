@@ -231,6 +231,27 @@ The current development server has separate session and machine presence owners:
 
 These are development-source semantics, not a claim that every published server already contains them.
 
+The development UI can retain a hidden detailed Session while updating only its
+list projection. `sessionLifecycleProjection.ts` owns ordering of the public
+lifecycle facts shared by both shapes. Full hydration reconciles those facts
+against both the retained detail and the current list row before the existing
+detail owner derives presence, thinking grace, and resume state. List replacement
+and patch publication use the same ordering, including the ready-event tuple and
+the protocol runtime-activity revision merge. Pending-request flags retain their
+newer observation tuple without fabricating detailed request counts. Older HTTP responses and delayed
+detail rebuilds therefore cannot replace newer completion facts. Encrypted
+metadata and transcript hydration remain demand-driven. The socket urgency
+classifier publishes turn-status and runtime-status changes immediately through
+its existing urgent path; timestamp-only activity retains its existing window.
+
+The development UI reconciles session-owned roster activity through its existing
+runtime presentation and freshness clock. Losing the owner makes stale activity
+unobserved; absence does not establish successful completion or cancellation.
+Newer child observations and actual late results still apply. Independently owned
+execution runs retain their own lifecycle and use the shared current-work
+[protocol classification](protocol.md#ephemeral-event-types), so an idle resumable
+handle does not keep the roster's live count or running indicator active.
+
 ## Storage and persistence
 ### Database (Prisma)
 Prisma models live in `prisma/schema.prisma`. Key tables:

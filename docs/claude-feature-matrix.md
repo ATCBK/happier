@@ -16,7 +16,7 @@ This document captures the current low-level Claude implementation across the CL
 | Remote Agent SDK path (default remote runtime) | `supported` | `apps/cli/src/backends/claude/remote/claudeRemoteDispatch.ts`, `apps/cli/src/backends/claude/remote/claudeRemoteAgentSdk.ts`, `apps/cli/src/backends/claude/claudeRemoteLauncher.ts`, `apps/cli/src/backends/claude/remote/sessionStartPlan.ts`, `packages/agents/src/providerSettings/definitions/claudeRemote.ts` | Preferred remote path when `claudeRemoteAgentSdkEnabled === true`; supports setting-sources v2, partial streaming, slash-command capability publication, optional checkpoint capture, and advanced option allowlisting. | Make this the single remote runtime surface and remove the auth-error-only fallback contract from `claudeRemoteDispatch.ts`. |
 | Legacy remote shim | `legacy` | `apps/cli/src/backends/claude/claudeRemote.ts`, `apps/cli/src/backends/claude/sdk/query.ts`, `apps/cli/src/backends/claude/sdk/index.ts`, `apps/cli/src/backends/claude/sdk/stream.ts`, `apps/cli/src/backends/claude/remote/claudeRemoteDispatch.ts` | Older stream-json runner still works and is the remote fallback when Agent SDK startup fails with a Claude auth error before additional prompts are consumed. | Retire after Agent SDK reaches full parity for all remaining startup/session-info edge cases. |
 | Local interactive / attach path | `supported` | `apps/cli/src/backends/claude/runClaude.ts`, `apps/cli/src/backends/claude/claudeLocalLauncher.ts`, `apps/cli/src/backends/claude/claudeLocal.ts`, `apps/cli/src/backends/claude/session.ts`, `packages/agents/src/manifest.ts` | Canonical local path is Claude's own TUI; attach is tmux-oriented and exclusive-topology in metadata/UI contracts; `runClaude.ts` also has a fast-start attach path for terminal-local resumes. | Collapse local launch, attach, and fast-start attach behind one provider local-control descriptor instead of branching in `runClaude.ts`. |
-| Execution runs | `supported` | `apps/cli/src/backends/claude/executionRuns/executionRunBackendFactory.ts`, `apps/cli/src/backends/claude/sdkAgentBackend/ClaudeSdkAgentBackend.ts`, `apps/cli/src/backends/claude/executionRuns/resolveClaudeExecutionRunPermissionPolicy.ts`, `apps/cli/src/agent/executionRuns/registry/executionRunBackendRegistry.ts`, `apps/cli/src/capabilities/registry/toolExecutionRuns.ts` | Claude execution runs already use an SDK-backed runtime, but it is a separate backend class with isolated `settings.json` and XDG roots rather than the normal remote-session launcher. | Converge user sessions and execution runs on one Claude runtime adapter so steering, capabilities, and checkpoint/sidechain behavior share the same plumbing. |
+| Execution runs | `supported` | `apps/cli/src/backends/claude/executionRuns/executionRunBackendFactory.ts`, `apps/cli/src/backends/claude/sdkAgentBackend/ClaudeSdkAgentBackend.ts`, `apps/cli/src/backends/claude/executionRuns/resolveClaudeExecutionRunPermissionPolicy.ts`, `apps/cli/src/agent/executionRuns/registry/executionRunBackendRegistry.ts`, `apps/cli/src/capabilities/registry/toolExecutionRuns.ts` | Claude execution runs use a separate SDK-backed class and a temporary `settings.json`. Development source preserves the user's normal cache/data/state environment instead of allocating per-run XDG roots. | Converge user sessions and execution runs on one Claude runtime adapter so steering, capabilities, and checkpoint/sidechain behavior share the same plumbing. |
 | Persisted Happier transcript ingestion | `supported` | `apps/cli/src/backends/claude/session.ts`, `apps/cli/src/backends/claude/claudeLocalLauncher.ts`, `apps/cli/src/backends/claude/claudeRemoteLauncher.ts`, `apps/cli/src/backends/claude/utils/sessionScanner.ts`, `apps/cli/src/backends/claude/utils/readClaudeSessionJsonlMessages.ts` | Local mode tails Claude JSONL files through `createSessionScanner`; remote mode forwards streamed SDK messages and still updates `claudeSessionId` / `claudeTranscriptPath` metadata when hooks reveal exact session info. | Normalize transcript provenance so local-scanned, remote-streamed, and imported history use one transcript-source envelope. |
 | Linked direct transcript source (`.claude/projects/...jsonl`) | `supported` | `apps/cli/src/backends/claude/session.ts`, `apps/cli/src/backends/claude/directSessions/listClaudeSessionCandidates.ts`, `apps/cli/src/backends/claude/directSessions/pageClaudeTranscript.ts`, `apps/cli/src/backends/claude/directSessions/readAfterClaudeTranscript.ts`, `apps/cli/src/backends/claude/directSessions/resolveClaudeDirectSessionFile.ts` | When transcript storage is `direct`, `session.ts` writes `directSessionV1`; browse/tail reads provider-owned JSONL directly and supports backward paging plus forward tail-follow. | Replace `directSessionV1` and Claude-specific file cursors with a shared transcript-source contract used by browse, takeover, and handoff. |
 | Sidechains, subagents, and team inbox | `partial` | `apps/cli/src/backends/claude/remote/sidechains/claudeTaskOutputSidechainImporter.ts`, `apps/cli/src/backends/claude/remote/sidechains/claudeRemoteSubagentFileCollector.ts`, `apps/cli/src/backends/claude/remote/teamInbox/claudeRemoteTeamInboxBridge.ts`, `apps/cli/src/backends/claude/utils/teamInbox/claudeTeamInboxCollector.ts`, `apps/ui/sources/sync/domains/session/participants/providers/claude/deriveClaudeTeamParticipants.ts`, `apps/ui/sources/components/tools/renderers/workflow/SubAgentRunView.tsx` | Remote mode has dedicated collectors for `Task` / `Agent` JSONL sidechains and team-inbox messages; UI then reconstructs team state, shutdown pruning, and run previews from normalized tool calls plus imported sidechain messages. | Centralize Claude sidechain/team normalization so CLI collectors and UI participant derivation stop re-encoding the same lifecycle rules. |
@@ -45,6 +45,87 @@ does not expose the terminal approval dialog in `-p` sessions. Happier does not
 override that policy or automatically accept held messages.
 
 ## Session lifecycle surfaces
+
+In development source, Claude background activity and workflow history share
+`taskNotifications/claudeTaskLifecycleEnvelope.ts` for native transcript task
+notifications, task-status attachments, peer handbacks, and successful resumed
+invocations. Handbacks report delivery; they do not prove execution completed.
+Actual terminal task notifications or status snapshots close the exact native
+task. Async Agent acknowledgements correlate that native task ID with its
+tool-use ID, including notifications that omit the tool-use ID. Lifecycle
+notifications require native USER `origin.kind: task-notification`, or a
+queued-command attachment with that origin or `commandMode: task-notification`.
+Copied user XML and bare queue-operation text cannot settle tasks: Claude logs
+ordinary queued prompts with the same queue shape. Trusted native outcomes can
+arrive before the async acknowledgement while parent hooks await; the existing
+native correlation record retains that outcome until the actual launch binds
+its alias, and the runtime ledger keeps terminal-before-launch ordering. Transcript
+normalization preserves native provenance instead of inventing it from copied
+XML. Provider acceptance also excludes native notification rows, including those
+without `isMeta`, so notification text cannot consume a matching queued user input.
+Conversation projection uses that same native envelope reader for queued-command
+attachments and Agent SDK `system/task_notification` events. Settled notifications
+replace the original Agent launch acknowledgement through the existing tool-result
+reducer. The presentation alias record retains task-ID-only notifications received
+before their acknowledgement, and a successful native `SendMessage` resume clears
+the old presentation alias before a subsequent invocation binds. This record maps
+conversation identities; it does not decide runtime activity. New projected results
+omit `isMeta` so existing readers can display them. Current readers also recover
+already-persisted native notification tool results marked `isMeta`; ordinary meta
+messages and copied user XML remain filtered or ordinary user content.
+Imported child transcripts use the same projector with their explicit child scope.
+Main-delivered results can target an unambiguous imported child; scoped results stay
+within that child. The existing reducer updates the parent card and reuses its
+orphan-result buffer when the child transcript arrives later. Permission-only
+mirrors retain their synthetic provenance and cannot redirect a child result onto
+an unrelated foreground call.
+UserPromptSubmit text alone remains a provisional hint: Claude supplies the same
+hook shape for notifications and ordinary prompts; actual transcript provenance
+and outgoing prompt acceptance decide foreground work.
+
+Authenticated `SubagentStart` reopens an exactly correlated background invocation
+in both runtime activity and workflow history. Background classification comes
+from the native async Agent/Workflow acknowledgement, including its authenticated
+PostToolUse hook and exact tool-use ID; a generic local-agent task type alone
+does not admit foreground children. A task ID remembered only from a terminal
+outcome also does not prove prior background membership; a real async launch
+acknowledgement establishes that membership while retaining its earlier outcome.
+SDK native `task_started` for `local_agent` can also establish background membership
+when its explicit `is_backgrounded` field is exactly `true`. Claude 2.1.291 emits
+this field and SDK 0.2.123 preserves it in JSON despite omitting it from its type
+declaration. Missing or false fields retain the existing known-only admission rule.
+The shared native classification handles this fact for both workflow and runtime
+activity, including nested SDK agents that outlive their launching agent.
+`SubagentStop` is progress evidence
+because Claude can veto that stop and continue working. Synchronous children
+finish on their tool results; asynchronous children finish on the provider's
+settled task evidence. Workflow correlation folds every tool block in a message,
+keeps each child's native task alias, and closes an implicit Agent activity group
+when all children settle. A successful native resume can reopen that group.
+A successful SendMessage `resumedAgentId` proves an asynchronous invocation,
+including when the original child ran in the foreground; it updates the same
+native background classification used by authenticated start hooks.
+
+Historical replay reconstructs workflow history without asserting current
+activity. When a provider observer is lost, unresolved task identities remain
+available for exact task operations, but their previous membership no longer
+proves current activity. Fresh execution evidence reconfirms only the exact observed task;
+report delivery alone cannot reconfirm a lost observer's activity.
+Agent SDK known resumes reconstruct native correlation before the query starts
+through the existing awaited transcript-history seed. Its raw observation reads
+the full history in pages, while team and display results retain their bounded
+tail. SDK resume streams do not replay old launch acknowledgements. The current
+Session identity takes precedence over cached metadata for an explicitly adopted
+resume target. Missing or incomplete required history reports the existing
+runtime-loss/process-error outcome instead of inventing current activity.
+Unified startup buffers retain the hook's original receipt time and deliver
+subagent facts after reconstructing the transcript baseline. Under the existing
+wall-clock convention, an older start cannot reopen a newer saved terminal;
+equal or unavailable timestamps leave the exact invocation unobserved/unknown.
+A fresh sibling remains observed. Millisecond ties, clock changes, and delayed
+hook delivery do not establish an unconditional provider invocation order.
+Startup reconciliation also resolves active orphan roster entries when their
+parent run is already terminal or absent from the retained workflow headline.
 
 Development-source Unified Terminal delivery keeps observing canonical Pending
 eligibility while its submitted prompt awaits provider acceptance. External manual
@@ -101,7 +182,7 @@ the permission authority before a request reaches these hooks.
 | --- | --- | --- | --- | --- |
 | Provider installables / runtime acquisition | `partial` | `packages/agents/src/providers/providerCliRuntime.ts`, `apps/cli/src/backends/claude/daemon/spawnHooks.ts`, `apps/ui/sources/capabilities/installablesRegistry.ts`, `apps/docs/content/docs/providers/claude.mdx` | Claude is `system-first`, accepts JS-file overrides, and uses Anthropic's vendor install recipe; there is no Happier-managed binary package comparable to Codex. | Make install policy explicit in one provider runtime catalog: system-first vendor-recipe, not an implicit absence of `managedInstall`. |
 | CLI auth detection and local login launch | `supported` | `apps/cli/src/backends/claude/cli/auth/claudeCliAuthSpec.ts`, `apps/cli/src/backends/claude/index.ts`, `apps/cli/src/backends/claude/cli/command.ts`, `apps/ui/sources/agents/providers/claude/settings/plugin.ts` | Auth detection prefers `ANTHROPIC_API_KEY`, then `ANTHROPIC_AUTH_TOKEN`, then `~/.claude/.credentials.json`; provider settings can launch Claude's login flow through Happier. | Move all provider auth probing and launch behavior behind one transport-neutral auth-status/launch contract. |
-| Cloud connect and connected-services materialization | `supported` | `apps/cli/src/backends/claude/cloud/connect.ts`, `apps/cli/src/backends/claude/cloud/authenticateClaudeSubscriptionOauth.ts`, `apps/cli/src/backends/claude/connectedServices/materializeClaudeSubscriptionConnectedServiceAuth.ts`, `apps/cli/src/backends/claude/connectedServices/materializeClaudeConnectedServiceAuth.ts`, `apps/cli/src/daemon/connectedServices/materialize/materializeConnectedServicesForSpawn.ts` | Claude supports `claude-subscription` setup-token or OAuth materialization plus plain Anthropic API keys; Anthropic OAuth is intentionally rejected for the raw `anthropic` service. | Normalize Claude auth materialization as a declared env contract so runtime spawn, cloud connect, and connected-services stop looking like separate auth systems. |
+| Cloud connect and connected-services materialization | `supported` | `apps/cli/src/backends/claude/cloud/connect.ts`, `apps/cli/src/backends/claude/cloud/authenticateClaudeSubscriptionOauth.ts`, `apps/cli/src/backends/claude/connectedServices/materializeClaudeSubscriptionConnectedServiceAuth.ts`, `apps/cli/src/backends/claude/connectedServices/materializeClaudeConnectedServiceAuth.ts`, `apps/cli/src/daemon/connectedServices/materialize/materializeConnectedServicesForSpawn.ts` | Claude supports `claude-subscription` setup-token or OAuth materialization plus plain Anthropic API keys; Anthropic OAuth is intentionally rejected for the raw `anthropic` service. Development source updates credentials in the existing account/pool home without replacing that home; private history and configuration survive refresh and missing or malformed old credential markers. | Keep account selection, switching and refresh with their existing owners; credential provenance must not decide whether durable private state is disposable. |
 | Automated provider tests / probes | `supported` | `apps/cli/src/backends/claude/e2e/providerSpec.json`, `apps/cli/src/backends/claude/e2e/providerScenarios.json`, `apps/cli/src/backends/claude/claudeRemoteLauncher.integration.test.ts`, `apps/cli/src/backends/claude/claudeLocalLauncher.integration.test.ts`, `apps/cli/src/backends/claude/executionRuns/claudeSdkExecutionRunSidechain.integration.test.ts`, `packages/tests/suites/providers/claude.agentTeams.subagents.jsonl.realProbe.test.ts` | Coverage spans launcher/runtime tests, direct-session tests, execution-run sidechains, provider scenario catalog, and real Claude provider probes for agent teams/subagent JSONL behavior. | Reorganize around shared provider-capability fixtures so local, remote, execution-run, and team-sidechain coverage reuse the same contracts. |
 | Manual QA trackers and UI validation surfaces | `supported` | `docs/testing/CLAUDE_TEAMS_EXECUTION_RUNS_MANUAL_QA_TRACKER_2026-03-01.md`, `docs/testing/CLAUDE_TEAMS_EXECUTION_RUNS_MANUAL_QA_TRACKER_DETAILED_2026-03-01.md`, `docs/testing/CLAUDE_TEAMS_EXECUTION_RUNS_MANUAL_QA_TRACKER_E2E_2026-03-01.md`, `docs/testing/CLAUDE_TEAMS_EXECUTION_RUNS_MANUAL_QA_LIVE_TRACKER_2026-03-01.md`, `apps/ui/sources/components/sessions/runs/launcher/SessionExecutionRunLauncherView.tsx`, `apps/ui/sources/agents/providers/claude/sessionSubagents/ClaudeAgentLaunchActionsCard.tsx` | The March 2026 tracker set already audited Claude teams/swarms, participant routing, structured `participant_message.v1` rendering, and execution-run recipient behavior; those docs are the authoritative manual-QA evidence surface today. | Convert the tracker scenarios into a provider-agnostic QA checklist so Claude-specific manual evidence can map directly onto the future unified capability matrix. |
 
