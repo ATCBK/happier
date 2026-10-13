@@ -1,7 +1,8 @@
 import React from 'react';
 import type { ReactTestRenderer } from 'react-test-renderer';
-import { describe, expect, it, vi } from 'vitest';
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { flushHookEffects, renderScreen } from '@/dev/testkit';
+import { storage } from '@/sync/domains/state/storage';
 import { installCodeBlockCommonModuleMocks } from './codeBlockTestHelpers';
 
 
@@ -59,28 +60,13 @@ vi.mock('expo-clipboard', () => ({
     setStringAsync: vi.fn(async () => {}),
 }));
 
-const featureSpy = vi.fn((id: string) => (id === 'files.diffSyntaxHighlighting' || id === 'files.syntaxHighlighting.advanced'));
-vi.mock('@/hooks/server/useFeatureEnabled', () => ({
-    useFeatureEnabled: (id: string) => featureSpy(id),
-}));
-
-const settingSpy = vi.fn((key: string): 'advanced' | 'simple' | 'off' | number | null => {
-    if (key === 'filesDiffSyntaxHighlightingMode') return 'advanced';
-    if (key === 'filesDiffTokenizationMaxBytes') return 1_000_000;
-    if (key === 'filesDiffTokenizationMaxLines') return 10_000;
-    if (key === 'filesDiffTokenizationMaxLineLength') return 10_000;
-    return null;
-});
-vi.mock('@/sync/domains/state/storage', async () => {
-    const { createStorageModuleStub } = await import('@/dev/testkit/mocks/storage');
-    return createStorageModuleStub({
-    useSetting: (key: string) => settingSpy(key),
-});
-});
-
-vi.mock('@/sync/store/hooks', () => ({
-    useLocalSetting: () => 1,
-}));
+const initialSettings = storage.getState().settings;
+beforeEach(() => storage.setState({ settings: { ...initialSettings, experiments: true,
+    featureToggles: { ...initialSettings.featureToggles, 'files.diffSyntaxHighlighting': true,
+        'files.syntaxHighlighting.advanced': true },
+    filesDiffSyntaxHighlightingMode: 'advanced', filesDiffTokenizationMaxBytes: 1_000_000,
+    filesDiffTokenizationMaxLines: 10_000, filesDiffTokenizationMaxLineLength: 10_000 } }));
+afterEach(() => storage.setState({ settings: initialSettings }));
 
 const createHighlighterSpy = vi.fn(async (..._args: any[]) => ({
     loadLanguage: async () => {},
@@ -103,7 +89,7 @@ async function flushReactAsyncWork(): Promise<void> {
 
 describe('CodeBlockView (web)', () => {
     it.each(['off', 'simple', 'advanced'] as const)('keeps Read and diff code marks through the web %s renderer', async (mode) => {
-        settingSpy.mockImplementation((key: string) => key === 'filesDiffSyntaxHighlightingMode' ? mode : 1_000_000);
+        storage.setState({ settings: { ...storage.getState().settings, filesDiffSyntaxHighlightingMode: mode } });
         // Shiki is the external syntax engine; retain every source line and split the matched
         // phrase across token boundaries, as its real output does.
         const code = Array.from({ length: 15 }, (_, index) => index === 14
@@ -138,8 +124,6 @@ describe('CodeBlockView (web)', () => {
     });
 
     it('uses Shiki tokens when advanced highlighting is enabled', async () => {
-        featureSpy.mockClear();
-        settingSpy.mockClear();
         // The web mark case may already have populated the real Shiki engine cache.
 
         const { CodeBlockView } = await import('./CodeBlockView.web');
@@ -173,13 +157,7 @@ describe('CodeBlockView (web)', () => {
     });
 
     it('does not invoke Shiki when highlighting is off', async () => {
-        settingSpy.mockImplementation((key: string) => {
-            if (key === 'filesDiffSyntaxHighlightingMode') return 'off';
-            if (key === 'filesDiffTokenizationMaxBytes') return 1_000_000;
-            if (key === 'filesDiffTokenizationMaxLines') return 10_000;
-            if (key === 'filesDiffTokenizationMaxLineLength') return 10_000;
-            return null;
-        });
+        storage.setState({ settings: { ...storage.getState().settings, filesDiffSyntaxHighlightingMode: 'off' } });
         createHighlighterSpy.mockClear();
 
         const { CodeBlockView } = await import('./CodeBlockView.web');

@@ -64,7 +64,12 @@ import {
     useHappierItemGroupItemBehavior,
     useHappierPageSection,
     useHappierMaterialColorResolver,
+    HAPPIER_ROW_TITLE_META_GAP_PX,
+    resolveHappierRowTitleMetaPlacement,
 } from '@happier-dev/plugin-ui/presentation';
+
+/** The title keeps this much of the line before a title meta moves beneath it. */
+const ITEM_TITLE_META_TITLE_MIN_PX = 120;
 
 function resizeItemIconForDensity(icon: React.ReactNode, iconSize: number, color?: string): React.ReactNode {
     if (!React.isValidElement(icon) || icon.type === React.Fragment) {
@@ -108,6 +113,12 @@ export interface ItemProps {
      * same-named machines apart). It stays whole while the title shortens.
      */
     titleQualifier?: string | null;
+    /**
+     * The title line's end-aligned meta (a where-summary, a count): tabular, never truncated. The title gives way
+     * first; when the two cannot share the line (`resolveHappierRowTitleMetaPlacement`) the meta wraps under the
+     * title, end-aligned. Unlike `titleQualifier`, it is a column, not part of the title's identity.
+     */
+    titleMeta?: React.ReactNode;
     /** An inline mark before a string subtitle, such as a status dot that flags trouble. */
     subtitleLeading?: React.ReactNode;
     /** Override the primitive title allowance; page labels grow, grouped labels keep their compact allowance. */
@@ -405,6 +416,15 @@ const stylesheet = StyleSheet.create((theme, runtime) => ({
         flexShrink: 1,
         minWidth: 0,
     },
+    titleMeta: {
+        flexShrink: 0,
+        marginLeft: 'auto',
+        paddingLeft: HAPPIER_ROW_TITLE_META_GAP_PX,
+        alignItems: 'flex-end',
+    },
+    titleMetaBeneath: {
+        alignItems: 'flex-end',
+    },
     titleQualifier: {
         ...Typography.rowMeta(),
         color: theme.colors.text.secondary,
@@ -563,6 +583,7 @@ export const Item = React.memo<ItemProps>((props) => {
         bottomElementInset,
         titleAccessory,
         titleQualifier,
+        titleMeta,
         subtitleLeading,
         titleLines,
         subtitleLines,
@@ -818,7 +839,9 @@ export const Item = React.memo<ItemProps>((props) => {
         accessoryOutsidePressable: rightElementOutsidePressable,
         showNavigationAccessory: showChevron,
         keepNavigationAccessoryWithAccessory: keepChevronWithRightElement,
-        showDivider,
+        // A section's last row never draws a hairline, even when a wrapping row component did not
+        // forward the `showDivider` its group injected (the row's position is the group's fact).
+        showDivider: showDivider && rowPosition?.isLast !== true,
     });
     const resolvedDensity = sharedItemBehavior.density;
 
@@ -1058,6 +1081,23 @@ export const Item = React.memo<ItemProps>((props) => {
         );
     }, [accessoryAccessibleName, handleAccessoryLayout, isAccessoryHovered, isHovered, isPageRow, measuresRowWidth, rightElement, fieldLayout, stackAccessory]);
     const subtitleAccessoryNode = React.useMemo(() => normalizeNodeForView(subtitleAccessory ?? null), [subtitleAccessory]);
+    const titleMetaNode = normalizeNodeForView(titleMeta ?? null);
+    const [titleMetaPlacement, setTitleMetaPlacement] = React.useState<'inline' | 'beneath'>('inline');
+    const titleMetaMeasure = React.useRef({ row: 0, meta: 0 });
+    const placeTitleMeta = React.useCallback((next: Partial<{ row: number; meta: number }>) => {
+        titleMetaMeasure.current = { ...titleMetaMeasure.current, ...next };
+        setTitleMetaPlacement(resolveHappierRowTitleMetaPlacement({
+            rowContentWidthPx: titleMetaMeasure.current.row,
+            titleNaturalWidthPx: Number.POSITIVE_INFINITY,
+            metaNaturalWidthPx: titleMetaMeasure.current.meta,
+            titleMinWidthPx: ITEM_TITLE_META_TITLE_MIN_PX,
+        }));
+    }, []);
+    const titleMetaCell = titleMetaNode == null ? null : (
+        <View style={styles.titleMeta} onLayout={(event) => placeTitleMeta({ meta: event.nativeEvent.layout.width })}>
+            {titleMetaNode}
+        </View>
+    );
     const titleTrailing = titleQualifier ? (
         <>
             <Text numberOfLines={1} style={styles.titleQualifier}>{titleQualifier}</Text>
@@ -1148,8 +1188,27 @@ export const Item = React.memo<ItemProps>((props) => {
             ) : null}
 
             {/* Center Section */}
-            <View style={styles.centerContent}>
-                {(typeof title === 'string' || typeof title === 'number') && titleTrailing ? (
+            <View
+                style={styles.centerContent}
+                {...(titleMetaCell === null ? {} : { onLayout: (event: LayoutChangeEvent) => placeTitleMeta({ row: event.nativeEvent.layout.width }) })}
+            >
+                {(typeof title === 'string' || typeof title === 'number') && titleMetaCell !== null ? (
+                    <>
+                        <View style={styles.inlineMarkRow}>
+                            <View style={styles.inlineMarkText}>
+                                {renderPrimitiveText({
+                                    value: title,
+                                    style: [styles.title, titleSizeStyle, titleColor, titleStyle],
+                                    numberOfLines: 1,
+                                    ellipsizeMode: titleEllipsizeMode,
+                                })}
+                            </View>
+                            {titleTrailing}
+                            {titleMetaPlacement === 'inline' ? titleMetaCell : null}
+                        </View>
+                        {titleMetaPlacement === 'beneath' ? <View style={styles.titleMetaBeneath}>{titleMetaCell}</View> : null}
+                    </>
+                ) : (typeof title === 'string' || typeof title === 'number') && titleTrailing ? (
                     <View style={styles.inlineMarkRow}>
                         <View style={styles.inlineMarkText}>
                             {renderPrimitiveText({

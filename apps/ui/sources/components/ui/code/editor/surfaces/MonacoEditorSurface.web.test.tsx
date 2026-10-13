@@ -115,14 +115,6 @@ vi.mock('react-native-unistyles', async () => {
     };
 });
 
-vi.mock('../codeEditorFontMetrics', () => ({
-    resolveCodeEditorFontMetrics: () => ({ fontSize: 12, lineHeight: 14 }),
-}));
-
-vi.mock('@/components/ui/text/Text', () => ({
-    TextInput: (props: any) => React.createElement('TextInput', props),
-}));
-
 import { MonacoEditorSurface } from './MonacoEditorSurface.web';
 import type { CodeEditorHandle } from '../codeEditorTypes';
 

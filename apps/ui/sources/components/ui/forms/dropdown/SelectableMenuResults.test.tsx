@@ -70,6 +70,28 @@ describe('SelectableMenuResults', () => {
         expect(rightOf('Find in changes')).toBeNull();
     });
 
+    it('keeps one text edge when only some rows of a menu carry an icon, and adds no slot to a menu with none', async () => {
+        const { SelectableMenuResults } = await import('./SelectableMenuResults');
+        const render = (items: Array<{ id: string; title: string; left?: React.ReactNode }>) => renderScreen(<SelectableMenuResults
+            categories={[{ id: 'tabs', title: '', items }]}
+            selectedIndex={-1}
+            onSelectionChange={() => {}}
+            onPressItem={() => {}}
+            rowVariant="slim"
+            emptyLabel="Empty"
+        />);
+        const mixed = await render([
+            { id: 'pin', title: 'Pin tab', left: <React.Fragment>{'icon'}</React.Fragment> },
+            { id: 'others', title: 'Close other tabs' },
+        ]);
+        const leftOf = (screen: typeof mixed, title: string) => screen.findAllByType('SelectableRow' as never)
+            .find((row) => row.props.title === title)?.props.left ?? null;
+        expect(leftOf(mixed, 'Close other tabs')).not.toBeNull();
+        const plain = await render([{ id: 'a', title: 'A' }, { id: 'b', title: 'B' }]);
+        expect(leftOf(plain, 'A')).toBeNull();
+        expect(leftOf(plain, 'B')).toBeNull();
+    });
+
     it('omits the category title row when the category title is empty', async () => {
         const { SelectableMenuResults } = await import('./SelectableMenuResults');
 

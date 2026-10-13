@@ -24,6 +24,8 @@ export type PageHeaderMenuAction = Readonly<{
     /** A policy the menu toggles ("Link new sessions automatically"): shows its current state as a check. */
     checked?: boolean;
     onSelect: () => void | Promise<void>;
+    /** A chooser one level in ("Move to folder" → its folders): the row opens these instead of selecting itself. */
+    children?: readonly PageHeaderMenuAction[];
 }>;
 
 /**
@@ -51,7 +53,7 @@ export const PageHeaderMenu = React.memo(function PageHeaderMenu(props: Readonly
     React.useEffect(() => {
         if (props.openRequested) setOpen(true);
     }, [props.openRequested]);
-    const items = React.useMemo((): ReadonlyArray<DropdownMenuItem> => props.actions.map((action) => ({
+    const toItem = React.useCallback((action: PageHeaderMenuAction): DropdownMenuItem => ({
         id: action.id,
         title: action.title,
         ...(action.testID ? { testID: action.testID } : {}),
@@ -63,7 +65,11 @@ export const PageHeaderMenu = React.memo(function PageHeaderMenu(props: Readonly
             : action.checked
                 ? { rightElement: <Icon name="check" size={16} color={theme.colors.text.secondary} /> }
                 : {}),
-    })), [props.actions, theme.colors.text.secondary]);
+        ...(action.children && action.children.length > 0
+            ? { submenu: { items: action.children.map((child) => toItem(child)), showCategoryTitles: false } }
+            : {}),
+    }), [theme.colors.text.secondary]);
+    const items = React.useMemo(() => props.actions.map(toItem), [props.actions, toItem]);
     return (
         <DropdownMenu
             testID={props.testID}
@@ -77,7 +83,8 @@ export const PageHeaderMenu = React.memo(function PageHeaderMenu(props: Readonly
             emptyLabel={content ? null : undefined}
             onSelect={(id) => {
                 setOpen(false);
-                return props.actions.find((action) => action.id === id)?.onSelect();
+                return props.actions.flatMap((action) => [action, ...(action.children ?? [])])
+                    .find((action) => action.id === id)?.onSelect();
             }}
             placement="bottom"
             popoverAnchorAlign="end"

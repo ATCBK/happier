@@ -55,10 +55,6 @@ vi.mock('react-native-unistyles', async () => {
     };
 });
 
-vi.mock('@/sync/store/hooks', () => ({
-    useLocalSetting: () => 1,
-}));
-
 import { CodeMirrorWebViewSurface } from './CodeMirrorWebViewSurface.native';
 import { renderScreen } from '@/dev/testkit';
 import type { CodeEditorHandle } from '../codeEditorTypes';

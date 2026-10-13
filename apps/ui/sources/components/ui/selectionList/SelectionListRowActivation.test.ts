@@ -1,60 +1,60 @@
-import { describe, expect, it, vi } from 'vitest';
+import { describe, expect, it } from 'vitest';
 
 import { activateSelectionListRow } from './SelectionListRowActivation';
+import type { SelectionListOption, SelectionListStep } from './_types';
+
+function activation() {
+    const events: unknown[] = [];
+    return {
+        events,
+        onSelect: (id: string, option: SelectionListOption) => { events.push({ selected: id, option }); },
+        onPushStep: (step: SelectionListStep) => { events.push({ step }); },
+        onRequiresInput: () => { events.push('input'); },
+    };
+}
 
 describe('activateSelectionListRow', () => {
     it('routes a requiresInputValue row to onRequiresInput without selecting or navigating', () => {
-        const onSelect = vi.fn();
-        const onPushStep = vi.fn();
-        const onRequiresInput = vi.fn();
-        const rowOnSelect = vi.fn();
+        const callbacks = activation();
         activateSelectionListRow({
-            option: { id: 'name-create', label: 'Type a name', requiresInputValue: true, onSelect: rowOnSelect },
-            onSelect,
-            onPushStep,
-            onRequiresInput,
+            ...callbacks,
+            option: { id: 'name-create', label: 'Type a name', requiresInputValue: true,
+                onSelect: () => { callbacks.events.push('option'); } },
         });
-        expect(onRequiresInput).toHaveBeenCalledTimes(1);
-        expect(rowOnSelect).not.toHaveBeenCalled();
-        expect(onSelect).not.toHaveBeenCalled();
-        expect(onPushStep).not.toHaveBeenCalled();
+        expect(callbacks.events).toEqual(['input']);
     });
 
     it('selects normally when requiresInputValue is absent (option then orchestrator onSelect)', () => {
-        const onSelect = vi.fn();
-        const onRequiresInput = vi.fn();
-        const rowOnSelect = vi.fn();
-        const option = { id: 'pick', label: 'Pick', onSelect: rowOnSelect } as const;
-        activateSelectionListRow({ option, onSelect, onPushStep: vi.fn(), onRequiresInput });
-        expect(rowOnSelect).toHaveBeenCalledTimes(1);
-        expect(onSelect).toHaveBeenCalledWith('pick', option);
-        expect(onRequiresInput).not.toHaveBeenCalled();
+        const callbacks = activation();
+        const option = { id: 'pick', label: 'Pick', onSelect: () => { callbacks.events.push('option'); } };
+        activateSelectionListRow({ ...callbacks, option });
+        expect(callbacks.events).toEqual(['option', { selected: 'pick', option }]);
     });
 
-    it('does nothing for a disabled row even when requiresInputValue is set', () => {
-        const onRequiresInput = vi.fn();
-        const onSelect = vi.fn();
+    it.each([false, true])('does nothing for a disabled row (requiresInputValue=%s)', (requiresInputValue) => {
+        const callbacks = activation();
         activateSelectionListRow({
-            option: { id: 'x', label: 'x', disabled: true, requiresInputValue: true },
-            onSelect,
-            onPushStep: vi.fn(),
-            onRequiresInput,
+            ...callbacks,
+            option: { id: 'x', label: 'x', disabled: true, requiresInputValue,
+                onSelect: () => { callbacks.events.push('option'); } },
         });
-        expect(onRequiresInput).not.toHaveBeenCalled();
-        expect(onSelect).not.toHaveBeenCalled();
+        expect(callbacks.events).toEqual([]);
     });
 
     it('navigates via openStep when present (requiresInputValue not set)', () => {
-        const onPushStep = vi.fn();
-        const onRequiresInput = vi.fn();
+        const callbacks = activation();
         const step = { id: 'sub', sections: [] } as const;
         activateSelectionListRow({
+            ...callbacks,
             option: { id: 'nav', label: 'Nav', openStep: step },
-            onSelect: vi.fn(),
-            onPushStep,
-            onRequiresInput,
         });
-        expect(onPushStep).toHaveBeenCalledWith(step);
-        expect(onRequiresInput).not.toHaveBeenCalled();
+        expect(callbacks.events).toEqual([{ step }]);
+    });
+
+    it('selects a plain option without requiring an option-level callback', () => {
+        const callbacks = activation();
+        const option = { id: 'pick', label: 'Pick' };
+        activateSelectionListRow({ ...callbacks, option });
+        expect(callbacks.events).toEqual([{ selected: 'pick', option }]);
     });
 });

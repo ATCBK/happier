@@ -27,19 +27,17 @@
 import * as React from 'react';
 import { Text, View } from 'react-native';
 import { act } from 'react-test-renderer';
-import { describe, expect, it, vi, beforeEach } from 'vitest';
+import { afterEach, describe, expect, it, vi, beforeEach } from 'vitest';
 
 import { renderScreen } from '@/dev/testkit';
+import { setReducedMotionPreferenceOverride } from '@/hooks/ui/useReducedMotionPreference';
 
 vi.mock('react-native', async () => {
     const { createReactNativeWebMock } = await import('@/dev/testkit/mocks/reactNative');
     return createReactNativeWebMock();
 });
 
-const reducedMotionRef = vi.hoisted(() => ({ value: false }));
-vi.mock('@/hooks/ui/useReducedMotionPreference', () => ({
-    useReducedMotionPreference: () => reducedMotionRef.value,
-}));
+afterEach(() => act(() => setReducedMotionPreferenceOverride(null)));
 
 const animationControls = vi.hoisted(() => ({
     fireTimingCallbackImmediately: false,
@@ -116,7 +114,7 @@ beforeEach(() => {
     animationControls.sharedValueWrites = [];
     animationControls.pendingTimingCallbacks = [];
     animationControls.cancelCount = 0;
-    reducedMotionRef.value = false;
+    setReducedMotionPreferenceOverride(false);
 });
 
 function fireOnLayout(node: { props: Record<string, unknown> }, height: number): void {
@@ -244,7 +242,7 @@ describe('SelectionListAnimatedHeight', () => {
     });
 
     it('snaps height immediately when reducedMotion is true (no withTiming animation to the incoming height)', async () => {
-        reducedMotionRef.value = true;
+        setReducedMotionPreferenceOverride(true);
         const { SelectionListAnimatedHeight } = await import('../SelectionListAnimatedHeight');
         const screen = await renderScreen(
             <SelectionListAnimatedHeight stepKey="step-a" testID="anim" measuredContentHeight={480}>

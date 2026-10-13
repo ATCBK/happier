@@ -7,8 +7,10 @@ import * as React from 'react';
 const NavigationTitleChromeContext = React.createContext<boolean>(false);
 const NavigationBackChromeShownContext = React.createContext<boolean>(false);
 type NavigationTitleChromePublisher = Readonly<{
-    setTitle: (title: string | null | undefined) => void;
-    setBack: (back: React.ReactNode) => void;
+    setTitle?: (title: string | null | undefined) => void;
+    /** Page identity can name its tab while phone chrome deliberately names only its kind. */
+    setPageTitle?: (title: string | null | undefined) => void;
+    setBack?: (back: React.ReactNode) => void;
 }>;
 const NavigationTitleChromePublisherContext = React.createContext<NavigationTitleChromePublisher | null>(null);
 

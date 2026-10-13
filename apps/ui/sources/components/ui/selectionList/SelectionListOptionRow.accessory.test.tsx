@@ -1,7 +1,10 @@
 import * as React from 'react';
+import { View } from 'react-native';
 import { describe, expect, it, vi } from 'vitest';
 
 import { renderScreen } from '@/dev/testkit';
+import { installDisconnectedServerSocketBoundary } from '@/dev/testkit/harness/serverAccountConnectionHarness';
+import { loadSyncSingletonForTests } from '@/dev/testkit/harness/syncSingletonLoader';
 
 vi.mock('react-native', async () => {
   const { createReactNativeWebMock } =
@@ -25,26 +28,18 @@ vi.mock('react-native', async () => {
   });
 });
 
-const itemProps = vi.hoisted(() => ({
-  current: null as Record<string, unknown> | null,
-}));
-vi.mock('@/components/ui/lists/Item', () => ({
-  Item: (props: Record<string, unknown>) => {
-    itemProps.current = props;
-    return React.createElement('Item', props);
-  },
-}));
-
-import { PlanOptionRow } from './SelectionListOptionRow';
+installDisconnectedServerSocketBoundary();
+await loadSyncSingletonForTests();
+const { PlanOptionRow } = await import('./SelectionListOptionRow');
 
 describe('SelectionListOptionRow accessory ownership', () => {
   it('keeps interactive accessories outside the row pressable', async () => {
-    await renderScreen(
+    const screen = await renderScreen(
       <PlanOptionRow
         option={{
           id: 'model-a',
           label: 'Model A',
-          rightAccessory: <React.Fragment />,
+          rightAccessory: <View testID="accessory" />,
           rightAccessoryOutsidePressable: true,
         }}
         rootTestID="models"
@@ -55,7 +50,13 @@ describe('SelectionListOptionRow accessory ownership', () => {
         onPushStep={() => {}}
       />,
     );
-    expect(itemProps.current?.rightElementOutsidePressable).toBe(true);
+    const row = screen.findByTestId('models:root:option:model-a');
+    const accessory = screen.findByTestId('accessory');
+    expect(row).not.toBeNull();
+    expect(accessory).not.toBeNull();
+    for (let ancestor = accessory!.parent; ancestor; ancestor = ancestor.parent) {
+      expect(ancestor).not.toBe(row);
+    }
   });
 
   it('uses one native button owner without leaking the web option role onto custom content', async () => {

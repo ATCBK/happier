@@ -3,7 +3,7 @@ import { View } from 'react-native';
 import { StyleSheet } from 'react-native-unistyles';
 import type { StyleProp, ViewStyle } from 'react-native';
 
-import { Item } from '@/components/ui/lists/Item';
+import { ItemAddRow } from '@/components/ui/lists/ItemAddRow';
 import { Typography } from '@/constants/Typography';
 import { Text, TextInput } from '@/components/ui/text/Text';
 import { SplitActionButtons } from '@/components/ui/forms/SplitActionButtons';
@@ -18,7 +18,6 @@ export interface InlineAddExpanderProps {
     /** A section can host the trigger itself; null leaves just the inline form. */
     trigger?: React.ReactNode;
     subtitle?: string;
-    icon?: React.ReactNode;
 
     helpText?: string;
     children: React.ReactNode;
@@ -43,7 +42,6 @@ export function InlineAddExpander({
     title,
     trigger,
     subtitle,
-    icon,
     helpText,
     children,
     onCancel,
@@ -67,13 +65,12 @@ export function InlineAddExpander({
 
     return (
         <>
-            {trigger !== undefined ? trigger : <Item
+            {trigger !== undefined ? trigger : <ItemAddRow
                 testID={triggerTestID}
                 title={title}
                 subtitle={subtitle}
-                icon={icon}
+                expanded={isOpen}
                 onPress={() => onOpenChange(!isOpen)}
-                showChevron={false}
                 showDivider={Boolean(isOpen)}
             />}
 

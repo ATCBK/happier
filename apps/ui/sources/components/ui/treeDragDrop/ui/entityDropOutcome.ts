@@ -87,7 +87,15 @@ export function useEntityDropOutcome(verdict: EntityDragDropSnapshot | null, ite
         title: t('settingsPlugins.targetSelection.unreachableThisHome'), detail: t('entityDragDrop.preview.unknownDetail') } : outcome;
 }
 
-/** A dispatched effect its owner refused or could not confirm, as the source row keeps it. */
+/** A released refusal or unconfirmed dispatch, as the source row keeps it. */
 export function describeEntityDropSettled(verdict: HappierDropVerdict, itemTitle: string | null = null) {
-    return describeHappierSettledDrop(verdict, vocabulary(verdict), itemTitle);
+    const words = vocabulary(verdict);
+    const settled = describeHappierSettledDrop(verdict, words, itemTitle);
+    if (settled) return settled;
+    // Admission refusals never dispatch, but a release must still leave the same
+    // canonical reason under its source after the returning card retires.
+    if (verdict.phase !== 'settled' || verdict.admission?.status !== 'refused') return null;
+    const release = describeHappierDropOutcome(verdict, words, itemTitle);
+    return release?.tone === 'refused' ? { kind: 'refused' as const, glyph: 'refused' as const,
+        title: release.title, detail: release.detail ?? verdict.admission.reason.message } : null;
 }

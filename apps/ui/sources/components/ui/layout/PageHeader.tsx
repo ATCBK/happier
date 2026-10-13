@@ -120,6 +120,13 @@ export const PageHeader = React.memo(function PageHeader(props: PageHeaderProps)
     const chromeShowsBack = useNavigationChromeShowsBack();
     const publisher = useNavigationTitleChromePublisher();
     const setChromeTitle = publisher?.setTitle;
+    const setPageTitle = publisher?.setPageTitle;
+    const setChromeBack = publisher?.setBack;
+    React.useEffect(() => {
+        if (!setPageTitle) return;
+        setPageTitle(props.title);
+        return () => setPageTitle(undefined);
+    }, [props.title, setPageTitle]);
     React.useEffect(() => {
         if (!setChromeTitle) return;
         // Entity identity stays in the body. Leave its generic destination
@@ -131,18 +138,18 @@ export const PageHeader = React.memo(function PageHeader(props: PageHeaderProps)
     const BackControl = useNavigationBackControl();
     // An entity page under retained title chrome puts its Back in that bar even on a deep link with no
     // history, so the identity starts on the same edge however the page was opened (DESIGN-9 P12).
-    const publishesBack = Boolean(publisher && chromeShowsTitle && BackControl && (chromeShowsBack || props.alwaysShowTitle === true));
+    const publishesBack = Boolean(setChromeBack && chromeShowsTitle && BackControl && (chromeShowsBack || props.alwaysShowTitle === true));
     const renderBack = React.useMemo(
         () => (BackControl && !chromeShowsBack && !publishesBack ? (style: StyleProp<ViewStyle>) => <BackControl style={style} /> : null),
         [BackControl, chromeShowsBack, publishesBack],
     );
     React.useEffect(() => {
-        if (!publishesBack || !publisher || !BackControl) return;
+        if (!publishesBack || !setChromeBack || !BackControl) return;
         // A retained phone header must use the same departure owner as its
         // inline Back, not the Expo stack that only mirrors its URL.
-        publisher.setBack(<BackControl style={{}} />);
-        return () => publisher.setBack(null);
-    }, [BackControl, publishesBack, publisher]);
+        setChromeBack(<BackControl style={{}} />);
+        return () => setChromeBack(null);
+    }, [BackControl, publishesBack, setChromeBack]);
     // Navigation owns ordinary page actions; an entity can retain its frequent operations by its identity.
 
     const pageButtons = !chromeShowsTitle && (props.primaryAction || props.cancelAction) ? (

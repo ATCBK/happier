@@ -1,7 +1,7 @@
 import * as React from 'react';
 import { ScrollView, View } from 'react-native';
 import { StyleSheet, useUnistyles } from 'react-native-unistyles';
-import { HappierPressable, resolveHappierFocusRingVisible, useHappierMaterialColorResolver } from '@happier-dev/plugin-ui/presentation';
+import { HappierPageRowFieldLayoutContext, HappierPressable, resolveHappierFocusRingVisible, useHappierMaterialColorResolver } from '@happier-dev/plugin-ui/presentation';
 
 import { Icon } from '@/components/ui/icons/Icon';
 import { focusRingStyle } from '@/components/ui/interactions/interactionFeedback';
@@ -25,6 +25,8 @@ export const SelectionListFilterChip = React.memo(function SelectionListFilterCh
     const { filter } = props;
     const { theme } = useUnistyles();
     const paintColor = useHappierMaterialColorResolver();
+    // A chip keeps its own width when a narrow row moves it beneath its label; only fields span the row.
+    const stackedInRow = React.useContext(HappierPageRowFieldLayoutContext)?.stacked === true;
     const styles = stylesheet;
     const anchorRef = React.useRef<View>(null);
     const [uncontrolledOpen, setUncontrolledOpen] = React.useState(false);
@@ -74,7 +76,7 @@ export const SelectionListFilterChip = React.memo(function SelectionListFilterCh
     return (
         <>
             {/* The anchor is a plain view: the popover measures it, the pressable owns interaction. */}
-            <View ref={anchorRef} style={styles.anchor}>
+            <View ref={anchorRef} style={[styles.anchor, stackedInRow ? styles.anchorStacked : null]}>
                 <HappierPressable
                     testID={testID}
                     accessibilityRole="button"
@@ -192,6 +194,9 @@ const stylesheet = StyleSheet.create((theme) => ({
     anchor: {
         maxWidth: '100%',
         flexShrink: 1,
+    },
+    anchorStacked: {
+        alignSelf: 'flex-start',
     },
     chip: {
         flexDirection: 'row',

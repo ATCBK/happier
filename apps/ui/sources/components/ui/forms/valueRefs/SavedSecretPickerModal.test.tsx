@@ -1,3 +1,4 @@
+import 'fake-indexeddb/auto';
 import React from 'react';
 import { act } from 'react-test-renderer';
 import { afterEach, beforeAll, beforeEach, describe, expect, it, vi } from 'vitest';
@@ -10,7 +11,6 @@ import {
     sealSavedSecretResourceStoredContentV1,
 } from '@happier-dev/protocol';
 
-import type { SavedSecret } from '@/sync/domains/settings/savedSecretTypes';
 import { renderScreen, standardCleanup } from '@/dev/testkit';
 import { createPlainAccountEncryptionCurrentnessFixture } from '@/dev/testkit/fixtures/accountEncryptionCurrentness';
 import { installDisconnectedServerSocketBoundary, restoreServerAccountForTest } from '@/dev/testkit/harness/serverAccountConnectionHarness';
@@ -23,14 +23,7 @@ import type { ServerAccountScope } from '@/sync/domains/scope/serverAccountScope
 
 (globalThis as unknown as { IS_REACT_ACT_ENVIRONMENT?: boolean }).IS_REACT_ACT_ENVIRONMENT = true;
 
-const storedSecrets: SavedSecret[] = [{
-    id: 'secret-1',
-    name: 'qa_saved_secret',
-    kind: 'apiKey',
-    encryptedValue: { _isSecretValue: true, value: 'sk-stored' },
-    createdAt: 1,
-    updatedAt: 1,
-}];
+const privateRef = 'happier:shared-secret:v1:secret-1';
 
 // Native/window and modal adapters remain boundaries; all settings/catalog/UI owners stay real.
 vi.mock('react-native', async () => {
@@ -55,6 +48,8 @@ vi.mock('@/modal', async () => {
     const { createModalModuleMock } = await import('@/dev/testkit/mocks/modal');
     return createModalModuleMock().module;
 });
+vi.mock('socket.io-client', async importOriginal =>
+    (await import('@/dev/testkit/harness/serverAccountConnectionHarness')).createSocketIoClientBoundary(importOriginal));
 installDisconnectedServerSocketBoundary();
 
 const features = FeaturesResponseSchema.parse({ features: { teams: { enabled: true } }, capabilities: {} });
@@ -65,6 +60,16 @@ const readyEntry = SavedSecretCatalogEntryV1Schema.parse({
     capabilities: { use: true, rename: false, rotate: false, manageAccess: false, delete: false },
 });
 const materialReply = SavedSecretResourceMaterialsResponseV1Schema.parse({ resources: [
+    {
+        resourceId: 'secret-1', encryptionMode: 'plain', recipientEnvelope: null,
+        entry: {
+            ...readyEntry, ref: privateRef, relationship: 'owner', ownerAccountId: 'account-a',
+            name: 'qa_saved_secret', audience: { accounts: [], teams: [], groups: [] },
+            capabilities: { use: true, rename: true, rotate: true, manageAccess: true, delete: true },
+        },
+        storedContent: sealSavedSecretResourceStoredContentV1({ resourceId: 'secret-1', mode: 'plain',
+            content: { v: 1, name: 'qa_saved_secret', kind: 'apiKey', value: 'sk-stored' } }),
+    },
     {
         resourceId: 'shared-ready', encryptionMode: 'plain', entry: readyEntry,
         storedContent: sealSavedSecretResourceStoredContentV1({ resourceId: 'shared-ready', mode: 'plain',
@@ -106,6 +111,8 @@ describe('SavedSecretPickerModal', () => {
             serverUrl: 'https://secret-picker.example.test', accountId: 'account-a',
             request: async (url, init) => {
                 const path = new URL(String(url)).pathname;
+                if (path === '/v1/account/project-rows/list') return Response.json({ status: 'listed', rows: [], coverage: 'complete' });
+                if (path === '/v1/account/authoring-memory') return Response.json({ rows: [] });
                 if (init?.method && init.method !== 'GET') {
                     writes.push(path);
                     return new Response('{}', { status: 405 });
@@ -114,8 +121,9 @@ describe('SavedSecretPickerModal', () => {
                 if (path === '/v1/features') return Response.json(features);
                 if (path === '/v2/cursor') return Response.json(CurrentCursorResponseSchema.parse({ cursor: 0, changesFloor: 0 }));
                 if (path === '/v1/account/encryption/currentness') return Response.json(createPlainAccountEncryptionCurrentnessFixture());
+                if (path === '/v1/account/encryption') return Response.json({ mode: 'plain', updatedAt: 1 });
                 if (path === '/v2/account/settings') return Response.json(AccountSettingsV2GetResponseSchema.parse({
-                    content: { t: 'plain', v: { secrets: storedSecrets, experiments: true } }, version: 1,
+                    content: { t: 'plain', v: { secrets: [], experiments: true } }, version: 1,
                 }));
                 if (path === '/v1/account/saved-secrets/resources/materials') {
                     if (materialUnavailable) return new Response('{}', { status: 503 });
@@ -126,7 +134,6 @@ describe('SavedSecretPickerModal', () => {
         });
         scope = { serverId: connection.home.id, accountId: 'account-a' };
         expect(storage.getState().settingsScope).toEqual(scope);
-        storage.getState().applySettingsLocal({ secrets: storedSecrets, experiments: true });
         storage.setState({ settingsVersion: 1 });
         primeServerFeaturesSnapshot({ serverId: scope.serverId, snapshot: { status: 'ready', features } });
         await refreshSavedSecretCatalog(scope);
@@ -150,7 +157,7 @@ describe('SavedSecretPickerModal', () => {
         }));
 
         for (const action of ['rename', 'replace', 'delete']) {
-            expect(screen.findByTestId(`saved-secret:secret-1:${action}`)).toBeTruthy();
+            expect(screen.findByTestId(`saved-secret:${privateRef}:${action}`)).toBeTruthy();
         }
         expect(screen.findByTestId('saved-secret-add')).toBeTruthy();
         expect(screen.findByTestId('saved-secret:none')).toBeTruthy();
@@ -172,17 +179,17 @@ describe('SavedSecretPickerModal', () => {
 
         // Nothing in the tree can create, replace, rename or delete a stored record.
         for (const action of ['rename', 'replace', 'delete']) {
-            expect(screen.findByTestId(`saved-secret:secret-1:${action}`)).toBeNull();
+            expect(screen.findByTestId(`saved-secret:${privateRef}:${action}`)).toBeNull();
         }
         expect(screen.findByTestId('saved-secret-add')).toBeNull();
         expect(screen.findByTestId('saved-secret:none')).toBeNull();
 
         // Selecting an already-stored record stays the whole point of the surface.
-        screen.pressByTestId('saved-secret:secret-1');
-        expect(onSelectId).toHaveBeenCalledWith('secret-1');
+        screen.pressByTestId(`saved-secret:${privateRef}`);
+        expect(onSelectId).toHaveBeenCalledWith(privateRef);
         expect(onClose).toHaveBeenCalledTimes(1);
         expect(writes).toEqual([]);
-        expect(storage.getState().settings.secrets).toEqual(storedSecrets);
+        expect(storage.getState().settings.secrets).toEqual([]);
     });
 
     it('selects ready shared resources and keeps preparing access visible but disabled', async () => {
@@ -197,7 +204,8 @@ describe('SavedSecretPickerModal', () => {
         expect(onSelectId).toHaveBeenCalledWith('happier:shared-secret:v1:shared-ready');
         expect(onClose).toHaveBeenCalledTimes(1);
 
-        const preparing = screen.findByTestId('saved-secret:happier:shared-secret:v1:shared-preparing');
+        const preparing = screen.findAllByTestId('saved-secret:happier:shared-secret:v1:shared-preparing')
+            .find(node => typeof node.props.title === 'string');
         expect(preparing?.props.disabled).toBe(true);
         expect(preparing?.props.onPress).toBeUndefined();
         expect(screen.findByTestId('saved-secret-corrupt:owner:0')).toBeNull();
@@ -218,7 +226,8 @@ describe('SavedSecretPickerModal', () => {
             await expect(refreshSavedSecretCatalog(scope)).rejects.toThrow();
         });
 
-        const staleRow = screen.findByTestId('saved-secret:happier:shared-secret:v1:shared-ready');
+        const staleRow = screen.findAllByTestId('saved-secret:happier:shared-secret:v1:shared-ready')
+            .find(node => typeof node.props.title === 'string');
         expect(staleRow?.props.subtitle).toBe('secrets.catalog.status.temporarily_unavailable');
         expect(staleRow?.props.selected).toBe(true);
         expect(staleRow?.props.disabled).toBe(true);
@@ -231,7 +240,8 @@ describe('SavedSecretPickerModal', () => {
             await vi.waitFor(() => expect(getSavedSecretCatalogSnapshot(scope)).toMatchObject({ status: 'ready', stale: false }));
         });
 
-        const restoredRow = screen.findByTestId('saved-secret:happier:shared-secret:v1:shared-ready');
+        const restoredRow = screen.findAllByTestId('saved-secret:happier:shared-secret:v1:shared-ready')
+            .find(node => typeof node.props.title === 'string');
         expect(restoredRow?.props.selected).toBe(true);
         expect(restoredRow?.props.disabled).toBe(false);
         screen.pressByTestId('saved-secret:happier:shared-secret:v1:shared-ready');

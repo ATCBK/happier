@@ -61,6 +61,43 @@ async function lateSettlement(outcome: EntityDropOutcomeV1, options: Readonly<{ 
 }
 
 describe('EntityDropSettledFeedback (lab ST4 late refusal)', () => {
+    it('keeps a refused put-under release and its unavailable reason after the source retires, without dispatch', async () => {
+        const runtime = createEntityDragDropRuntime();
+        const retire = runtime.registerSource({ id: 'source', scope, isCurrent: () => true,
+            getItem: () => ({ kind: 'session', scope, address: { serverId: scope.serverId, sessionId: 'review' } }),
+            describe: () => ({ title: 'Review #2481' }) });
+        const execute = vi.fn(async (): Promise<EntityDropOutcomeV1> => ({ status: 'applied' }));
+        runtime.registerTarget({ id: 'lead', scope, acceptedKinds: ['session'], getBounds: () => ({ x: 0, y: 0, width: 100, height: 100 }),
+            resolve: () => ({ status: 'refused', reason: { code: 'unavailable', message: 'Couldn’t check this session just now' },
+                preview: { glyph: 'refused', verb: 'Can’t put under Fix settings', target: 'Fix settings' } }), execute });
+        const screen = await renderScreen(<EntityDropSettledFeedback runtime={runtime}
+            match={{ item: item => item.kind === 'session' && item.address.sessionId === 'review' }} testID="row"><Text>Review #2481</Text></EntityDropSettledFeedback>);
+        await act(async () => {
+            const carry = runtime.begin('source')!;
+            carry.move({ x: 50, y: 50 });
+            await carry.release();
+            retire();
+            runtime.cancel('feedback-finished');
+        });
+        expect(execute).not.toHaveBeenCalled();
+        expect(screen.findHostByTestId('row-settled')).not.toBeNull();
+        expect(screen.getTextContent()).toContain('Can’t put under Fix settings');
+        expect(screen.getTextContent()).toContain('Couldn’t check this session just now');
+        await screen.unmount();
+    });
+    it('keeps a committed relation key-waiting notice on the landed row without an unknown or refusal', async () => {
+        const outcome = { status: 'applied' as const, notice: {
+            code: 'session_follow_source_key_preparation_waiting', message: 'Updates start once the source key is ready',
+        } };
+        const { screen } = await lateSettlement(outcome);
+        expect(screen.findHostByTestId('row-settled')).not.toBeNull();
+        expect(screen.findHostByTestId('row-landed')).not.toBeNull();
+        expect(screen.getTextContent()).toContain('Updates start once the source key is ready');
+        expect(screen.getTextContent()).not.toContain('Not sure');
+        expect(screen.getTextContent()).not.toContain('Couldn’t put');
+        await screen.unmount();
+    });
+
     it('keeps the late refusal under its source row after the carry ends, naming verb, target and reason', async () => {
         const { runtime, screen } = await lateSettlement({ status: 'refused', reason: { code: 'changed', message: 'This session was just moved. Try again' } });
         expect(runtime.getSnapshot().phase).toBe('idle');

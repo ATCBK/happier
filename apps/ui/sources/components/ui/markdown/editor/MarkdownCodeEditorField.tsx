@@ -47,6 +47,8 @@ export type MarkdownCodeEditorFieldProps = Readonly<{
     wrapLines?: boolean;
     /** `canvas`: the document's source is the page (an Artifact), unframed on the page's surface. Default framed. */
     presentation?: 'framed' | 'canvas';
+    /** The source only, with no rich mode and no mode menu: for a page that offers its own Preview (a skill's instructions). */
+    sourceOnly?: boolean;
     testID?: string;
 }>;
 
@@ -118,7 +120,7 @@ export function MarkdownCodeEditorField(props: MarkdownCodeEditorFieldProps) {
     // Keep an already-mounted rich surface through an asynchronous HTML check;
     // replacing it with loading could drop its still-debounced input.
     const committedRich = React.useRef(false);
-    const showRich = markdownEditMode === 'rich' && (richEligible || (richEligibilityPending && committedRich.current));
+    const showRich = props.sourceOnly !== true && markdownEditMode === 'rich' && (richEligible || (richEligibilityPending && committedRich.current));
     React.useEffect(() => { committedRich.current = showRich; }, [showRich]);
 
     // Live controller of the embedded rich surface — set when the rich panel
@@ -143,7 +145,7 @@ export function MarkdownCodeEditorField(props: MarkdownCodeEditorFieldProps) {
 
     return (
         <View style={{ flex: 1 }} testID={props.testID}>
-            {showToggle ? (
+            {showToggle && props.sourceOnly !== true ? (
                 <View
                     style={{
                         flexDirection: 'row',
@@ -183,7 +185,7 @@ export function MarkdownCodeEditorField(props: MarkdownCodeEditorFieldProps) {
                 </View>
             ) : null}
             <View style={{ flex: 1 }}>
-                {markdownEditMode === 'rich' && richEligibilityPending && !showRich ? (
+                {props.sourceOnly !== true && markdownEditMode === 'rich' && richEligibilityPending && !showRich ? (
                     <ActivitySpinner size="small" />
                 ) : showRich ? (
                     <RichMarkdownEditorPanel

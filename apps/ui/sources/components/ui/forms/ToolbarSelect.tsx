@@ -18,7 +18,8 @@ export type ToolbarSelectItem = Readonly<{
 /**
  * A toolbar filter or scope choice: the selected choice in a compact bordered field, the choices in a
  * menu. Used where a page or modal narrows one collection (Plugins' status and source, the external
- * sessions browser's agent and source); a configuration row uses a field select instead.
+ * sessions browser's agent and source), and a value's type in a row of fields (`ValueRefRowsEditor`);
+ * a configuration row uses a field select instead.
  */
 export const ToolbarSelect = React.memo(function ToolbarSelect(props: Readonly<{
     /** Names the menu; its trigger is `<testID>.trigger` and each choice `<testID>:<id>`. */
@@ -31,6 +32,8 @@ export const ToolbarSelect = React.memo(function ToolbarSelect(props: Readonly<{
     disabled?: boolean;
     /** Fit a narrow toolbar to its choice; keep the platform press target and typography. */
     compact?: boolean;
+    /** Fill the column a row of fields gives it (a value's type beside its name and value). */
+    fill?: boolean;
 }>) {
     const { theme } = useUnistyles();
     const [open, setOpen] = React.useState(false);
@@ -69,7 +72,7 @@ export const ToolbarSelect = React.memo(function ToolbarSelect(props: Readonly<{
                     accessibilityLabel={`${props.label}: ${selectedTitle}`}
                     expanded={open}
                     hasPopup="menu"
-                    style={{ minHeight: resolveMinimumInteractiveTargetSize(Platform.OS), minWidth: resolveMinimumInteractiveTargetSize(Platform.OS), justifyContent: 'center' }}
+                    style={{ minHeight: resolveMinimumInteractiveTargetSize(Platform.OS), minWidth: resolveMinimumInteractiveTargetSize(Platform.OS), justifyContent: 'center', ...(props.fill ? { width: '100%' } : null) }}
                 >
                     {renderDropdownItemTriggerRightElement({
                         detail: selectedTitle,
@@ -78,7 +81,7 @@ export const ToolbarSelect = React.memo(function ToolbarSelect(props: Readonly<{
                         chevronColor: theme.colors.text.secondary,
                         field: resolveFieldBoxColors(theme),
                         leading: selected?.icon,
-                        fieldSpan: props.compact ? 'intrinsic' : 'content',
+                        fieldSpan: props.fill ? 'row' : props.compact ? 'intrinsic' : 'content',
                     })}
                 </HappierPressable>
             )}

@@ -23,6 +23,31 @@ function fixture() {
 }
 
 describe('mounted entity drag owner', () => {
+    it('refuses release when the last allowed hover loses its measured target', async () => {
+        const f = fixture();
+        f.runtime.registerTarget({ ...f.target, measureBounds: async () => {
+            f.setBounds({ x: 200, y: 0, width: 100, height: 100 });
+        } });
+        const carry = f.runtime.begin('source')!;
+        carry.move({ x: 50, y: 50 });
+        expect(f.runtime.getSnapshot().admission).toEqual(allowed);
+        expect(await carry.release()).toMatchObject({ status: 'refused', reason: { code: 'target-missing' } });
+        expect(f.runtime.getSnapshot()).toMatchObject({ phase: 'settled', admission: allowed });
+        expect(f.effects).toEqual([]);
+    });
+
+    it('reports a no-target release after an allowed cue but keeps an uncued outside drop quiet', async () => {
+        const f = fixture();
+        const carry = f.runtime.begin('source')!;
+        carry.move({ x: 50, y: 50 });
+        f.setVerdict({ status: 'refused', reason: { code: 'no-target', message: 'No row' } });
+        expect(await carry.release()).toMatchObject({ status: 'refused', reason: { code: 'target-missing' } });
+        expect(f.effects).toEqual([]);
+        const outside = f.runtime.begin('source')!;
+        outside.move({ x: 300, y: 300 });
+        expect(await outside.release()).toBeNull();
+    });
+
     it('keeps the pointer source held through target retirement and re-admits the current replacement', async () => {
         const f = fixture();
         const carry = f.runtime.begin('source')!;

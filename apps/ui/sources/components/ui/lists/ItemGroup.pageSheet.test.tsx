@@ -147,6 +147,22 @@ describe('ItemGroup page sections render through the shared page sheet', () => {
         expect(dividers.map((color) => color !== null)).toEqual([true, false, true, false]);
     });
 
+    it('draws no hairline under the last row when a row component does not forward the divider prop', async () => {
+        const { ItemGroup, Item, ListPresentationProvider } = await loadModules();
+        // A domain row that wraps Item without accepting `showDivider` (settings rows built elsewhere).
+        const WrappedRow = (props: Readonly<{ testID: string; title: string }>) => <Item testID={props.testID} title={props.title} />;
+        const screen = await renderScreen(
+            <ListPresentationProvider value="page">
+                <ItemGroup title="Connection">
+                    <WrappedRow testID="row-a" title="Name" />
+                    <WrappedRow testID="row-b" title="Show in model picker" />
+                </ItemGroup>
+            </ListPresentationProvider>,
+        );
+        const dividers = rowDividers(screen, ['row-a', 'row-b']);
+        expect(dividers.map((color) => color !== null)).toEqual([true, false]);
+    });
+
     it('hands each row its position in the section, so a highlighted first or last row follows the sheet corners', async () => {
         const { ItemGroup, ListPresentationProvider, rowPosition } = await loadModules();
         const seen: Array<unknown> = [];

@@ -1,8 +1,10 @@
 import * as React from 'react';
-import { beforeEach, describe, expect, it, vi } from 'vitest';
+import { act } from 'react-test-renderer';
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
 import { renderScreen } from '@/dev/testkit';
 import { createCapturingLegendListMock } from '@/dev/testkit/mocks/legendList';
+import { setReducedMotionPreferenceOverride } from '@/hooks/ui/useReducedMotionPreference';
 
 import type { SectionRenderPlan } from '../SelectionListRenderPlan';
 import type {
@@ -11,11 +13,7 @@ import type {
     SelectionListVirtualizedOptionSource,
 } from '../_types';
 
-const reducedMotionState = vi.hoisted(() => ({ value: false }));
-
-vi.mock('@/hooks/ui/useReducedMotionPreference', () => ({
-    useReducedMotionPreference: () => reducedMotionState.value,
-}));
+afterEach(() => act(() => setReducedMotionPreferenceOverride(null)));
 
 vi.mock('react-native', async () => {
     const { createReactNativeWebMock } = await import('@/dev/testkit/mocks/reactNative');
@@ -122,7 +120,7 @@ function buildDirectSource(): SelectionListVirtualizedOptionSource {
  */
 describe('SelectionListBody flat virtualized-list focused-row scroll (RV-9)', () => {
     beforeEach(() => {
-        reducedMotionState.value = false;
+        setReducedMotionPreferenceOverride(false);
         scrollToIndex.mockClear();
         scrollToOffset.mockClear();
     });
@@ -274,7 +272,7 @@ describe('SelectionListBody flat virtualized-list focused-row scroll (RV-9)', ()
     });
 
     it('scrolls the flat recycler without animation when reduced motion is enabled', async () => {
-        reducedMotionState.value = true;
+        setReducedMotionPreferenceOverride(true);
         const { SelectionListBody } = await import('../SelectionListBody');
         const screen = await renderScreen(
             <SelectionListBody

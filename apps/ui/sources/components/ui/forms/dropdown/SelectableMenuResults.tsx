@@ -193,6 +193,10 @@ const stylesheet = StyleSheet.create((theme) => ({
     container: {
         paddingVertical: MENU_ROW_METRICS.insetPx,
     },
+    leadingSlot: {
+        width: MENU_ROW_METRICS.iconGlyphSizePx,
+        height: MENU_ROW_METRICS.iconGlyphSizePx,
+    },
     emptyContainer: {
         padding: theme.space.s48,
         alignItems: 'center',
@@ -258,6 +262,8 @@ export const SelectableMenuResults = React.forwardRef<SelectableMenuResultsHandl
     const submenuAnchorRefs = React.useRef(new Map<string, React.RefObject<View | null>>());
 
     const allItems = React.useMemo(() => props.categories.flatMap((c) => c.items), [props.categories]);
+    // A menu where only some rows carry an icon keeps one text edge: the others hold the same empty slot.
+    const reservesLeadingSlot = React.useMemo(() => allItems.some((item) => item.left != null), [allItems]);
     React.useImperativeHandle(ref, () => ({
         focusItem(index) {
             if (Platform.OS !== 'web') return;
@@ -323,6 +329,7 @@ export const SelectableMenuResults = React.forwardRef<SelectableMenuResultsHandl
                     const itemIndex = categoryStartIndex + idx;
                     const isSelected = itemIndex === props.selectedIndex;
                     const right = item.right ?? (item.checked === true ? checkMark : null);
+                    const left = item.left ?? (reservesLeadingSlot ? <View style={styles.leadingSlot} /> : null);
                     currentIndex++;
                     const rowAnchorRef = getRowAnchorRef(String(item.id));
                     const submenuAnchorRef = getSubmenuAnchorRef(String(item.id));
@@ -361,7 +368,7 @@ export const SelectableMenuResults = React.forwardRef<SelectableMenuResultsHandl
                             accessibilityRole={item.checked === undefined ? props.itemProps?.accessibilityRole : 'radio'}
                             webRole={item.checked === undefined ? props.itemProps?.webRole : 'radio'}
                             accessibilityChecked={item.checked ?? props.itemProps?.accessibilityChecked}
-                            icon={item.left}
+                            icon={left}
                             rightElement={right}
                             selected={isSelected}
                             disabled={item.disabled}
@@ -379,7 +386,7 @@ export const SelectableMenuResults = React.forwardRef<SelectableMenuResultsHandl
                             presentation="menu"
                             selected={isSelected}
                             disabled={item.disabled}
-                            left={item.left}
+                            left={left}
                             leftGap={item.leftGap}
                             right={right}
                             title={item.titleNode ?? item.title}

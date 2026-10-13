@@ -155,7 +155,7 @@ export function useOverlayPresence(visible: boolean, exitMs: number): Readonly<{
 export function useOverlayMotionAnimation(params: Readonly<{
     visible: boolean;
     preset: OverlayMotionPreset;
-    /** Web frames animate their content and move their material paint by transform; the paint's ancestors stay still. */
+    /** Web frames animate as a whole; one holding material paint moves by transform and never fades. */
     elementRef?: React.RefObject<unknown>;
 }>): Readonly<{
     exitMs: number;
@@ -218,15 +218,16 @@ const GLASS_BACKDROP_SELECTOR = '[data-happy-glass-backdrop]';
 type WebMotionTarget = Readonly<{ element: HTMLElement; paint: boolean }>;
 
 /**
- * Keep the existing layout: descend only through material branches. The material paint moves by
- * transform alone, because any opacity on the paint or above it would empty the backdrop its blur
- * samples. Its content siblings move with it and never fade either: content fading over solid paper
- * reads as an empty card. A frame with no material paint (a plain popover) fades as its preset says.
+ * A frame holding material paint moves whole, by transform alone: opacity on the paint's ancestors would
+ * empty the backdrop its blur samples, while a transform does not (Chromium, observed in DESIGN-18). Moving
+ * the frame, not only the paint and its content siblings, carries the edges and fills the paint's ancestors
+ * draw (a sheet's rim, a hold card's tinted ring) with it; leaving them behind showed an empty card shell
+ * standing still while the content travelled (DESIGN-17 R3, DESIGN-18 M1). A frame with no material paint
+ * (a plain popover) also fades, as its preset says.
  */
 function webOverlayMotionTargets(element: HTMLElement): WebMotionTarget[] {
-    if (element.matches(GLASS_BACKDROP_SELECTOR)) return [{ element, paint: true }];
-    if (!element.querySelector(GLASS_BACKDROP_SELECTOR)) return [{ element, paint: false }];
-    return Array.from(element.children).flatMap(child => child instanceof HTMLElement ? webOverlayMotionTargets(child) : []);
+    const material = element.matches(GLASS_BACKDROP_SELECTOR) || element.querySelector(GLASS_BACKDROP_SELECTOR) !== null;
+    return [{ element, paint: material }];
 }
 
 type WebContentMotionTarget = {

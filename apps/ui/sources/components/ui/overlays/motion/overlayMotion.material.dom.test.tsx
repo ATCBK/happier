@@ -26,7 +26,7 @@ afterEach(() => {
 });
 
 describe('web overlay material composition', () => {
-    it('moves backdrop paint with its content by transform, never opacity, while its ancestors stay still', async () => {
+    it('moves a material frame whole by transform, never opacity, so its edges travel with its paint and content', async () => {
         const container = document.createElement('div');
         document.body.append(container);
         const root = createRoot(container);
@@ -54,48 +54,33 @@ describe('web overlay material composition', () => {
         try {
             await act(async () => root.render(<Scene visible preset="auto" />));
             const material = container.querySelector<HTMLElement>('[data-testid="material"]')!;
+            const frame = material.parentElement!;
             const paint = Array.from(material.children).find(child => (child as HTMLElement).style.backdropFilter.includes('blur')) as HTMLElement;
             expect(paint).toBeTruthy();
-            for (let ancestor = paint.parentElement; ancestor && ancestor !== container; ancestor = ancestor.parentElement) {
-                expect(getComputedStyle(ancestor).opacity || '1').toBe('1');
-                expect(getComputedStyle(ancestor).transform || 'none').toBe('none');
-            }
+            // One run, on the frame: the material's own edge and fill (its ancestors of the paint) move with it.
+            expect(runs.map(run => run.target)).toEqual([frame]);
+            expect(runs[0]!.frames[0]).toHaveProperty('transform', 'translate(0px, -8px) scale(0.98)');
+            // Opacity above the paint would empty the backdrop its blur samples.
+            for (const frameStep of runs[0]!.frames) expect(frameStep).not.toHaveProperty('opacity');
             const input = container.querySelector<HTMLInputElement>('[data-testid="draft"]')!;
-            expect(runs.some(run => run.target === input)).toBe(true);
-            // A frame with material paint scales and translates as a whole; content that faded over solid paper would show an empty card.
-            for (const run of runs.filter(entry => entry.target === input)) {
-                for (const frame of run.frames) expect(frame).toMatchObject({ opacity: '1' });
-            }
-            const backdrops = Array.from(material.querySelectorAll<HTMLElement>('[data-happy-glass-backdrop]'));
-            expect(backdrops).toHaveLength(2);
-            for (const backdrop of backdrops) {
-                // Opacity under an ancestor or on the paint would empty the blur's backdrop; transform keeps it sampling the page.
-                const enter = runs.filter(run => run.target === backdrop);
-                expect(enter).toHaveLength(1);
-                expect(enter[0]!.frames[0]).toHaveProperty('transform', 'translate(0px, -8px) scale(0.98)');
-                for (const frame of enter[0]!.frames) expect(frame).not.toHaveProperty('opacity');
-                expect(runs.some(run => run.target !== backdrop && run.target.contains(backdrop))).toBe(false);
+            for (let node: HTMLElement | null = paint; node && node !== frame; node = node.parentElement) {
+                expect(node.style.opacity).toBe('');
+                expect(node.style.transform).toBe('');
             }
             expect(material.style.padding).toBe('12px');
             expect(material.style.gap).toBe('8px');
-            input.style.opacity = '0.4';
-            input.style.transform = 'translateY(2px)';
             await act(async () => root.render(<Scene visible={false} preset="auto" />));
-            const exit = runs.filter(run => run.target === input).at(-1)!;
-            expect(exit.frames[0]).toMatchObject({ opacity: '0.4', transform: 'translateY(2px)' });
-            expect(exit.frames[1]).toMatchObject({ opacity: '1' });
+            const exit = runs.at(-1)!;
+            expect(exit.target).toBe(frame);
+            expect(exit.frames[1]).toHaveProperty('transform', 'translate(0px, -8px) scale(0.98)');
+            expect(exit.frames[1]).not.toHaveProperty('opacity');
             expect(exit.options.duration).toBe(motionTokens.overlay.popover.exitMs);
             expect(exit.options.fill).toBeUndefined();
-            expect(material.parentElement?.style.pointerEvents).toBe('none');
-            const paintExit = runs.filter(run => run.target === paint).at(-1)!;
-            expect(paintExit.frames[1]).toHaveProperty('transform', 'translate(0px, -8px) scale(0.98)');
-            expect(paintExit.frames[1]).not.toHaveProperty('opacity');
-            expect(paint.style.opacity).toBe('');
+            expect(frame.style.pointerEvents).toBe('none');
+            expect(frame.style.opacity).toBe('');
             await act(async () => root.render(<Scene visible preset="solid" />));
             expect(container.querySelector('[data-testid="draft"]')).toBe(input);
             expect(input.value).toBe('keep this draft');
-            expect(input.style.opacity).toBe('');
-            expect(input.style.transform).toBe('');
             await act(async () => root.render(<Scene visible preset="auto" />));
             expect(container.querySelector('[data-testid="draft"]')).toBe(input);
         } finally {
@@ -125,15 +110,10 @@ describe('web overlay material composition', () => {
         }
         try {
             await act(async () => root.render(<Sheet />));
-            const backdrop = container.querySelector<HTMLElement>('[data-happy-glass-backdrop]')!;
-            const button = container.querySelector('button')!;
-            for (const target of [backdrop, button]) {
-                const run = runs.find(entry => entry.target === target)!;
-                expect(run.frames[0]).toMatchObject({ transform: 'translate(0px, 320px) scale(1)' });
-                expect(run.options.duration).toBe(motionTokens.overlay.modal.enterMs);
-            }
-            // The sheet is not see-through on the way up.
-            expect(runs.find(entry => entry.target === button)!.frames[0]).toMatchObject({ opacity: '1' });
+            const frame = container.querySelector<HTMLElement>('[data-testid="sheet"]')!.parentElement!;
+            expect(runs.map(entry => entry.target)).toEqual([frame]);
+            expect(runs[0]!.frames[0]).toEqual({ transform: 'translate(0px, 320px) scale(1)' });
+            expect(runs[0]!.options.duration).toBe(motionTokens.overlay.modal.enterMs);
             runs.length = 0;
             await act(async () => setReducedMotionPreferenceOverride(true));
             // Fading content over still paper would show an empty card, so a material frame changes at once.

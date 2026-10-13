@@ -1,163 +1,58 @@
+import 'fake-indexeddb/auto';
 import React from 'react';
 import { act } from 'react-test-renderer';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
-import type { SavedSecret } from '@/sync/domains/settings/savedSecretTypes';
-import { installValueRefsCommonModuleMocks } from '@/components/ui/forms/valueRefs/valueRefsTestHelpers';
-import { findTestInstanceByTypeWithProps, renderScreen } from '@/dev/testkit';
-import { createPassThroughModule } from '@/dev/testkit/mocks/components';
+import { renderScreen, standardCleanup } from '@/dev/testkit';
+import { createSecretSettingsTestHarness } from '@/components/settings/secrets/secretSettingsTestHarness';
+import { installDisconnectedServerSocketBoundary } from '@/dev/testkit/harness/serverAccountConnectionHarness';
+import { resetSavedSecretCatalogEngineForTests, refreshSavedSecretCatalog } from '@/sync/engine/settings/savedSecretCatalogEngine';
+import { resetSavedSecretCatalogSnapshotsForTests } from '@/sync/store/settings/savedSecretCatalogSnapshot';
+import { publishHomeAccountChange } from '@/sync/runtime/orchestration/homeAccountChange';
+import { settingsParse } from '@/sync/domains/settings/settings';
 
+Object.assign(globalThis, { IS_REACT_ACT_ENVIRONMENT: true });
 
-(globalThis as unknown as { IS_REACT_ACT_ENVIRONMENT?: boolean }).IS_REACT_ACT_ENVIRONMENT = true;
-
-let liveSecrets: SavedSecret[] = [];
-const liveSecretListeners = new Set<() => void>();
 const modalShowSpy = vi.hoisted(() => vi.fn());
-
-function updateLiveSecrets(next: SavedSecret[]) {
-    liveSecrets = next;
-    for (const listener of liveSecretListeners) {
-        listener();
-    }
-}
-
-function resetLiveSecrets() {
-    liveSecrets = [];
-    liveSecretListeners.clear();
-}
-
-/**
- * Saved secrets are read through the canonical settings-store hook, so the live-update contract
- * lives at that seam: a store change while the surface is mounted has to re-render it. This
- * stand-in publishes to the same listener set `updateLiveSecrets` drives, so a surface that
- * snapshots the list once instead of subscribing fails these tests. Both the hooks module and the
- * barrel that re-exports it are mocked, because the surfaces import it under both specifiers. The
- * cast at the barrel narrows the generic settings hook to the single key these surfaces read.
- */
-function useLiveSecretsSetting(name: string): SavedSecret[] {
-    if (name !== 'secrets') {
-        throw new Error(`Unexpected setting key in test: ${name}`);
-    }
-
-    const [, forceUpdate] = React.useReducer((value: number) => value + 1, 0);
-
-    React.useEffect(() => {
-        const listener = () => forceUpdate();
-        liveSecretListeners.add(listener);
-        return () => {
-            liveSecretListeners.delete(listener);
-        };
-    }, []);
-
-    return liveSecrets;
-}
-
-installValueRefsCommonModuleMocks({
-    modal: async () => {
-        const { createModalModuleMock } = await import('@/dev/testkit/mocks/modal');
-        return createModalModuleMock({
-            spies: {
-                show: modalShowSpy,
-            },
-        }).module;
-    },
-    reactNative: async () => {
-        const { createReactNativeWebMock } = await import('@/dev/testkit/mocks/reactNative');
-        const { createPassThroughComponent } = await import('@/dev/testkit/mocks/components');
-        return createReactNativeWebMock({
-            Platform: {
-                OS: 'ios',
-                select: <T,>(obj: { ios?: T; web?: T; default?: T }) => obj.ios ?? obj.web ?? obj.default,
-            },
-            Pressable: createPassThroughComponent('Pressable'),
-            Text: createPassThroughComponent('Text'),
-            View: createPassThroughComponent('View'),
-            TextInput: React.forwardRef<{ focus: () => void }, Record<string, unknown>>((props, ref) => {
-                if (ref && typeof ref === 'object') {
-                    ref.current = { focus: () => {} };
-                }
-                return React.createElement('TextInput', props);
-            }),
-        });
-    },
-    storage: async () => {
-        const { createStorageModuleStub } = await import('@/dev/testkit/mocks/storage');
-        return createStorageModuleStub({
-            useSetting: useLiveSecretsSetting as unknown as typeof import('@/sync/domains/state/storage').useSetting,
-        });
-    },
+vi.mock('socket.io-client', async importOriginal =>
+    (await import('@/dev/testkit/harness/serverAccountConnectionHarness')).createSocketIoClientBoundary(importOriginal));
+installDisconnectedServerSocketBoundary();
+await vi.hoisted(async () => {
+    const { installValueRefsCommonModuleMocks } = await import('./valueRefsTestHelpers');
+    installValueRefsCommonModuleMocks({
+        storage: importOriginal => importOriginal(),
+        modal: async () => (await import('@/dev/testkit/mocks/modal')).createModalModuleMock({
+            spies: { show: modalShowSpy },
+        }).module,
+    });
 });
 
-vi.mock('@/sync/store/hooks', () => ({
-    useSetting: useLiveSecretsSetting,
-    useSettingsVersion: () => 1,
-}));
+// Load the real store, catalog and Action graph after the network/platform boundaries.
+const { ValueRefEditorModal } = await import('./ValueRefEditorModal');
+const { SavedSecretPickerModal } = await import('./SavedSecretPickerModal');
+let home: Awaited<ReturnType<typeof createSecretSettingsTestHarness>> | undefined;
 
-vi.mock('@/hooks/server/useFeatureEnabled', () => ({
-    useFeatureEnabled: () => false,
-}));
+function namedRow(screen: Awaited<ReturnType<typeof renderScreen>>, testID: string) {
+    return screen.findAllByTestId(testID).find(node => typeof node.props.title === 'string');
+}
 
-vi.mock('@/sync/runtime/getSyncSingleton', () => ({
-    getSyncSingleton: () => ({ mutateAccountSettings: vi.fn() }),
-}));
-
-vi.mock('@/components/ui/text/Text', () => ({
-    ...createPassThroughModule(['Text', 'TextInput']),
-}));
-
-vi.mock('@/components/ui/lists/ItemList', () => createPassThroughModule(['ItemList']));
-
-vi.mock('@/components/ui/lists/ItemGroup', () => createPassThroughModule(['ItemGroup']));
-
-vi.mock('@/components/ui/lists/ItemRowActions', () => createPassThroughModule(['ItemRowActions']));
-
-vi.mock('@/components/ui/lists/Item', () => createPassThroughModule(['Item']));
-
-vi.mock('@/components/ui/forms/InlineAddExpander', () => ({
-    InlineAddExpander: ({
-        children,
-        isOpen,
-        onOpenChange,
-        title,
-        saveDisabled,
-        onSave,
-    }: {
-        children?: React.ReactNode;
-        isOpen: boolean;
-        onOpenChange: (next: boolean) => void;
-        title: string;
-        saveDisabled?: boolean;
-        onSave?: () => void;
-    }) => React.createElement(
-        React.Fragment,
-        null,
-        React.createElement('Item', {
-            title,
-            onPress: () => onOpenChange(!isOpen),
-        }),
-        isOpen ? React.createElement(
-            'View',
-            null,
-            children,
-            React.createElement('Pressable', {
-                accessibilityLabel: 'common.save',
-                disabled: saveDisabled,
-                onPress: onSave,
-            }),
-        ) : null,
-    ),
-}));
-
-vi.mock('@/components/ui/forms/dropdown/DropdownMenu', () => createPassThroughModule(['DropdownMenu']));
-
-vi.mock('@/constants/Typography', () => ({
-    Typography: new Proxy({}, { get: () => () => ({}) }),
-    FontWeights: { regular: '400' },
-}));
+beforeEach(async () => {
+    resetSavedSecretCatalogEngineForTests();
+    resetSavedSecretCatalogSnapshotsForTests();
+    modalShowSpy.mockClear();
+    home = await createSecretSettingsTestHarness({ settings: settingsParse({ secrets: [] }) });
+    await refreshSavedSecretCatalog(home.scope);
+});
+afterEach(async () => {
+    await standardCleanup();
+    resetSavedSecretCatalogEngineForTests();
+    resetSavedSecretCatalogSnapshotsForTests();
+    await home?.dispose();
+    home = undefined;
+});
 
 describe('value ref saved secrets live updates', () => {
     it('preserves a template header reference when saving without changing its value', async () => {
-        const { ValueRefEditorModal } = await import('./ValueRefEditorModal');
         const onSubmit = vi.fn(() => true);
         const initialValueRef = {
             t: 'template', template: 'Bearer {api_key}',
@@ -165,121 +60,69 @@ describe('value ref saved secrets live updates', () => {
         } as const;
         const screen = await renderScreen(React.createElement(ValueRefEditorModal, {
             onClose: vi.fn(), kind: 'header', initialKey: 'Authorization',
-            initialValueRef, secrets: [], onSubmit,
+            initialValueRef, secrets: [], onSubmit, scope: home!.scope,
         }));
-        const save = screen.findByTestId('mcp.valueRefEditor.save');
-        if (!save) throw new Error('Missing value ref save control');
-        await act(async () => { save.props.onPress(); });
+        await screen.pressByTestIdAsync('mcp.valueRefEditor.save');
         expect(onSubmit).toHaveBeenCalledWith({ key: 'Authorization', valueRef: initialValueRef });
     });
 
     it('preserves an attested header reference when saving its existing editor value', async () => {
-        const { ValueRefEditorModal } = await import('./ValueRefEditorModal');
         const onSubmit = vi.fn(() => true);
         const initialValueRef = { t: 'sessionAttested', field: 'externalPrincipalId' } as const;
         const screen = await renderScreen(React.createElement(ValueRefEditorModal, {
             onClose: vi.fn(), kind: 'header', initialKey: 'X-Wilson-On-Behalf-Of',
-            initialValueRef, secrets: [], onSubmit,
+            initialValueRef, secrets: [], onSubmit, scope: home!.scope,
         }));
-        const save = screen.findByTestId('mcp.valueRefEditor.save');
-        if (!save) throw new Error('Missing value ref save control');
-        await act(async () => { save.props.onPress(); });
+        await screen.pressByTestIdAsync('mcp.valueRefEditor.save');
         expect(onSubmit).toHaveBeenCalledWith({ key: 'X-Wilson-On-Behalf-Of', valueRef: initialValueRef });
     });
 
-    beforeEach(() => {
-        resetLiveSecrets();
-    });
-
-    afterEach(() => {
-        vi.clearAllMocks();
-        resetLiveSecrets();
-    });
-
-    it('SavedSecretPickerModal reflects secrets added after the modal opens', async () => {
-        const { SavedSecretPickerModal } = await import('./SavedSecretPickerModal');
-
+    it('SavedSecretPickerModal reflects resources added after the modal opens on an Account change', async () => {
+        const onSelectId = vi.fn();
         const screen = await renderScreen(React.createElement(SavedSecretPickerModal, {
-                    onClose: vi.fn(),
-                    selectedId: null,
-                    onSelectId: vi.fn(),
-                }));
-
-        expect(findTestInstanceByTypeWithProps(screen.tree, 'Item', { title: 'secrets.emptyTitle' })).toBeTruthy();
-        expect(findTestInstanceByTypeWithProps(screen.tree, 'Item', { title: 'qa_picker_live_modal' })).toBeUndefined();
-
-        await act(async () => {
-            updateLiveSecrets([{
-                id: 'secret-live',
-                name: 'qa_picker_live_modal',
-                kind: 'apiKey',
-                encryptedValue: { _isSecretValue: true, value: 'secret-value' },
-                createdAt: 1,
-                updatedAt: 1,
-            }]);
-        });
-
-        expect(findTestInstanceByTypeWithProps(screen.tree, 'Item', { title: 'secrets.emptyTitle' })).toBeUndefined();
-        expect(findTestInstanceByTypeWithProps(screen.tree, 'Item', { title: 'qa_picker_live_modal' })).toBeTruthy();
+            onClose: vi.fn(), selectedId: null, onSelectId, scope: home!.scope,
+        }));
+        expect(screen.findByTestId('saved-secret:empty')).not.toBeNull();
+        const { entry } = await home!.addOwnerResource();
+        await act(async () => { publishHomeAccountChange(home!.scope.serverId); });
+        await vi.waitFor(() => expect(namedRow(screen, `saved-secret:${entry.ref}`)?.props.disabled).toBe(false));
+        expect(screen.findByTestId('saved-secret:empty')).toBeNull();
+        await screen.pressByTestIdAsync(`saved-secret:${entry.ref}`);
+        expect(onSelectId).toHaveBeenCalledWith(entry.ref);
+        expect(home!.settingsWrites).toEqual([]);
     });
 
-    it('ValueRefEditorModal resolves saved-secret names from the live secrets store', async () => {
-        const { ValueRefEditorModal } = await import('./ValueRefEditorModal');
-
+    it('ValueRefEditorModal resolves saved-secret names from its live scoped catalog', async () => {
+        const ref = 'happier:shared-secret:v1:resource-a';
         const screen = await renderScreen(React.createElement(ValueRefEditorModal, {
-                    onClose: vi.fn(),
-                    kind: 'header',
-                    initialKey: 'Authorization',
-                    initialValueRef: { t: 'savedSecret', secretId: 'secret-live' },
-                    secrets: [],
-                    onSubmit: () => true,
-                }));
-
-        expect(screen.findByTestId('mcp.valueRefEditor.secret')?.props.title).toBe('settings.mcpServersValueSecretSelect');
-        expect(screen.findByTestId('mcp.valueRefEditor.secret')?.props.subtitle).toBe('secret-live');
-
-        await act(async () => {
-            updateLiveSecrets([{
-                id: 'secret-live',
-                name: 'qa_value_ref_live_secret',
-                kind: 'apiKey',
-                encryptedValue: { _isSecretValue: true, value: 'secret-value' },
-                createdAt: 1,
-                updatedAt: 1,
-            }]);
-        });
-
-        expect(screen.findByTestId('mcp.valueRefEditor.secret')?.props.title).toBe('qa_value_ref_live_secret');
-        expect(screen.findByTestId('mcp.valueRefEditor.secret')?.props.subtitle).toBe('secret-live');
+            onClose: vi.fn(), kind: 'header', initialKey: 'Authorization',
+            initialValueRef: { t: 'savedSecret', secretId: ref }, secrets: [],
+            onSubmit: () => true, scope: home!.scope,
+        }));
+        expect(namedRow(screen, 'mcp.valueRefEditor.secret')?.props.title).toBe('settings.mcpServersValueSecretSelect');
+        expect(namedRow(screen, 'mcp.valueRefEditor.secret')?.props.subtitle).toBe(ref);
+        const { entry } = await home!.addOwnerResource();
+        await act(async () => { publishHomeAccountChange(home!.scope.serverId); });
+        await vi.waitFor(() => expect(namedRow(screen, 'mcp.valueRefEditor.secret')?.props.title).toBe(entry.name));
+        expect(namedRow(screen, 'mcp.valueRefEditor.secret')?.props.subtitle).toBe(ref);
+        expect(home!.settingsWrites).toEqual([]);
     });
 
-    it('ValueRefEditorModal opens the saved-secret picker with shared chrome', async () => {
-        const { ValueRefEditorModal } = await import('./ValueRefEditorModal');
-        const { SavedSecretPickerModal } = await import('./SavedSecretPickerModal');
-
+    it('ValueRefEditorModal opens the saved-secret picker with its captured scope and shared chrome', async () => {
         const screen = await renderScreen(React.createElement(ValueRefEditorModal, {
-                    onClose: vi.fn(),
-                    kind: 'header',
-                    initialKey: 'Authorization',
-                    initialValueRef: { t: 'literal', v: 'token' },
-                    secrets: [],
-                    onSubmit: () => true,
-                }));
-
-        const dropdownMenu = screen.findByType('DropdownMenu' as any);
-
-        await act(async () => {
-            dropdownMenu.props.onSelect('savedSecret');
-        });
-
+            onClose: vi.fn(), kind: 'header', initialKey: 'Authorization',
+            initialValueRef: { t: 'literal', v: 'token' }, secrets: [],
+            onSubmit: () => true, scope: home!.scope,
+        }));
+        const dropdown = screen.findAll(node => typeof node.props.onSelect === 'function'
+            && node.props.items?.some((item: { id: string }) => item.id === 'savedSecret'))[0];
+        if (!dropdown) throw new Error('Missing value source menu');
+        await act(async () => { dropdown.props.onSelect('savedSecret'); });
         expect(modalShowSpy).toHaveBeenCalledTimes(1);
         expect(modalShowSpy.mock.calls[0]?.[0]).toMatchObject({
             component: SavedSecretPickerModal,
-            chrome: {
-                kind: 'card',
-                title: 'settings.mcpServersPickSecretTitle',
-                dimensions: { size: 'lg' },
-            },
+            props: { scope: home!.scope },
+            chrome: { kind: 'card', title: 'settings.mcpServersPickSecretTitle', dimensions: { size: 'lg' } },
             closeOnBackdrop: true,
         });
     });

@@ -63,7 +63,7 @@ async function renderScene(scene: Scene, frameHeight: number) {
     Object.defineProperty(HTMLElement.prototype, 'animate', { configurable: true, value: function (this: HTMLElement, frames: Keyframe[], options: KeyframeAnimationOptions) {
         const id = counter++;
         this.setAttribute('data-motion-target', String(id));
-        runs.push({ id, paint: this.hasAttribute('data-happy-glass-backdrop'), frames, duration: Number(options.duration), easing: String(options.easing) });
+        runs.push({ id, paint: this.matches('[data-happy-glass-backdrop]') || this.querySelector('[data-happy-glass-backdrop]') !== null, frames, duration: Number(options.duration), easing: String(options.easing) });
         return { playState: 'finished', cancel: () => {} } as unknown as Animation;
     } });
     vi.spyOn(HTMLElement.prototype, 'getBoundingClientRect').mockReturnValue({ height: frameHeight } as DOMRect);

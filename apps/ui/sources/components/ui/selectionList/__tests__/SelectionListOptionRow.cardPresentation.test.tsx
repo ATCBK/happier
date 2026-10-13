@@ -25,6 +25,8 @@ import { beforeEach, describe, expect, it, vi } from 'vitest';
 
 import { renderScreen } from '@/dev/testkit';
 import { darkTheme, lightTheme, type Theme } from '@/theme';
+import { installDisconnectedServerSocketBoundary } from '@/dev/testkit/harness/serverAccountConnectionHarness';
+import { loadSyncSingletonForTests } from '@/dev/testkit/harness/syncSingletonLoader';
 
 vi.mock('react-native', async () => {
     const { createReactNativeWebMock } = await import('@/dev/testkit/mocks/reactNative');
@@ -56,17 +58,12 @@ vi.mock('react-native-unistyles', async () => {
     };
 });
 
-const itemProps = vi.hoisted(() => ({ current: null as Record<string, unknown> | null }));
-vi.mock('@/components/ui/lists/Item', () => ({
-    Item: (props: Record<string, unknown>) => {
-        itemProps.current = props;
-        return React.createElement('Item', props);
-    },
-}));
+installDisconnectedServerSocketBoundary();
+await loadSyncSingletonForTests();
+const { PlanOptionRow } = await import('../SelectionListOptionRow');
 
 import { View } from 'react-native';
 
-import { PlanOptionRow } from '../SelectionListOptionRow';
 import { SelectionListA11yPatternContext } from '../SelectionListA11yPatternContext';
 import { SelectionListOptionPresentationContext } from '../SelectionListOptionPresentationContext';
 import {
@@ -82,6 +79,12 @@ const ACCESSORY_TEST_ID = 'trailing-accessory';
 const WRAPPER_TEST_ID = 'models:root:option-wrapper:opt-a';
 const OVERLAY_TEST_ID = 'models:root:option-card-accessory:opt-a';
 const OPTION_TEST_ID = 'models:root:option:opt-a';
+
+function readItemProps(screen: Awaited<ReturnType<typeof renderScreen>>) {
+    // React Test Renderer exposes the function inside memo, not the memo wrapper.
+    return screen.tree.root.find(node => typeof node.type === 'function'
+        && node.props.title === 'Option A').props;
+}
 
 function flattenStyle(style: unknown): Record<string, unknown> {
     const resolved = typeof style === 'function'
@@ -119,7 +122,6 @@ async function renderRow(params: Readonly<{
     measureMode?: boolean;
 }>) {
     themeHolder.current = params.theme ?? lightTheme;
-    itemProps.current = null;
     return renderScreen(
         <SelectionListA11yPatternContext.Provider value="grid">
             <SelectionListOptionPresentationContext.Provider value={params.presentation}>
@@ -156,8 +158,9 @@ describe('optionPresentation default — the untouched path', () => {
 
         // The accessory still travels through Item's right slot, still flagged
         // as an out-of-pressable secondary action.
-        expect(itemProps.current?.rightElementOutsidePressable).toBe(true);
-        const rightElement = itemProps.current?.rightElement as React.ReactElement | undefined;
+        const itemProps = readItemProps(screen);
+        expect(itemProps.rightElementOutsidePressable).toBe(true);
+        const rightElement = itemProps.rightElement as React.ReactElement | undefined;
         expect((rightElement?.props as { testID?: string } | undefined)?.testID)
             .toBe(ACCESSORY_TEST_ID);
 
@@ -226,8 +229,8 @@ describe('optionPresentation card — one shape', () => {
 
 describe('optionPresentation card — content inset', () => {
     it('gives the card its own inset instead of inheriting the list row inset', async () => {
-        await renderRow({ presentation: 'card', isSelected: false });
-        const style = flattenStyle(itemProps.current?.style);
+        const screen = await renderRow({ presentation: 'card', isSelected: false });
+        const style = flattenStyle(readItemProps(screen).style);
         expect(style.paddingHorizontal).toBe(SELECTION_LIST_CARD_CONTENT_INSET_PX);
         expect(style.paddingVertical).toBe(SELECTION_LIST_CARD_CONTENT_INSET_PX);
 
@@ -241,25 +244,25 @@ describe('optionPresentation card — content inset', () => {
     });
 
     it('lets a card description wrap to two lines (a model card: name, then one or two lines)', async () => {
-        await renderRow({ presentation: 'card', isSelected: false });
-        expect(itemProps.current?.subtitleLines).toBe(2);
+        const card = await renderRow({ presentation: 'card', isSelected: false });
+        expect(readItemProps(card).subtitleLines).toBe(2);
 
-        await renderRow({ presentation: 'row', isSelected: false });
-        expect(itemProps.current?.subtitleLines).toBeUndefined();
+        const row = await renderRow({ presentation: 'row', isSelected: false });
+        expect(readItemProps(row).subtitleLines).toBeUndefined();
     });
 
     it('leaves the flush row on the density inset it has always had', async () => {
-        await renderRow({ presentation: 'row', isSelected: false });
+        const screen = await renderRow({ presentation: 'row', isSelected: false });
         // Not an empty style object — no style prop at all, so `Item` resolves
         // the user's density setting exactly as it does for every other list.
-        expect(itemProps.current?.style).toBeUndefined();
+        expect(readItemProps(screen).style).toBeUndefined();
     });
 
     it('applies the same inset to the measure mirror', async () => {
         // The mirror exists to report the live row's natural height. An inset
         // it did not share would make every card animate to the wrong height.
-        await renderRow({ presentation: 'card', isSelected: true, measureMode: true });
-        expect(flattenStyle(itemProps.current?.style).paddingVertical)
+        const screen = await renderRow({ presentation: 'card', isSelected: true, measureMode: true });
+        expect(flattenStyle(readItemProps(screen).style).paddingVertical)
             .toBe(SELECTION_LIST_CARD_CONTENT_INSET_PX);
     });
 });
@@ -269,10 +272,11 @@ describe('optionPresentation card — corner accessory', () => {
         const screen = await renderRow({ presentation: 'card', isSelected: true });
 
         // It is no longer Item's right element…
-        const rightElement = itemProps.current?.rightElement as React.ReactElement | undefined;
+        const itemProps = readItemProps(screen);
+        const rightElement = itemProps.rightElement as React.ReactElement | undefined;
         expect((rightElement?.props as { testID?: string } | undefined)?.testID)
             .not.toBe(ACCESSORY_TEST_ID);
-        expect(itemProps.current?.rightElementOutsidePressable).toBe(false);
+        expect(itemProps.rightElementOutsidePressable).toBe(false);
 
         // …but Item still RESERVES its width, or a long title would run under it.
         expect(flattenStyle((rightElement?.props as { style?: unknown } | undefined)?.style).width)

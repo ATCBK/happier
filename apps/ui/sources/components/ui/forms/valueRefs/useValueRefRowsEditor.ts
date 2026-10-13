@@ -146,8 +146,8 @@ export function useValueRefRowsEditor(options: Readonly<{
         const key = normalizeKey(current.kind, rawKey);
         if (!validateKey(current.kind, key)) return { ok: false, error: 'invalid_key' };
         if (!ValueRefV1Schema.safeParse(valueRef).success) return { ok: false, error: 'invalid_value' };
-        if (originalKey !== null && !Object.hasOwn(current.entries, originalKey)) return { ok: false, error: 'missing_entry' };
-        if (key !== originalKey && Object.hasOwn(current.entries, key)) return { ok: false, error: 'duplicate_key' };
+        if (originalKey !== null && !Object.prototype.hasOwnProperty.call(current.entries, originalKey)) return { ok: false, error: 'missing_entry' };
+        if (key !== originalKey && Object.prototype.hasOwnProperty.call(current.entries, key)) return { ok: false, error: 'duplicate_key' };
         if (key === originalKey && current.entries[key] === valueRef) return { ok: true };
         const next = { ...current.entries };
         if (originalKey !== null) delete next[originalKey];
@@ -157,7 +157,7 @@ export function useValueRefRowsEditor(options: Readonly<{
     }, []);
     const removeEntry = React.useCallback((key: string): ValueRefRowsResult => {
         const current = optionsRef.current;
-        if (!Object.hasOwn(current.entries, key)) return { ok: false, error: 'missing_entry' };
+        if (!Object.prototype.hasOwnProperty.call(current.entries, key)) return { ok: false, error: 'missing_entry' };
         const next = { ...current.entries };
         delete next[key];
         current.onChangeEntries(next);
@@ -166,7 +166,7 @@ export function useValueRefRowsEditor(options: Readonly<{
     const beginAdd = React.useCallback(() => { editor.beginDraft(null, '', { t: 'literal', v: '' }); }, [editor.beginDraft]);
     const beginEdit = React.useCallback((key: string): ValueRefRowsResult => {
         const current = optionsRef.current;
-        if (!Object.hasOwn(current.entries, key)) return { ok: false, error: 'missing_entry' };
+        if (!Object.prototype.hasOwnProperty.call(current.entries, key)) return { ok: false, error: 'missing_entry' };
         editor.beginDraft(key, key, current.entries[key]);
         return { ok: true };
     }, [editor.beginDraft]);

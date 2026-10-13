@@ -11,10 +11,6 @@ vi.mock('@/text', async () => {
     const { createTextModuleMock } = await import('@/dev/testkit/mocks/text');
     return createTextModuleMock();
 });
-vi.mock('@/sync/store/hooks', async () => {
-    const { createStorageModuleStub } = await import('@/dev/testkit/mocks/storage');
-    return createStorageModuleStub({ useLocalSetting: () => 1 });
-});
 installCodeViewCommonModuleMocks();
 const lines = buildCodeLinesFromUnifiedDiff({ unifiedDiff: '@@ -1 +1 @@\n-old\n+new' });
 const settleScroll = async () => act(async () => { await new Promise((resolve) => setTimeout(resolve, 80)); });

@@ -34,6 +34,7 @@ import { DropdownMenu } from '@/components/ui/forms/dropdown/DropdownMenu';
 import { Icon } from '@/components/ui/icons/Icon';
 
 import { resolveSegmentedTabFit } from './segmentedTabFit';
+import { t } from '@/text';
 
 /**
  * The glyph size for an icon-only segmented bar.
@@ -167,6 +168,13 @@ export type SegmentedTabBarProps<T extends string = string> = Readonly<{
      * segment announcing as an enabled tab to a screen reader, and leaves it in the tab order.
      */
     disabled?: boolean;
+    /**
+     * Where the chosen value comes from (R8). `set` (default) is today's filled thumb. `inherited`: the
+     * value follows a default (a tool on its server's default), so the chosen segment is outlined in the
+     * ink border role with no fill and no lift, its label in secondary ink, and it announces "default".
+     * Selection, keyboard and the thumb's travel are unchanged. Segmented presentation only.
+     */
+    valueSource?: 'set' | 'inherited';
 }>;
 
 type TabRect = Readonly<{ x: number; width: number }>;
@@ -351,6 +359,15 @@ const stylesheet = StyleSheet.create((theme) => ({
         overflow: 'hidden',
         ...shadowLevelStyle(theme.colors.shadowLevels[1]),
     },
+    // An inherited value (R8): the chosen segment is outlined in the ink border role, no fill, no lift.
+    thumbOutlined: {
+        backgroundColor: 'transparent',
+        borderWidth: 1,
+        borderColor: theme.colors.border.default,
+        boxShadow: 'none',
+        shadowOpacity: 0,
+        elevation: 0,
+    },
     thumbCompact: {
         borderRadius: HAPPIER_SEGMENTED_METRICS.segmentRadiusPx.compact,
     },
@@ -384,6 +401,9 @@ const stylesheet = StyleSheet.create((theme) => ({
         ...Typography.default(),
         fontVariant: ['tabular-nums'],
     },
+    tabLabelInherited: {
+        color: theme.colors.text.secondary,
+    },
     tabLabelActive: {
         color: theme.colors.text.primary,
         // The semibold face itself; a numeric weight over the regular face would synthesize bold.
@@ -402,6 +422,8 @@ function SlidingThumb(props: Readonly<{
     tabId: string;
     compact: boolean;
     plain?: boolean;
+    /** An inherited value: the thumb is an outline, no fill and no lift. */
+    outlined?: boolean;
     testID?: string;
 }>) {
     const styles = stylesheet;
@@ -439,9 +461,9 @@ function SlidingThumb(props: Readonly<{
         <Animated.View
             testID={props.testID}
             pointerEvents="none"
-            style={[styles.thumb, props.compact ? styles.thumbCompact : null, props.plain ? styles.plainThumb : null, { backgroundColor: paintColor(props.plain ? theme.colors.surface.selected : theme.colors.segmentedControl.activeBackground, undefined, props.plain ? undefined : 'solidControl') }, animatedStyle]}
+            style={[styles.thumb, props.compact ? styles.thumbCompact : null, props.plain ? styles.plainThumb : null, props.outlined ? styles.thumbOutlined : { backgroundColor: paintColor(props.plain ? theme.colors.surface.selected : theme.colors.segmentedControl.activeBackground, undefined, props.plain ? undefined : 'solidControl') }, animatedStyle]}
         >
-            {props.plain ? null : <GradientSurface
+            {props.plain || props.outlined ? null : <GradientSurface
                 fallbackColor={paintColor(theme.colors.segmentedControl.activeBackground, undefined, 'solidControl')}
                 gradient={happierMaterialGradient(theme.colors.segmentedControl.activeGradient, color => paintColor(color, undefined, 'solidControl'))}
                 borderRadius={HAPPIER_SEGMENTED_METRICS.segmentRadiusPx[props.compact ? 'compact' : 'default']}
@@ -463,6 +485,7 @@ function SegmentedTabBarInner<T extends string>(props: SegmentedTabBarProps<T>) 
     // choice rather than cross-fading between separate highlights); pills have no track to slide in.
     const slidingThumb = !pills;
     const valueChoice = props.role === 'radiogroup';
+    const inherited = props.valueSource === 'inherited' && !pills && !plain;
     const contentSized = pills || plain || props.segmentSizing === 'content';
     // Icons replace labels only when the whole bar is iconic; a half-iconic row reads as broken.
     // Page tabs keep both: the glyph leads its label.
@@ -635,6 +658,7 @@ function SegmentedTabBarInner<T extends string>(props: SegmentedTabBarProps<T>) 
                         tabId={String(props.activeTabId)}
                         compact={compact === true}
                         plain={plain}
+                        outlined={inherited}
                         testID={props.testIDPrefix ? `${props.testIDPrefix}:thumb` : undefined}
                     />
                 ) : null}
@@ -644,7 +668,8 @@ function SegmentedTabBarInner<T extends string>(props: SegmentedTabBarProps<T>) 
                     // Until the chosen segment is measured it paints itself, so the selection is visible on
                     // the first frame; the thumb then mounts at that rect and takes the surface over.
                     const showOwnActiveSurface = active && (!slidingThumb || activeRect === null);
-                    const tabName = [tab.label, tab.count, tab.badge].filter(Boolean).join(' ');
+                    const baseName = [tab.label, tab.count, tab.badge].filter(Boolean).join(' ');
+                    const tabName = active && inherited ? `${baseName}, ${t('capabilities.detail.inheritedValue')}` : baseName;
                     const unavailableReason = tab.disabled === true ? tab.unavailableReason : undefined;
                     const webKeyDownProps = Platform.OS === 'web'
                         ? ({ onKeyDown: (event: any) => handleTabKeyDown(tabIndex, event) } as Record<string, unknown>)
@@ -690,17 +715,17 @@ function SegmentedTabBarInner<T extends string>(props: SegmentedTabBarProps<T>) 
                                     iconOnly ? (compact ? styles.tabSurfaceIconCompact : styles.tabSurfaceIcon) : null,
                                     tabSurfaceTarget,
                                     contentSized ? styles.tabSurfaceContent : null,
-                                    showOwnActiveSurface && !pills && !plain ? styles.tabActive : null,
+                                    showOwnActiveSurface && !pills && !plain ? (inherited ? styles.thumbOutlined : styles.tabActive) : null,
                                     plain ? styles.plainSurface : null,
                                     plain && showOwnActiveSurface ? styles.plainActive : null,
                                     pills ? styles.pillSurface : null,
                                     pills && active ? styles.pillActive : null,
-                                    showOwnActiveSurface ? { backgroundColor: paintColor(pills ? theme.colors.surface.inset : plain ? theme.colors.surface.selected : theme.colors.segmentedControl.activeBackground, undefined, pills || plain ? undefined : 'solidControl') } : null,
+                                    showOwnActiveSurface && !inherited ? { backgroundColor: paintColor(pills ? theme.colors.surface.inset : plain ? theme.colors.surface.selected : theme.colors.segmentedControl.activeBackground, undefined, pills || plain ? undefined : 'solidControl') } : null,
                                     happierFocusRingStyle({ visible: !tabDisabled && focusedTabId === tab.id, color: theme.colors.border.focus }),
                                     !disabled && tab.disabled === true ? styles.tabDisabled : null,
                                 ]}
                             >
-                                {showOwnActiveSurface && !pills && !plain ? (
+                                {showOwnActiveSurface && !pills && !plain && !inherited ? (
                                     <GradientSurface
                                         fallbackColor={paintColor(theme.colors.segmentedControl.activeBackground, undefined, 'solidControl')}
                                         gradient={happierMaterialGradient(theme.colors.segmentedControl.activeGradient, color => paintColor(color, undefined, 'solidControl'))}
@@ -728,6 +753,7 @@ function SegmentedTabBarInner<T extends string>(props: SegmentedTabBarProps<T>) 
                                             props.labelSize === 'field' ? styles.tabLabelField : null,
                                             pills ? styles.pillLabel : null,
                                             active ? styles.tabLabelActive : null,
+                                            active && inherited ? styles.tabLabelInherited : null,
                                             active ? props.activeLabelStyle : null,
                                         ]}
                                     >

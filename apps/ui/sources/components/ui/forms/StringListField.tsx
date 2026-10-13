@@ -27,6 +27,8 @@ export const StringListField = React.memo(function StringListField(props: Readon
     addLabel: string;
     itemPlaceholder?: string;
     monospace?: boolean;
+    /** A value was committed: a field lost focus or an entry was removed (lists that save in place). */
+    onCommit?: () => void;
     /** Test id prefix: `<testID>.item.<i>`, `<testID>.remove.<i>`, `<testID>.add`. */
     testID: string;
 }>) {
@@ -49,6 +51,7 @@ export const StringListField = React.memo(function StringListField(props: Readon
     const remove = (index: number) => {
         keysRef.current = keysRef.current.filter((_, position) => position !== index);
         onChange(values.filter((_, position) => position !== index));
+        props.onCommit?.();
     };
     const update = (index: number, text: string) => {
         onChange(values.map((value, position) => (position === index ? text : value)));
@@ -65,6 +68,7 @@ export const StringListField = React.memo(function StringListField(props: Readon
                             testID={`${props.testID}.item.${index}`}
                             value={value}
                             onChangeText={(text) => update(index, text)}
+                            onBlur={props.onCommit}
                             accessibilityLabel={props.itemLabel(index + 1)}
                             placeholder={props.itemPlaceholder}
                             monospace={props.monospace}

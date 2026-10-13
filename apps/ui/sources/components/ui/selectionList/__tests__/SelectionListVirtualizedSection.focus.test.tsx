@@ -1,16 +1,14 @@
 import * as React from 'react';
-import { beforeEach, describe, expect, it, vi } from 'vitest';
+import { act } from 'react-test-renderer';
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
 import { renderScreen } from '@/dev/testkit';
 import { createCapturingLegendListMock } from '@/dev/testkit/mocks/legendList';
+import { setReducedMotionPreferenceOverride } from '@/hooks/ui/useReducedMotionPreference';
 
 import type { SelectionListOption, SelectionListSection } from '../_types';
 
-const reducedMotionState = vi.hoisted(() => ({ value: false }));
-
-vi.mock('@/hooks/ui/useReducedMotionPreference', () => ({
-    useReducedMotionPreference: () => reducedMotionState.value,
-}));
+afterEach(() => act(() => setReducedMotionPreferenceOverride(null)));
 
 vi.mock('react-native', async () => {
     const { createReactNativeWebMock } = await import('@/dev/testkit/mocks/reactNative');
@@ -60,7 +58,7 @@ function makeSection(count: number): SelectionListSection {
  */
 describe('SelectionListVirtualizedSection focus parity (F4)', () => {
     beforeEach(() => {
-        reducedMotionState.value = false;
+        setReducedMotionPreferenceOverride(false);
         scrollToIndex.mockClear();
     });
     /**
@@ -244,7 +242,7 @@ describe('SelectionListVirtualizedSection focus parity (F4)', () => {
     });
 
     it('scrolls focused rows without animation when reduced motion is enabled', async () => {
-        reducedMotionState.value = true;
+        setReducedMotionPreferenceOverride(true);
         const { SelectionListVirtualizedSection } = await import('../SelectionListVirtualizedSection');
         const section = makeSection(60);
         const screen = await renderScreen(

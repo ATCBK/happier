@@ -45,8 +45,8 @@ export function SavedSecretPickerModal(props: SavedSecretPickerModalProps) {
         <ItemList presentation="grouped" keyboardShouldPersistTaps="handled">
             <SecretsList
                 wrapInItemList={false}
-                secrets={catalog.personalSecrets}
-                sharedEntries={catalog.sharedEntries}
+                secrets={catalog.picker.personalSecrets}
+                sharedEntries={catalog.picker.sharedEntries}
                 resolveSharedReference={catalog.resolveReference}
                 sharedCatalogStale={catalog.status === 'error' || (catalog.status === 'ready' && catalog.stale)}
                 onRetrySharedCatalog={retrySharedCatalog}

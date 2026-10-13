@@ -1,50 +1,47 @@
-import { describe, expect, it, vi } from 'vitest';
+/** @vitest-environment jsdom */
+import { describe, expect, it } from 'vitest';
+import { Editor } from '@tiptap/core';
+import '@tiptap/markdown';
 
-vi.mock('../normalizeSoftBreaks', () => ({
-    normalizeSoftBreaks: vi.fn((editor: any) => {
-        editor.state.doc.content.size = editor.nextDocSize;
-    }),
-}));
-
+import { createMarkdownEditorExtensions } from '../createMarkdownEditorExtensions';
 import { seedMarkdown } from '../seedMarkdown';
 
 function createEditorFixture() {
-    const scrollElement = { scrollTop: 84, scrollLeft: 9 };
-    const editor: any = {
-        nextDocSize: 20,
-        state: {
-            selection: { from: 7, to: 7 },
-            doc: { content: { size: 12 } },
-        },
-        view: {
-            dom: { parentElement: scrollElement },
-        },
-        commands: {
-            setContent: vi.fn(),
-            setTextSelection: vi.fn(),
-        },
-    };
+    const scrollElement = document.createElement('div');
+    const element = document.createElement('div');
+    scrollElement.appendChild(element);
+    document.body.appendChild(scrollElement);
+    const editor = new Editor({ element, extensions: createMarkdownEditorExtensions(),
+        content: 'Original long paragraph content', contentType: 'markdown' });
+    editor.commands.setTextSelection({ from: 7, to: 12 });
+    scrollElement.scrollTop = 84;
+    scrollElement.scrollLeft = 9;
     return { editor, scrollElement };
 }
 
 describe('seedMarkdown', () => {
-    it('preserves selection and scroll when requested', () => {
+    it('preserves a real selection and scroll across content replacement and soft-break normalization', () => {
         const { editor, scrollElement } = createEditorFixture();
-
-        seedMarkdown(editor, 'external update', { preserveViewState: true });
-
-        expect(editor.commands.setTextSelection).toHaveBeenCalledWith({ from: 7, to: 7 });
-        expect(scrollElement.scrollTop).toBe(84);
-        expect(scrollElement.scrollLeft).toBe(9);
+        try {
+            seedMarkdown(editor, 'external update\nsecond line', { preserveViewState: true });
+            expect(editor.state.selection).toMatchObject({ from: 7, to: 12 });
+            expect(editor.state.doc.childCount).toBe(2);
+            expect(editor.state.doc.child(0).textContent).toBe('external update');
+            expect(editor.state.doc.child(1).textContent).toBe('second line');
+            expect(scrollElement.scrollTop).toBe(84);
+            expect(scrollElement.scrollLeft).toBe(9);
+        } finally { editor.destroy(); scrollElement.remove(); }
     });
 
     it('clamps restored selection to the new document size', () => {
-        const { editor } = createEditorFixture();
-        editor.state.selection = { from: 1000, to: 1005 };
-        editor.nextDocSize = 3;
-
-        seedMarkdown(editor, 'short', { preserveViewState: true });
-
-        expect(editor.commands.setTextSelection).toHaveBeenCalledWith({ from: 3, to: 3 });
+        const { editor, scrollElement } = createEditorFixture();
+        try {
+            seedMarkdown(editor, 'x', { preserveViewState: true });
+            expect(editor.state.doc.textContent).toBe('x');
+            // The text cursor ends before the paragraph's closing node boundary.
+            const end = editor.state.doc.content.size - 1;
+            expect(editor.state.selection).toMatchObject({ from: end, to: end });
+            expect(editor.state.selection.$from.parent.inlineContent).toBe(true);
+        } finally { editor.destroy(); scrollElement.remove(); }
     });
 });

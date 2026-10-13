@@ -29,7 +29,7 @@ afterEach(() => {
 type AnchorRect = Readonly<{ left: number; top: number; width: number; height: number }>;
 
 /** A fixed-width picker (520 wide) hung from a chip, as the composer's list pickers are. */
-async function renderPicker(anchor: AnchorRect, anchorAlign: 'start' | 'end') {
+async function renderPicker(anchor: AnchorRect, anchorAlign: 'start' | 'end', edgePadding = 0) {
     const { Popover } = await import('./Popover');
     const { OverlayPortalProvider, OverlayPortalHost } = await import('./OverlayPortal');
     const { PopoverPortalTargetContextProvider } = await import('./PopoverPortalTarget');
@@ -38,6 +38,7 @@ async function renderPicker(anchor: AnchorRect, anchorAlign: 'start' | 'end') {
         measure: (cb: any) => cb(0, 0, 1000, 800, 0, 0),
     } as any;
     const portalTarget = { rootRef: { current: portalRootNode }, layout: { width: 1000, height: 800 } } as const;
+    let childMaxWidth = 0;
     const screen = await renderScreen(
         <PopoverPortalTargetContextProvider value={portalTarget}>
             <OverlayPortalProvider>
@@ -50,8 +51,12 @@ async function renderPicker(anchor: AnchorRect, anchorAlign: 'start' | 'end') {
                     gap={8}
                     maxHeightCap={300}
                     maxWidthCap={520}
+                    edgePadding={{ horizontal: edgePadding, vertical: edgePadding }}
                 >
-                    {() => React.createElement('Picker')}
+                    {({ maxWidth }) => {
+                        childMaxWidth = maxWidth;
+                        return React.createElement('Picker');
+                    }}
                 </Popover>
                 <OverlayPortalHost />
             </OverlayPortalProvider>
@@ -62,7 +67,7 @@ async function renderPicker(anchor: AnchorRect, anchorAlign: 'start' | 'end') {
     });
     const style = flattenStyle(findPopoverContentView(screen, 'Picker')?.props?.style);
     const padding = Number(style.paddingLeft ?? 0);
-    return { left: Number(style.left) + padding, width: Number(style.width) - padding * 2 };
+    return { left: Number(style.left) + padding, width: Number(style.width) - padding * 2, childMaxWidth };
 }
 
 describe('Popover: a fixed-width popover hangs from its anchor edge', () => {
@@ -81,5 +86,13 @@ describe('Popover: a fixed-width popover hangs from its anchor edge', () => {
     it('hangs an end-aligned popover from the anchor\'s start edge when the end edge leaves it no room', async () => {
         const { left } = await renderPicker({ left: 100, top: 400, width: 100, height: 32 }, 'end');
         expect(left).toBe(100);
+    });
+
+    it('keeps the visible surface the edge margin from the window edge and tells its child the width it may fill', async () => {
+        // The edge padding is a transparent gutter inside the box: the surface (box less gutter) ends 12 px
+        // from the window edge, and a child sized by `maxWidth` fits that surface instead of overflowing it.
+        const { left, width, childMaxWidth } = await renderPicker({ left: 940, top: 400, width: 60, height: 32 }, 'end', 12);
+        expect(left + width).toBe(1000 - 12);
+        expect(childMaxWidth).toBe(width);
     });
 });

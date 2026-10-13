@@ -28,8 +28,6 @@ const WEB_VISUAL_TEXT_WRAPPING: TextStyle & { overflowWrap: 'normal'; wordBreak:
     wordBreak: 'normal',
 };
 
-const WEB_TILE_TEXT_HYPHENATION: TextStyle & { hyphens: 'auto' } = { hyphens: 'auto' };
-
 /**
  * Happier core's adapter for the shared tile owner (`HappierSelectionTiles` in
  * `@happier-dev/plugin-ui/presentation`), which owns selection, semantics, the
@@ -157,10 +155,9 @@ export function SelectionTiles<T extends string>(props: SelectionTilesProps<T>) 
         <Text style={[
             textStyle(styles, role, selected, compact),
             alignment ? { textAlign: alignment } : null,
+            // Tile text wraps at word boundaries and is never auto-hyphenated ("ac-count"); RNW's break-word
+            // still splits a single word only when it is wider than the whole text column.
             Platform.OS === 'web' && (role === 'visualLabel' || role === 'visualSublabel') ? WEB_VISUAL_TEXT_WRAPPING : null,
-            // A word wider than a narrow tile's text column hyphenates rather than breaking at an arbitrary
-            // letter ("accessibl / e", DESIGN-17 R5); the browser still breaks it only when nothing else fits.
-            Platform.OS === 'web' && role !== 'visualLabel' && role !== 'visualSublabel' ? WEB_TILE_TEXT_HYPHENATION : null,
         ]} numberOfLines={numberOfLines}>{text}</Text>
     ), [styles]);
 

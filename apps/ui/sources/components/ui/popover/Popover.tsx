@@ -758,6 +758,11 @@ export function Popover(props: PopoverWithBackdrop | PopoverWithoutBackdrop) {
         return { horizontal, top, bottom };
     }, [edgePadding]);
 
+    // The edge padding is a transparent gutter inside the popover's box (see `paddingStyle`): the
+    // width a child may fill is the box less that gutter, never the box itself.
+    const horizontalGutter = computed.placement === 'top' || computed.placement === 'bottom' ? edgeInsets.horizontal : 0;
+    const contentMaxWidth = Math.max(0, computed.maxWidth - horizontalGutter * 2);
+
     const keyboardHeightRef = React.useRef(0);
 
     const recompute = React.useCallback(async () => {
@@ -1400,9 +1405,11 @@ export function Popover(props: PopoverWithBackdrop | PopoverWithoutBackdrop) {
                 return computed.placement === 'top' ? topForTop : topForBottom;
             })();
 
+            // The box carries the edge padding as a transparent gutter, so the box may reach the boundary's
+            // outer edge: the visible surface then stands exactly the edge margin from it, not twice.
             const clampedLeft = Math.min(
-                boundaryRect.x + boundaryRect.width - desiredWidth,
-                Math.max(boundaryRect.x, left),
+                boundaryRect.x + boundaryRect.width + horizontalGutter - desiredWidth,
+                Math.max(boundaryRect.x - horizontalGutter, left),
             );
 
             const verticalStyle: ViewStyle = (() => {
@@ -1929,7 +1936,7 @@ export function Popover(props: PopoverWithBackdrop | PopoverWithoutBackdrop) {
                                 kind="popover"
                                 direction={popoverMotionDirection}
                             >
-                                {children({ ...computed, requestClose })}
+                                {children({ ...computed, maxWidth: contentMaxWidth, requestClose })}
                             </OverlayMotionFrame>
                         </ModalPortalTargetProvider>
                     </>
@@ -1939,7 +1946,7 @@ export function Popover(props: PopoverWithBackdrop | PopoverWithoutBackdrop) {
                         kind="popover"
                         direction={popoverMotionDirection}
                     >
-                        {children({ ...computed, requestClose })}
+                        {children({ ...computed, maxWidth: contentMaxWidth, requestClose })}
                     </OverlayMotionFrame>
                 )}
             </ViewWithWheel>
