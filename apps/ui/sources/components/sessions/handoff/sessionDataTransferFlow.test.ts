@@ -37,6 +37,9 @@ it('keeps the dialog after no-copy refusal and sends only the corrected transfer
         const admission = SessionHandoffStartResponseSchema.parse(produced.admission);
         const terminal = ActionOperationSnapshotV1Schema.parse(produced.terminal);
         expect(terminal.error?.errorCode).toBe('existing_session_state_unavailable');
+        if ('launchFailure' in produced) {
+            expect(produced.launchFailure).toMatchObject({ type: 'error', errorCode: terminal.error?.errorCode, errorMessage: terminal.error?.error });
+        }
         if (!terminal.error?.error) throw new Error('Daemon failure explanation is missing');
         expectedError = terminal.error.error;
         const { actionOperationStore } = await import('@/sync/domains/actionOperations/actionOperationStore');
