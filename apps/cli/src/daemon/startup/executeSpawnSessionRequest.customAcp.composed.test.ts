@@ -1,4 +1,4 @@
-import { afterAll, beforeAll, beforeEach, describe, expect, it, vi } from 'vitest';
+import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it, vi } from 'vitest';
 import { mkdtemp, readdir, readFile, rm } from 'node:fs/promises';
 import axios, { AxiosHeaders, type AxiosResponse } from 'axios';
 import { tmpdir } from 'node:os';
@@ -52,11 +52,13 @@ import { McpServerCatalogV1Schema } from '@happier-dev/protocol/mcp/servers/serv
 import { PromptLibraryCatalogKeyV1Schema } from '@happier-dev/protocol/prompts/library/promptLibraryRowsV1';
 import { emptyPromptLibraryRecordV1 } from '@happier-dev/protocol/prompts/library/promptLibraryCatalogV1';
 import { V2SessionByIdResponseSchema, type V2SessionByIdResponse } from '@happier-dev/protocol/sessions/control/contract';
+import { AgentRuntimeDaemonServiceRequestV1Schema, AgentRuntimeDaemonServiceResponseV1Schema } from '@/agent/runtime/session/process/agentRuntimeDaemonServiceProtocol';
 
 const storage = vi.hoisted(() => ({ home: '', persistedToken: 'df38-owner-token',
   credentials: { token: 'df38-owner-token', encryption: null }, io: vi.fn(),
   runnerCommand: '', runnerExited: false, sourceChecks: null as Array<{ command: string; args: string[] }> | null,
   runnerBootstrapPath: '',
+  runnerWrapperPid: 0,
   runnerLaunches: [] as Array<{ command: string; args: string[] }>,
   runnerSpawn: null as ((args: string[], env: NodeJS.ProcessEnv) => import('node:child_process').ChildProcess) | null,
   daemonPort: 0, daemonControlToken: '' }));
@@ -98,13 +100,13 @@ vi.mock('node:child_process', async importOriginal => {
 // process command identity differs from Vitest's actual worker command.
 vi.mock('../processIdentity', async importOriginal => {
   const actual = await importOriginal<typeof import('../processIdentity')>();
-  return { ...actual, readProcessIdentityByPid: async (pid: number) => storage.runnerCommand && pid === process.pid
-    ? storage.runnerExited ? null : { pid, command: storage.runnerCommand, processStartTimeMs: 1 }
+  return { ...actual, readProcessIdentityByPid: async (pid: number) => storage.runnerCommand && (pid === process.pid || pid === storage.runnerWrapperPid)
+    ? storage.runnerExited ? null : { pid, command: storage.runnerCommand, processStartTimeMs: pid === storage.runnerWrapperPid ? 2 : 1 }
     : await actual.readProcessIdentityByPid(pid) };
 });
 vi.mock('../processRunState', async importOriginal => {
   const actual = await importOriginal<typeof import('../processRunState')>();
-  return { ...actual, readProcessRunState: async (pid: number) => storage.runnerCommand && pid === process.pid
+  return { ...actual, readProcessRunState: async (pid: number) => storage.runnerCommand && (pid === process.pid || pid === storage.runnerWrapperPid)
     ? storage.runnerExited ? 'dead' : 'servable'
     : await actual.readProcessRunState(pid) };
 });
@@ -139,17 +141,26 @@ vi.mock('@/persistence', async importOriginal => ({
 
 let runtime: Awaited<ReturnType<typeof createCustomAcpAdmissionRuntimeFixture>>;
 let api: ApiClient;
+let runtimeHome = '';
 beforeAll(async () => {
   storage.home = await mkdtemp(join(tmpdir(), 'happier-df38-spawn-'));
+  runtimeHome = storage.home;
   runtime = await createCustomAcpAdmissionRuntimeFixture();
   api = await ApiClient.create(storage.credentials);
 });
 afterAll(async () => {
   await runtime?.dispose();
   resetActiveAccountSettingsSnapshotForTests();
-  await rm(storage.home, { recursive: true, force: true });
+  await rm(runtimeHome, { recursive: true, force: true });
 });
-beforeEach(() => {
+afterEach(async () => {
+  await rm(storage.home, { recursive: true, force: true });
+  storage.home = runtimeHome;
+});
+beforeEach(async () => {
+  // The fixture controller remains one real daemon occurrence, but each
+  // process replay owns its own Home/markers, just as distinct workers do.
+  storage.home = await mkdtemp(join(tmpdir(), 'happier-df42-runner-'));
   storage.persistedToken = storage.credentials.token;
   resetActiveAccountSettingsSnapshotForTests();
   setActiveAccountSettingsSnapshot({ source: 'network', settings: accountSettingsParse({}),
@@ -203,13 +214,15 @@ describe('Custom ACP fresh daemon launch composition', () => {
     }
   });
 
-  it('retains the qualified spawn target through installed runner startup and permission seeding to the first native model call', async () => {
+  it.each(['alpha', 'beta'])('retains the qualified spawn target %s through installed runner startup and permission seeding to the first native model call', async definitionId => {
     const fatal = vi.spyOn(logger, 'fatal').mockImplementation(() => {});
     const exit = vi.spyOn(process, 'exit').mockImplementation(() => { throw new Error('df41-child-exit'); });
     const stderr = vi.spyOn(console, 'error').mockImplementation(() => {});
     const debug = vi.spyOn(logger, 'debug');
     const actualFetch = globalThis.fetch;
     const networkSpies: Array<{ mockRestore(): void }> = [];
+    const daemonServiceDeliveries: Array<{ request: ReturnType<typeof AgentRuntimeDaemonServiceRequestV1Schema.parse>;
+      response: ReturnType<typeof AgentRuntimeDaemonServiceResponseV1Schema.parse> }> = [];
     let daemon: Awaited<ReturnType<typeof startDaemonSessionControlRuntime>> | undefined;
     const daemonMutationCustody = createDaemonSessionMutationCustody({ credentials: storage.credentials });
     const snapshot = getActiveAccountSettingsSnapshot();
@@ -225,11 +238,14 @@ describe('Custom ACP fresh daemon launch composition', () => {
     const daemonEnvironment = { ...process.env, HAPPIER_ACCOUNT_SETTINGS_MODE: 'auto' };
     vi.stubEnv(PROCESS_OWNER_ENV_KEY, initialProcessOwner);
     storage.runnerCommand = `${process.execPath} ${join(process.cwd(), 'src', 'index.ts')}`;
+    // The managed Linux launch has an OS wrapper and a distinct Session runner.
+    // Model those process identities at the OS boundary instead of making the
+    // worker stand in for both roles, which skips canonical child adoption.
+    storage.runnerWrapperPid = process.pid + 1_000_000;
     storage.sourceChecks = [];
     storage.runnerLaunches = [];
     let sessionId = 'cdf41qualified000000000001';
     let sessionRow: V2SessionByIdResponse['session'] = createSessionNotificationContextFixture(sessionId);
-    const createdPermissionIntents = new Map<string, ReturnType<typeof readPermissionModeIntentFromMetadata>>();
     const trackedSessions = new Map<number, TrackedSession>();
     const pidToAwaiter = new Map<number, (session: TrackedSession) => void>();
     const pidToSpawnResultResolver: ExecuteSpawnSessionRequestParams['pidToSpawnResultResolver'] = new Map();
@@ -240,11 +256,12 @@ describe('Custom ACP fresh daemon launch composition', () => {
     const onChildExited = createOnChildExited({ pidToTrackedSession: trackedSessions, spawnResourceCleanupByPid,
       sessionAttachCleanupByPid, getApiMachineForSessions: () => null });
     const onHappySessionWebhook = createOnHappySessionWebhook({ pidToTrackedSession: trackedSessions, pidToAwaiter,
-      spawnResourceCleanupByPid, sessionAttachCleanupByPid, deviceLocalSecretStorage });
+      spawnResourceCleanupByPid, sessionAttachCleanupByPid, deviceLocalSecretStorage,
+      getParentPidFn: pid => pid === process.pid ? storage.runnerWrapperPid : null });
     let child: ChildProcess | undefined;
     const actualKill = process.kill;
     networkSpies.push(vi.spyOn(process, 'kill').mockImplementation((pid, signal) => {
-      if (storage.runnerCommand && Math.abs(pid) === process.pid) {
+      if (storage.runnerCommand && (Math.abs(pid) === process.pid || Math.abs(pid) === storage.runnerWrapperPid)) {
         if (signal !== 0) throw new Error('A synthetic runner must never signal the Vitest worker');
         if (pid < 0 || storage.runnerExited) throw Object.assign(new Error('Synthetic runner is absent'), { code: 'ESRCH' });
         return true;
@@ -280,7 +297,16 @@ describe('Custom ACP fresh daemon launch composition', () => {
       // Agent factory and ACP transport all execute their production owners.
       vi.stubGlobal('fetch', vi.fn<typeof fetch>(async (input, init) => {
         const url = new URL(input instanceof Request ? input.url : String(input));
-        if (url.hostname === '127.0.0.1' || url.hostname === 'localhost') return actualFetch(input, init);
+        if (url.hostname === '127.0.0.1' || url.hostname === 'localhost') {
+          const serviceRequest = typeof init?.body === 'string'
+            ? AgentRuntimeDaemonServiceRequestV1Schema.safeParse(JSON.parse(init.body)) : null;
+          const response = await actualFetch(input, init);
+          if (response.ok && serviceRequest?.success && serviceRequest.data.operation.kind === 'plugin_services.prepare_v1') {
+            daemonServiceDeliveries.push({ request: serviceRequest.data,
+              response: AgentRuntimeDaemonServiceResponseV1Schema.parse(await response.clone().json()) });
+          }
+          return response;
+        }
         if (url.pathname.startsWith('/v1/features')) return Response.json(features);
         return new Response('{}', { status: 404 });
       }));
@@ -314,10 +340,7 @@ describe('Custom ACP fresh daemon launch composition', () => {
             || typeof sharedMetadata.ciphertext !== 'string') throw new Error('Missing produced shared metadata');
           const ownerMetadata = StoredSessionOwnerMetadataEnvelopeV1Schema.parse('ownerMetadata' in body ? body.ownerMetadata : undefined);
           if (ownerMetadata.t !== 'plain') throw new Error('Expected the plain fixture Account');
-          const createdMetadata = projectSessionOwnerCompatibilityViewV1({
-            sharedMetadata: StoredSessionSharedMetadataV1Schema.parse(JSON.parse(sharedMetadata.ciphertext)),
-            ownerMetadata: ownerMetadata.v });
-          createdPermissionIntents.set(sessionId, readPermissionModeIntentFromMetadata(createdMetadata));
+          StoredSessionSharedMetadataV1Schema.parse(JSON.parse(sharedMetadata.ciphertext));
           const agentState = 'agentState' in body ? body.agentState : undefined;
           if (typeof agentState !== 'string' && agentState !== null) throw new Error('Invalid produced Agent state');
           if (!('metadataLayoutVersion' in body) || body.metadataLayoutVersion !== 1
@@ -353,7 +376,7 @@ describe('Custom ACP fresh daemon launch composition', () => {
         onHappySessionWebhook, requestShutdown: () => {}, processEnv: {} });
       storage.daemonPort = daemon.controlPort;
       storage.daemonControlToken = daemon.controlToken;
-      for (const definitionId of ['alpha', 'beta']) {
+      {
         sessionId = definitionId === 'alpha' ? 'cdf41qualified00000000000a' : 'cdf41qualified00000000000b';
         sessionRow = createSessionNotificationContextFixture(sessionId);
         vi.unstubAllEnvs();
@@ -389,11 +412,11 @@ describe('Custom ACP fresh daemon launch composition', () => {
           // tracked registration, markers and private authority come from the
           // production spawn and webhook producers, never a fixture reassembly.
           child = new ChildProcess();
-          Object.defineProperty(child, 'pid', { value: process.pid });
+          Object.defineProperty(child, 'pid', { value: storage.runnerWrapperPid });
           child.kill = () => true;
           runnerCompletion = Promise.resolve().then(async () => {
             try {
-              const tracked = trackedSessions.get(process.pid);
+              const tracked = trackedSessions.get(storage.runnerWrapperPid);
               if (!tracked || (tracked.acceptedSpawnMarkerGate && !await tracked.acceptedSpawnMarkerGate)) {
                 throw new Error('Real spawn marker was not accepted');
               }
@@ -425,6 +448,9 @@ describe('Custom ACP fresh daemon launch composition', () => {
         // Fresh daemon startup is correlated by the request's existing nonce;
         // the real marker owner requires it when adopting a PID placeholder.
         spawnInput.options.spawnNonce = `df41-${definitionId}-launch`;
+        // The Home-issued birth authorization makes the real daemon create
+        // owner commit the Session before the wrapped runner attaches to it.
+        spawnInput.options.creationAuthorization = { token: 'df42-home-create-authorization' };
         // Restricted runners deliberately cannot read hosting Account defaults.
         // The public spawn request carries the user's admitted permission intent.
         spawnInput.options.permissionMode = definitionId === 'alpha' ? 'read-only' : 'yolo';
@@ -446,6 +472,11 @@ describe('Custom ACP fresh daemon launch composition', () => {
                 || String(message).includes('Canonical Session startup readiness failed')
                 || String(message).includes('Canonical adoption ownership mismatch')).slice(-3)
               .map(([message, cause]) => [message, cause instanceof Error ? cause.stack : cause]))}`).not.toBeNull();
+        const prepared = daemonServiceDeliveries.filter(({ request }) => request.context.sessionId === sessionId);
+        expect(prepared, 'Installed runner must prepare PluginServices through the real daemon loopback route').not.toHaveLength(0);
+        expect(prepared.map(({ response }) => response)).toEqual(expect.arrayContaining([
+          expect.objectContaining({ ok: true, result: expect.objectContaining({ kind: 'plugin_services.result_v1' }) }),
+        ]));
         expect(result).toMatchObject({ type: 'success', sessionId });
         for (const sourceCheck of storage.sourceChecks ?? []) {
           expect(sourceCheck).toEqual({ command: process.execPath,
@@ -459,7 +490,12 @@ describe('Custom ACP fresh daemon launch composition', () => {
         const firstModel = JSON.parse(observed!);
         expect(firstModel).toMatchObject({ definitionId, agentTargetKey: buildBackendTargetKeyV2(admittedTarget), request: {
           method: 'session/set_model', params: { modelId: 'ollama/qwen2.5:3b' } } });
-        expect(createdPermissionIntents.get(sessionId), 'Session creation must preserve the admitted permission intent')
+        const ownerMetadata = StoredSessionOwnerMetadataEnvelopeV1Schema.parse(sessionRow.ownerMetadata);
+        if (ownerMetadata.t !== 'plain') throw new Error('Expected the plain produced owner metadata');
+        const producedMetadata = projectSessionOwnerCompatibilityViewV1({
+          sharedMetadata: StoredSessionSharedMetadataV1Schema.parse(JSON.parse(sessionRow.metadata!)),
+          ownerMetadata: ownerMetadata.v });
+        expect(readPermissionModeIntentFromMetadata(producedMetadata), 'Session startup must preserve the admitted permission intent')
           .toMatchObject({ permissionMode: definitionId === 'alpha' ? 'read-only' : 'yolo' });
         expect(Number.isSafeInteger(firstModel.pid) && firstModel.pid > 0).toBe(true);
         expect(await readProcessIdentityByPid(firstModel.pid), 'The real owned ACP vendor process must be retired').toBeNull();
@@ -471,6 +507,7 @@ describe('Custom ACP fresh daemon launch composition', () => {
       for (const spy of networkSpies.reverse()) spy.mockRestore();
       vi.unstubAllGlobals(); vi.unstubAllEnvs();
       storage.runnerCommand = ''; storage.runnerExited = false; storage.sourceChecks = null;
+      storage.runnerWrapperPid = 0;
       storage.runnerSpawn = null;
       storage.runnerBootstrapPath = '';
       storage.daemonPort = 0; storage.daemonControlToken = '';
