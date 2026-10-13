@@ -104,6 +104,16 @@ CLI lane rule:
   - `src/test-setup.integration.ts`
   - `src/test-setup.slow.ts`
 
+## Seam tests (required when a change crosses a seam)
+
+Most live failures in 0.3 were correct owners wired together wrongly: an empty environment handed to a real service, a reader never bound, an approval executor registered with the wrong dependencies, a producer emitting a field its strict consumer rejects, a cross-program change silently breaking another program's invariant. Owner-level tests that inject collaborators cannot see these. So:
+
+- **Composed test through real wiring.** When a change touches a composition root, registration, Action family, transport, persistence path or another program's contract, add or extend one test that goes through the production composition: the real registration/executor/handler/schema/storage (in-process real Socket.IO, real HTTP, disposable real SQLite/Postgres), mocking only true external systems (third-party APIs, OS/process, clock). Reuse the existing composed harness for that family first; create one per Action family/seam only when none exists.
+- **Producer → consumer contract.** For every wire or persisted shape the change produces, run the real producer's output (including edge inputs) through the exact consumer/strict schema that reads it.
+- **Wiring sensitivity check.** A seam test must fail if the wiring under test is removed or mis-bound (comment out the registration / pass the wrong dependency once and confirm RED). If it would still pass, it is not testing the seam.
+- **Fixtures come from real producers or canonical schemas**, not hand-written copies of internal shapes; a fixture that mirrors internals goes stale silently.
+- **Prefer fewer, stronger tests.** Delete or merge unit tests that only re-assert collaborator calls or mirror implementation; keep one owner test per decision plus the seam test. A lane may not report a seam-crossing change as done on mocked unit tests alone: it needs the seam test, or the named composed live recipe actually run, or an explicit deferral naming the recipe and its owner.
+
 ## Fixture And Mock Policy
 
 - Do not partially mock central shared modules such as `@/sync/domains/state/storage`.

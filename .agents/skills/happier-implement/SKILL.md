@@ -98,6 +98,8 @@ Classify unexpected failures before changing code: production defect, test drift
 
 Run the narrowest deciding GREEN check, then broaden according to reachability, silence of failure, blast radius, and reversibility. Exercise relevant happy, edge, failure, cancellation, recovery, persistence, compatibility, platform, and neighboring-owner behavior without manufacturing Cartesian matrices.
 
+When the change crosses a seam (composition root, registration, Action family, transport, persistence, another program's contract), follow `happier-testing` § "Seam tests": one composed test through the real wiring plus a producer→consumer contract check is part of done.
+
 For user-visible or environment-dependent changes, run the composed live browser/device/CLI/API/daemon recipe against the relevant loaded source/build when authorized and available. If that proof cannot run, use `IMPLEMENTED_NOT_VERIFIED` and name the missing prerequisite; do not substitute more internal checks and claim completion.
 
 Do not guess an expected result that cannot be derived from the user request, approved plan when applicable, current external contract, or observed canonical behavior. Distinguish implementation missing/wrong, implementation present but behavior unverified, evidence unavailable, and expected behavior materially ambiguous.
