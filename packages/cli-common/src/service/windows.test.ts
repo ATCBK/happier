@@ -24,9 +24,9 @@ describe('Windows scheduled task folder listing PowerShell helper', () => {
     expect(parseWindowsScheduledTaskFolderPowerShellJson('["\\\\Happier\\\\happier-daemon.default"]'))
       .toEqual(['\\Happier\\happier-daemon.default']);
     expect(parseWindowsScheduledTaskFolderPowerShellJson('[]')).toEqual([]);
-    // A successful empty enumeration, as `schtasks /Query /FO CSV /NH` reported it.
-    expect(parseWindowsScheduledTaskFolderPowerShellJson('')).toEqual([]);
-    expect(parseWindowsScheduledTaskFolderPowerShellJson(' \r\n')).toEqual([]);
+    // The COM producer emits explicit [] for an empty inventory; blank output proves nothing.
+    expect(parseWindowsScheduledTaskFolderPowerShellJson('')).toBeNull();
+    expect(parseWindowsScheduledTaskFolderPowerShellJson(' \r\n')).toBeNull();
     expect(parseWindowsScheduledTaskFolderPowerShellJson('ERROR: The system cannot find the file specified.')).toBeNull();
     expect(parseWindowsScheduledTaskFolderPowerShellJson('[1]')).toBeNull();
   });
