@@ -5,7 +5,8 @@ import { loadSyncSingletonForTests } from '@/dev/testkit/harness/syncSingletonLo
 import { standardCleanup } from '@/dev/testkit';
 import { applyProjectAccountRowsFixture } from '@/dev/testkit/fixtures/projectAccountRows';
 import { ScmComparisonSchema } from '@happier-dev/protocol/scm/comparison';
-import type { ScmDiffSummaryResult } from '@happier-dev/protocol/scm/diffSummaryResult';
+import { ScmDiffSummaryResultSchema } from '@happier-dev/protocol/scm/diffSummaryResult';
+import { PluginUiNewSessionSeedV1Schema, PluginUiNewSessionSeedOriginV1Schema } from '@happier-dev/protocol/plugins/ui';
 import { seedAndOpenNewSession } from '@/components/sessions/new/newSessionSeedComposer';
 import { readNewSessionDraftFromRepository } from '@/components/sessions/composer/newSessionDraftRepositoryAdapter';
 import { resetSessionDraftRepositoryForTests } from '@/sync/ops/sessionDrafts/sessionDraftRepository';
@@ -31,18 +32,22 @@ const comparison = ScmComparisonSchema.parse({ id: 'comparison-exact', source: {
         { path: 'denied.ts', changeKind: 'modified', binary: false, generated: false, lockfile: false,
             evidence: { state: 'unavailable', reason: 'permission_denied', unifiedDiff: 'DO_NOT_DISCLOSE' }, occurrences: [] },
     ] } });
-const result: ScmDiffSummaryResult = { resultId: 'saved-result', revision: 4, canUndo: false, output: {
+const result = ScmDiffSummaryResultSchema.parse({ resultId: 'saved-result', revision: 4, canUndo: false, output: {
     success: false, error: 'Partial', errorCode: 'SUMMARY_FAILED', sourceKey: comparison.id,
     comparison, resultId: 'saved-result', revision: 4,
+    requestedOutputs: ['walkthrough'],
+    analysis: { suppliedChangeRefs: ['change-one', 'change-other'], analysedChangeRefs: ['change-one'], remainingChangeRefs: ['change-other'] },
     outputs: { walkthrough: { state: 'partial', value: { title: 'Reading', intro: 'Overview', otherChangeRefs: ['change-other'],
         stops: [{ id: 'stop-one', title: 'Saved stop', explanationMarkdown: 'Saved explanation', changeRefs: ['change-one'] }] } } },
-} };
+} });
 afterEach(resetSessionDraftRepositoryForTests);
 
 describe('workspace SCM ordinary authoring seed', () => {
     it('captures the exact checkout and basis with only the selected stop authorized excerpts', () => {
         const seed = buildWorkspaceScmAuthoringSeed({ workspace, accountId: scope.accountId, comparison, result, stopId: 'stop-one' });
         expect(seed).not.toBeNull();
+        expect(PluginUiNewSessionSeedV1Schema.parse(seed)).toEqual({ ...seed, prompt: seed?.prompt?.trim() });
+        expect(PluginUiNewSessionSeedOriginV1Schema.parse(seed?.origin)).toEqual(seed?.origin);
         expect(seed?.prompt).toContain('before-oid');
         expect(seed?.prompt).toContain('Saved explanation');
         expect(seed?.prompt).toContain('+after');

@@ -1,6 +1,6 @@
 import { afterAll, afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import * as React from 'react';
-import { SessionAuthoringOpenResultV1Schema } from '@happier-dev/protocol/plugins/ui';
+import { PluginUiNewSessionSeedOriginV1Schema, SessionAuthoringOpenResultV1Schema } from '@happier-dev/protocol/plugins/ui';
 import { createHomeGovernanceHarness, installHomeGovernanceBoundaries } from '@/dev/testkit/harness/homeGovernanceHarness';
 import { installDisconnectedServerSocketBoundary, restoreServerAccountForTest } from '@/dev/testkit/harness/serverAccountConnectionHarness';
 import { loadSyncSingletonForTests } from '@/dev/testkit/harness/syncSingletonLoader';
@@ -530,7 +530,14 @@ describe('Project setup through ordinary authoring', () => {
         } });
         const reopened = readNewSessionDraftProjectionFromRepository({ scope, draftId: acknowledgement.draftId })?.draft;
         expect(reopened).toMatchObject({ input: 'My edited setup prompt', selectedMachineId: 'edited-machine', selectedPath: '/other' });
-        const destination = resolveCurrentProjectAuthoringReturn(reopened?.authoringOrigin);
+        const { resetSessionDraftRepositoryForTests } = await import('@/sync/ops/sessionDrafts/sessionDraftRepository');
+        resetSessionDraftRepositoryForTests();
+        const persisted = readNewSessionDraftProjectionFromRepository({ scope, draftId: acknowledgement.draftId })?.draft;
+        expect(persisted).toMatchObject({ input: 'My edited setup prompt', selectedMachineId: 'edited-machine', selectedPath: '/other' });
+        // Reconstruct from serialized local storage, then exercise the strict origin
+        // consumer. Reading the just-written in-memory draft cannot prove reopen.
+        expect(PluginUiNewSessionSeedOriginV1Schema.parse(persisted?.authoringOrigin)).toEqual(draft.authoringOrigin);
+        const destination = resolveCurrentProjectAuthoringReturn(persisted?.authoringOrigin);
         expect(destination.kind).toBe('ready');
         if (destination.kind !== 'ready') throw new Error('Return refused');
         expect(new URL(destination.href, 'https://happier.test').pathname).toBe('/projects/checkout-a/scripts');

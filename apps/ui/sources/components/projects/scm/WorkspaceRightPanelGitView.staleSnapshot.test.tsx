@@ -1,8 +1,12 @@
 import * as React from 'react';
-import { describe, expect, it, vi } from 'vitest';
+import { beforeEach, describe, expect, it, vi } from 'vitest';
 
 import { renderScreen } from '@/dev/testkit';
 import type { ScmWorkingSnapshot } from '@/sync/domains/state/storageTypes';
+import { storage } from '@/sync/domains/state/storage';
+import { projectManager } from '@/sync/runtime/orchestration/projectManager';
+import { EMPTY_SCM_CAPABILITIES } from '@/scm/core/snapshotMappers';
+import { RPC_METHODS } from '@happier-dev/protocol/rpc';
 
 // Unrelated external Markdown package; fail if this Git path ever invokes it.
 vi.mock('react-native-enriched-markdown/lib/module/web/streamingReveal.js', () => ({
@@ -11,9 +15,11 @@ vi.mock('react-native-enriched-markdown/lib/module/web/streamingReveal.js', () =
 
 (globalThis as any).IS_REACT_ACT_ENVIRONMENT = true;
 
-let snapshotMock: ScmWorkingSnapshot | null = null;
-let errorMock: { message: string; errorCode: string | null } | null = null;
-const refreshSpy = vi.fn(async () => {});
+type RpcRequest = Parameters<typeof import('@/sync/runtime/orchestration/serverScopedRpc/serverScopedMachineRpc').machineRpcWithServerScope>[0];
+const rpc = vi.hoisted(() => vi.fn<(request: RpcRequest) => Promise<unknown>>());
+let rootPath = '';
+let sequence = 0;
+const scope = () => ({ serverId: 's1', machineId: 'm1', rootPath });
 
 vi.mock('react-native', async () => {
     const { createReactNativeWebMock } = await import('@/dev/testkit/mocks/reactNative');
@@ -46,18 +52,9 @@ vi.mock('@/modal', async () => {
     return createModalModuleMock().module;
 });
 
-vi.mock('@/hooks/workspaces/scm/useWorkspaceScmSnapshotController', () => ({
-    useWorkspaceScmSnapshotController: () => ({
-        snapshot: snapshotMock,
-        loading: false,
-        error: errorMock,
-        refresh: refreshSpy,
-    }),
-}));
+vi.mock('@/sync/runtime/orchestration/serverScopedRpc/serverScopedMachineRpc', async () =>
+    (await import('@/dev/testkit/mocks/serverScopedRpc')).createServerScopedMachineRpcBoundaryMock(rpc));
 
-vi.mock('@/hooks/server/useFeatureEnabled', () => ({
-    useFeatureEnabled: () => true,
-}));
 
 vi.mock('./WorkspaceSourceControlView', () => ({
     WorkspaceSourceControlView: () => React.createElement('WorkspaceSourceControlViewStub'),
@@ -68,9 +65,9 @@ function createSnapshot(isRepo: boolean): ScmWorkingSnapshot {
         projectKey: 'p',
         fetchedAt: 1,
         repo: isRepo
-            ? { isRepo: true, rootPath: '/repo', backendId: 'git', mode: '.git' }
+            ? { isRepo: true, rootPath, backendId: 'git', mode: '.git' }
             : { isRepo: false, rootPath: null, backendId: null, mode: null },
-        capabilities: { readLog: true } as any,
+        capabilities: { ...EMPTY_SCM_CAPABILITIES, readLog: true },
         branch: { head: 'main', upstream: null, ahead: 0, behind: 0, detached: false },
         hasConflicts: false,
         entries: [],
@@ -83,7 +80,7 @@ function createSnapshot(isRepo: boolean): ScmWorkingSnapshot {
             pendingAdded: 0,
             pendingRemoved: 0,
         },
-    } as unknown as ScmWorkingSnapshot;
+    };
 }
 
 async function render() {
@@ -92,7 +89,7 @@ async function render() {
         <WorkspaceRightPanelGitView
             serverId="s1"
             machineId="m1"
-            rootPath="/repo"
+            rootPath={rootPath}
             onOpenFile={() => {}}
         />,
     );
@@ -107,42 +104,52 @@ async function render() {
  * place — made every later refresh failure invisible. The user reads stale content as current.
  */
 describe('WorkspaceRightPanelGitView (stale snapshot)', () => {
+    beforeEach(() => {
+        projectManager.clear();
+        storage.setState(storage.getInitialState(), true);
+        rootPath = `/stale-snapshot-${++sequence}`;
+        rpc.mockReset().mockResolvedValue({ success: false, errorCode: 'BACKEND_UNAVAILABLE', error: 'RPC method not available' });
+    });
     it('surfaces a failing refresh while keeping the cached repository content visible', async () => {
-        snapshotMock = createSnapshot(true);
-        errorMock = { message: 'RPC method not available', errorCode: 'BACKEND_UNAVAILABLE' };
-        refreshSpy.mockClear();
+        storage.getState().updateWorkspaceScmSnapshot(scope(), createSnapshot(true));
 
         const screen = await render();
 
         // The failure is visible…
-        expect(screen.findHostByTestId('workspace-rightpanel-git-stale')).not.toBeNull();
+        await vi.waitFor(() => expect(screen.findHostByTestId('workspace-rightpanel-git-stale')).not.toBeNull());
         // …and the cached content is still there rather than being replaced by an error card.
         expect(screen.findHostByTestId('project-rightpanel-git-surface:commit')).not.toBeNull();
         expect(screen.findHostByTestId('workspace-rightpanel-git-unavailable')).toBeNull();
 
         // The affordance is actionable, not just decorative.
+        rpc.mockClear();
+        rpc.mockResolvedValue({ success: true, snapshot: createSnapshot(true) });
         await screen.pressByTestIdAsync('workspace-rightpanel-git-stale-action');
-        expect(refreshSpy).toHaveBeenCalledTimes(1);
+        expect(rpc).toHaveBeenCalledWith(expect.objectContaining({ serverId: 's1', machineId: 'm1',
+            method: RPC_METHODS.SCM_STATUS_SNAPSHOT, payload: expect.objectContaining({ cwd: rootPath }) }));
+        await vi.waitFor(() => expect(screen.findHostByTestId('workspace-rightpanel-git-stale')).toBeNull());
+        expect(storage.getState().getWorkspaceScmSnapshotError(scope())).toBeNull();
     });
 
     it('surfaces a failing refresh over a cached "not a repository" answer', async () => {
-        snapshotMock = createSnapshot(false);
-        errorMock = { message: 'RPC method not available', errorCode: 'BACKEND_UNAVAILABLE' };
-        refreshSpy.mockClear();
+        storage.getState().updateWorkspaceScmSnapshot(scope(), createSnapshot(false));
 
         const screen = await render();
 
-        expect(screen.findHostByTestId('workspace-rightpanel-git-stale')).not.toBeNull();
+        await vi.waitFor(() => expect(screen.findHostByTestId('workspace-rightpanel-git-stale')).not.toBeNull());
         expect(screen.findHostByTestId('scm-not-repository')).not.toBeNull();
     });
 
     it('stays quiet when the snapshot is current', async () => {
-        snapshotMock = createSnapshot(true);
-        errorMock = null;
-        refreshSpy.mockClear();
+        storage.getState().updateWorkspaceScmSnapshot(scope(), createSnapshot(true));
+        rpc.mockResolvedValue({ success: true, snapshot: createSnapshot(true) });
 
         const screen = await render();
 
+        await vi.waitFor(() => expect(rpc).toHaveBeenCalledWith(expect.objectContaining({
+            method: RPC_METHODS.SCM_STATUS_SNAPSHOT, payload: expect.objectContaining({ cwd: rootPath }),
+        })));
+        expect(storage.getState().getWorkspaceScmSnapshotError(scope())).toBeNull();
         expect(screen.findHostByTestId('workspace-rightpanel-git-stale')).toBeNull();
         expect(screen.findHostByTestId('project-rightpanel-git-surface:commit')).not.toBeNull();
     });

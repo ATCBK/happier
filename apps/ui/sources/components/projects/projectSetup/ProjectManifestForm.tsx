@@ -24,6 +24,7 @@ import { InlineAddExpander } from '@/components/ui/forms/InlineAddExpander';
 import { Icon } from '@/components/ui/icons/Icon';
 import { ExpandableItem } from '@/components/ui/lists/ExpandableItem';
 import { Item } from '@/components/ui/lists/Item';
+import { ItemAddRow } from '@/components/ui/lists/ItemAddRow';
 import { ItemGroup } from '@/components/ui/lists/ItemGroup';
 import { SegmentedTabBar } from '@/components/ui/navigation/SegmentedTabBar';
 import { SelectionCheckGlyph } from '@/components/ui/selection/SelectionCheckGlyph';
@@ -838,7 +839,6 @@ function AddCommand(
     onAdd: (command: string, name?: string) => boolean;
   }>,
 ) {
-  const { theme } = useUnistyles();
   const [open, setOpen] = React.useState(false);
   const [name, setName] = React.useState('');
   const [command, setCommand] = React.useState('');
@@ -858,23 +858,11 @@ function AddCommand(
       onOpenChange={setOpen}
       title={props.label}
       trigger={
-        <Item
+        <ItemAddRow
           testID={props.testID}
           density="compact"
-          title={
-            <View style={styles.addRow}>
-              <Icon name="plus" size={16} color={theme.colors.text.secondary} />
-              <Text
-                style={[
-                  styles.addLabel,
-                  { color: theme.colors.text.secondary },
-                ]}
-              >
-                {props.label}
-              </Text>
-            </View>
-          }
-          showChevron={false}
+          title={props.label}
+          expanded={open}
           onPress={() => setOpen(!open)}
         />
       }
@@ -1104,8 +1092,6 @@ function CodeChip(props: Readonly<{ text: string; sans?: boolean }>) {
 const styles = StyleSheet.create(() => ({
   form: { gap: 8 },
   inline: { flexDirection: 'row', alignItems: 'center', gap: 8 },
-  addRow: { flexDirection: 'row', alignItems: 'center', gap: 10 },
-  addLabel: { ...Typography.default(), ...happierPageTextMetrics('rowTitle') },
   addFields: { gap: 8 },
   rowActions: {
     flexDirection: 'row',

@@ -2,7 +2,8 @@ import * as React from 'react';
 import { act } from 'react-test-renderer';
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 import type { ScmWorkingSnapshot } from '@/sync/domains/state/storageTypes';
-import type { WorkspaceScopeBase } from '@/sync/domains/workspaces/workspaceScope';
+import { storage } from '@/sync/domains/state/storage';
+import { projectManager } from '@/sync/runtime/orchestration/projectManager';
 
 import { renderScreen } from '@/dev/testkit';
 
@@ -13,9 +14,7 @@ vi.mock('react-native-enriched-markdown/lib/module/web/streamingReveal.js', () =
 
 (globalThis as any).IS_REACT_ACT_ENVIRONMENT = true;
 
-const beginWorkspaceScmOperationMock = vi.hoisted(() => vi.fn());
-const finishWorkspaceScmOperationMock = vi.hoisted(() => vi.fn(() => true));
-const appendWorkspaceScmOperationMock = vi.hoisted(() => vi.fn());
+const scope = { serverId: 'server-1', machineId: 'machine-1', rootPath: '/repo' };
 const machineScmRemoteAddMock = vi.hoisted(() => vi.fn(async (..._args: unknown[]) => ({ success: true })));
 const machineScmRemoteSetUrlMock = vi.hoisted(() => vi.fn(async (..._args: unknown[]) => ({ success: true })));
 const machineScmRemoteRemoveMock = vi.hoisted(() => vi.fn(async (..._args: unknown[]) => ({ success: true })));
@@ -92,22 +91,6 @@ vi.mock('@/hooks/server/useFeatureEnabled', () => ({
     useFeatureEnabled: () => true,
 }));
 
-vi.mock('@/sync/domains/state/storage', async (importOriginal) => {
-    const actual = await importOriginal<typeof import('@/sync/domains/state/storage')>();
-    const { createPartialStorageModuleMock } = await import('@/dev/testkit/mocks/storage');
-    const { createStorageStoreMock } = await import('@/dev/testkit/mocks/storage');
-    return createPartialStorageModuleMock(importOriginal, {
-        storage: createStorageStoreMock({
-            beginWorkspaceScmOperation: beginWorkspaceScmOperationMock,
-            finishWorkspaceScmOperation: finishWorkspaceScmOperationMock,
-            appendWorkspaceScmOperation: appendWorkspaceScmOperationMock,
-            // Preserve the real progress owner added to the operation lock contract.
-            updateWorkspaceScmOperationProgress: (scope: WorkspaceScopeBase, operationId: string, progressText?: string) =>
-                actual.storage.getState().updateWorkspaceScmOperationProgress(scope, operationId, progressText),
-        } as any),
-        useSetting: () => null,
-    });
-});
 
 vi.mock('@/components/workspaces/scm/states', () => ({
     SourceControlStaleSnapshotNotice: () => null,
@@ -230,18 +213,8 @@ describe('WorkspaceRightPanelGitView update mutations', () => {
         capturedPullRequestProps = null;
         capturedBranchIntegrationProps = null;
         capturedNotRepositoryProps = null;
-        beginWorkspaceScmOperationMock.mockReset();
-        beginWorkspaceScmOperationMock.mockReturnValue({
-            started: true,
-            operation: {
-                id: 'lock-1',
-                startedAt: 1,
-                sessionId: 'session-1',
-                operation: 'remote_add',
-            },
-        });
-        finishWorkspaceScmOperationMock.mockClear();
-        appendWorkspaceScmOperationMock.mockClear();
+        projectManager.clear();
+        storage.setState(storage.getInitialState(), true);
         machineScmRemoteAddMock.mockClear();
         machineScmRemoteSetUrlMock.mockClear();
         machineScmRemoteRemoveMock.mockClear();
@@ -258,16 +231,8 @@ describe('WorkspaceRightPanelGitView update mutations', () => {
     });
 
     it('routes remote add through the workspace SCM operation lock before invoking the RPC', async () => {
-        beginWorkspaceScmOperationMock.mockReturnValue({
-            started: false,
-            reason: 'operation_in_flight',
-            inFlight: {
-                id: 'lock-1',
-                startedAt: 1,
-                sessionId: 'other-session',
-                operation: 'pull',
-            },
-        });
+        const active = storage.getState().beginWorkspaceScmOperation(scope, 'pull');
+        expect(active.started).toBe(true);
 
         const { WorkspaceRightPanelGitView } = await import('./WorkspaceRightPanelGitView');
         const screen = await renderScreen(
@@ -286,14 +251,7 @@ describe('WorkspaceRightPanelGitView update mutations', () => {
             fetchUrl: 'git@example.com:repo.git',
         });
 
-        expect(beginWorkspaceScmOperationMock).toHaveBeenCalledWith(
-            expect.objectContaining({
-                serverId: 'server-1',
-                machineId: 'machine-1',
-                rootPath: '/repo',
-            }),
-            'remote_add',
-        );
+        expect(storage.getState().getWorkspaceScmInFlightOperation(scope)?.operation).toBe('pull');
         expect(machineScmRemoteAddMock).not.toHaveBeenCalled();
         expect(response).toEqual({
             success: false,

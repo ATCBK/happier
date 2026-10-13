@@ -31,6 +31,6 @@ describe('admitted Project terminal scope', () => {
             storage.getState().activateProfileScope({ serverId, accountId: 'cara' });
             expect(captured?.lifetime.isCurrent()).toBe(false);
             expect(resolveProjectTerminalScope(scopeId, workspace)).toBeNull();
-        } finally { home.dispose(); }
+        } finally { await home.dispose(); }
     });
 });

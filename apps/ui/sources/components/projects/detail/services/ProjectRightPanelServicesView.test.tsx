@@ -1,12 +1,14 @@
 import * as React from 'react';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
-import type { FeatureDecision, FeatureId, RuntimeActionExecute } from '@happier-dev/protocol';
+import { RPC_METHODS } from '@happier-dev/protocol/rpc';
+import { DaemonLocalServiceLauncherStartResponseV1Schema } from '@happier-dev/protocol/local/services/launcher/v1';
+import { DaemonLocalServicePublicPreviewCreateResponseV1Schema } from '@happier-dev/protocol/local/services/public/v1';
 import type { IModal } from '@/modal/types';
 import { buildLocalServiceInventoryState } from '@/dev/testkit/fixtures/localServices';
-import { pressTestInstanceAsync, renderScreen } from '@/dev/testkit/render/renderScreen';
-import { flushHookEffects } from '@/dev/testkit/hooks/flushHookEffects';
+import { pressTestInstanceAsync, renderScreen, flushHookEffects } from '@/dev/testkit';
 import { createHomeGovernanceHarness, installHomeGovernanceBoundaries } from '@/dev/testkit/harness/homeGovernanceHarness';
+import { createRootLayoutFeaturesResponse } from '@/dev/testkit/fixtures/featureFixtures';
 import {
     applyLocalServicePublicPreviewSnapshot,
     createLocalServicePublicPreviewState,
@@ -18,22 +20,19 @@ const home = createHomeGovernanceHarness();
 installHomeGovernanceBoundaries(home);
 const { applyLocalServiceLauncherSnapshot, createLocalServiceLauncherState } = await import('@/sync/domains/local/services/launch');
 const { ProjectRightPanelServicesView } = await import('./ProjectRightPanelServicesView');
+const { createFrontDoorRuntimeActionExecutor } = await import('@/sync/ops/actions/frontDoorRuntimeActionExecutor');
+const { storage } = await import('@/sync/domains/state/storage');
+const { settingsParse } = await import('@/sync/domains/settings/settings');
 
-const useFeatureDecisionMock = vi.hoisted(() => vi.fn((featureId: FeatureId, _scope?: unknown): FeatureDecision => ({
-    featureId,
-    state: 'enabled',
-    blockedBy: null,
-    blockerCode: 'none',
-    diagnostics: [],
-    evaluatedAt: 1,
-    scope: { scopeKind: 'runtime' },
-})));
+const rpc = vi.hoisted(() => ({ machine: vi.fn() }));
+// Only the daemon network is substituted; the mounted host and all Action dispatch run for real.
+vi.mock('@/sync/runtime/orchestration/serverScopedRpc/serverScopedMachineRpc', async () => {
+    const { createServerScopedMachineRpcBoundaryMock } = await import('@/dev/testkit/mocks/serverScopedRpc');
+    return createServerScopedMachineRpcBoundaryMock(rpc.machine);
+});
+
 const modalConfirmMock = vi.hoisted(() => vi.fn(async () => true));
 const modalShowMock = vi.hoisted(() => vi.fn<IModal['show']>(() => 'modal-id'));
-
-vi.mock('@/hooks/server/useFeatureDecision', () => ({
-    useFeatureDecision: (featureId: FeatureId, scope?: unknown) => useFeatureDecisionMock(featureId, scope),
-}));
 
 vi.mock('@/modal', async () => {
     const { createModalModuleMock } = await import('@/dev/testkit/mocks/modal');
@@ -43,16 +42,17 @@ vi.mock('@/modal', async () => {
     }).module;
 });
 
-function disabledServerDecision(featureId: FeatureId): FeatureDecision {
-    return {
-        featureId,
-        state: 'disabled',
-        blockedBy: 'server',
-        blockerCode: 'feature_disabled',
-        diagnostics: [],
-        evaluatedAt: 1,
-        scope: { scopeKind: 'spawn', serverId: 'server-a' },
-    };
+async function publishFeatures(serverId: string, publicPreviewEnabled: boolean) {
+    const features = createRootLayoutFeaturesResponse({ features: {
+        localServices: { enabled: true, inventory: { enabled: true }, launcher: { enabled: true },
+            preview: { enabled: true }, publicPreview: { enabled: publicPreviewEnabled } },
+        browser: { enabled: true, viewTargets: { enabled: true } },
+    } });
+    home.answer(serverId, '/v1/features', { body: features });
+    home.answer(serverId, '/v1/features/authenticated', { body: features });
+    // The real decision hook reads the Home's canonical published snapshot.
+    const { primeServerFeaturesSnapshot } = await import('@/sync/api/capabilities/serverFeaturesClient');
+    primeServerFeaturesSnapshot({ serverId, snapshot: { status: 'ready', features } });
 }
 
 function buildLauncherState() {
@@ -126,15 +126,14 @@ describe('ProjectRightPanelServicesView', () => {
     beforeEach(async () => {
         await home.reset();
         serverId = await home.addHome({ name: 'Project Home', serverUrl: 'https://project.example.test', accountId: 'project-account', currentAccount: true });
-        useFeatureDecisionMock.mockImplementation((featureId: FeatureId): FeatureDecision => ({
-            featureId,
-            state: 'enabled',
-            blockedBy: null,
-            blockerCode: 'none',
-            diagnostics: [],
-            evaluatedAt: 1,
-            scope: { scopeKind: 'runtime' },
-        }));
+        await publishFeatures(serverId, true);
+        rpc.machine.mockReset();
+        rpc.machine.mockImplementation(async () => { throw new Error('unexpected_machine_rpc'); });
+        const scope = { serverId, accountId: 'project-account' };
+        storage.setState({ profileScope: scope, settingsScope: scope });
+        storage.getState().applySettingsForScope(scope, settingsParse({ actionsSettingsV1: { v: 1,
+            approvalWaivedSurfaces: { 'localServices.launcher.start': ['ui'], 'localServices.publicPreview.create': ['ui'] },
+        } }), 1);
         modalConfirmMock.mockClear();
         modalShowMock.mockReset();
         modalShowMock.mockImplementation(() => 'modal-id');
@@ -177,19 +176,7 @@ describe('ProjectRightPanelServicesView', () => {
     });
 
     it('does not poll public preview status when public previews are disabled', async () => {
-        useFeatureDecisionMock.mockImplementation((featureId: FeatureId): FeatureDecision => (
-            featureId === 'localServices.publicPreview'
-                ? disabledServerDecision(featureId)
-                : {
-                    featureId,
-                    state: 'enabled',
-                    blockedBy: null,
-                    blockerCode: 'none',
-                    diagnostics: [],
-                    evaluatedAt: 1,
-                    scope: { scopeKind: 'runtime' },
-                }
-        ));
+        await publishFeatures(serverId, false);
         const publicPreviewStatusClient = vi.fn(async () => ({
             ok: false as const,
             reason: 'unavailable' as const,
@@ -210,7 +197,7 @@ describe('ProjectRightPanelServicesView', () => {
     });
 
     it('builds a launcher start runtime action request without requiring session context', async () => {
-        const runtimeActionExecute = vi.fn(async () => ({
+        rpc.machine.mockResolvedValue(DaemonLocalServiceLauncherStartResponseV1Schema.parse({
             protocolVersion: 1,
             machineId: 'machine-a',
             targetId: 'inventory:project-feed',
@@ -221,7 +208,8 @@ describe('ProjectRightPanelServicesView', () => {
                 updatedAt: 4_000,
                 targets: [],
             },
-        })) satisfies RuntimeActionExecute;
+        }));
+        const runtimeActionExecute = vi.fn(createFrontDoorRuntimeActionExecutor());
         const screen = await renderScreen(
             <ProjectRightPanelServicesView
                 machineId="machine-a"
@@ -252,27 +240,19 @@ describe('ProjectRightPanelServicesView', () => {
                 surface: 'ui',
             },
         });
+        expect(rpc.machine).toHaveBeenCalledWith(expect.objectContaining({
+            serverId, machineId: 'machine-a', method: RPC_METHODS.DAEMON_LOCAL_SERVICES_LAUNCHER_START,
+            payload: { machineId: 'machine-a', targetId: 'inventory:project-feed' },
+        }));
+        await expect(runtimeActionExecute.mock.results[0]!.value).resolves.toMatchObject({
+            protocolVersion: 1, machineId: 'machine-a', targetId: 'inventory:project-feed',
+            status: 'succeeded', snapshot: { targets: [] },
+        });
     });
 
-    it('creates public preview links through the project Services runtime action host', async () => {
-        modalShowMock.mockImplementationOnce((config) => {
-            const props = (config as unknown as Readonly<{
-                props: Readonly<{
-                    modeChoices: readonly { mode: 'secret_link' | 'authenticated' }[];
-                    ttlChoices: readonly { ttlMs: number }[];
-                    onResolve: (decision: { mode: 'secret_link' | 'authenticated'; ttlMs: number } | null) => void;
-                }>;
-            }>).props;
-            const mode = props.modeChoices[0];
-            const ttl = props.ttlChoices[0];
-            props.onResolve(mode && ttl ? { mode: mode.mode, ttlMs: ttl.ttlMs } : null);
-            return 'modal-id';
-        });
-        const runtimeActionExecute = vi.fn(async () => ({
+    it('creates a public preview through the real Services Action host under the Account UI approval waiver', async () => {
+        rpc.machine.mockResolvedValue(DaemonLocalServicePublicPreviewCreateResponseV1Schema.parse({
             protocolVersion: 1,
-            previewId: 'preview-project',
-            exposureId: 'public-preview-1',
-            status: 'created',
             exposure: {
                 exposureId: 'public-preview-1',
                 previewId: 'preview-project',
@@ -290,6 +270,7 @@ describe('ProjectRightPanelServicesView', () => {
                 v: 1,
                 machineId: 'machine-a',
                 sessionId: 'session-a',
+                previewId: 'preview-project',
                 generatedAt: 4_000,
                 refreshState: 'idle',
                 policy: {
@@ -304,7 +285,8 @@ describe('ProjectRightPanelServicesView', () => {
                 exposures: [],
                 diagnostics: [],
             },
-        })) satisfies RuntimeActionExecute;
+        }));
+        const runtimeActionExecute = vi.fn(createFrontDoorRuntimeActionExecutor());
         const screen = await renderScreen(
             <ProjectRightPanelServicesView
                 machineId="machine-a"
@@ -318,10 +300,10 @@ describe('ProjectRightPanelServicesView', () => {
 
         await screen.pressByTestIdAsync('project-rightpanel-services-row:preview:project-feed-item');
         await flushHookEffects();
-        await screen.pressByTestIdAsync('project-rightpanel-services-row:preview:project-feed-public-preview-target:preview-project-create');
+        await screen.pressByTestIdAsync('project-rightpanel-services-row:preview:project-feed-share');
         await flushHookEffects();
 
-        expect(modalShowMock).toHaveBeenCalledOnce();
+        expect(modalShowMock).not.toHaveBeenCalled();
         expect(modalConfirmMock).not.toHaveBeenCalled();
         expect(runtimeActionExecute).toHaveBeenCalledExactlyOnceWith({
             actionId: 'localServices.publicPreview.create',
@@ -339,6 +321,15 @@ describe('ProjectRightPanelServicesView', () => {
                 signal: expect.any(AbortSignal),
                 surface: 'ui',
             },
+        });
+        expect(rpc.machine).toHaveBeenCalledWith(expect.objectContaining({
+            serverId, machineId: 'machine-a', method: RPC_METHODS.DAEMON_LOCAL_SERVICES_PUBLIC_PREVIEW_CREATE,
+            payload: expect.objectContaining({ previewId: 'preview-project', sessionId: 'session-a',
+                mode: 'secret_link', ttlMs: 600_000, confirmation: { acknowledged: true } }),
+        }));
+        await expect(runtimeActionExecute.mock.results[0]!.value).resolves.toMatchObject({
+            protocolVersion: 1, exposure: { exposureId: 'public-preview-1', previewId: 'preview-project',
+                publicUrl: 'https://preview.example.test/public-preview-1' },
         });
     });
 });

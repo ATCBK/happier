@@ -1,12 +1,23 @@
 import * as React from 'react';
 import { act } from 'react';
-import { beforeEach, describe, expect, it, vi } from 'vitest';
+import { describe, expect, it, vi } from 'vitest';
 
 import { renderScreen } from '@/dev/testkit';
 import { createTextModuleMock } from '@/dev/testkit/mocks/text';
 import { toTestIdSafeValue } from '@/utils/ui/toTestIdSafeValue';
 import { selectScmChangedFiles } from '@/scm/scmStatusFiles';
 import { HappierTreeRow } from '@happier-dev/plugin-ui/presentation';
+import { DaemonFilesystemListDirectoryRequestSchema } from '@happier-dev/protocol/machines/fileBrowser';
+
+// Keep the tree, cache and row projection real; replace only the daemon transport.
+vi.mock('@/sync/runtime/orchestration/serverScopedRpc/serverScopedMachineRpc', async () =>
+    (await import('@/dev/testkit/mocks/serverScopedRpc')).createServerScopedMachineRpcBoundaryMock(async request => {
+        const { path } = DaemonFilesystemListDirectoryRequestSchema.parse(request.payload);
+        return { ok: true, path, truncated: false, gitIgnoreAvailable: true, entries: path === '/repo' ? [
+            { name: 'src', path: '/repo/src', type: 'directory' },
+            { name: 'README.md', path: '/repo/README.md', type: 'file' },
+        ] : [] };
+    }));
 
 vi.mock('react-native', async () => {
     const { createReactNativeWebMock } = await import('@/dev/testkit/mocks/reactNative');
@@ -20,25 +31,6 @@ vi.mock('react-native', async () => {
 
 const textMock = createTextModuleMock({ translate: (key: string) => key });
 vi.mock('@/text', () => textMock);
-
-// The directory listing is a machine RPC: the one boundary this tree reads through.
-const lazyTree = vi.hoisted(() => ({
-    nodes: [
-        { path: 'src', name: 'src', type: 'directory', depth: 0, isExpanded: false, isLoadingChildren: false },
-        { path: 'README.md', name: 'README.md', type: 'file', depth: 0, isExpanded: false, isLoadingChildren: false },
-    ] as any[],
-}));
-vi.mock('@/hooks/workspaces/files/useWorkspaceRepositoryTreeBrowser', () => ({
-    useWorkspaceRepositoryTreeBrowser: () => ({
-        rootLoading: false,
-        rootError: null,
-        nodes: lazyTree.nodes,
-        toggleDirectory: vi.fn(),
-        retryRoot: vi.fn(),
-        retryDirectory: vi.fn(),
-        gitIgnoreAvailable: true,
-    }),
-}));
 
 // Virtualization is a platform list; render every row so the test reads the tree itself.
 vi.mock('@/components/ui/filesystemBrowser/FilesystemBrowserList', () => ({
@@ -104,12 +96,6 @@ describe('WorkspaceRepositoryTreeList · Changed only', () => {
         },
     } as any;
 
-    beforeEach(() => {
-        lazyTree.nodes = [
-            { path: 'src', name: 'src', type: 'directory', depth: 0, isExpanded: false, isLoadingChildren: false },
-            { path: 'README.md', name: 'README.md', type: 'file', depth: 0, isExpanded: false, isLoadingChildren: false },
-        ];
-    });
 
     async function render(props: Partial<React.ComponentProps<typeof import('./WorkspaceRepositoryTreeList').WorkspaceRepositoryTreeList>> = {}) {
         const { WorkspaceRepositoryTreeList } = await import('./WorkspaceRepositoryTreeList');

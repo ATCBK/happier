@@ -1,13 +1,12 @@
 import * as React from 'react';
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 import { renderHook, standardCleanup } from '@/dev/testkit';
-import { AppPaneProvider } from '@/components/appShell/panes/AppPaneProvider';
+import { act } from 'react-test-renderer';
 import { installSessionPaneRuntimeTestHarness } from '@/components/sessions/panes/sessionPaneRuntimeTestHarness';
-import { getSessionDraftSnapshot, resetSessionDraftRepositoryForTests } from '@/sync/ops/sessionDrafts/sessionDraftRepository';
-import { prepareSessionDraftPersistenceStorage } from '@/sync/ops/sessionDrafts/sessionDraftPersistenceStorage';
-import { useProjectSurfaceActions } from './useProjectSurfaceActions';
 
 const boundary = vi.hoisted(() => ({ sequence: 10, push: vi.fn() }));
+vi.mock('socket.io-client', async importOriginal =>
+    (await import('@/dev/testkit/harness/serverAccountConnectionHarness')).createSocketIoClientBoundary(importOriginal));
 vi.mock('expo-router', async () => {
     const { createExpoRouterMock } = await import('@/dev/testkit/mocks/router');
     return createExpoRouterMock({ router: { push: boundary.push } }).module;
@@ -16,13 +15,53 @@ vi.mock('expo-router', async () => {
 vi.mock('@/modal', async () => (await import('@/dev/testkit/mocks/modal')).createModalModuleMock().module);
 // IndexedDB is supplied by the canonical runtime harness; draft and pane owners stay real.
 vi.mock('@/platform/randomUUID', () => ({ randomUUID: () => `00000000-0000-4000-8000-${String(boundary.sequence++).padStart(12, '0')}` }));
-function Wrapper(props: React.PropsWithChildren) { return React.createElement(AppPaneProvider, null, props.children); }
 const runtime = installSessionPaneRuntimeTestHarness();
+// Install Home boundaries before consumers that reach the Sync singleton.
+const [{ AppPaneProvider }, { useAppPaneScope }, { useProjectSurfaceActions },
+    { getSessionDraftSnapshot, resetSessionDraftRepositoryForTests }, { prepareSessionDraftPersistenceStorage }] = await Promise.all([
+    import('@/components/appShell/panes/AppPaneProvider'),
+    import('@/components/appShell/panes/hooks/useAppPaneScope'),
+    import('./useProjectSurfaceActions'),
+    import('@/sync/ops/sessionDrafts/sessionDraftRepository'),
+    import('@/sync/ops/sessionDrafts/sessionDraftPersistenceStorage'),
+]);
+function Wrapper(props: React.PropsWithChildren) { return React.createElement(AppPaneProvider, null, props.children); }
 
 describe('useProjectSurfaceActions', () => {
     beforeEach(async () => {
         standardCleanup(); boundary.push.mockReset(); resetSessionDraftRepositoryForTests();
         await prepareSessionDraftPersistenceStorage();
+    });
+    it('opens Changes in the companion without creating a separate Details tab', async () => {
+        const scopeId = 'project:review';
+        const workspaceRef = { id: 'review', serverId: runtime.serverId, machineId: 'machine-1', rootPath: '/repo', createdAtMs: 1 };
+        const hook = await renderHook(() => ({ pane: useAppPaneScope(scopeId),
+            actions: useProjectSurfaceActions({ scopeId, workspaceRef, activeRootPath: '/repo' }),
+        }), { wrapper: Wrapper });
+        try {
+            await act(async () => hook.getCurrent().actions.openReviewAllChanges());
+            expect(hook.getCurrent().pane.scopeState?.right).toMatchObject({ isOpen: true, activeTabId: 'git' });
+            expect(hook.getCurrent().pane.scopeState?.details.tabs).toEqual([]);
+        } finally { await hook.unmount(); }
+    });
+    it('reveals in Files and returns to Changes while retaining unsent Details and commit drafts', async () => {
+        const scopeId = 'project:files';
+        const workspaceRef = { id: 'files', serverId: runtime.serverId, machineId: 'machine-1', rootPath: '/repo', createdAtMs: 1 };
+        const hook = await renderHook(() => ({ pane: useAppPaneScope(scopeId),
+            actions: useProjectSurfaceActions({ scopeId, workspaceRef, activeRootPath: '/repo' }),
+        }), { wrapper: Wrapper });
+        try {
+            await act(async () => hook.getCurrent().pane.setDetailsTabState('file:src/a.ts', { editorText: 'unsaved' }));
+            await act(async () => hook.getCurrent().actions.revealInFilesTree('src/a.ts'));
+            expect(hook.getCurrent().pane.scopeState?.right.activeTabId).toBe('files');
+            expect(hook.getCurrent().pane.scopeState?.right.tabState.files).toMatchObject({ revealRequest: { path: 'src/a.ts' } });
+            expect(hook.getCurrent().pane.scopeState?.details.tabState['file:src/a.ts']).toEqual({ editorText: 'unsaved' });
+            await act(async () => hook.getCurrent().pane.setRightTabState('git', { activeSubTabId: 'history', commitMessageDraft: 'keep me' }));
+            await act(async () => hook.getCurrent().actions.openChanges());
+            expect(hook.getCurrent().pane.scopeState?.right.activeTabId).toBe('git');
+            expect(hook.getCurrent().pane.scopeState?.right.tabState.git).toMatchObject({ activeSubTabId: 'commit', commitMessageDraft: 'keep me' });
+            expect(hook.getCurrent().pane.scopeState?.details.tabState['file:src/a.ts']).toEqual({ editorText: 'unsaved' });
+        } finally { await hook.unmount(); }
     });
     it('retains an agent-free worktree draft with the exact Home, Machine and current folder before navigation', async () => {
         const hook = await renderHook(() => useProjectSurfaceActions({ scopeId: 'project:wr_1',

@@ -4,6 +4,7 @@ import { act } from 'react-test-renderer';
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 
 import { flushHookEffects, renderScreen } from '@/dev/testkit';
+import { storage } from '@/sync/domains/state/storage';
 
 (globalThis as any).IS_REACT_ACT_ENVIRONMENT = true;
 
@@ -54,12 +55,6 @@ vi.mock('@/components/ui/text/Text', () => ({
     TextInput: (props: Record<string, unknown>) => React.createElement('TextInput', props),
 }));
 
-vi.mock('@/sync/domains/state/storage', async () => {
-    const { createStorageModuleStub } = await import('@/dev/testkit/mocks/storage');
-    return createStorageModuleStub({
-        useSetting: () => 'always_bring',
-    });
-});
 
 vi.mock('@/components/workspaces/scm/branches/SwitchBranchWithChangesDialog', () => ({
     showSwitchBranchWithChangesDialog: vi.fn(async () => 'bring_changes'),
@@ -144,6 +139,8 @@ function flattenResultItems(results: { props: { categories?: Array<{ items: Arra
 
 describe('WorkspaceSourceControlBranchMenu worktrees', () => {
     beforeEach(() => {
+        storage.setState(storage.getInitialState(), true);
+        storage.getState().applySettingsLocal({ scmUncommittedChangesStrategy: 'always_bring' });
         pruneWorktreesForMachinePathMock.mockReset();
         removeWorktreeForMachinePathMock.mockReset();
         readCachedBranchesForMachinePathMock.mockReset();

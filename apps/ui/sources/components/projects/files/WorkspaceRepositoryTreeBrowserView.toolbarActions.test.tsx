@@ -4,12 +4,11 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
 import { createCapturingLegendListMock, createModalModuleMock, flushHookEffects, renderScreen, standardCleanup } from '@/dev/testkit';
 import type { StorageState } from '@/sync/store/types';
+import { buildWorkspaceCacheKey } from '@/sync/domains/workspaces/workspaceScope';
+import { getCachedWorkspaceRepositoryDirectoryEntries, setCachedWorkspaceRepositoryDirectoryEntries } from '@/sync/domains/workspaces/files/workspaceRepositoryDirectory';
 
 (globalThis as any).IS_REACT_ACT_ENVIRONMENT = true;
 
-const storageSpies = vi.hoisted(() => ({
-    setWorkspaceRepositoryTreeExpandedPaths: vi.fn(),
-}));
 let previousMachineState: Pick<StorageState, 'machines' | 'machineListByServerId' | 'machineListStatusByServerId'> | null = null;
 
 const promptSpy = vi.fn(async (..._args: any[]) => null as any);
@@ -19,11 +18,9 @@ const workspaceCreateDirectorySpy = vi.fn(async (..._args: any[]) => ({ success:
 const machineWorkspaceFileListSpy = vi.fn(async (_machineId: string, _input: unknown, _options: unknown) => ({
     ok: true as const, paths: ['src/needle.ts'], truncated: false,
 }));
-const clearWorkspaceRepositoryDirectoryEntriesSpy = vi.fn();
 const startUploadsSpy = vi.fn(async (..._args: any[]) => ({ ok: true } as const));
 let latestTransferOptions: any = null;
 
-const safePathSpy = vi.fn((value: string) => value === 'src/new-file.ts' || value === 'src/new-folder');
 const onOpenFileSpy = vi.fn();
 const onOpenFilePinnedSpy = vi.fn();
 let serverId = '';
@@ -113,14 +110,6 @@ vi.mock('@/modal', () => {
     return modalModuleMock.module;
 });
 
-vi.mock('@/sync/domains/state/storage', async (importOriginal) => {
-    const { createPartialStorageModuleMock } = await import('@/dev/testkit/mocks/storage');
-    return createPartialStorageModuleMock(importOriginal, {
-        useWorkspaceRepositoryTreeExpandedPaths: () => ['src'],
-        useMachine: () => machineState.current,
-        useServerScopedMachine: () => machineState.current,
-    });
-});
 
 vi.mock('@/sync/runtime/nativeIrohTunnels/machineTransferLifecycle', () => ({
     isIrohMachineTransferLifecycleAvailable: () => false,
@@ -161,10 +150,6 @@ vi.mock('@/sync/ops/machineWorkspaceFileList', () => ({
     machineWorkspaceFileList: (machineId: string, input: unknown, options: unknown) => machineWorkspaceFileListSpy(machineId, input, options),
 }));
 
-vi.mock('@/sync/domains/workspaces/files/workspaceRepositoryDirectory', () => ({
-    clearCachedWorkspaceRepositoryDirectoryEntries: (input: { workspaceCacheKey: string }) =>
-        clearWorkspaceRepositoryDirectoryEntriesSpy(input),
-}));
 
 vi.mock('@/hooks/workspaces/transfers/useWorkspaceFileTransfers', () => ({
     useWorkspaceFileTransfers: (input: any) => {
@@ -180,13 +165,7 @@ vi.mock('@/hooks/workspaces/transfers/useWorkspaceFileTransfers', () => ({
     },
 }));
 
-vi.mock('@/utils/path/isSafeWorkspaceRelativePath', () => ({
-    isSafeWorkspaceRelativePath: (value: string) => safePathSpy(value),
-}));
 
-vi.mock('@/components/workspaces/files/repositoryTree/computeExpandedPathsForReveal', () => ({
-    computeExpandedPathsForReveal: ({ expandedPaths }: any) => expandedPaths,
-}));
 
 vi.mock('./WorkspaceRepositoryTreeList', () => ({
     WorkspaceRepositoryTreeList: (props: any) => {
@@ -221,13 +200,9 @@ describe('WorkspaceRepositoryTreeBrowserView (toolbar actions)', () => {
         alertSpy.mockClear();
         workspaceWriteFileSpy.mockClear();
         workspaceCreateDirectorySpy.mockClear();
-        safePathSpy.mockClear();
-        safePathSpy.mockImplementation((value: string) => value === 'src/new-file.ts' || value === 'src/new-folder');
         onOpenFileSpy.mockClear();
         onOpenFilePinnedSpy.mockClear();
-        storageSpies.setWorkspaceRepositoryTreeExpandedPaths.mockClear();
         machineWorkspaceFileListSpy.mockClear();
-        clearWorkspaceRepositoryDirectoryEntriesSpy.mockClear();
         startUploadsSpy.mockClear();
         latestTransferOptions = null;
         latestWorkspaceRepositoryTreeListProps.current = null;
@@ -252,6 +227,7 @@ describe('WorkspaceRepositoryTreeBrowserView (toolbar actions)', () => {
                 machineListStatusByServerId: { [serverId]: 'idle', [secondServerId]: 'idle' },
             });
         });
+        for (const server of [serverId, secondServerId]) getStorage().getState().setWorkspaceRepositoryTreeExpandedPaths({ serverId: server, machineId: 'm1', rootPath: '/repo' }, ['src']);
         const fixtureState = getStorage().getState();
         expect(fixtureState.machines.m1).toBe(machineState.current);
         expect(fixtureState.machineListByServerId[serverId]?.[0]).toBe(machineState.current);
@@ -455,6 +431,11 @@ describe('WorkspaceRepositoryTreeBrowserView (toolbar actions)', () => {
         const search = { scope: { serverId, machineId: 'm1', rootPath: '/repo' }, query: 'needle' };
         await searchWorkspaceFiles(search);
         expect(machineWorkspaceFileListSpy).toHaveBeenCalledTimes(1);
+        const cache = { workspaceCacheKey: buildWorkspaceCacheKey(search.scope), directoryPath: '' };
+        const other = { ...cache, workspaceCacheKey: buildWorkspaceCacheKey({ ...search.scope, serverId: secondServerId }) };
+        setCachedWorkspaceRepositoryDirectoryEntries({ ...cache, entries: [{ name: 'old.ts', type: 'file' }] });
+        setCachedWorkspaceRepositoryDirectoryEntries({ ...other, entries: [{ name: 'keep.ts', type: 'file' }] });
+        expect(getCachedWorkspaceRepositoryDirectoryEntries(cache)?.map(entry => entry.name)).toEqual(['old.ts']);
 
         expect(menuItem(screen, 'repository-tree-create-menu', 'repository-tree-upload-files')).toBeTruthy();
         expect(latestTransferOptions?.workspaceScope).toEqual({
@@ -472,7 +453,8 @@ describe('WorkspaceRepositoryTreeBrowserView (toolbar actions)', () => {
         // The next read must reach transport again after the upload invalidates this workspace.
         await searchWorkspaceFiles(search);
         expect(machineWorkspaceFileListSpy).toHaveBeenCalledTimes(2);
-        expect(clearWorkspaceRepositoryDirectoryEntriesSpy).toHaveBeenCalledWith({ workspaceCacheKey: `${serverId}:m1:/repo` });
+        expect(getCachedWorkspaceRepositoryDirectoryEntries(cache)).toBeNull();
+        expect(getCachedWorkspaceRepositoryDirectoryEntries(other)?.map(entry => entry.name)).toEqual(['keep.ts']);
         expect(workspaceScmControllerState.refresh).toHaveBeenCalled();
     });
 
@@ -483,6 +465,8 @@ describe('WorkspaceRepositoryTreeBrowserView (toolbar actions)', () => {
             activeAt: Date.now(),
             daemonState: { status: 'running' },
         } as any;
+        const { getStorage } = await import('@/sync/domains/state/storage');
+        getStorage().setState({ machines: { m1: machineState.current }, machineListByServerId: { [serverId]: [machineState.current] } });
 
         const screen = await renderView();
 

@@ -3,6 +3,9 @@ import { beforeEach, describe, expect, it, vi } from 'vitest';
 import type { ScmWorkingSnapshot } from '@/sync/domains/state/storageTypes';
 import type { machineScmChangeExclude, machineScmChangeInclude } from '@/sync/ops/scm/machineScm';
 import { renderScreen } from '@/dev/testkit';
+import { storage } from '@/sync/domains/state/storage';
+import { projectManager } from '@/sync/runtime/orchestration/projectManager';
+import { EMPTY_SCM_CAPABILITIES } from '@/scm/core/snapshotMappers';
 import { toTestIdSafeValue } from '@/utils/ui/toTestIdSafeValue';
 
 const machineScmChangeIncludeSpy = vi.hoisted(() => vi.fn<typeof machineScmChangeInclude>(async () => ({ success: true })));
@@ -38,19 +41,6 @@ vi.mock('@/sync/ops/scm/machineScm', () => ({
     machineScmChangeExclude: (...args: Parameters<typeof machineScmChangeExcludeSpy>) => machineScmChangeExcludeSpy(...args),
 }));
 
-vi.mock('@/sync/domains/state/storage', async (importOriginal) => {
-    const { createPartialStorageModuleMock, createStorageStoreMock } = await import('@/dev/testkit/mocks/storage');
-    return createPartialStorageModuleMock(importOriginal, {
-        storage: createStorageStoreMock({
-            beginWorkspaceScmOperation: () => ({
-                started: true,
-                operation: { id: 'op-1', startedAt: 1, sessionId: 'session-1', operation: 'stage' },
-            }),
-            finishWorkspaceScmOperation: () => true,
-            appendWorkspaceScmOperation: () => {},
-        } as any),
-    });
-});
 
 function createSnapshot(): ScmWorkingSnapshot {
     return {
@@ -58,9 +48,10 @@ function createSnapshot(): ScmWorkingSnapshot {
         fetchedAt: 1,
         repo: { isRepo: true, rootPath: '/repo', backendId: 'git', mode: '.git' },
         capabilities: {
+            ...EMPTY_SCM_CAPABILITIES,
             writeInclude: true,
             writeExclude: true,
-        } as any,
+        },
         branch: { head: 'main', upstream: 'origin/main', ahead: 0, behind: 0, detached: false },
         hasConflicts: false,
         entries: [],
@@ -78,11 +69,13 @@ function createSnapshot(): ScmWorkingSnapshot {
 
 describe('applyWorkspaceFileStageAction', () => {
     beforeEach(() => {
+        projectManager.clear();
+        storage.setState(storage.getInitialState(), true);
         machineScmChangeIncludeSpy.mockClear();
         machineScmChangeExcludeSpy.mockClear();
     });
 
-    it('passes the workspace server scope to include RPCs', async () => {
+    it('passes the workspace server scope to include RPCs and settles the real operation', async () => {
         const { applyWorkspaceFileStageAction } = await import('./WorkspaceScmCommitSelectionToggleButton');
 
         await applyWorkspaceFileStageAction({
@@ -100,9 +93,12 @@ describe('applyWorkspaceFileStageAction', () => {
             { cwd: '/repo', paths: ['src/a.ts'] },
             { serverId: 'server-1' },
         );
+        const scope = { serverId: 'server-1', machineId: 'machine-1', rootPath: '/repo' };
+        expect(storage.getState().getWorkspaceScmInFlightOperation(scope)).toBeNull();
+        expect(storage.getState().getWorkspaceScmOperationLog(scope).at(-1)).toMatchObject({ operation: 'stage', status: 'success', path: 'src/a.ts' });
     });
 
-    it('passes the workspace server scope to exclude RPCs', async () => {
+    it('passes the workspace server scope to exclude RPCs and settles the real operation', async () => {
         const { applyWorkspaceFileStageAction } = await import('./WorkspaceScmCommitSelectionToggleButton');
 
         await applyWorkspaceFileStageAction({
@@ -120,6 +116,9 @@ describe('applyWorkspaceFileStageAction', () => {
             { cwd: '/repo', paths: ['src/a.ts'] },
             { serverId: 'server-1' },
         );
+        const scope = { serverId: 'server-1', machineId: 'machine-1', rootPath: '/repo' };
+        expect(storage.getState().getWorkspaceScmInFlightOperation(scope)).toBeNull();
+        expect(storage.getState().getWorkspaceScmOperationLog(scope).at(-1)).toMatchObject({ operation: 'unstage', status: 'success', path: 'src/a.ts' });
     });
 
     it('describes real index changes as stage and unstage actions', async () => {

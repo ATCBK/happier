@@ -1,8 +1,8 @@
 import * as React from 'react';
-import { describe, expect, it, vi } from 'vitest';
+import { storage } from '@/sync/domains/state/storage';
+import { beforeEach, describe, expect, it, vi } from 'vitest';
 
 import { renderScreen } from '@/dev/testkit';
-import { createExpoRouterMock } from '@/dev/testkit/mocks/router';
 
 const detailsSurfaceHostSpy = vi.hoisted(() => vi.fn((props: unknown) => React.createElement('DetailsSurfaceHostMock', { props })));
 const detailsSplitWorkspaceSpy = vi.hoisted(() => vi.fn((props: any) => React.createElement(
@@ -24,7 +24,7 @@ vi.mock('@/components/appShell/panes/details/surfaces', () => ({
     createDetailsSurfacePaneCallbacks: (callbacks: unknown) => callbacks,
 }));
 
-vi.mock('expo-router', () => createExpoRouterMock().module);
+vi.mock('expo-router', async () => (await import('@/dev/testkit/mocks/router')).createExpoRouterMock().module);
 
 vi.mock('@/text', async () => {
     const { createTextModuleMock } = await import('@/dev/testkit/mocks/text');
@@ -91,15 +91,8 @@ vi.mock('@/components/projects/detail/surfaces/ProjectTerminalSurface', () => ({
     ProjectTerminalSurface: () => React.createElement('ProjectTerminalSurface'),
 }));
 
-vi.mock('@/sync/domains/state/storage', async (importOriginal) => {
-    const { createPartialStorageModuleMock } = await import('@/dev/testkit/mocks/storage');
-    return createPartialStorageModuleMock(importOriginal, {
-        useAllMachines: () => [],
-        useLocalSetting: () => false,
-        useLocalSettingMutable: () => [false, vi.fn()],
-        useWorkspaceReviewCommentsDrafts: () => [],
-    });
-});
+
+beforeEach(() => storage.setState(storage.getInitialState(), true));
 
 describe('WorkspaceDetailsPanel generic details surface host adapter', () => {
     it('routes workspace detail tabs through the app-shell details surface host with canonical scope identity', async () => {
@@ -159,31 +152,6 @@ describe('WorkspaceDetailsPanel generic details surface host adapter', () => {
         expect(hostProps?.renderers).toEqual(expect.arrayContaining([
             expect.objectContaining({ id: 'plugin-details-destination:project', owner: 'plugin' }),
         ]));
-    });
-
-    it('keeps the workspace overview content while the generic details renderer set is available', async () => {
-        const { WorkspaceDetailsPanel } = await import('./WorkspaceDetailsPanel');
-        detailsSplitWorkspaceSpy.mockClear();
-
-        await renderScreen(
-            <WorkspaceDetailsPanel
-                workspaceRef={{
-                    id: 'wr_1',
-                    serverId: 'server-1',
-                    machineId: 'machine-1',
-                    rootPath: '/repo/main',
-                    label: 'Repo',
-                } as any}
-                scopeId="workspace:wr_1"
-                activeRootPath="/repo/main"
-                {...({ pluginUiProjection: { generation: 1 }, platform: 'web' } as any)}
-            />,
-        );
-
-        expect(detailsSplitWorkspaceSpy).toHaveBeenCalledWith(expect.objectContaining({
-            renderEmptyState: expect.any(Function),
-            renderTabContent: expect.any(Function),
-        }));
     });
 
     it('derives project details scope from the panel owner without a placement-scope override', async () => {

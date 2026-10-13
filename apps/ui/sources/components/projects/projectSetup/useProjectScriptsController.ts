@@ -100,6 +100,7 @@ export function useProjectScriptsController(
     scopeKey,
     serverId: workspace.serverId,
     onExecuted: onChanged,
+    openOnRequest: true,
   });
   const requestApprovalRef = React.useRef<
     (registration: ActionApprovalRegistration) => void

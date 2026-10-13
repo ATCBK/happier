@@ -1,8 +1,9 @@
 import * as React from 'react';
-import { describe, expect, it, vi } from 'vitest';
+import { beforeEach, describe, expect, it, vi } from 'vitest';
 import { renderScreen } from '@/dev/testkit';
+import { storage } from '@/sync/domains/state/storage';
 
-const pushSpy = vi.fn();
+const pushSpy = vi.hoisted(() => vi.fn());
 
 vi.mock('react-native', async () => {
   const { createReactNativeNativeMock } =
@@ -26,15 +27,11 @@ vi.mock('expo-router', async () => {
   const { createExpoRouterMock } = await import('@/dev/testkit/mocks/router');
   return createExpoRouterMock({ router: { push: pushSpy } }).module;
 });
-vi.mock('@/sync/domains/state/storage', async (importOriginal) => ({
-  ...(await importOriginal<typeof import('@/sync/domains/state/storage')>()),
-  useActiveServerAccountScope: () => ({
-    serverId: 'home a',
-    accountId: 'acct',
-  }),
-}));
-
 describe('ProjectActionApprovalNotice', () => {
+  beforeEach(() => {
+    pushSpy.mockClear();
+    storage.getState().activateProfileScope({ serverId: 'home a', accountId: 'acct' });
+  });
   it('is the shared pending notice: it says the change waits and Review opens that exact approval on its Home', async () => {
     const { ProjectActionApprovalNotice } =
       await import('./ProjectActionApprovalNotice');

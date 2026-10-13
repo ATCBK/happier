@@ -52,8 +52,8 @@ vi.mock('@expo/vector-icons', () => ({ Ionicons: 'Ionicons' }));
 let fixture:
   | Awaited<ReturnType<typeof createPlainArtifactHomeFixture>>
   | undefined;
-afterEach(() => {
-  fixture?.dispose();
+afterEach(async () => {
+  await fixture?.dispose();
   fixture = undefined;
   remote.mockReset();
   storage.getState().clearProjectAccountRowsScope();

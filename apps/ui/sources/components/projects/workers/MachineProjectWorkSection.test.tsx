@@ -86,12 +86,12 @@ vi.mock('@/sync/http/client', async (importOriginal) => {
 let fixture:
   | Awaited<ReturnType<typeof createPlainArtifactHomeFixture>>
   | undefined;
-afterEach(() => {
+afterEach(async () => {
   machineHttp.read = null;
   machineHttp.gate = null;
   viewport.compact = false;
   rpc.machine.mockReset();
-  fixture?.dispose();
+  await fixture?.dispose();
   fixture = undefined;
   vi.restoreAllMocks();
 });

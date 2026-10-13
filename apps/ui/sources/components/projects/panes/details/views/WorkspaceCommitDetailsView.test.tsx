@@ -1,4 +1,5 @@
 import * as React from 'react';
+import { storage } from '@/sync/domains/state/storage';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
 import { flushHookEffects, renderScreen, standardCleanup } from '@/dev/testkit';
@@ -39,12 +40,6 @@ vi.mock('@/text', async () => {
     return createTextModuleMock({ translate: (key) => key });
 });
 
-vi.mock('@/sync/domains/state/storage', async (importOriginal) => {
-    const { createPartialStorageModuleMock } = await import('@/dev/testkit/mocks/storage');
-    return createPartialStorageModuleMock(importOriginal, {
-        useSetting: () => false,
-    });
-});
 
 vi.mock('@/sync/ops/scm/machineScm', () => ({
     machineScmDiffCommit: (...args: Parameters<MachineScmDiffCommit>) => machineScmDiffCommitSpy(...args),
@@ -57,6 +52,7 @@ vi.mock('@/components/ui/code/WrapLinesToggleButton', () => ({ WrapLinesToggleBu
 
 describe('WorkspaceCommitDetailsView', () => {
     beforeEach(() => {
+        storage.setState(storage.getInitialState(), true);
         machineScmDiffCommitSpy.mockClear();
     });
 

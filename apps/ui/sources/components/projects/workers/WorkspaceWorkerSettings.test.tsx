@@ -101,8 +101,8 @@ function createExecutionConfigHome() {
 let fixture:
   | Awaited<ReturnType<typeof createPlainArtifactHomeFixture>>
   | undefined;
-afterEach(() => {
-  fixture?.dispose();
+afterEach(async () => {
+  await fixture?.dispose();
   fixture = undefined;
   vi.restoreAllMocks();
 });

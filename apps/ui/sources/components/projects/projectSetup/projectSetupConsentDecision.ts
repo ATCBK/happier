@@ -48,7 +48,8 @@ export async function rememberProjectSetupConsent(
   const refresh = async () => {
     if (input.signal?.aborted) throw new ProjectTrustOperationError('cancelled');
     const response = await getActionOperation({ serverId: retained.serverId, accountId: input.scope.accountId,
-      machineId: retained.snapshot.scope.machineId, operationId: retained.snapshot.operationId, requireCurrentDomainFacts: true });
+      machineId: retained.snapshot.scope.machineId, operationId: retained.snapshot.operationId,
+      requireCurrentDomainFacts: true, refreshSetupReview: true });
     if (input.signal?.aborted) throw new ProjectTrustOperationError('cancelled');
     if (response.kind !== 'found' || !matchesRetainedCheckout(response.operation, retained.snapshot, input.scope, workspace)) return null;
     publishActionOperationObservation({ serverId: retained.serverId, machineId: retained.snapshot.scope.machineId,

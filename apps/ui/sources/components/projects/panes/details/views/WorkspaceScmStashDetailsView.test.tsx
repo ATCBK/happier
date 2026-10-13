@@ -246,15 +246,10 @@ describe('WorkspaceScmStashDetailsView', () => {
             await settle();
         });
 
-        const unmanagedOption = screen.tree.findByProps({
-            testID: `dropdown-option-${String('stash@{1}').replace(/[^a-zA-Z0-9_-]/g, '_')}`,
-        });
-        await act(async () => {
-            unmanagedOption.props.onPress?.();
-            await settle();
-        });
+        await screen.pressByTestIdAsync(`dropdown-option-${String('stash@{1}').replace(/[^a-zA-Z0-9_-]/g, '_')}`);
+        await settle();
 
-        expect(machineScmStashShowSpy).toHaveBeenCalledWith('m1', expect.objectContaining({ cwd: '/repo', stashRef: 'stash@{1}' }), { serverId: 's1' });
+        await vi.waitFor(() => expect(machineScmStashShowSpy).toHaveBeenCalledWith('m1', expect.objectContaining({ cwd: '/repo', stashRef: 'stash@{1}' }), { serverId: 's1' }));
         const updatedHeader = screen.findByType(DetailsTabHeader);
         expect(updatedHeader.props.title).toBe('WIP on feature: unmanaged');
         expect(updatedHeader.props.meta).toEqual(expect.arrayContaining([

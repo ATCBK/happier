@@ -2,9 +2,11 @@ import * as React from 'react';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
 import { renderScreen, standardCleanup } from '@/dev/testkit';
-import { createExpoRouterMock } from '@/dev/testkit/mocks/router';
+import { storage } from '@/sync/domains/state/storage';
+import { buildWorkspaceCacheKey } from '@/sync/domains/workspaces/workspaceScope';
+import { ReviewCommentDraftMessageV1Schema } from '@happier-dev/protocol';
 
-const routerPushSpy = vi.fn();
+const routerPushSpy = vi.hoisted(() => vi.fn());
 const workspaceScmReviewDetailsViewSpy = vi.hoisted(() => vi.fn((_props: unknown) => null));
 const projectTerminalSurfaceSpy = vi.hoisted(() => vi.fn((_props: unknown) => null));
 const openDetailsTabSpy = vi.hoisted(() => vi.fn());
@@ -14,13 +16,9 @@ const detailsSplitWorkspaceSpy = vi.hoisted(() => vi.fn((props: any) => React.cr
     props.renderHeaderActions?.(),
 )));
 
-const expoRouterMock = createExpoRouterMock({
-    router: {
-        push: (value: unknown) => routerPushSpy(value),
-    },
-});
-
-vi.mock('expo-router', () => expoRouterMock.module);
+vi.mock('expo-router', async () => (await import('@/dev/testkit/mocks/router')).createExpoRouterMock({
+    router: { push: routerPushSpy },
+}).module);
 
 vi.mock('@/text', async () => {
     const { createTextModuleMock } = await import('@/dev/testkit/mocks/text');
@@ -94,13 +92,11 @@ vi.mock('@/platform/randomUUID', () => ({
     randomUUID: () => 'terminal-instance-2',
 }));
 
-vi.mock('@/sync/domains/state/storage', async (importOriginal) => {
-    const { createPartialStorageModuleMock } = await import('@/dev/testkit/mocks/storage');
-    return createPartialStorageModuleMock(importOriginal, {
-        useAllMachines: () => [],
-        useLocalSetting: () => false,
-        useLocalSettingMutable: () => [false, vi.fn()],
-        useWorkspaceReviewCommentsDrafts: () => [{
+
+describe('WorkspaceDetailsPanel review comment launcher', () => {
+    beforeEach(() => {
+        storage.setState(storage.getInitialState(), true);
+        storage.getState().upsertWorkspaceReviewCommentDraft(buildWorkspaceCacheKey({ serverId: 'server-1', machineId: 'machine-1', rootPath: '/repo/worktree-a' }), ReviewCommentDraftMessageV1Schema.parse({
             id: 'draft-1',
             filePath: 'src/a.ts',
             source: 'diff',
@@ -118,12 +114,8 @@ vi.mock('@/sync/domains/state/storage', async (importOriginal) => {
             },
             body: 'Please verify this project change.',
             createdAt: 1,
-        }],
-    });
-});
+        }));
 
-describe('WorkspaceDetailsPanel review comment launcher', () => {
-    beforeEach(() => {
         routerPushSpy.mockReset();
         workspaceScmReviewDetailsViewSpy.mockReset();
         projectTerminalSurfaceSpy.mockReset();

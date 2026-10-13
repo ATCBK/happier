@@ -6,7 +6,7 @@ import { createPlainArtifactHomeFixture } from '@/dev/testkit/harness/artifactSt
 import { useObservedWorkerSetting } from './useObservedWorkerSetting';
 
 let fixture: Awaited<ReturnType<typeof createPlainArtifactHomeFixture>> | undefined;
-afterEach(() => { fixture?.dispose(); fixture = undefined; });
+afterEach(async () => { await fixture?.dispose(); fixture = undefined; });
 
 describe('observed worker setting intent custody', () => {
   it.each(['conflict', 'outcomeUnknown', 'locked', 'unavailable', 'throw'] as const)(

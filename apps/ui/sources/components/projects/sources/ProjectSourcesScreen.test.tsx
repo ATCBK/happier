@@ -424,6 +424,6 @@ describe('Projects › Sources', () => {
       expect(document.writes).toEqual([]);
       expect(homes.requests.filter(request => request.home === 'foreign' && request.path.startsWith('/v1/artifacts'))
         .every(request => request.accountId === 'foreign-viewer')).toBe(true);
-    } finally { await disconnect(); homes.dispose(); }
+    } finally { await disconnect(); await homes.dispose(); }
   });
 });

@@ -62,7 +62,7 @@ describe('Project terminal through the incumbent pane workspace', () => {
             await act(async () => { storage.setState({ machines: { [machine.id]: heartbeat }, machineListByServerId: { [serverId]: [heartbeat] } }); });
             expect(screen.findByType(EmbeddedTerminalPane).props.controller.status).toBe('connecting');
             await screen.unmount();
-        } finally { vi.useRealTimers(); storage.setState(previous); home.dispose(); }
+        } finally { vi.useRealTimers(); storage.setState(previous); await home.dispose(); }
     });
 
     it('opens an admitted shell without a Session, then preserves labels, split identity and borrowed-view close', async () => {
@@ -120,6 +120,6 @@ describe('Project terminal through the incumbent pane workspace', () => {
             await vi.waitFor(() => expect(screen.findByTestId('project-terminal-workspace-root')).toBeNull());
             expect(readTerminalSurfaceState(key)?.output).toBe('');
             await screen.unmount();
-        } finally { retireMeasurements?.(); home.dispose(); }
+        } finally { retireMeasurements?.(); await home.dispose(); }
     });
 });

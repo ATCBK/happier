@@ -10,10 +10,13 @@ import { installRealActionExecutorModuleLoader } from '@/dev/testkit/harness/act
 import { installSessionDetailsPanelNonRnModuleMocks } from '@/components/sessions/panes/sessionDetailsPanelNonRnModuleMocks';
 import { installSessionPaneRuntimeTestHarness } from '@/components/sessions/panes/sessionPaneRuntimeTestHarness';
 import type { SelectedPaneDestinationV1 } from '@/components/appShell/panes/model/selectedPaneDestination';
+import { buildWidgetSurfaceArtifactIdV1, buildWidgetSurfaceArtifactHeaderV1, WidgetAreaLayoutV1Schema } from '@happier-dev/protocol/widgets';
 
 installSessionDetailsPanelNonRnModuleMocks();
 // Keep the pane reducer, Project adapters, overlay and close controls real in the DOM.
 vi.mock('react-native', async () => vi.importActual<typeof import('react-native-web')>('react-native-web'));
+vi.mock('socket.io-client', async importOriginal =>
+    (await import('@/dev/testkit/harness/serverAccountConnectionHarness')).createSocketIoClientBoundary(importOriginal));
 const daemon = vi.hoisted(() => vi.fn());
 vi.mock('@/sync/runtime/orchestration/serverScopedRpc/serverScopedMachineRpc', () => ({ machineRpcWithServerScope: daemon }));
 
@@ -32,7 +35,13 @@ beforeEach(() => {
 });
 const runtime = installSessionPaneRuntimeTestHarness({
     scopeId: ({ serverId }) => buildProjectPaneScopeId('wr_1', serverId),
-    request: async (url, init) => artifacts.handle(new URL(String(url)).pathname, init),
+    request: async (url, init) => {
+        const path = new URL(String(url)).pathname;
+        if (path === '/v2/account/settings') return Response.json({ content: { t: 'plain', v: {
+            actionsSettingsV1: { v: 1, approvalWaivedSurfaces: { 'widgets.item.add': ['ui'] } },
+        } }, version: 1 });
+        return artifacts.handle(path, init);
+    },
 });
 let root: Root;
 let container: HTMLDivElement;
@@ -65,9 +74,9 @@ afterEach(async () => {
     vi.unstubAllGlobals();
 });
 
-async function renderProject() {
+async function renderProject(page: 'context' | 'overview' = 'context') {
     await act(async () => root.render(<runtime.Wrapper><ProjectDetailScreen
-        workspaceRefId="wr_1" serverId={runtime.serverId} page="context"
+        workspaceRefId="wr_1" serverId={runtime.serverId} page={page}
     /></runtime.Wrapper>));
 }
 function element(testId: string) {
@@ -97,6 +106,58 @@ function restoreRightPane(right: Readonly<{
 }
 
 describe('Project companion pane dismissal in the DOM', () => {
+    it('opens the single phone Add gallery after dismissing Git and persists additions to both dashboard areas', async () => {
+        const surface = { serverId: runtime.serverId, accountId: 'account-a',
+            owner: { kind: 'project' as const, projectId: 'project-alpha' } };
+        const artifactId = buildWidgetSurfaceArtifactIdV1(surface);
+        const empty = WidgetAreaLayoutV1Schema.parse({ v: 1, surface, items: [] });
+        const { createArtifactWithHeaderViaApi } = await import('@/sync/engine/artifacts/syncArtifacts');
+        await createArtifactWithHeaderViaApi({ artifactId, serverId: runtime.serverId,
+            credentials: { token: `header.${Buffer.from(JSON.stringify({ sub: 'account-a' })).toString('base64url')}.signature` },
+            request: async (path, init) => path === '/v1/account/encryption' ? Response.json({ mode: 'plain', updatedAt: 1 })
+                : await artifacts.handle(path, init) ?? Response.json({}, { status: 404 }),
+            header: buildWidgetSurfaceArtifactHeaderV1(empty), body: JSON.stringify(empty), encryption: null,
+            artifactDataKeys: new Map(), addArtifact: () => {},
+        });
+        await renderProject('overview');
+        await act(async () => runtime.pane.openRight({ tabId: 'git' }));
+        await act(async () => element('project-rightpanel-header.close').click());
+        expect(container.querySelector('[data-testid="multi-pane-right-modal"]')).toBeNull();
+        await vi.waitFor(() => expect(container.querySelectorAll('[data-testid="project-overview-main.add"]')).toHaveLength(1));
+        expect(container.querySelector('[data-testid="project-overview-aside.add"]')).toBeNull();
+        await act(async () => element('project-overview-main.add').click());
+        // Real BaseModal portal, gallery and strict Action/Artifact wiring; no renderer substitute.
+        const gallery = () => document.querySelector<HTMLElement>('[data-testid="project-overview-main.addPopover.sheet"]');
+        await vi.waitFor(() => expect(gallery()).not.toBeNull());
+        expect(artifacts.list().map(row => row.id)).toEqual([artifactId]);
+        expect(WidgetAreaLayoutV1Schema.parse(JSON.parse(artifacts.readPlainBody(artifactId)!))).toEqual(empty);
+        const clickGallery = async (id: string) => {
+            const control = gallery()?.querySelector<HTMLElement>(`[data-testid="${id}"]`);
+            expect(control).not.toBeNull();
+            await act(async () => control!.click());
+        };
+        for (const [area, widget] of [['main', 'project_about'], ['aside', 'project_readme']] as const) {
+            await clickGallery(`project-overview-main.addPopover.area:${area}`);
+            await clickGallery(`project-overview-main.addPopover.entry.plugin-builtin:${widget}`);
+            await vi.waitFor(() => expect(gallery()?.querySelector('[data-testid$=".submit"]')).not.toBeNull());
+            await act(async () => gallery()!.querySelector<HTMLElement>('[data-testid$=".submit"]')!.click());
+            await vi.waitFor(() => {
+                const saved = WidgetAreaLayoutV1Schema.parse(JSON.parse(artifacts.readPlainBody(artifactId)!));
+                expect(saved.items).toContainEqual(expect.objectContaining({ area, instance: expect.objectContaining({
+                    definition: { kind: 'builtin', id: widget },
+                }) }));
+            });
+            const back = gallery()?.querySelector<HTMLElement>('[data-testid$=".detail.back"]');
+            if (back) await act(async () => back.click());
+        }
+        await clickGallery('project-overview-main.addPopover.done');
+        await act(async () => root.render(<runtime.Wrapper />));
+        await renderProject('overview');
+        const saved = WidgetAreaLayoutV1Schema.parse(JSON.parse(artifacts.readPlainBody(artifactId)!));
+        for (const item of saved.items) if (item.kind === 'widget') await vi.waitFor(() => expect(container.querySelector(
+            `[data-testid="project-overview-merged.widget.${item.instance.id}"]`)).not.toBeNull());
+        expect(saved.items.map(item => item.area)).toEqual(['main', 'aside']);
+    });
     it.each([1100, 830])('opens a fresh wide Project scope at %s with the preferred tab', async (width) => {
         await resize(width);
         await renderProject();

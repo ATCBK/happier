@@ -1,32 +1,21 @@
+import * as React from 'react';
 import { beforeEach, describe, expect, it, vi } from 'vitest';
+import { act } from 'react-test-renderer';
 
 import { renderHook } from '@/dev/testkit';
-import { createExpoRouterMock } from '@/dev/testkit/mocks/router';
 import type { WorkspaceRefV1 } from '@/sync/domains/workspaces/workspaceRefModel';
+import { AppPaneProvider } from '@/components/appShell/panes/AppPaneProvider';
+import { useAppPaneScope } from '@/components/appShell/panes/hooks/useAppPaneScope';
 
 (globalThis as { IS_REACT_ACT_ENVIRONMENT?: boolean }).IS_REACT_ACT_ENVIRONMENT = true;
 
-const routerMock = createExpoRouterMock();
-const paneScopeMock = {
-    openRight: vi.fn(),
-    setRightTab: vi.fn(),
-    closeRight: vi.fn(),
-    scopeState: {
-        right: {
-            isOpen: false,
-            activeTabId: null as string | null,
-        },
-    },
-};
+const routerReplace = vi.hoisted(() => vi.fn());
+function Wrapper(props: React.PropsWithChildren) { return React.createElement(AppPaneProvider, null, props.children); }
 
-vi.mock('expo-router', () => routerMock.module);
+vi.mock('expo-router', async () => (await import('@/dev/testkit/mocks/router')).createExpoRouterMock({ router: { replace: routerReplace } }).module);
 
 vi.mock('@/utils/platform/responsive', () => ({
     useDeviceType: () => 'phone',
-}));
-
-vi.mock('@/components/appShell/panes/hooks/useAppPaneScope', () => ({
-    useAppPaneScope: () => paneScopeMock,
 }));
 
 const workspaceRef: WorkspaceRefV1 = {
@@ -41,23 +30,22 @@ const workspaceRef: WorkspaceRefV1 = {
 
 describe('useProjectSurfaceController', () => {
     beforeEach(() => {
-        paneScopeMock.openRight.mockClear();
-        paneScopeMock.setRightTab.mockClear();
-        routerMock.spies.replace.mockClear();
+        routerReplace.mockClear();
     });
 
     it('preserves a non-worktree active root path when changing cockpit surfaces on phone', async () => {
         const { useProjectSurfaceController } = await import('./useProjectSurfaceController');
-        const hook = await renderHook(() => useProjectSurfaceController({
+        const hook = await renderHook(() => ({ controller: useProjectSurfaceController({
             scopeId: 'project:wr_1',
             workspaceRef,
             activeRootPath: '/repo/packages/ui',
             activeWorktreeId: null,
-        }));
+        }), pane: useAppPaneScope('project:wr_1') }), { wrapper: Wrapper });
 
-        hook.getCurrent().setActiveTab('services');
+        await act(async () => hook.getCurrent().controller.setActiveTab('services'));
+        expect(hook.getCurrent().pane.scopeState?.right).toMatchObject({ isOpen: true, activeTabId: 'services' });
 
-        expect(routerMock.spies.replace).toHaveBeenCalledWith(
+        expect(routerReplace).toHaveBeenCalledWith(
             '/projects/wr_1/overview?activeRootPath=%2Frepo%2Fpackages%2Fui&serverId=server-1&mobileSurface=services',
         );
 

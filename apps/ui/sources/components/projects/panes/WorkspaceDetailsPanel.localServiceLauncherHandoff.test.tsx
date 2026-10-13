@@ -1,8 +1,8 @@
 import * as React from 'react';
-import { describe, expect, it, vi } from 'vitest';
+import { storage } from '@/sync/domains/state/storage';
+import { beforeEach, describe, expect, it, vi } from 'vitest';
 
 import { renderScreen } from '@/dev/testkit';
-import { createExpoRouterMock } from '@/dev/testkit/mocks/router';
 import {
     applyLocalServiceLauncherSnapshot,
     createLocalServiceLauncherState,
@@ -41,7 +41,7 @@ vi.mock('@/components/appShell/panes/details/workspace/DetailsSplitWorkspace', (
     ),
 }));
 
-vi.mock('expo-router', () => createExpoRouterMock().module);
+vi.mock('expo-router', async () => (await import('@/dev/testkit/mocks/router')).createExpoRouterMock().module);
 
 vi.mock('@/text', async () => {
     const { createTextModuleMock } = await import('@/dev/testkit/mocks/text');
@@ -104,15 +104,6 @@ vi.mock('@/components/projects/detail/surfaces/ProjectTerminalSurface', () => ({
     ProjectTerminalSurface: () => React.createElement('ProjectTerminalSurface'),
 }));
 
-vi.mock('@/sync/domains/state/storage', async (importOriginal) => {
-    const { createPartialStorageModuleMock } = await import('@/dev/testkit/mocks/storage');
-    return createPartialStorageModuleMock(importOriginal, {
-        useAllMachines: () => [],
-        useLocalSetting: () => false,
-        useLocalSettingMutable: () => [false, vi.fn()],
-        useWorkspaceReviewCommentsDrafts: () => [],
-    });
-});
 
 function buildLauncherState() {
     return applyLocalServiceLauncherSnapshot(createLocalServiceLauncherState(), {
@@ -175,6 +166,8 @@ function renderBrowserLaunchpadRenderer(element: unknown): React.ReactElement<{
     }> | null;
 }
 
+beforeEach(() => storage.setState(storage.getInitialState(), true));
+
 describe('WorkspaceDetailsPanel local service launcher handoff', () => {
     it('passes supplied LSV launcher rows into the browser details renderer', async () => {
         const { WorkspaceDetailsPanel } = await import('./WorkspaceDetailsPanel');
@@ -216,7 +209,7 @@ describe('WorkspaceDetailsPanel local service launcher handoff', () => {
 
         expect(element?.props.launchpadRows).toEqual(expect.arrayContaining([
             expect.objectContaining({
-                id: 'localService:preview:project-browser-feed',
+                id: 'service:preview:project-browser-feed',
                 disabledReason: null,
             }),
         ]));
