@@ -1,14 +1,15 @@
 import { describe, expect, it } from 'vitest';
 import { normalizeUsageQuery, getUsageQueryKey } from '../inputs/usageQuery.js';
 import { resolveUsagePageAggregation } from './resolveUsagePageAggregation.js';
-import type { UsageAnalyticsQueryResponse } from './usageAnalyticsContracts.js';
+import { UsageAnalyticsQueryResponseSchema, type UsageAnalyticsQueryResponse } from './usageAnalyticsContracts.js';
 import { composeUsageRecap } from './composeUsageRecap.js';
 import { resolveUsageHowYouWork } from './resolveUsageHowYouWork.js';
 import { UsageRecapComposeInputSchema, UsageRecapComposeResultSchema, USAGE_RECAP_STYLES, USAGE_RECAP_FORMATS } from './usageRecap.js';
+import { ScmPullRequestWorkEvidenceSchema } from '../scm/pullRequests.js';
 
 const query = normalizeUsageQuery({ period: { startMs: 1000, endMs: 9000 }, timeZoneOffsetMinutes: 120,
   session: 'private-session', projects: ['private-project'], includeInsights: true, includeActivity: true });
-const response: UsageAnalyticsQueryResponse = {
+const response = UsageAnalyticsQueryResponseSchema.parse({
   v: 1,
   totals: { eventCount: 2, tokens: { input: 100, output: 20, reasoning: 0, cacheRead: 5, cacheWrite: 0, total: 120 },
     cost: { reportedUsd: 1.5, estimatedUsd: 1.2, currency: 'USD', costSource: 'provider_reported' } },
@@ -16,7 +17,7 @@ const response: UsageAnalyticsQueryResponse = {
     tokens: { input: 100, output: 20, reasoning: 0, cacheRead: 5, cacheWrite: 0, total: 120 },
     cost: { reportedUsd: 1.5, estimatedUsd: 1.2, currency: 'USD' } }] },
   insights: { activeDays: 1, longestStreakDays: 1, sessionsUsed: 1, messagesUsed: 2, modelsTried: 1, favoriteModelChangeCount: 0 },
-};
+});
 const snapshot = resolveUsagePageAggregation({ queries: [query], accounting: [{ query, value: response, status: 'available', asOfMs: 9500 }] }).results[0]!;
 
 describe('private recap composition', () => {
@@ -78,6 +79,57 @@ describe('private recap composition', () => {
     if (result.kind !== 'composed') return;
     expect(result.facts).toEqual({ highlights: [] });
     expect(result.unavailableFields).toEqual(['streak', 'parallel', 'night', 'work', 'coach']);
+
+    const value = UsageAnalyticsQueryResponseSchema.parse({ ...response, contributions: [{
+      id: 'private-contribution', observedAtMs: 2000, sessionId: 'private-session', turnId: 'private-turn',
+      agentId: null, modelId: null, machineId: null, projectKey: 'private-project', workspaceId: null,
+      source: 'runtime', tokens: response.totals.tokens, cost: response.totals.cost,
+    }] });
+    const input = UsageRecapComposeInputSchema.parse({ query, selectedFields: ['work', 'highlights'] });
+    const witness = ScmPullRequestWorkEvidenceSchema.parse({ sessionId: 'private-session', turnId: 'private-turn',
+      repositoryKey: 'private-repository', checkpointRef: 'private-checkpoint', checkpointCommitSha: 'a'.repeat(40),
+      commitSha: 'b'.repeat(40), attributionScope: 'no_happier_checkpoint_overlap_observed', pullRequest: {
+        provider: { id: 'forge', kind: 'github', displayName: 'Forge', baseUrl: 'https://github.com',
+          nameWithOwner: 'private-owner/private-repository', urlSafety: { allowedSchemes: ['https:'] } },
+        number: 1, title: 'Private outcome', url: 'https://github.com/private-owner/private-repository/pull/1',
+        baseBranch: 'main', headBranch: 'private-branch', state: 'merged',
+      } });
+    for (const status of ['unknown', 'error', 'unsupported', 'not_loaded'] as const) {
+      const unavailable = resolveUsagePageAggregation({ queries: [query],
+        accounting: [{ query, value, status: 'available' }], work: [{ query, status, evidence: [witness] }] }).results[0]!;
+      const composed = composeUsageRecap({ input, snapshot: unavailable });
+      expect(composed.kind).toBe('composed');
+      if (composed.kind !== 'composed') throw new Error('Expected available accounting');
+      expect(composed.facts.work).toBeUndefined();
+      expect(composed.unavailableFields).toContain('work');
+      expect(composed.facts.highlights).toEqual([]);
+      expect(composed.coverage.sourceStatuses).toContainEqual({ status });
+    }
+    const available = resolveUsagePageAggregation({ queries: [query],
+      accounting: [{ query, value, status: 'available' }], work: [{ query, status: 'available', evidence: [] }] });
+    const empty = composeUsageRecap({ input, snapshot: available.results[0]! });
+    expect(empty).toMatchObject({ kind: 'composed', unavailableFields: [], facts: { work: {
+      linkedOutcomes: 0, allocatedContributions: 0, unallocatedContributions: 1 }, highlights: [] } });
+    const partial = resolveUsagePageAggregation({ queries: [query],
+      accounting: [{ query, value, status: 'available' }], work: [{ query, status: 'partial', evidence: [witness] }] });
+    const witnessed = composeUsageRecap({ input, snapshot: partial.results[0]! });
+    expect(witnessed).toMatchObject({ kind: 'composed', unavailableFields: [], facts: { work: {
+      linkedOutcomes: 1, allocatedContributions: 1, unallocatedContributions: 0 }, highlights: [{ kind: 'linked_outcomes', count: 1 }] },
+      coverage: { sourceStatuses: expect.arrayContaining([{ status: 'partial' }]) } });
+    expect(JSON.stringify(witnessed)).not.toContain('private-');
+    const pending = resolveUsagePageAggregation({ queries: [query],
+      accounting: [{ query, value, status: 'available' }], work: [{ query, status: 'pending' }], previous: partial });
+    expect(composeUsageRecap({ input, snapshot: pending.results[0]! })).toMatchObject({ kind: 'composed',
+      unavailableFields: [], facts: { work: { linkedOutcomes: 1 }, highlights: [{ kind: 'linked_outcomes', count: 1 }] },
+      coverage: { pending: true, sourceStatuses: expect.arrayContaining([{ status: 'pending' }]) } });
+    for (const previous of [undefined, available]) {
+      const noWitness = resolveUsagePageAggregation({ queries: [query],
+        accounting: [{ query, value, status: 'available' }], work: [{ query, status: 'pending' }], previous }).results[0]!;
+      expect(composeUsageRecap({ input, snapshot: noWitness })).toMatchObject({ kind: 'composed',
+        unavailableFields: ['work'], facts: { highlights: [] }, coverage: { pending: true } });
+      const composed = composeUsageRecap({ input, snapshot: noWitness });
+      expect(composed.kind === 'composed' && composed.facts.work).toBeUndefined();
+    }
   });
 
   it('refuses a previous or differently filtered query and missing accounting instead of re-labelling old values', () => {
