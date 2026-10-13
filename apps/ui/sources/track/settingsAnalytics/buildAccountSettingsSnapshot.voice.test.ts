@@ -55,73 +55,21 @@ describe('buildAccountSettingsSnapshot', () => {
                 },
                 providers: {
                     ...voiceSettingsDefaults.providers,
-                    'happier.voice.elevenlabs/realtime-elevenlabs': { schemaVersion: 2, config: {
-                        billingMode: 'byo',
-                        tts: {
-                            voiceId: 'custom-voice',
-                            modelId: 'eleven_turbo_v2',
-                            voiceSettings: {
-                                stability: 0.2,
-                                similarityBoost: 0.85,
-                                style: 0.6,
-                                useSpeakerBoost: true,
-                                speed: 1.1,
-                            },
-                        },
-                        byo: {
-                            agentId: 'byo-agent',
-                        },
-                    } },
                     local_direct: { schemaVersion: 1, config: {
                         ...localDirectDefaults,
                         networkTimeoutMs: 25_000,
                         handsFree: {
+                            ...localDirectDefaults.handsFree,
                             enabled: true,
-                            endpointing: {
-                                silenceMs: 900,
-                                minSpeechMs: 250,
-                            },
                         },
                     } },
                     local_conversation: { schemaVersion: 1, config: {
                         ...localConversationDefaults,
                         conversationMode: 'agent',
-                        networkTimeoutMs: 30_000,
-                        handsFree: {
-                            enabled: true,
-                            endpointing: {
-                                silenceMs: 1_200,
-                                minSpeechMs: 300,
-                            },
-                        },
                         agent: {
                             ...localConversationDefaults.agent,
-                            agentSource: 'agent',
-                            stayInVoiceHome: true,
-                            teleportEnabled: false,
-                            rootSessionPolicy: 'keep_warm',
-                            maxWarmRoots: 5,
                             voiceHomeSubdirName: 'custom-home',
-                            permissionIntent: 'read-only',
-                            idleTtlSeconds: 7_200,
-                            prewarmOnConnect: false,
                             resumabilityMode: 'provider_resume',
-                            providerResume: {
-                                fallbackToReplay: false,
-                            },
-                            replay: {
-                                strategy: 'summary_plus_recent',
-                                recentMessagesCount: 32,
-                            },
-                            commitIsolation: true,
-                            transcript: {
-                                persistenceMode: 'persistent',
-                                epoch: 0,
-                            },
-                            chatModelSource: 'custom',
-                            chatModelId: 'gpt-4o-mini',
-                            commitModelSource: 'custom',
-                            commitModelId: 'gpt-4.1',
                             providerChat: {
                                 status: 'configured',
                                 chat: {
@@ -134,16 +82,10 @@ describe('buildAccountSettingsSnapshot', () => {
                                     providerConnectionId: 'voice-openai-compatible-chat',
                                     modelId: 'custom-commit',
                                 },
-                                configuration: { temperature: 1.4 },
                             },
-                            verbosity: 'balanced',
                         },
                         streaming: {
-                            enabled: false,
-                            ttsEnabled: false,
-                            ttsChunkChars: 800,
-                            turnReadPollIntervalMs: 200,
-                            turnReadMaxEvents: 128,
+                            ...localConversationDefaults.streaming,
                             turnStreamTimeoutMs: 600_000,
                         },
                     } },
