@@ -1,6 +1,7 @@
 import * as React from 'react';
 import { View, type LayoutChangeEvent } from 'react-native';
 import { StyleSheet, useUnistyles } from 'react-native-unistyles';
+import { HAPPIER_PAGE_METRICS } from '@happier-dev/plugin-ui/presentation';
 import type { OpenProjectResultV1 } from '@happier-dev/protocol/projects/openProjectV1';
 import type { ProjectSourceV1 } from '@happier-dev/protocol/projects/sources/projectSourceV1';
 import { SessionDraftAddressV2Schema } from '@happier-dev/protocol/drafts/sessionDraftsV2';
@@ -421,7 +422,12 @@ const ProjectOpenForm = React.memo(function ProjectOpenForm(
             />
           </View>
         ) : null}
-        <ItemList testID="projects.open.choices" style={styles.choicesPane}>
+        <ItemList
+          testID="projects.open.choices"
+          style={styles.choicesPane}
+          // A card's page list is contained and owns no inset: the dialog gives the choices the card's sheet inset.
+          containerStyle={dialog ? styles.choicesInset : undefined}
+        >
           {dialog ? null : (
             <PageHeader
               title={t('projects.open.title')}
@@ -800,6 +806,7 @@ const styles = StyleSheet.create(() => ({
     borderRightWidth: StyleSheet.hairlineWidth,
   },
   choicesPane: { flex: 1, minWidth: 0 },
+  choicesInset: { paddingHorizontal: HAPPIER_PAGE_METRICS.sheetInsetPx },
   footer: {
     flexDirection: 'row',
     alignItems: 'center',
