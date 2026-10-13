@@ -11,6 +11,11 @@
               "create"
             ],
             "stop": true
+          },
+          "skills": {
+            "delivery": "none",
+            "liveReload": "unsupported",
+            "nativeDisable": "unsupported"
           }
         },
         "catalog": {
@@ -142,6 +147,7 @@
       }
     ],
     "providers": [],
+    "registrySources": [],
     "requestInterceptors": [],
     "resources": [
       {
