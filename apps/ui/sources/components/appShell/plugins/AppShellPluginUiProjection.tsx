@@ -1,5 +1,7 @@
 import * as React from 'react';
 import { publishCommittedAppShellPluginUiProjection, readCurrentAppShellPluginUiProjection } from './committedPluginUiProjection';
+import type { AppShellPluginUiProjectionRead } from './committedPluginUiProjection';
+import { areServerAccountScopesEqual } from '@/sync/domains/scope/serverAccountScope';
 
 import { arePluginMachineExecutionOriginsEqual, getPluginMachineExecutionOriginRef, type PluginMachineExecutionOriginV1 } from '@happier-dev/protocol/machines/administration/pluginMachineExecutionOriginV1';
 import type { PluginMachineMaterializationV1 } from '@happier-dev/protocol/plugins/availability/v1';
@@ -358,7 +360,9 @@ export function AppShellPluginUiProjectionValueProvider(props: Readonly<{
 }>): React.ReactElement {
     const lifetime = captureActiveServerAccountScopeLifetime();
     React.useLayoutEffect(() => {
-        const read = () => lifetime?.isCurrent() && props.value.phase === 'current'
+        const read = (input?: AppShellPluginUiProjectionRead) => lifetime?.isCurrent()
+            && (!input || areServerAccountScopesEqual(input.scope, lifetime.scope))
+            && (input?.declarationsOnly || props.value.phase === 'current')
             ? props.value.pluginUiProjection : null;
         return publishCommittedAppShellPluginUiProjection(read);
     }, [lifetime, props.value]);
@@ -881,6 +885,7 @@ export function AppShellPluginUiProjectionProvider(props: Readonly<{
                     accountLifetime={accountLifetime}
                     classifyRelease={classifyRelease}
                     projection={pluginUiProjection}
+                    members={unionMembers}
                     onOrigin={publishPluginExecutionOrigin}
                 />
             ))}
@@ -991,6 +996,7 @@ function AppShellPluginExecutionOriginSelection(props: Readonly<{
     accountLifetime: ActiveServerAccountScopeLifetime | null;
     classifyRelease: ReturnType<typeof useActivePluginAccountAvailabilityReleaseClassifier>;
     projection: PluginUiProjectionModel | null;
+    members: readonly PluginUiProjectionUnionMember[];
     onOrigin: (
         pluginId: string,
         accountLifetime: ActiveServerAccountScopeLifetime | null,
@@ -998,15 +1004,17 @@ function AppShellPluginExecutionOriginSelection(props: Readonly<{
         selectableOrigins: readonly PluginMachineExecutionOriginV1[],
     ) => void;
 }>): null {
-    const facts = React.useMemo(() => readPluginUiExecutionOriginCandidates({ projection: props.projection, pluginId: props.pluginId }),
-        [props.pluginId, props.projection]);
+    const membersRef = React.useRef(props.members);
+    membersRef.current = props.members;
+    const facts = React.useMemo(() => readPluginUiExecutionOriginCandidates({ projection: props.projection, pluginId: props.pluginId, members: props.members }),
+        [props.pluginId, props.projection, props.members]);
     const selection = usePluginMachineExecutionOriginSelection({
         pluginId: props.pluginId,
         includeMachineCandidates: false,
         classifyRelease: props.classifyRelease,
         ...facts,
-        readSourceCandidates: () => readPluginUiExecutionOriginCandidates({ projection: readCurrentAppShellPluginUiProjection(), pluginId: props.pluginId }).sourceCandidates,
-        readDeclaredDefaultOrigins: () => readPluginUiExecutionOriginCandidates({ projection: readCurrentAppShellPluginUiProjection(), pluginId: props.pluginId }).declaredDefaultOrigins,
+        readSourceCandidates: () => readPluginUiExecutionOriginCandidates({ projection: readCurrentAppShellPluginUiProjection(), pluginId: props.pluginId, members: membersRef.current }).sourceCandidates,
+        readDeclaredDefaultOrigins: () => readPluginUiExecutionOriginCandidates({ projection: readCurrentAppShellPluginUiProjection(), pluginId: props.pluginId, members: membersRef.current }).declaredDefaultOrigins,
     });
     // Retain exact user intent while its machine/source is unavailable. Losing
     // that preference here would let the union bind a different sole supplier.

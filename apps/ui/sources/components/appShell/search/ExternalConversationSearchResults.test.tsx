@@ -1,8 +1,14 @@
+import 'fake-indexeddb/auto';
 import * as React from 'react';
 import { act } from 'react-test-renderer';
-import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
+import { afterAll, afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { PluginProjectionV2Schema, makeExternalSessionHistoricalImportLocalId } from '@happier-dev/protocol';
-import { createDeferred, createMachineFixture, findAllHostTestInstances, flushHookEffects, pressTestInstanceAsync, renderScreen, standardCleanup } from '@/dev/testkit';
+import { createDeferred, createMachineFixture, createRootLayoutFeaturesResponse, findAllHostTestInstances, flushHookEffects, pressTestInstanceAsync, renderScreen, standardCleanup } from '@/dev/testkit';
+import { installSessionOpsNetworkBoundary } from '@/dev/testkit/harness/sessionOpsNetworkBoundary';
+import { createPlainMachineRowFixture } from '@/dev/testkit/fixtures/machineFixtures';
+import { SOCKET_RPC_EVENTS, type SocketRpcRequestPayload } from '@happier-dev/protocol/socketRpc';
+import { RPC_METHODS } from '@happier-dev/protocol/rpc';
+import { DEFAULT_MEMORY_SETTINGS } from '@happier-dev/protocol/memory/memorySettings';
 
 const boundary = vi.hoisted(() => ({ list: vi.fn(), ensure: vi.fn(), page: vi.fn(), projection: vi.fn(), routerPush: vi.fn(), serverId: '' }));
 vi.mock('react-native', async () => {
@@ -30,30 +36,39 @@ vi.mock('expo-router', async () => {
     const { createExpoRouterMock } = await import('@/dev/testkit/mocks/router');
     return createExpoRouterMock({ router: { push: boundary.routerPush } }).module;
 });
-// Applied Home identity is a process/connection boundary; scope and credential fencing remain real.
-vi.mock('@/sync/runtime/orchestration/appliedActiveServerRuntime', async importOriginal => ({
-    ...await importOriginal<typeof import('@/sync/runtime/orchestration/appliedActiveServerRuntime')>(),
-    getAppliedActiveServerSnapshot: () => ({ serverId: boundary.serverId }),
-    isAppliedActiveServerRuntimeAvailable: () => true,
-}));
-vi.mock('@/sync/runtime/orchestration/serverScopedRpc/serverScopedMachineRpc', async () => {
-    const { answerMachineProjectionDescribeAtRpcBoundary } = await import('@/dev/testkit/mocks/machineProjectionRpc');
-    const { RPC_METHODS } = await import('@happier-dev/protocol/rpc');
-    const { DEFAULT_MEMORY_SETTINGS } = await import('@happier-dev/protocol/memory/memorySettings');
-    const describe = answerMachineProjectionDescribeAtRpcBoundary(boundary.projection);
-    return { machineRpcWithServerScope: (params: Parameters<typeof describe>[0]) => params.method === RPC_METHODS.DAEMON_MEMORY_SETTINGS_GET
-        ? Promise.resolve(DEFAULT_MEMORY_SETTINGS) : describe(params) };
-});
-vi.mock('@/sync/ops/machineExternalSessions', () => ({
-    machineExternalSessionsCandidatesList: boundary.list,
-    machineExternalSessionLinkEnsure: boundary.ensure,
-    machineExternalSessionTranscriptPage: boundary.page,
-}));
+const network = await installSessionOpsNetworkBoundary();
+// Scoped clients can reuse a transport after the per-case request ledger resets.
+const observedSockets = new Set<(typeof network.socketBoundaries)[number]>();
+function socketBoundaries() {
+    for (const socket of network.socketBoundaries) observedSockets.add(socket);
+    return [...observedSockets];
+}
+const { loadSyncSingletonForTests } = await import('@/dev/testkit/harness/syncSingletonLoader');
+await loadSyncSingletonForTests();
+const { ExternalConversationSearchResults } = await import('./ExternalConversationSearchResults');
+const { resolveExternalSessionBrowseSourceOptions } = await import('@/components/sessions/external/browse/resolveExternalSessionBrowseSourceOptions');
+const { parseToken } = await import('@/utils/auth/parseToken');
+const homeIdsByUrl = new Map<string, string>();
 
-import { ExternalConversationSearchResults } from './ExternalConversationSearchResults';
-import { resolveExternalSessionBrowseSourceOptions } from '@/components/sessions/external/browse/resolveExternalSessionBrowseSourceOptions';
+function issuedRequestId(method: string, remoteSessionId?: string): string {
+    const calls = socketBoundaries().flatMap(item => item.socket.emitWithAck.mock.calls);
+    const request = calls.map(([event, raw]) => {
+        if (event !== SOCKET_RPC_EVENTS.CALL || !raw || typeof raw !== 'object') return null;
+        return raw as SocketRpcRequestPayload;
+    }).filter((request): request is SocketRpcRequestPayload => request !== null)
+        .reverse().find(request => request.method.endsWith(`:${method}`)
+            && (!remoteSessionId || (request.params as Record<string, unknown>).remoteSessionId === remoteSessionId));
+    if (!request?.requestId) throw new Error('Expected an issued cancellable daemon RPC');
+    return request.requestId;
+}
+function wasCancelled(requestId: string): boolean {
+    return socketBoundaries().some(item => item.socket.emit.mock.calls.some(([event, raw]) =>
+        event === SOCKET_RPC_EVENTS.CANCEL && raw !== null && typeof raw === 'object'
+        && 'requestId' in raw && raw.requestId === requestId));
+}
 
 let scopeOwner: typeof import('@/sync/domains/scope/activeServerAccountScope');
+let connection: Awaited<ReturnType<typeof import('@/dev/testkit/harness/serverAccountConnectionHarness').restoreServerAccountForTest>> | undefined;
 
 function projection(contentSearch?: boolean) {
     return PluginProjectionV2Schema.parse({
@@ -106,11 +121,16 @@ function sourceKey() {
 
 describe('activated external conversation results', () => {
     beforeEach(async () => {
-        const { loadSyncSingletonForTests } = await import('@/dev/testkit/harness/syncSingletonLoader');
-        await loadSyncSingletonForTests();
+        for (const boundary of socketBoundaries()) {
+            boundary.socket.emitWithAck.mockClear();
+            boundary.socket.emit.mockClear();
+        }
+        network.resetRequests();
+        homeIdsByUrl.clear();
         const { storage } = await import('@/sync/domains/state/storage');
-        const { TokenStorage } = await import('@/auth/storage/tokenStorage');
-        const { upsertAndActivateServer } = await import('@/sync/domains/server/serverRuntime');
+        storage.setState(storage.getInitialState(), true);
+        const { upsertAndActivateServer, getActiveServerSnapshot } = await import('@/sync/domains/server/serverRuntime');
+        const { publishAppliedActiveServerSnapshot } = await import('@/sync/runtime/orchestration/appliedActiveServerRuntime');
         const { clearDaemonMergedProjectionCacheForTests } = await import('@/agents/backendCatalog/loadDaemonMergedProjectionInputs');
         scopeOwner = await import('@/sync/domains/scope/activeServerAccountScope');
         boundary.list.mockReset().mockResolvedValue(page);
@@ -118,20 +138,69 @@ describe('activated external conversation results', () => {
         boundary.page.mockReset().mockResolvedValue(transcriptPage);
         boundary.routerPush.mockReset();
         boundary.projection.mockReset().mockResolvedValue({ supported: true, projection: projection(true) });
-        const home = await upsertAndActivateServer({ serverUrl: 'https://palette-history.test' });
+        const home = await network.addHome('https://palette-history.test', 'account-a');
+        homeIdsByUrl.set(home.serverUrl, home.id);
+        await upsertAndActivateServer({ serverUrl: home.serverUrl });
         boundary.serverId = home.id;
-        storage.setState({
-            profileScope: { serverId: home.id, accountId: 'account-a' },
-            machineListByServerId: { [home.id]: [createMachineFixture({ activeAt: Date.now() })] },
-        });
+        const { clearMachineRequestReachabilityForMachine } = await import('@/sync/domains/machines/reachability/machineReachability');
+        clearMachineRequestReachabilityForMachine({ serverId: home.id, accountId: 'account-a' }, 'machine-1');
+        publishAppliedActiveServerSnapshot(getActiveServerSnapshot());
         const { registerStorageStateReader } = await import('@/sync/domains/state/storageStateReaderBridge');
         registerStorageStateReader(() => storage.getState());
-        vi.spyOn(TokenStorage, 'getCredentialsForServerUrl').mockResolvedValue({
-            token: `e30.${Buffer.from(JSON.stringify({ sub: 'account-a' })).toString('base64url')}.signature`,
+        const httpResponse: Parameters<typeof network.setHttpResponder>[0] = async input => {
+            const url = new URL(String(input));
+            if (url.pathname === '/health') return Response.json({});
+            if (url.pathname === '/v1/features' || url.pathname === '/v1/features/authenticated') return Response.json(createRootLayoutFeaturesResponse());
+            if (url.pathname === '/v1/account/encryption') return Response.json({ mode: 'plain', updatedAt: 0 });
+            if (url.pathname === '/v1/account/encryption/currentness') return Response.json({ mode: 'plain', version: 0,
+                signingKeyFingerprint: null, contentKeyFingerprint: null, updatedAt: 0 });
+            if (url.pathname === '/v2/account/settings') return Response.json({ content: { t: 'plain', v: {
+                experiments: true, featureToggles: { 'memory.search': true },
+            } }, version: 1 });
+            if (url.pathname === '/v1/machines') return Response.json([
+                createPlainMachineRowFixture({ id: 'machine-1', accountId: url.origin === home.serverUrl ? 'account-a' : 'account-b' }),
+            ]);
+            if (url.pathname === '/v1/machines/machine-1') return Response.json({ machine:
+                createPlainMachineRowFixture({ id: 'machine-1', accountId: url.origin === home.serverUrl ? 'account-a' : 'account-b' }) });
+            return null;
+        };
+        network.setHttpResponder(httpResponse);
+        network.setRpcResponder(async call => {
+            if (call.method === RPC_METHODS.DAEMON_MEMORY_SETTINGS_GET) return DEFAULT_MEMORY_SETTINGS;
+            const serverId = homeIdsByUrl.get(call.serverUrl);
+            if (!serverId) throw new Error('Unknown fixture Home route');
+            const request = { ...(call.payload as Record<string, unknown>), machineId: call.targetId };
+            const options = { serverId, accountId: call.token ? parseToken(call.token) : null };
+            if (call.method === RPC_METHODS.DAEMON_EXTERNAL_SESSIONS_CANDIDATES_LIST) return boundary.list(request, options);
+            if (call.method === RPC_METHODS.DAEMON_EXTERNAL_SESSION_LINK_ENSURE) return boundary.ensure(request, options);
+            if (call.method === RPC_METHODS.DAEMON_EXTERNAL_SESSION_TRANSCRIPT_PAGE) return boundary.page(request, options);
+            if (call.method === RPC_METHODS.DAEMON_MERGED_CONTRIBUTION_REGISTRY_PROJECTION_DESCRIBE) {
+                const { supported, ...answer } = await boundary.projection(call.targetId, { serverId });
+                if (!supported) throw new Error('Unexpected unavailable projection fixture');
+                return { protocolVersion: 1, ...answer };
+            }
+            throw new Error(`Unexpected conversation RPC ${call.method}`);
+        });
+        const { restoreServerAccountForTest } = await import('@/dev/testkit/harness/serverAccountConnectionHarness');
+        connection = await restoreServerAccountForTest({ serverUrl: home.serverUrl, accountId: 'account-a', credentials: { token: home.token },
+            additionalRequestOrigins: ['https://palette-foreign.test'], request: httpResponse });
+        storage.setState({
+            isDataReady: true,
+            profileScope: { serverId: home.id, accountId: 'account-a' },
+            settingsScope: { serverId: home.id, accountId: 'account-a' }, settingsVersion: 1,
+            settings: { ...storage.getState().settings, experiments: true, featureToggles: { 'memory.search': true } },
+            machineListByServerId: { [home.id]: [createMachineFixture({ activeAt: Date.now() })] },
+            machineListStatusByServerId: { [home.id]: 'idle' },
         });
         clearDaemonMergedProjectionCacheForTests();
     });
-    afterEach(() => { standardCleanup(); scopeOwner?.retireActiveServerAccountScopeLifetime(); vi.restoreAllMocks(); });
+    afterEach(async () => {
+        standardCleanup();
+        await connection?.dispose();
+        connection = undefined;
+        scopeOwner?.retireActiveServerAccountScopeLifetime();
+    });
+    afterAll(() => network.dispose());
 
     it('searches only the selected source after activation, pages explicitly, and opens the decoded hit with a mapped Find seed', async () => {
         const input = props();
@@ -255,16 +324,16 @@ describe('activated external conversation results', () => {
         await flushHookEffects({ cycles: 4, turns: 2 });
         await act(async () => { screen.findByTestId('external-conversation-results')!.props.onLayout({ nativeEvent: { layout: { width: 800 } } }); });
         await flushHookEffects();
-        const firstSignal = boundary.page.mock.calls[0]?.[1].signal as AbortSignal;
+        const firstRequest = issuedRequestId(RPC_METHODS.DAEMON_EXTERNAL_SESSION_TRANSCRIPT_PAGE, 'hit');
         await act(async () => { screen.findByTestId('external-conversation-open:other')!.props.onFocus(); });
         await flushHookEffects();
-        expect(firstSignal.aborted).toBe(true);
+        expect(wasCancelled(firstRequest)).toBe(true);
         first.resolve(response);
         await flushHookEffects();
         expect(screen.getTextContent()).not.toContain('Explain this failure');
-        const secondSignal = boundary.page.mock.calls[1]?.[1].signal as AbortSignal;
+        const secondRequest = issuedRequestId(RPC_METHODS.DAEMON_EXTERNAL_SESSION_TRANSCRIPT_PAGE, 'other');
         await act(async () => { scopeOwner.retireActiveServerAccountScopeLifetime(); });
-        expect(secondSignal.aborted).toBe(true);
+        expect(wasCancelled(secondRequest)).toBe(true);
         second.resolve(response);
         await flushHookEffects();
         expect(screen.findHostByTestId('external-conversation-results')).toBeNull();
@@ -278,7 +347,7 @@ describe('activated external conversation results', () => {
         const screen = await renderScreen(<ExternalConversationSearchResults {...input} />);
         await flushHookEffects({ cycles: 4, turns: 2 });
         await screen.pressByTestIdAsync('external-conversation-stop');
-        expect(boundary.list.mock.calls[0]?.[1].signal.aborted).toBe(true);
+        expect(wasCancelled(issuedRequestId(RPC_METHODS.DAEMON_EXTERNAL_SESSIONS_CANDIDATES_LIST))).toBe(true);
         pending.resolve(page);
         await flushHookEffects();
         expect(screen.findHostByTestId('external-session-candidate-match:hit')).toBeNull();
@@ -320,13 +389,9 @@ describe('activated external conversation results', () => {
 
     it('keeps Show scoped to the online foreign Home when the foreground Home has an offline machine with the same id', async () => {
         const { storage } = await import('@/sync/domains/state/storage');
-        const { TokenStorage } = await import('@/auth/storage/tokenStorage');
-        const { upsertServerProfileOnly } = await import('@/sync/domains/server/serverRuntime');
         const { useServerCredentialAccountScopes } = await import('@/sync/domains/scope/useServerCredentialAccountScopes');
-        const foreign = await upsertServerProfileOnly({ serverUrl: 'https://palette-foreign.test' });
-        vi.mocked(TokenStorage.getCredentialsForServerUrl).mockImplementation(async (serverUrl) => ({
-            token: `e30.${Buffer.from(JSON.stringify({ sub: serverUrl === foreign.serverUrl ? 'account-b' : 'account-a' })).toString('base64url')}.signature`,
-        }));
+        const foreign = await network.addHome('https://palette-foreign.test', 'account-b');
+        homeIdsByUrl.set(foreign.serverUrl, foreign.id);
         storage.setState({
             settingsScope: { serverId: boundary.serverId, accountId: 'account-a' },
             machineListByServerId: {

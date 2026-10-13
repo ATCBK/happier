@@ -1,9 +1,14 @@
 import * as React from 'react';
-import { useLocalSearchParams, usePathname } from 'expo-router';
+import { Stack as ExpoStack, useLocalSearchParams, usePathname } from 'expo-router';
+import { Platform } from 'react-native';
+import { useRouteNode } from 'expo-router/build/Route';
+import { resolveHref } from 'expo-router/build/link/href';
 import { useOptionalWorkspaceNavigation } from './WorkspaceNavigationContext';
-import { useDestinationInstanceKey } from './DestinationInstanceHost';
+import { DestinationTitlePublication, useDestinationInstanceKey } from './DestinationInstanceHost';
 import { WorkspaceRouteHostingContext } from './WorkspaceRouteHostingContext';
 import { PaneLoadingFallback } from '@/components/ui/panels/PaneLoadingFallback';
+import { useWorkspaceFocusedDestinationTitle } from './WorkspaceWindowTitle';
+import { workspaceRouteFiles } from './workspaceRoutes';
 
 /** The Expo entry is only the URL sink when the workspace hosts its body. */
 export function WorkspaceRouteEntry(props: Readonly<{ Body: React.ComponentType; mirror?: React.ReactNode; loadingFallback?: React.ReactNode }>) {
@@ -25,5 +30,28 @@ export function WorkspaceRouteEntry(props: Readonly<{ Body: React.ComponentType;
         // Layout mirrors must stay mounted: Expo still owns their URL serialization.
         return <>{props.mirror ?? props.loadingFallback ?? <PaneLoadingFallback testID="workspace-route-hydrating" />}</>;
     }
-    return workspace?.active === true && !hosted ? <>{props.mirror}</> : <props.Body />;
+    if (workspace?.active === true && !hosted) return <><WorkspaceRouteTitle />{props.mirror}</>;
+    return !hosted && workspace && Platform.OS !== 'web'
+        ? <NativeWorkspaceRouteTitle><props.Body /></NativeWorkspaceRouteTitle> : <props.Body />;
+}
+
+/** Expo's local module/params remain this scene's identity after the global URL moves elsewhere. */
+function NativeWorkspaceRouteTitle(props: React.PropsWithChildren) {
+    const workspace = useOptionalWorkspaceNavigation();
+    const node = useRouteNode();
+    const params = useLocalSearchParams();
+    const routeKey = React.useMemo(() => Object.entries(workspaceRouteFiles).find(([, contextKey]) => contextKey === node?.contextKey)?.[0], [node?.contextKey]);
+    const href = routeKey !== undefined ? resolveHref({ pathname: `/${routeKey}`, params }) : null;
+    const destination = href ? workspace?.findOpenHref?.(href) : null;
+    const tab = destination ? workspace?.state.tabs[destination.tabId] : null;
+    // Keep this nonvisual boundary mounted before/after phone readiness; only
+    // its publication identity changes, never the native editable body.
+    return <DestinationTitlePublication instance={tab ? { tabId: tab.id, ref: tab.target } : null}>{props.children}</DestinationTitlePublication>;
+}
+
+/** Expo retains navigation metadata while its route is only the workspace's URL mirror. */
+function WorkspaceRouteTitle() {
+    const title = useWorkspaceFocusedDestinationTitle() ?? '';
+    const options = React.useMemo(() => ({ title }), [title]);
+    return <ExpoStack.Screen options={options} />;
 }

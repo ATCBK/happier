@@ -61,9 +61,9 @@ function ComposedPage(props: Readonly<{ authority: ServerAccountScopeLifetime | 
     </CurrentUiContextCommandsProvider>;
 }
 
-afterEach(() => {
+afterEach(async () => {
     standardCleanup(); unregister?.(); unregister = undefined; reader = null;
-    retireActiveServerAccountScopeLifetime(); home?.dispose(); home = undefined;
+    retireActiveServerAccountScopeLifetime(); await home?.dispose(); home = undefined;
     intents.clear(); changes.length = 0;
 });
 

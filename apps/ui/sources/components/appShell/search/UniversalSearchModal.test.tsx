@@ -2,27 +2,33 @@ import * as React from 'react';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 
 import { act } from 'react-test-renderer';
-import { renderScreen, standardCleanup } from '@/dev/testkit';
+import { renderScreen as renderScreenWithTestkit, standardCleanup } from '@/dev/testkit';
+import { installNewSessionComponentsCommonModuleMocks } from '@/components/sessions/new/components/newSessionComponentsTestHelpers';
+import { createTextModuleMock } from '@/dev/testkit/mocks/text';
+import { installSessionOpsNetworkBoundary } from '@/dev/testkit/harness/sessionOpsNetworkBoundary';
+import { afterAll } from 'vitest';
 
 const capturedChrome = vi.hoisted(() => ({ value: null as Record<string, unknown> | null }));
-const capturedControllerProps = vi.hoisted(() => ({ value: null as Record<string, unknown> | null }));
 
-vi.mock('@/modal/components/card/useModalCardChrome', () => ({
-    useModalCardChrome: (_setChrome: unknown, chrome: Record<string, unknown>) => {
-        capturedChrome.value = chrome;
-    },
-}));
+const setChrome: NonNullable<import('@/modal/types').CustomModalInjectedProps['setChrome']> = chrome => {
+    capturedChrome.value = chrome;
+};
 
-vi.mock('./UniversalSearchController', () => ({
-    UniversalSearchController: (props: Record<string, unknown>) => {
-        capturedControllerProps.value = props;
-        return React.createElement('UniversalSearchController', props);
-    },
-}));
+installNewSessionComponentsCommonModuleMocks({ text: () => createTextModuleMock({
+    translate: key => key === 'tools.names.search' ? 'Search' : key,
+}) });
+vi.unmock('@/sync/domains/state/storage');
+const network = await installSessionOpsNetworkBoundary();
+const { loadSyncSingletonForTests } = await import('@/dev/testkit/harness/syncSingletonLoader');
+await loadSyncSingletonForTests();
+const { UniversalSearchController } = await import('./UniversalSearchController');
+const { InjectedAuthProvider } = await import('@/auth/context/AuthContext');
+const AppProviders = ({ children }: React.PropsWithChildren) => <InjectedAuthProvider credentials={null}>{children}</InjectedAuthProvider>;
+function renderScreen(element: React.ReactElement) { return renderScreenWithTestkit(element, { wrapper: AppProviders }); }
+afterAll(() => network.dispose());
 
 afterEach(() => {
     capturedChrome.value = null;
-    capturedControllerProps.value = null;
     standardCleanup();
 });
 
@@ -34,7 +40,7 @@ describe('UniversalSearchModal', () => {
             <UniversalSearchModal
                 commands={[]}
                 onClose={vi.fn()}
-                setChrome={vi.fn()}
+                setChrome={setChrome}
             />,
         );
 
@@ -53,8 +59,8 @@ describe('UniversalSearchModal', () => {
     // for the detail column beside the list.
     it('widens the card while the controller shows a detail mode and narrows it again', async () => {
         const { UniversalSearchModal } = await import('./UniversalSearchModal');
-        await renderScreen(<UniversalSearchModal commands={[]} onClose={vi.fn()} setChrome={vi.fn()} />);
-        const setLayout = capturedControllerProps.value?.onSurfaceLayoutChange as ((layout: 'compact' | 'detail') => void) | undefined;
+        const screen = await renderScreen(<UniversalSearchModal commands={[]} onClose={vi.fn()} setChrome={setChrome} />);
+        const setLayout = screen.findByType(UniversalSearchController).props.onSurfaceLayoutChange as ((layout: 'compact' | 'detail') => void) | undefined;
         expect(setLayout).toBeTypeOf('function');
         await act(async () => { setLayout!('detail'); });
         expect((capturedChrome.value?.dimensions as { width: number }).width).toBe(960);

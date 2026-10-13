@@ -217,14 +217,8 @@ export function createWorkspaceNavigationAdapter(input: Readonly<{
         },
         closeTabs(groupId: string, tabIds: readonly string[]) {
             const state = input.getState();
-            const group = state.groups[groupId];
-            if (!group) return;
-            for (const tabId of new Set(tabIds)) {
-                if (group.tabIds.includes(tabId) && !state.tabs[tabId]?.pinned) {
-                    input.dispatch({ type: 'closeTab', groupId, tabId, newTab: createWorkspaceEmptyTab(input.createId()) });
-                }
-            }
-            visit();
+            input.dispatch({ type: 'closeTabs', groupId, tabIds, newTab: createWorkspaceEmptyTab(input.createId()) });
+            if (input.getState() !== state) visit();
         },
         setParams(tabId: string, values: Readonly<Record<string, unknown>>) {
             const state = input.getState();

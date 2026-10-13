@@ -1,5 +1,5 @@
 import * as React from 'react';
-import { describe, expect, it } from 'vitest';
+import { describe, expect, it, vi } from 'vitest';
 
 import { renderScreen } from '@/dev/testkit';
 import PluginSettingsPageRoute from '@/app/(app)/settings/plugins/[pluginId]/[pageId]';
@@ -9,6 +9,16 @@ import { PluginSurfaceFallback } from '@/components/sessions/panes/PluginSurface
 import { WorkspaceRouteEntry } from './createWorkspaceRouteEntry';
 import { WorkspaceNavigationContext, type WorkspaceNavigationContextValue } from './WorkspaceNavigationContext';
 import { createWorkspaceState } from './workspaceState';
+
+const windowTitle = vi.hoisted(() => ({ options: null as Readonly<Record<string, unknown>> | null }));
+vi.mock('expo-router', async () => {
+    const { createExpoRouterMock } = await import('@/dev/testkit/mocks/router');
+    return createExpoRouterMock({ stackOptionsCapture: {
+        record: options => { windowTitle.options = typeof options === 'function' ? options() : options; },
+        reset: () => { windowTitle.options = null; },
+        getRaw: () => windowTitle.options, getResolved: () => windowTitle.options,
+    } }).module;
+});
 
 function workspace(active: boolean): WorkspaceNavigationContextValue {
     return {
@@ -22,6 +32,17 @@ function workspace(active: boolean): WorkspaceNavigationContextValue {
 }
 
 describe('WorkspaceRouteEntry', () => {
+    it('publishes the focused live destination title to the Expo window owner while the editable body stays in its retained host', async () => {
+        const ref = { kind: 'workflow', params: { id: 'deploy' } };
+        const base = { ...workspace(true), state: createWorkspaceState({ id: 'workflow-tab', target: ref, pinned: false, preview: false }) };
+        const element = (title: string) => <WorkspaceNavigationContext.Provider value={{ ...base,
+            destinationTitles: { 'workflow-tab': { ref, title } },
+        }}><WorkspaceRouteEntry Body={() => { throw new Error('Expo must not mount the workspace body'); }} /></WorkspaceNavigationContext.Provider>;
+        const screen = await renderScreen(element('Deploy Lumen'));
+        expect(windowTitle.options?.title).toBe('Deploy Lumen');
+        await screen.update(element('Deploy renamed'));
+        expect(windowTitle.options?.title).toBe('Deploy renamed');
+    });
     it.each([
         { route: 'Settings', RouteEntry: PluginSettingsPageRoute, testID: 'plugin-settings-page-hydrating' },
         { route: 'App root', RouteEntry: PluginAppPageRootRoute, testID: 'plugin-app-page-hydrating' },

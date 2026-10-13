@@ -197,6 +197,7 @@ describe('workspace owner on a phone', () => {
         expect(await invokeWorkspaceAction({ actionId: 'workspace.tabs.list', input: {} })).toMatchObject({ ok: false, errorCode: 'unsupported_action' });
     });
 
+
     const renderSwitcher = async (mru: string[], up: 'list' | 'recent', side: 'list' | 'recent', band = false) => {
         const before = storage.getState();
         restoreStorage = () => storage.setState(before);

@@ -28,22 +28,6 @@ vi.mock('@expo/vector-icons', async () => {
   return createExpoVectorIconsMock();
 });
 
-vi.mock('@/components/sessions/shell/sessionPinIcons', () => ({
-  PinIcon: (props: Record<string, unknown>) =>
-    React.createElement('PinIcon', props),
-  PinSlashIcon: (props: Record<string, unknown>) =>
-    React.createElement('PinSlashIcon', props),
-}));
-
-vi.mock('@/components/ui/media/FileIcon', () => ({
-  FileIcon: (props: Record<string, unknown>) =>
-    React.createElement('FileIcon', props),
-}));
-
-vi.mock('@/components/ui/scroll/useWebScrollLockBypass', () => ({
-  useWebScrollLockBypass: () => {},
-}));
-
 const pane = {
   setActiveDetailsTab: vi.fn(),
   pinDetailsTab: vi.fn(),

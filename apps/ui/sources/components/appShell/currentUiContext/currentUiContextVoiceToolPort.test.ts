@@ -1,4 +1,14 @@
-import { beforeEach, describe, expect, it, vi } from 'vitest';
+import * as React from 'react';
+import { act } from 'react-test-renderer';
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
+import { renderScreen } from '@/dev/testkit';
+import { createHomeGovernanceHarness, createAccountTokenForTests } from '@/dev/testkit/harness/homeGovernanceHarness';
+import { createPlainMachineRowFixture } from '@/dev/testkit/fixtures/machineFixtures';
+import { installSessionActionRpcBoundary } from '@/dev/testkit/harness/sessionActionRpcBoundary';
+import { ModalProvider, useOptionalModal } from '@/modal';
+import { TokenStorage } from '@/auth/storage/tokenStorage';
+import { getStorage } from '@/sync/domains/state/storage';
+import { setRuntimeFetch, resetRuntimeFetch } from '@/utils/system/runtimeFetch';
 
 import { isPluginError } from '@happier-dev/plugin-sdk';
 import type { PluginClientApi } from '@happier-dev/plugin-sdk';
@@ -10,11 +20,9 @@ import {
     activate as activatePublicAuthoringReviewClientActions,
 } from '../../../../../../packages/plugin-sdk/examples/public-authoring/ui/reviewClientActions.ts';
 import {
-    createActionExecutor,
     formatQualifiedPluginActionId,
     PluginProjectionInstalledPackageV2Schema,
     PluginProjectedActionV2Schema,
-    type ActionExecutorDeps,
     type CurrentUiContextSnapshotV1,
     type PluginContributionClientPlatform,
     type PluginMachineExecutionOriginV1,
@@ -25,7 +33,7 @@ import type { PluginUiActionProjection, PluginUiProjectionModel } from '@/sync/d
 import { EMPTY_PLUGIN_UI_PROJECTION } from '@/sync/domains/plugins/ui/projection';
 import { PLUGIN_UI_CONTRIBUTION_ORIGIN_KEY } from '@/sync/domains/plugins/ui/projectionUnion';
 import { createPluginReactNativeBundleCache } from '@/components/plugins/reactNative/bundleCache';
-import { getInstalledPluginUiClientExecutableComposition } from '@/components/plugins/reactNative/clientExecutableContributions';
+import { getInstalledPluginUiClientExecutableComposition, resolvePluginUiClientActionRegistration } from '@/components/plugins/reactNative/clientExecutableContributions';
 import { resolveProjectedPluginUiClientExecutables } from '@/components/plugins/reactNative/clientExecutableProjection';
 import { dispatchPluginSurfaceAction } from '@/components/plugins/surfaces/pluginSurfaceActionDispatch';
 import type {
@@ -35,45 +43,104 @@ import type {
 import type { PluginReactNativeBundleCacheIdentity } from '@/sync/domains/plugins/ui/reactNativeRuntime';
 import { setPreferredLanguageFromSettings } from '@/text';
 import { RPC_METHODS } from '@happier-dev/protocol/rpc';
+import { SOCKET_RPC_EVENTS, SocketRpcCancellationPayloadSchema, SocketRpcRequestIdSchema } from '@happier-dev/protocol/socketRpc';
 
-// Keep the Action dispatcher and its currentness checks real. The
-// server-scoped daemon RPC is the system boundary at the far end of this
-// AppShell bridge.
-const machineRpcWithServerScopeMock = vi.hoisted(() => vi.fn());
+// Daemon replies are an external Socket boundary. Home selection, Account
+// mode, machine transport, mediation policy and issuance/cancellation stay real.
+const daemonReply = vi.hoisted(() => vi.fn<(request: Readonly<{
+    machineId: string; method: string; payload: unknown; signal: AbortSignal;
+}>) => Promise<unknown>>());
 const clientExecutablePlatformState = vi.hoisted(() => ({
-    platform: 'web' as PluginContributionClientPlatform,
+    platform: 'ios' as PluginContributionClientPlatform,
 }));
+const transportSockets = vi.hoisted(() => [] as import('socket.io-client').Socket[]);
 
-vi.mock('@/sync/runtime/orchestration/serverScopedRpc/serverScopedMachineRpc', () => ({
-    machineRpcWithServerScope: machineRpcWithServerScopeMock,
-}));
-
-vi.mock('@/sync/domains/local/services/preview/platform', () => ({
-    resolveLocalServicePreviewPlatform: () => clientExecutablePlatformState.platform,
-}));
-
-// The shared approval owner is real; native dialog presentation confirms this
-// transport-lifetime case before the mock daemon RPC becomes pending.
-vi.mock('@/modal', async () => {
-    const { createModalModuleMock } = await import('@/dev/testkit/mocks/modal');
-    return createModalModuleMock({ confirmResult: true }).module;
+vi.mock('socket.io-client', async original => {
+    const boundary = await (await import('@/dev/testkit/harness/serverAccountConnectionHarness')).createSocketIoClientBoundary(original);
+    // Observe the canonical SDK boundary's wire receipts, not private RPC state.
+    const createSocket = (...args: Parameters<typeof boundary.io>) => {
+        const socket = boundary.io(...args);
+        transportSockets.push(socket);
+        return socket;
+    };
+    const io = Object.assign(createSocket, boundary.io, { io: createSocket, connect: createSocket });
+    return { ...boundary, io, connect: io, default: io };
 });
+// Native OS identity is the input to the actual preview-platform resolver.
+vi.mock('react-native', async () => {
+    const { createReactNativeWebMock } = await import('@/dev/testkit/mocks/reactNative');
+    return createReactNativeWebMock({ Platform: {
+        get OS() { return clientExecutablePlatformState.platform; },
+        select: <T,>(values: Partial<Record<PluginContributionClientPlatform | 'default' | 'native', T>>) =>
+            values[clientExecutablePlatformState.platform] ?? values.native ?? values.default,
+    } });
+});
+const daemonRequests = installSessionActionRpcBoundary((request, context) => {
+    const separator = request.method.indexOf(':');
+    return daemonReply({ machineId: request.method.slice(0, separator), method: request.method.slice(separator + 1),
+        payload: request.params, signal: context.signal });
+});
+let homes: ReturnType<typeof createHomeGovernanceHarness>;
+let actionHomeId: string;
+let clientHomeId: string;
+let publicHomeId: string;
+let modalScreen: Awaited<ReturnType<typeof renderScreen>>;
+let visibleModalCount = 0;
+const credentialsToRestore: NonNullable<Awaited<ReturnType<typeof TokenStorage.setCredentialsForServerUrlWithRollback>>>[] = [];
+const initialState = getStorage().getState();
+function ModalStateProbe() {
+    visibleModalCount = useOptionalModal()?.state.modals.length ?? 0;
+    return null;
+}
 
 /** Declared Action schemas the daemon answers per Action; never projected. */
 const actionSchemasByQualifiedId = new Map<string, Readonly<{ inputSchema: object; outputSchema?: object }>>();
 
-beforeEach(() => {
+beforeEach(async () => {
     actionSchemasByQualifiedId.clear();
     resetMachineProjectionReadsForTests();
-    machineRpcWithServerScopeMock.mockClear();
-    machineRpcWithServerScopeMock.mockImplementation(async (request: Readonly<{
-        method?: string;
-        payload?: Readonly<{ qualifiedActionId?: string }>;
-    }>) => {
+    daemonRequests.length = 0;
+    transportSockets.length = 0;
+    daemonReply.mockReset();
+    daemonReply.mockImplementation(async (request) => {
         if (request.method !== RPC_METHODS.DAEMON_PLUGIN_ACTION_SCHEMAS_READ) return undefined;
-        const schemas = actionSchemasByQualifiedId.get(request.payload?.qualifiedActionId ?? '');
+        const payload = request.payload;
+        const schemas = payload && typeof payload === 'object' && 'qualifiedActionId' in payload
+            && typeof payload.qualifiedActionId === 'string' ? actionSchemasByQualifiedId.get(payload.qualifiedActionId) : null;
         return schemas ? { ok: true, ...schemas } : { ok: false, code: 'plugin_action_schemas_unavailable' };
     });
+    clientExecutablePlatformState.platform = 'ios';
+    homes = createHomeGovernanceHarness();
+    setRuntimeFetch(homes.request);
+    const add = async (serverUrl: string, serverIdentityId: string, machineId: string) => {
+        const serverId = await homes.addHome({ name: 'Current UI Home', serverUrl, serverIdentityId, accountId: 'current-ui-account', currentAccount: true });
+        const credential = await TokenStorage.setCredentialsForServerUrlWithRollback(serverUrl, { serverId }, { token: createAccountTokenForTests('current-ui-account', { currentAccount: true }) });
+        if (!credential) throw new Error('Current UI fixture credentials were not persisted');
+        credentialsToRestore.push(credential);
+        // The real scoped transport first proves this Home accepts its Account.
+        homes.answer(serverId, '/v1/auth/ping', { body: { ok: true } });
+        // Public feature discovery precedes credential-scoped transport preparation.
+        homes.answer(serverId, '/health', { body: { status: 'ok' } });
+        homes.answer(serverId, '/v1/machines/' + machineId, { body: { machine: createPlainMachineRowFixture({ id: machineId, accountId: 'current-ui-account' }) } });
+        return serverId;
+    };
+    actionHomeId = await add('https://current-ui-actions.test', 'srv_actions', 'machine-actions');
+    clientHomeId = await add('https://current-ui-client.test', 'srv_current_ui_client_action', 'machine-current-ui-client-action');
+    publicHomeId = await add('https://current-ui-public.test', 'srv_public_authoring_client_action', 'machine-public-authoring-client-action');
+    getStorage().getState().activateProfileScope({ serverId: publicHomeId, accountId: 'current-ui-account' });
+    modalScreen = await renderScreen(React.createElement(ModalProvider, null, React.createElement(ModalStateProbe)));
+});
+afterEach(async () => {
+    await modalScreen?.unmount();
+    const { serverScopedRpcSocketPool } = await import('@/sync/runtime/orchestration/serverScopedRpc/serverScopedRpcSocketPool');
+    await serverScopedRpcSocketPool.stopAll();
+    serverScopedRpcSocketPool.resetForTests();
+    const { resetScopedMachineTransportCacheForTests } = await import('@/sync/runtime/orchestration/serverScopedRpc/serverScopedRpcPool');
+    resetScopedMachineTransportCacheForTests();
+    for (const credentials of credentialsToRestore.splice(0).reverse()) await credentials.rollback();
+    await homes?.reset();
+    resetRuntimeFetch();
+    getStorage().setState(initialState, true);
 });
 
 import { resetMachineProjectionReadsForTests } from '@/sync/ops/machineContributionRegistryProjection';
@@ -83,9 +150,7 @@ import {
     createCurrentUiContributedActionRpcHandler,
     bindCurrentUiContextVoiceToolPortToAdmission,
     createCurrentUiContextVoiceToolPort,
-    type CurrentUiContextVoiceCommandInvocationInput,
     type CurrentUiContextVoiceInvocationOutcome,
-    type CurrentUiContextVoiceToolPort,
 } from './currentUiContextVoiceToolPort';
 
 const COMMAND_ID = 'current-ui-command:1';
@@ -93,7 +158,7 @@ const ACTION_ID = Object.freeze({ pluginId: 'acme.triage', localId: 'file-ticket
 const ACTION_DISCOVERY_ID = formatQualifiedPluginActionId(ACTION_ID);
 const ACTION_ORIGIN = Object.freeze({
     machineId: 'machine-actions',
-    serverId: 'server-actions',
+    get serverId() { return actionHomeId; },
     generation: 27,
     interactionEnabled: true,
     phase: 'current' as const,
@@ -111,7 +176,7 @@ const CLIENT_ACTION_ID = Object.freeze({ pluginId: 'acme.current-ui', localId: '
 const CLIENT_ACTION_TARGET = Object.freeze({
     artifactId: 'current-ui-client-action-bundle',
     exportName: 'activate',
-    platform: 'web' as const,
+    platform: 'ios' as const,
 });
 const CLIENT_ACTION_GENERATION = 41;
 const CLIENT_ACTION_EXECUTION_ORIGIN: PluginMachineExecutionOriginV1 = Object.freeze({
@@ -124,7 +189,7 @@ const CLIENT_ACTION_EXECUTION_ORIGIN: PluginMachineExecutionOriginV1 = Object.fr
 });
 const CLIENT_ACTION_HOST_ORIGIN = Object.freeze({
     machineId: CLIENT_ACTION_EXECUTION_ORIGIN.materializationRef.machineId,
-    serverId: 'server-current-ui-client-action',
+    get serverId() { return clientHomeId; },
     generation: CLIENT_ACTION_GENERATION,
     interactionEnabled: true,
     phase: 'current' as const,
@@ -167,7 +232,7 @@ const PUBLIC_AUTHORING_CLIENT_ACTION_EXECUTION_ORIGIN: PluginMachineExecutionOri
 });
 const PUBLIC_AUTHORING_CLIENT_ACTION_HOST_ORIGIN = Object.freeze({
     machineId: PUBLIC_AUTHORING_CLIENT_ACTION_EXECUTION_ORIGIN.materializationRef.machineId,
-    serverId: 'server-public-authoring-client-action',
+    get serverId() { return publicHomeId; },
     generation: PUBLIC_AUTHORING_CLIENT_ACTION_GENERATION,
     interactionEnabled: true,
     phase: 'current' as const,
@@ -501,7 +566,7 @@ function createDaemonActionProjection(input: Readonly<{
     dangerLevel?: PluginProjectedActionV2['dangerLevel'];
 }> = {}): PluginUiProjectionModel {
     const dangerLevel = input.dangerLevel ?? 'safe';
-    const daemonAction: PluginProjectedActionV2 = {
+    const daemonAction = PluginProjectedActionV2Schema.parse({
         id: ACTION_ID.localId,
         pluginId: ACTION_ID.pluginId,
         occurrenceId: 'acme-triage-occurrence-27',
@@ -514,7 +579,7 @@ function createDaemonActionProjection(input: Readonly<{
             ? {}
             : { confirmation: { title: 'Confirm ticket creation' } }),
         available: true,
-    };
+    });
     const action: PluginUiActionProjection = Object.freeze({
         ...daemonAction,
         [PLUGIN_UI_CONTRIBUTION_ORIGIN_KEY]: ACTION_ORIGIN,
@@ -561,13 +626,20 @@ describe('current UI context Voice tool port', () => {
         const initialState = getStorage().getState();
         const serverId = (await upsertAndActivateServer({ serverUrl: 'https://reverse-action.test', name: 'Reverse Action Home' })).id;
         getStorage().getState().activateProfileScope({ serverId, accountId: 'reverse-account' });
-        const credentials = vi.spyOn(TokenStorage, 'getCredentialsForServerUrl').mockResolvedValue({ token: createAccountTokenForTests('reverse-account') });
+        const credentials = await TokenStorage.setCredentialsForServerUrlWithRollback(
+            'https://reverse-action.test', { serverId }, { token: createAccountTokenForTests('reverse-account') },
+        );
+        if (!credentials) throw new Error('Reverse Action Home credentials were not persisted');
         setRuntimeFetch(async (url) => {
             const path = new URL(String(url)).pathname;
             if (path === '/v1/auth/ping') return Response.json({ ok: true });
+            if (path === '/health') return Response.json({ status: 'ok' });
+            if (path === '/v1/machines/machine-current-ui-client-action') return Response.json({
+                machine: createPlainMachineRowFixture({ id: 'machine-current-ui-client-action', accountId: 'reverse-account' }),
+            });
             if (path === '/v1/account/encryption') return Response.json({ mode: 'plain', updatedAt: 0 });
             if (path === '/v2/account/settings') return Response.json({ content: { t: 'plain', v: {} }, version: 1 });
-            throw new Error(`Unexpected reverse Action request: ${path}`);
+            return new Response('{}', { status: 404 });
         });
         let viewedSessionId = 'unrelated-viewed-session';
         const listeners = new Set<() => void>();
@@ -607,14 +679,13 @@ describe('current UI context Voice tool port', () => {
                 .toEqual({ ok: true, result: { navigated: true } });
             expect(viewedSessionId).toBe('created-session');
         } finally {
-            unregister(); await fixture.composition.unload(); credentials.mockRestore(); resetRuntimeFetch();
+            unregister(); await fixture.composition.unload(); await credentials.rollback(); resetRuntimeFetch();
             getStorage().setState(initialState, true); invalidateAccountEncryptionModeCache();
         }
     });
 
     it('routes generic action.invoke through the answering default UI executor', async () => {
-        const { Modal } = await import('@/modal');
-        vi.mocked(Modal.show).mockClear();
+        expect(visibleModalCount).toBe(0);
         const fixture = createCurrentUiClientActionFixture({
             surfaces: ['agent', 'mcp', 'cli'],
             handler: async (_input, context) => ({ surface: context.invocationSurface }),
@@ -629,11 +700,13 @@ describe('current UI context Voice tool port', () => {
             await fixture.composition.reconcile([fixture.activation]);
             const { createDefaultActionExecutor } = await import('@/sync/ops/actions/defaultActionExecutor');
             for (const surface of ['agent', 'mcp', 'cli'] as const) {
-                expect(await createDefaultActionExecutor().execute('action.invoke', { action: CLIENT_ACTION_ID, input: null }, {
+                const outcome = await createDefaultActionExecutor().execute('action.invoke', { action: CLIENT_ACTION_ID, input: null }, {
                     surface, expectedContributedActionOccurrenceId: fixture.action.occurrenceId,
-                })).toEqual({ ok: true, result: { surface } });
+                });
+                expect(daemonRequests, JSON.stringify(homes.requests)).not.toEqual([]);
+                expect(outcome).toEqual({ ok: true, result: { surface } });
             }
-            expect(Modal.show).not.toHaveBeenCalled();
+            expect(visibleModalCount).toBe(0);
         } finally { unregister(); await fixture.composition.unload(); }
     });
 
@@ -680,8 +753,8 @@ describe('current UI context Voice tool port', () => {
     });
 
     it('binds nested builtin Actions to the canonical executor for each automated client origin', async () => {
-        // Only the external project inventory is reached; all executor policy remains real.
-        const executor = createActionExecutor({ projectsList: async () => ({ projects: [{ id: 'project-ui', name: 'Current project' }] }) } as unknown as ActionExecutorDeps);
+        const { createDefaultActionExecutor } = await import('@/sync/ops/actions/defaultActionExecutor');
+        const executor = createDefaultActionExecutor();
         const fixture = createCurrentUiClientActionFixture({
             surfaces: ['agent', 'mcp', 'cli'],
             handler: async (_input, context) => ({ surface: context.invocationSurface, projects: await context.ui.executeAction('projects.list', {}) }),
@@ -696,79 +769,62 @@ describe('current UI context Voice tool port', () => {
                     readProjection: () => fixture.projection, readNavigationBinding: () => null,
                 });
                 expect(await requireActionInvoker(port)({ action: CLIENT_ACTION_ID, expectedContributorOccurrenceId: fixture.action.occurrenceId }))
-                    .toEqual({ ok: true, result: { surface: invocationSurface, projects: { projects: [{ id: 'project-ui', name: 'Current project' }] } } });
+                    .toEqual({ ok: true, result: { surface: invocationSurface, projects: { items: [], truncated: false, coverage: 'complete' } } });
             }
         } finally { await fixture.composition.unload(); }
     });
 
     it('fails closed across every port capability after its admitting lifetime retires while preserving a known in-flight settlement', async () => {
         const admission = new AbortController();
-        const snapshot: CurrentUiContextSnapshotV1 = {
-            navigation: { area: 'settings', screen: 'settings_page' },
-            commands: [],
-        };
-        const sourceListener = { current: null as (() => void) | null };
-        const unsubscribe = vi.fn();
+        const snapshot: CurrentUiContextSnapshotV1 = { navigation: { area: 'settings', screen: 'settings_page' }, commands: [] };
+        const sourceListeners = new Set<() => void>();
+        let readCount = 0;
+        let commandInvocations = 0;
+        let forwardedSignal: AbortSignal | undefined;
         let settleKnownInvocation!: (outcome: CurrentUiContextVoiceInvocationOutcome) => void;
-        const invokeCurrentUiCommand = vi.fn<(input: CurrentUiContextVoiceCommandInvocationInput) => Promise<CurrentUiContextVoiceInvocationOutcome>>(() => (
-            new Promise<CurrentUiContextVoiceInvocationOutcome>((resolve) => {
-                settleKnownInvocation = resolve;
-            })
-        ));
-        const invokeAction = vi.fn(async (): Promise<CurrentUiContextVoiceInvocationOutcome> => ({ ok: true }));
-        const listCurrentContributedActionDefinitions = vi.fn(() => []);
-        const source: CurrentUiContextVoiceToolPort = {
-            readCurrentUiContext: vi.fn(() => snapshot),
-            resolveCurrentUiCommand: vi.fn(() => null),
-            subscribe: vi.fn((listener) => {
-                sourceListener.current = listener;
-                return unsubscribe;
-            }),
-            listCurrentContributedActionDefinitions,
-            invokeCurrentUiCommand,
-            invokeAction,
+        const command: CurrentUiContextResolvedCommand = {
+            id: 'current-ui-command:admission', retirementSignal: new AbortController().signal,
+            command: { kind: 'hostLocal', invoke: ({ signal }) => {
+                commandInvocations += 1;
+                forwardedSignal = signal;
+                return new Promise<CurrentUiContextVoiceInvocationOutcome>(resolve => { settleKnownInvocation = resolve; });
+            } },
         };
+        const source = createCurrentUiContextVoiceToolPort({
+            reader: {
+                readCurrentUiContext: () => { readCount += 1; return snapshot; },
+                resolveCurrentUiCommand: id => id === command.id ? command : null,
+                subscribe: listener => { sourceListeners.add(listener); return () => { sourceListeners.delete(listener); }; },
+            },
+            readProjection: () => null, readNavigationBinding: () => null,
+        });
         const port = bindCurrentUiContextVoiceToolPortToAdmission(source, admission.signal);
         const listener = vi.fn();
         const release = port.subscribe(listener);
-        if (!port.invokeCurrentUiCommand || !port.invokeAction || !port.listCurrentContributedActionDefinitions) {
-            throw new Error('expected bound current UI capability surface');
-        }
-
+        if (!port.invokeCurrentUiCommand || !port.invokeAction || !port.listCurrentContributedActionDefinitions) throw new Error('expected bound current UI capability surface');
         expect(port.readCurrentUiContext()).toBe(snapshot);
-        expect(port.resolveCurrentUiCommand('current-ui-command:admission')).toBeNull();
+        expect(port.resolveCurrentUiCommand(command.id)).toBe(command);
         expect(port.listCurrentContributedActionDefinitions()).toEqual([]);
-        sourceListener.current?.();
+        for (const notify of sourceListeners) notify();
         expect(listener).toHaveBeenCalledTimes(1);
-
-        const pendingKnownInvocation = port.invokeCurrentUiCommand({ commandId: 'current-ui-command:admission' });
-        const forwardedSignal = invokeCurrentUiCommand.mock.calls[0]?.[0]?.signal;
+        const pendingKnownInvocation = port.invokeCurrentUiCommand({ commandId: command.id });
         expect(forwardedSignal?.aborted).toBe(false);
         admission.abort(new Error('the admitting Account retired'));
         expect(forwardedSignal?.aborted).toBe(true);
         settleKnownInvocation({ ok: true, result: { committed: true } });
         await expect(pendingKnownInvocation).resolves.toEqual({ ok: true, result: { committed: true } });
-
         expect(port.readCurrentUiContext()).toBeNull();
-        expect(port.resolveCurrentUiCommand('current-ui-command:admission')).toBeNull();
+        expect(port.resolveCurrentUiCommand(command.id)).toBeNull();
         expect(port.listCurrentContributedActionDefinitions()).toEqual([]);
-        sourceListener.current?.();
+        for (const notify of sourceListeners) notify();
         release();
         expect(listener).toHaveBeenCalledTimes(1);
-        expect(unsubscribe).toHaveBeenCalledTimes(1);
-        expect(source.readCurrentUiContext).toHaveBeenCalledTimes(1);
-        expect(source.resolveCurrentUiCommand).toHaveBeenCalledTimes(1);
-        expect(listCurrentContributedActionDefinitions).toHaveBeenCalledTimes(1);
-        await expect(port.invokeCurrentUiCommand({ commandId: 'current-ui-command:retired' })).resolves.toEqual({
-            ok: false,
-            code: 'unavailable',
-        });
-        await expect(port.invokeAction({ action: ACTION_ID })).resolves.toEqual({
-            ok: false,
-            code: 'unavailable',
-        });
-        expect(invokeCurrentUiCommand).toHaveBeenCalledTimes(1);
-        expect(invokeAction).not.toHaveBeenCalled();
+        expect(sourceListeners.size).toBe(0);
+        expect(readCount).toBe(1);
+        await expect(port.invokeCurrentUiCommand({ commandId: 'current-ui-command:retired' })).resolves.toEqual({ ok: false, code: 'unavailable' });
+        await expect(port.invokeAction({ action: ACTION_ID })).resolves.toEqual({ ok: false, code: 'unavailable' });
+        expect(commandInvocations).toBe(1);
+        expect(daemonRequests).toEqual([]);
     });
 
     it('derives exact Voice Action definitions from the latest current AppShell projection', async () => {
@@ -882,10 +938,10 @@ describe('current UI context Voice tool port', () => {
         await expect(port.readCurrentContributedActionSchemas?.(
             formatQualifiedPluginActionId({ pluginId: ACTION_ID.pluginId, localId: 'ui-only' }),
         )).resolves.toBeNull();
-        expect(machineRpcWithServerScopeMock).toHaveBeenCalledTimes(1);
-        expect(machineRpcWithServerScopeMock).toHaveBeenCalledWith(expect.objectContaining({
+        expect(daemonRequests).toHaveLength(1);
+        expect(homes.requests.some(request => request.serverId === actionHomeId && request.path === '/v1/machines/machine-actions')).toBe(true);
+        expect(daemonReply).toHaveBeenCalledWith(expect.objectContaining({
             machineId: ACTION_ORIGIN.machineId,
-            serverId: ACTION_ORIGIN.serverId,
             method: RPC_METHODS.DAEMON_PLUGIN_ACTION_SCHEMAS_READ,
             payload: expect.objectContaining({
                 qualifiedActionId: `${ACTION_ID.pluginId}/${ACTION_ID.localId}`,
@@ -1030,10 +1086,26 @@ describe('current UI context Voice tool port', () => {
 
     it('activates and dispatches the public-authoring review Action through the generic executable projection on web, iOS, and Android', async () => {
         const composition = getInstalledPluginUiClientExecutableComposition();
+        // Switching OS inputs also switches the real credential owner's storage
+        // backend. Supply only browser-origin persistence, not credential readers.
+        const originalLocalStorage = Object.getOwnPropertyDescriptor(globalThis, 'localStorage');
+        const browserValues = new Map<string, string>();
+        const browserStorage: Storage = {
+            get length() { return browserValues.size; },
+            key: index => [...browserValues.keys()][index] ?? null,
+            getItem: key => browserValues.get(key) ?? null,
+            setItem: (key, value) => { browserValues.set(key, value); },
+            removeItem: key => { browserValues.delete(key); },
+            clear: () => { browserValues.clear(); },
+        };
+        Object.defineProperty(globalThis, 'localStorage', { configurable: true, value: browserStorage });
         await composition.unload();
         try {
             for (const platform of ['web', 'ios', 'android'] as const) {
                 clientExecutablePlatformState.platform = platform;
+                const credential = await TokenStorage.setCredentialsForServerUrlWithRollback('https://current-ui-public.test',
+                    { serverId: publicHomeId }, { token: createAccountTokenForTests('current-ui-account', { currentAccount: true }) });
+                if (!credential) throw new Error(`Public-authoring ${platform} credentials were not persisted`);
                 const fixture = createPublicAuthoringClientActionFixture({
                     localId: 'open-review-status',
                     platform,
@@ -1044,7 +1116,10 @@ describe('current UI context Voice tool port', () => {
                 const openSurface = vi.fn(async () => ({ ok: true as const }));
                 try {
                     expect(fixture.resolved).toHaveLength(1);
-                    await fixture.composition.reconcile([fixture.activation]);
+                    expect(await fixture.composition.reconcile([fixture.activation])).toMatchObject([{ result: { ok: true } }]);
+                    const { resolvePluginUiClientExecutablePlatform } = await import('@/sync/domains/plugins/ui/usePluginUiProjectionCurrentness');
+                    expect(resolvePluginUiClientExecutablePlatform()).toBe(platform);
+                    expect(resolvePluginUiClientActionRegistration({ action: fixture.action, platform })).not.toBeNull();
 
                     const outcome = await dispatchPluginSurfaceAction({
                         action: { pluginId: fixture.action.pluginId, localId: fixture.action.id },
@@ -1070,11 +1145,14 @@ describe('current UI context Voice tool port', () => {
                     });
                 } finally {
                     await fixture.composition.unload();
+                    await credential.rollback();
                 }
             }
         } finally {
-            clientExecutablePlatformState.platform = 'web';
+            clientExecutablePlatformState.platform = 'ios';
             await composition.unload();
+            if (originalLocalStorage) Object.defineProperty(globalThis, 'localStorage', originalLocalStorage);
+            else Reflect.deleteProperty(globalThis, 'localStorage');
         }
     });
 
@@ -1108,7 +1186,7 @@ describe('current UI context Voice tool port', () => {
                     reason: 'plugin_surface_client_action_unavailable',
                 });
             } finally {
-                clientExecutablePlatformState.platform = 'web';
+                clientExecutablePlatformState.platform = 'ios';
                 await composition.unload();
             }
         },
@@ -1331,8 +1409,8 @@ describe('current UI context Voice tool port', () => {
     });
 
     it('delegates a generic Voice Action through the canonical dispatcher with its exact origin and returns only its bounded settlement', async () => {
-        machineRpcWithServerScopeMock.mockReset();
-        machineRpcWithServerScopeMock.mockResolvedValue({
+        daemonReply.mockReset();
+        daemonReply.mockResolvedValue({
             ok: true,
             result: { ticketId: 'T-124' },
         });
@@ -1355,9 +1433,8 @@ describe('current UI context Voice tool port', () => {
 
         expect(outcome).toEqual({ ok: true, result: { ticketId: 'T-124' } });
         expect(JSON.stringify(outcome)).not.toContain('private ticket title');
-        expect(machineRpcWithServerScopeMock).toHaveBeenCalledWith(expect.objectContaining({
+        expect(daemonReply).toHaveBeenCalledWith(expect.objectContaining({
             machineId: 'machine-actions',
-            serverId: 'server-actions',
             method: RPC_METHODS.DAEMON_PLUGIN_STRUCTURED_MESSAGE_ACTION_EXECUTE,
             payload: expect.objectContaining({
                 expectedContributorOccurrenceId: 'acme-triage-occurrence-27',
@@ -1370,9 +1447,8 @@ describe('current UI context Voice tool port', () => {
     });
 
     it('projects an issued daemon Action acknowledgement loss to the retained Voice outcome_unknown settlement', async () => {
-        machineRpcWithServerScopeMock.mockReset();
-        machineRpcWithServerScopeMock.mockImplementation(async (input: Readonly<{ onIssued?: () => void }>) => {
-            input.onIssued?.();
+        daemonReply.mockReset();
+        daemonReply.mockImplementation(async () => {
             throw new Error('active Action socket acknowledgement timed out after emission');
         });
         const projection = createDaemonActionProjection();
@@ -1390,15 +1466,14 @@ describe('current UI context Voice tool port', () => {
             action: ACTION_ID,
             input: { title: 'private ticket title' },
         })).resolves.toEqual({ ok: false, code: 'outcome_unknown' });
-        expect(machineRpcWithServerScopeMock).toHaveBeenCalledWith(expect.objectContaining({
+        expect(daemonReply).toHaveBeenCalledWith(expect.objectContaining({
             method: RPC_METHODS.DAEMON_PLUGIN_STRUCTURED_MESSAGE_ACTION_EXECUTE,
-            onIssued: expect.any(Function),
         }));
     });
 
     it('retains a post-handler daemon retirement as outcome_unknown', async () => {
-        machineRpcWithServerScopeMock.mockReset();
-        machineRpcWithServerScopeMock.mockResolvedValue({
+        daemonReply.mockReset();
+        daemonReply.mockResolvedValue({
             ok: false,
             code: 'plugin_action_outcome_unknown',
         });
@@ -1417,6 +1492,9 @@ describe('current UI context Voice tool port', () => {
             action: ACTION_ID,
             input: { title: 'private ticket title' },
         })).resolves.toEqual({ ok: false, code: 'outcome_unknown' });
+        expect(daemonReply).toHaveBeenCalledWith(expect.objectContaining({
+            method: RPC_METHODS.DAEMON_PLUGIN_STRUCTURED_MESSAGE_ACTION_EXECUTE,
+        }));
     });
 
     it('delegates an opaque execute-Action command through that same dispatcher and preserves a known success after its publication retires', async () => {
@@ -1429,8 +1507,8 @@ describe('current UI context Voice tool port', () => {
             },
             retirementSignal: new AbortController().signal,
         };
-        machineRpcWithServerScopeMock.mockReset();
-        machineRpcWithServerScopeMock.mockImplementation(async () => {
+        daemonReply.mockReset();
+        daemonReply.mockImplementation(async () => {
             current = null;
             return { ok: true, result: { ticketId: 'T-125' } };
         });
@@ -1461,10 +1539,10 @@ describe('current UI context Voice tool port', () => {
             },
             retirementSignal: new AbortController().signal,
         };
-        machineRpcWithServerScopeMock.mockReset();
-        machineRpcWithServerScopeMock.mockImplementation(async () => {
+        daemonReply.mockReset();
+        daemonReply.mockImplementation(async () => {
             current = null;
-            return { ok: false, errorCode: 'plugin_action_unavailable', error: 'target reported a known failure' };
+            return { ok: false, code: 'plugin_action_unavailable' };
         });
         const projection = createDaemonActionProjection();
         const port = createCurrentUiContextVoiceToolPort({
@@ -1481,9 +1559,40 @@ describe('current UI context Voice tool port', () => {
             ok: false,
             code: 'unavailable',
         });
+        expect(current).toBeNull();
+        expect(daemonReply).toHaveBeenCalledWith(expect.objectContaining({
+            method: RPC_METHODS.DAEMON_PLUGIN_STRUCTURED_MESSAGE_ACTION_EXECUTE,
+        }));
     });
 
-    it('forwards exact command retirement to a pending non-safe daemon Action', async () => {
+    it('forwards exact command retirement before a non-safe daemon Action dispatches', async () => {
+        const retirement = new AbortController();
+        let current: CurrentUiContextResolvedCommand | null = {
+            id: COMMAND_ID,
+            command: { kind: 'executeAction', action: ACTION_ID },
+            retirementSignal: retirement.signal,
+        };
+        const projection = createDaemonActionProjection({ dangerLevel: 'writesRemote' });
+        const port = createCurrentUiContextVoiceToolPort({
+            reader: {
+                readCurrentUiContext: () => null,
+                resolveCurrentUiCommand: id => id === COMMAND_ID ? current : null,
+                subscribe: () => () => {},
+            },
+            readProjection: () => projection,
+            readNavigationBinding: () => null,
+        });
+        let pending!: Promise<CurrentUiContextVoiceInvocationOutcome>;
+        await act(async () => { pending = requireCommandInvoker(port)({ commandId: COMMAND_ID }); });
+        await vi.waitFor(() => expect(modalScreen.findByTestId('app-shell-confirmation-confirm')).not.toBeNull());
+        current = null;
+        await act(async () => { retirement.abort(new Error('the exact command retired before dispatch')); });
+        await modalScreen.pressByTestIdAsync('app-shell-confirmation-confirm');
+        await expect(pending).resolves.toEqual({ ok: false, code: 'unavailable' });
+        expect(daemonRequests).toEqual([]);
+    });
+
+    it('retains outcome_unknown and sends correlated cancellation when an already-dispatched non-safe daemon Action retires', async () => {
         const retirement = new AbortController();
         let current: CurrentUiContextResolvedCommand | null = {
             id: COMMAND_ID,
@@ -1500,8 +1609,8 @@ describe('current UI context Voice tool port', () => {
             throw new Error('daemon Action RPC did not start');
         };
         let observedSignal: AbortSignal | undefined;
-        machineRpcWithServerScopeMock.mockReset();
-        machineRpcWithServerScopeMock.mockImplementation((input: Readonly<{ signal?: AbortSignal }>) => (
+        daemonReply.mockReset();
+        daemonReply.mockImplementation((input: Readonly<{ signal?: AbortSignal }>) => (
             new Promise<Readonly<{ ok: false; code: string }>>((resolve) => {
                 observedSignal = input.signal;
                 resolveRpc = resolve;
@@ -1519,16 +1628,30 @@ describe('current UI context Voice tool port', () => {
             readNavigationBinding: () => null,
         });
 
-        const pending = requireCommandInvoker(port)({ commandId: COMMAND_ID });
+        let pending!: Promise<CurrentUiContextVoiceInvocationOutcome>;
+        await act(async () => { pending = requireCommandInvoker(port)({ commandId: COMMAND_ID }); });
+        await vi.waitFor(() => expect(modalScreen.findByTestId('app-shell-confirmation-confirm')).not.toBeNull());
+        expect(daemonRequests).toEqual([]);
+        await modalScreen.pressByTestIdAsync('app-shell-confirmation-confirm');
         await rpcStartedPromise;
         current = null;
-        retirement.abort(new Error('the exact command retired while confirmation was pending'));
+        await act(async () => { retirement.abort(new Error('the exact command retired while confirmation was pending')); });
         try {
             expect(observedSignal?.aborted).toBe(true);
         } finally {
             resolveRpc({ ok: false, code: 'plugin_action_aborted' });
         }
-        await expect(pending).resolves.toEqual({ ok: false, code: 'unavailable' });
+        await expect(pending).resolves.toEqual({ ok: false, code: 'outcome_unknown' });
+        const calls = transportSockets.flatMap(socket => vi.mocked(socket.emitWithAck).mock.calls);
+        const dispatched = calls.find(([event, payload]) => event === SOCKET_RPC_EVENTS.CALL
+            && payload && typeof payload === 'object' && 'method' in payload
+            && payload.method === `machine-actions:${RPC_METHODS.DAEMON_PLUGIN_STRUCTURED_MESSAGE_ACTION_EXECUTE}`);
+        expect(dispatched).toBeDefined();
+        const requestId = SocketRpcRequestIdSchema.parse(dispatched?.[1]?.requestId);
+        const cancellations = transportSockets.flatMap(socket => vi.mocked(socket.emit).mock.calls)
+            .filter(([event]) => event === SOCKET_RPC_EVENTS.CANCEL)
+            .map(([, payload]) => SocketRpcCancellationPayloadSchema.parse(payload));
+        expect(cancellations.map(receipt => receipt.requestId)).toEqual([requestId]);
     });
 
     it.each(['action', 'command'] as const)('admits a Session-scoped client %s using only the host current Session binding', async (entryPoint) => {

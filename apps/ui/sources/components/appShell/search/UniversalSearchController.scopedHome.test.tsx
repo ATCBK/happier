@@ -1,381 +1,304 @@
+import 'fake-indexeddb/auto';
 import * as React from 'react';
 import { act } from 'react-test-renderer';
-import { afterEach, beforeAll, describe, expect, it, vi } from 'vitest';
+import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it, vi } from 'vitest';
+import { PluginProjectionV2Schema, SessionCurrentProjectionRecordV1Schema, tryWriteServerEnabledBitInPlace } from '@happier-dev/protocol';
 import { RPC_ERROR_CODES } from '@happier-dev/protocol/rpcErrors';
+import { RPC_METHODS } from '@happier-dev/protocol/rpc';
 import { DEFAULT_MEMORY_SETTINGS } from '@happier-dev/protocol/memory/memorySettings';
-
-import { renderScreen, standardCleanup } from '@/dev/testkit';
+import { MetadataSchema } from '@happier-dev/session-core/state';
+import { SessionViewerProjectionV1Schema } from '@happier-dev/protocol/sessions/personal/viewer';
+import { QUIET_SESSION_PERSONAL_ATTENTION_V1 } from '@happier-dev/protocol/sessions/personal/attention';
+import { createDeferred, createMachineFixture, createSessionFixture, createRootLayoutFeaturesResponse, flushHookEffects, renderScreen as renderScreenWithTestkit, standardCleanup } from '@/dev/testkit';
+import { installSessionOpsNetworkBoundary } from '@/dev/testkit/harness/sessionOpsNetworkBoundary';
+import { createPlainMachineRowFixture } from '@/dev/testkit/fixtures/machineFixtures';
+import { createAccountTokenForTests, createHomeGovernanceHarness, waitForHomeGovernance } from '@/dev/testkit/harness/homeGovernanceHarness';
+import { applyProjectAccountRowsFixture } from '@/dev/testkit/fixtures/projectAccountRows';
+import type { WorkspaceRefV1 } from '@/sync/domains/workspaces/workspaceRefModel';
 import type { SelectionListProps } from '@/components/ui/selectionList';
 import type { SessionOrganizationProjection } from '@/sync/domains/session/organization/types';
-import {
-    EMPTY_PLUGIN_UI_PROJECTION,
-    type PluginUiProjectionModel,
-} from '@/sync/domains/plugins/ui/projection';
+import type { UniversalSearchControllerProps } from './UniversalSearchController';
+import type { PluginUiProjectionModel } from '@/sync/domains/plugins/ui/projection';
 
+const HOME_A = 'srv_fsp_controller_a';
+const HOME_B = 'srv_fsp_controller_b';
+let localHomeB = '';
+let controllerConnection: Awaited<ReturnType<typeof import('@/dev/testkit/harness/serverAccountConnectionHarness').restoreServerAccountForTest>> | undefined;
 const harness = vi.hoisted(() => ({
-    selectionListProps: null as SelectionListProps | null,
-    navigateToSession: vi.fn(),
-    searchHomeMemory: vi.fn(),
-    machineRpc: vi.fn(),
-    routerPush: vi.fn(),
-    memoryMachine: null as null | { serverId: string; machine: { id: string } },
-    workspaceRefs: [] as unknown[],
-    modalAlert: vi.fn(),
-    featureEnabled: { search: true, 'memory.search': false } as Record<string, boolean>,
-    fetchAllSessionMetadata: vi.fn(async () => {}),
-    ensureSessionMetadataInventoryForServerAccountScope: vi.fn(async (_params: Readonly<{
-        scope: { serverId: string; accountId: string };
-        accountLifetime: {
-            isCurrent(): boolean;
-            onRetire(cancel: () => void): { dispose(): void };
-        };
-        signal?: AbortSignal;
-    }>) => {}),
-    sessionListRows: [] as Array<{
-        serverId: string | null;
-        serverName: string | null;
-        session: {
-            id: string;
-            updatedAt: number;
-            archivedAt?: number | null;
-            metadata: { name: string; path?: string };
-        };
-    }>,
-    homeCredentialMutationListeners: new Set<(event: { kind: 'credentials_set' | 'credentials_removed'; serverId: string; serverUrl: string }) => void>(),
-    portableIdentity: false,
-    singleHome: false,
-    settingsCatalog: { tree: [], search: () => [] } as { tree: readonly unknown[]; search: (query: string) => readonly unknown[] },
-    sessionOrganizationProjection: null as SessionOrganizationProjection | null,
-    appShellPluginProjection: null as PluginUiProjectionModel | null,
-    scopedPluginProjections: new Map<string, PluginUiProjectionModel>(),
-    scopedPluginProjectionCalls: [] as Array<Readonly<{
-        machineId?: string | null;
-        serverId?: string | null;
-        enabled?: boolean;
-    }>>,
-    activeAccountLifetime: null as null | {
-        scope: { serverId: string; accountId: string };
-        isCurrent(): boolean;
-        onRetire(): { dispose(): void };
-    },
+    routerNavigate: vi.fn(), routerPush: vi.fn(), modalAlert: vi.fn(),
 }));
-
 vi.mock('react-native', async () => {
     const { createReactNativeWebMock } = await import('@/dev/testkit/mocks/reactNative');
     return createReactNativeWebMock({ Platform: { OS: 'web' } });
 });
-
-vi.mock('@/modal', () => ({ Modal: { alert: harness.modalAlert } }));
-
+vi.mock('react-native-unistyles', async () => {
+    const { createUnistylesMock } = await import('@/dev/testkit/mocks/unistyles');
+    return createUnistylesMock();
+});
+vi.mock('@/modal', async () => {
+    const { createModalModuleMock } = await import('@/dev/testkit/mocks/modal');
+    return createModalModuleMock({ spies: { alert: harness.modalAlert } }).module;
+});
 vi.mock('expo-router', async () => {
     const { createExpoRouterMock } = await import('@/dev/testkit/mocks/router');
-    return createExpoRouterMock({ router: { push: harness.routerPush } }).module;
+    return createExpoRouterMock({ router: { push: harness.routerPush, navigate: harness.routerNavigate } }).module;
 });
 
-vi.mock('@/components/ui/selectionList', async (importOriginal) => {
-    const actual = await importOriginal<typeof import('@/components/ui/selectionList')>();
-    return {
-        ...actual,
-        SelectionList: (props: SelectionListProps) => {
-            harness.selectionListProps = props;
-            return React.createElement('SelectionList');
-        },
-    };
-});
+const network = await installSessionOpsNetworkBoundary();
+const selectedHomes = createHomeGovernanceHarness();
+let concurrentFixtureStarted = false;
+const { loadSyncSingletonForTests } = await import('@/dev/testkit/harness/syncSingletonLoader');
+await loadSyncSingletonForTests();
+const { storage } = await import('@/sync/domains/state/storage');
+const { TokenStorage } = await import('@/auth/storage/tokenStorage');
+const { setServerProfileIdentityForUrl, upsertServerProfile, removeServerProfile, listServerProfiles } = await import('@/sync/domains/server/serverProfiles');
+const { upsertAndActivateServer, getActiveServerSnapshot } = await import('@/sync/domains/server/serverRuntime');
+const { publishAppliedActiveServerSnapshot } = await import('@/sync/runtime/orchestration/appliedActiveServerRuntime');
+const { primeServerFeaturesSnapshot } = await import('@/sync/api/capabilities/serverFeaturesClient');
+const { captureActiveServerAccountScopeLifetime, retireActiveServerAccountScopeLifetime } = await import('@/sync/domains/scope/activeServerAccountScope');
+const { clearDaemonMergedProjectionCacheForTests } = await import('@/agents/backendCatalog/loadDaemonMergedProjectionInputs');
+const { InjectedAuthProvider } = await import('@/auth/context/AuthContext');
+const { parseToken } = await import('@/utils/auth/parseToken');
+const { AppShellPluginUiProjectionValueProvider, useAppShellPluginUiProjection } = await import('@/components/appShell/plugins/AppShellPluginUiProjection');
+const { normalizePluginUiProjection } = await import('@/sync/domains/plugins/ui/projection');
+const { readCurrentAppShellPluginUiProjection } = await import('@/components/appShell/plugins/committedPluginUiProjection');
 
-vi.mock('@/hooks/session/useNavigateToSession', () => ({
-    useNavigateToSession: () => harness.navigateToSession,
-}));
-
-vi.mock('@/components/projects/useOpenProject', () => ({ useOpenProject: () => vi.fn(() => true) }));
-vi.mock('@/components/settings/catalog/runtime/useResolvedSettingsPageCatalog', () => ({
-    useResolvedSettingsPageCatalog: () => harness.settingsCatalog,
-}));
-vi.mock('@/components/appShell/plugins/AppShellPluginUiProjection', () => ({
-    useAppShellPluginUiProjection: () => ({
-        pluginUiProjection: harness.appShellPluginProjection,
-        serverId: harness.appShellPluginProjection ? 'home-a' : null,
-        machineId: harness.appShellPluginProjection ? 'machine-a' : null,
-        interactionEnabled: harness.appShellPluginProjection !== null,
-    }),
-}));
-vi.mock('@/components/plugins/projection/useScopedPluginUiProjection', () => ({
-    useScopedPluginUiProjection: (params: Readonly<{
-        machineId?: string | null;
-        serverId?: string | null;
-        enabled?: boolean;
-    }>) => {
-        harness.scopedPluginProjectionCalls.push(params);
-        const projection = params.enabled === false
-            ? null
-            : harness.scopedPluginProjections.get(`${params.serverId ?? ''}:${params.machineId ?? ''}`) ?? null;
-        return {
-            pluginUiProjection: projection,
-            pluginBrowserProjection: null,
-            phase: projection ? 'current' : 'unavailable',
-            interactionEnabled: projection !== null,
-            serverId: params.serverId ?? null,
-            machineId: params.machineId ?? null,
-            platform: 'web',
-        };
-    },
-}));
-vi.mock('@/components/appShell/currentUiContext/CurrentUiContextProvider', () => ({
-    useOptionalCurrentUiContextReader: () => null,
-}));
-vi.mock('@/components/plugins/surfaces/pluginSurfaceDestinationNavigation', () => ({
-    usePluginSurfaceDestinationNavigationBinding: () => null,
-}));
-
-vi.mock('@/sync/store/hooks', () => ({
-    useAllMachines: () => [],
-    useAllSessions: () => [{
-        id: 'session-b',
-        serverId: harness.portableIdentity ? 'local-home-b' : 'home-b',
-        updatedAt: 1,
-        metadata: { name: 'Home B session', path: '/repo/b' },
-    }],
-    useSessionListRowsByServerId: () => harness.sessionListRows.reduce<Record<string, Record<string, typeof harness.sessionListRows[number]['session']>>>((byServer, row) => {
-        const serverId = row.serverId ?? '';
-        if (!serverId) return byServer;
-        byServer[serverId] ??= {};
-        byServer[serverId]![row.session.id] = row.session;
-        return byServer;
-    }, {}),
-    useSessionOrganizationProjection: () => harness.sessionOrganizationProjection,
-}));
-vi.mock('@/sync/runtime/getSyncSingleton', () => ({
-    getSyncSingleton: () => ({
-        fetchAllSessionMetadata: harness.fetchAllSessionMetadata,
-        ensureSessionVisibleForMessageRoute: async () => ({ kind: 'available' }),
-        getSyncTuning: () => ({ sessionListHydrationConcurrencyLimit: 2 }),
-    }),
-}));
-vi.mock('@/sync/domains/session/fetchSessionMetadataInventoryForServerAccountScope', () => ({
-    ensureSessionMetadataInventoryForServerAccountScope: harness.ensureSessionMetadataInventoryForServerAccountScope,
-}));
-vi.mock('@/sync/runtime/orchestration/serverScopedRpc/fetchSessionByIdWithServerScope', () => ({
-    fetchSessionByIdWithServerScope: async (params: Readonly<{
-        sessionId: string;
-        serverId?: string | null;
-        applySessions(sessions: readonly unknown[]): void;
-    }>) => {
-        params.applySessions([{
-            id: params.sessionId,
-            serverId: params.serverId,
-            seq: 100,
-            createdAt: 1,
-            updatedAt: 1,
-            active: true,
-            activeAt: 1,
-            archivedAt: null,
-            encryptionMode: 'plain',
-            metadata: { name: 'Scoped Session', path: '/repo/b' },
-            metadataVersion: 1,
-            agentState: {},
-            agentStateVersion: 1,
-            thinking: false,
-            thinkingAt: 0,
-        }]);
-        return { ok: true };
-    },
-}));
-vi.mock('@/sync/domains/state/storage', async () => {
-    const { createStorageModuleStub } = await import('@/dev/testkit/mocks/storage');
-    return createStorageModuleStub({
-        useSetting: () => [],
-        useWorkspaceRefs: () => harness.workspaceRefs,
-        storage: { getState: () => ({
-            sessions: {},
-            machines: {},
-            machineListByServerId: harness.memoryMachine ? { [harness.memoryMachine.serverId]: [{
-                id: harness.memoryMachine.machine.id, active: true, activeAt: Date.now(), createdAt: 1, updatedAt: 1,
-                metadata: { host: 'Test machine' },
-            }] } : {},
-            sessionListRowsByServerId: harness.sessionListRows.reduce<Record<string, Record<string, typeof harness.sessionListRows[number]['session']>>>((byServer, row) => {
-                const serverId = row.serverId ?? '';
-                if (!serverId) return byServer;
-                byServer[serverId] ??= {};
-                byServer[serverId]![row.session.id] = row.session;
-                return byServer;
-            }, {}),
-            clearSessionListRowsForServerScope: () => undefined,
-            mergeSessionListRowsForServerScope: (serverId: string, sessions: typeof harness.sessionListRows[number]['session'][]) => {
-                for (const session of sessions) {
-                    harness.sessionListRows = harness.sessionListRows.filter((row) => (
-                        row.serverId !== serverId || row.session.id !== session.id
-                    ));
-                    harness.sessionListRows.push({ serverId, serverName: serverId, session });
-                }
-            },
-        }) },
+const fixture = {
+    homeSearch: vi.fn<(request: Record<string, unknown>) => Promise<unknown>>(),
+    daemonRpc: vi.fn(async (_request: { method: string; payload: unknown; serverId: string; accountId: string | null; machineId: string }) => DEFAULT_MEMORY_SETTINGS as unknown),
+    featureEnabled: { search: true, 'memory.search': false } as Record<string, boolean>,
+    memoryMachine: null as null | { serverId: string; machine: { id: string } },
+    workspaceRefs: [] as WorkspaceRefV1[],
+    sessionListRows: [] as Array<{ serverId: string | null; serverName: string | null; session: { id: string; updatedAt: number; archivedAt?: number | null; metadata: { name: string; path?: string } } }>,
+    sessionOrganizationProjection: null as SessionOrganizationProjection | null,
+    portableIdentity: false, singleHome: false,
+    scopedPluginProjections: new Map<string, ReturnType<typeof PluginProjectionV2Schema.parse>>(),
+    observedAmbientProjection: null as PluginUiProjectionModel | null,
+    inventoryFailure: false,
+    inventoryHold: null as Promise<void> | null,
+    inventorySignals: [] as AbortSignal[],
+};
+let mountedSearch: Awaited<ReturnType<typeof renderScreenWithTestkit>> | undefined;
+let SelectionList: typeof import('@/components/ui/selectionList')['SelectionList'];
+// ReactTestInstance erases the props type; this node is the actual typed SelectionList.
+const selectionListProps = (): SelectionListProps | null => (mountedSearch?.findByType(SelectionList).props as SelectionListProps | undefined) ?? null;
+const inventoryRequests = () => network.httpRequests.filter(request => new URL(request.url).pathname === '/v2/sessions');
+const homeUrl = (id: string) => id === HOME_A ? 'https://home-a.example.test' : 'https://home-b.example.test';
+function wireSession(id: string, metadata: Readonly<{ name: string; path?: string }> = { name: 'Scoped Session', path: '/repo/b' }, archivedAt: number | null = null, updatedAt = 1) {
+    const admittedMetadata = MetadataSchema.parse(metadata);
+    const session = createSessionFixture({ id, metadata: admittedMetadata, seq: 100, updatedAt, active: archivedAt === null, archivedAt, activeAt: Date.now() });
+    return SessionCurrentProjectionRecordV1Schema.parse({ ...session,
+        metadata: JSON.stringify(admittedMetadata), metadataLayoutVersion: 0, agentState: null, dataEncryptionKey: null,
+        share: null, effectiveAccess: { v: 1, level: session.access!.level, sources: [{ kind: 'owner' }], capabilities: session.access!.capabilities },
+        responsibleAccountId: null, responsibleAccount: null, pendingCount: 0, pendingVersion: 0,
+        viewer: SessionViewerProjectionV1Schema.parse({
+            readState: { state: 'not_started' }, relevance: { relevant: true, reasons: ['owned_by_me'] },
+            follow: { follows: false, notificationLevel: null }, notification: { level: 'important', source: 'owner' },
+            attention: QUIET_SESSION_PERSONAL_ATTENTION_V1,
+        }),
     });
-});
-vi.mock('@/sync/domains/state/storageStore', async () => {
-    const { storage } = await import('@/sync/domains/state/storage');
-    return { storage };
-});
-vi.mock('@/sync/domains/scope/activeServerAccountScope', () => ({
-    getActiveServerAccountScope: () => ({ serverId: 'home-a', accountId: 'account-1' }),
-    captureActiveServerAccountScopeLifetime: () => {
-        harness.activeAccountLifetime ??= {
-            scope: { serverId: 'home-a', accountId: 'account-1' },
-            isCurrent: () => true,
-            onRetire: () => ({ dispose: () => undefined }),
-        };
-        return harness.activeAccountLifetime;
-    },
-}));
-vi.mock('@/hooks/server/useActiveServerSnapshot', () => ({
-    useActiveServerSnapshot: () => ({ serverId: 'home-a' }),
-}));
-vi.mock('@/hooks/server/useFeatureEnabled', () => ({
-    useFeatureEnabled: (id: string) => harness.featureEnabled[id] === true,
-}));
-vi.mock('@/sync/domains/features/featureDecisionRuntime', () => {
-    const ready = {
-        status: 'ready',
-        features: { capabilities: { homeSearch: { enabled: true } } },
-    };
-    return {
-        useServerFeaturesRuntimeSnapshot: () => ready,
-        useServerFeaturesSnapshotForServerId: () => ready,
-    };
-});
-vi.mock('@/sync/domains/machines/administration/useTargetSelection', () => ({
-    useMachineAdministrationTargetSelection: () => ({ resolveExecutionTarget: () => harness.memoryMachine }),
-}));
-vi.mock('@/sync/domains/memory/searchHomeMemory', () => ({
-    searchHomeMemory: harness.searchHomeMemory,
-}));
-vi.mock('@/sync/runtime/orchestration/serverScopedRpc/createServerRequestWithServerScope', () => ({
-    captureServerRequestAuthorityForServerAccountScope: async ({ scope }: { scope: { serverId: string; accountId: string } }) => ({
-        scope,
-        context: { scope: 'scoped', credentials: { token: scope.accountId } },
-        request: async () => new Response('{}'),
-        release: async () => undefined,
-    }),
-}));
-vi.mock('@/auth/storage/tokenStorage', async (importOriginal) => {
-    const actual = await importOriginal<typeof import('@/auth/storage/tokenStorage')>();
-    return {
-        ...actual,
-        accountDirectoryAuthCredentials: {
-        read: async () => ({ kind: 'absent' as const }),
-        get: async () => null,
-        set: async () => false,
-        remove: async () => false,
-        clear: async () => false,
-        logout: async () => false,
-        },
-        TokenStorage: {
-            ...actual.TokenStorage,
-            getCredentialsForServerUrl: async (_url: string, options: { serverId?: string }) => ({
-                token: options.serverId === 'home-b' ? 'account-1' : 'account-a',
-            }),
-        },
-        subscribeHomeCredentialMutations: (listener: Parameters<typeof actual.subscribeHomeCredentialMutations>[0]) => {
-            harness.homeCredentialMutationListeners.add(listener);
-            return () => harness.homeCredentialMutationListeners.delete(listener);
-        },
-    };
-});
-vi.mock('@/utils/auth/parseToken', () => ({ parseToken: (token: string) => token }));
-// The daemon RPC is the system boundary; negotiation, parsing and eligibility remain real.
-vi.mock('@/sync/runtime/orchestration/serverScopedRpc/serverScopedMachineRpc', () => ({
-    machineRpcWithServerScope: harness.machineRpc,
-}));
-vi.mock('@/sync/ops/sessionMachineTarget', () => ({ readMachineControlTargetForSession: () => null }));
-vi.mock('@/hooks/server/useServerProfilesGeneration', () => ({ useServerProfilesGeneration: () => 1 }));
-vi.mock('@/sync/domains/server/serverProfiles', () => ({
-    // The Home display-name owner reads a user-given name; these fixtures name every Home.
-    readServerProfileHomeName: (profile: { name?: string }) => profile.name?.trim() || null,
-    getActiveServerSnapshot: () => ({
-        serverId: 'home-a',
-        serverUrl: 'https://home-a.example.test',
-        generation: 1,
-        isSelectionExplicit: true,
-    }),
-    listServerProfiles: () => [
-        ...(harness.singleHome ? [] : [{ id: 'home-a', name: 'Home A', serverUrl: 'https://home-a.example.test' }]),
-        harness.portableIdentity
-            ? { id: 'local-home-b', serverIdentityId: 'home-b', name: 'Home B', serverUrl: 'https://home-b.example.test' }
-            : { id: 'home-b', name: 'Home B', serverUrl: 'https://home-b.example.test' },
-    ],
-    getServerProfileById: (serverId: string) => harness.portableIdentity && (serverId === 'home-b' || serverId === 'local-home-b')
-        ? { id: 'local-home-b', serverIdentityId: 'home-b', name: 'Home B', serverUrl: 'https://home-b.example.test' }
-        : { id: serverId, name: serverId, serverUrl: `https://${serverId}.example.test` },
-    resolveServerProfileScopeId: (profile: { id: string; serverIdentityId?: string | null }) => profile.serverIdentityId ?? profile.id,
-    resolveServerProfileScopeIdForIdentifier: (serverId: string) => harness.portableIdentity && serverId === 'local-home-b' ? 'home-b' : serverId,
-    areServerProfileIdentifiersEquivalent: (left: string, right: string) => left === right
-        || (harness.portableIdentity && [left, right].sort().join(':') === 'home-b:local-home-b'),
-}));
-
-function pluginSearchProjection(input: Readonly<{
-    pluginId: string;
-    title: string;
-    generation: number;
-}>): PluginUiProjectionModel {
-    const providerId = `searchProvider:${input.pluginId}:entries`;
-    return Object.freeze({
-        ...EMPTY_PLUGIN_UI_PROJECTION,
-        generation: input.generation,
-        searchProvidersById: Object.freeze({
-            [providerId]: Object.freeze({
-                id: providerId,
-                pluginId: input.pluginId,
-                contributionKind: 'searchProvider' as const,
-                descriptorId: 'entries',
-                identity: Object.freeze({ pluginId: input.pluginId, localId: 'entries' }),
-                action: Object.freeze({ pluginId: input.pluginId, localId: 'search' }),
-            }),
-        }),
-        actionsById: Object.freeze({
-            [`${input.pluginId}/search`]: Object.freeze({
-                id: 'search',
-                pluginId: input.pluginId,
-                title: input.title,
-                icon: 'action',
-                scopes: ['global'],
-                surfaces: ['ui'],
-                execution: { target: 'daemon' },
-                dangerLevel: 'safe',
-                available: true,
-            }),
-        }),
-    }) as PluginUiProjectionModel;
 }
-
-afterEach(() => {
-    harness.selectionListProps = null;
-    harness.sessionListRows = [];
-    harness.portableIdentity = false;
-    harness.singleHome = false;
-    harness.settingsCatalog = { tree: [], search: () => [] };
-    harness.sessionOrganizationProjection = null;
-    harness.appShellPluginProjection = null;
-    harness.scopedPluginProjections.clear();
-    harness.scopedPluginProjectionCalls = [];
-    harness.activeAccountLifetime = null;
-    harness.featureEnabled = { search: true, 'memory.search': false };
-    harness.memoryMachine = null;
-    harness.workspaceRefs = [];
-    harness.machineRpc.mockReset();
+async function mutateHomeBCredentials() {
+    await network.setAccount(homeUrl(HOME_B), 'account-1');
+    expect(await TokenStorage.setCredentialsForServerUrl(homeUrl(HOME_B), { serverId: HOME_B }, { token: createAccountTokenForTests('account-1') })).toBe(true);
+}
+async function prepareControllerFixture() {
+    const { clearMachineRequestReachabilityForTest } = await import('@/sync/domains/machines/reachability/machineReachability');
+    clearMachineRequestReachabilityForTest();
+    for (const profile of listServerProfiles()) {
+        if (profile.serverUrl === homeUrl(HOME_A) || profile.serverUrl === homeUrl(HOME_B)) await removeServerProfile(profile.id);
+    }
+    const profiles = [];
+    for (const [serverId, accountId, name] of [[HOME_A, 'account-a', 'Home A'], [HOME_B, 'account-1', 'Home B']] as const) {
+        await upsertServerProfile({ serverUrl: homeUrl(serverId), name });
+        const home = await network.addHome(homeUrl(serverId), accountId);
+        await upsertServerProfile({ serverUrl: home.serverUrl, name });
+        if (serverId === HOME_B) localHomeB = home.id;
+        await setServerProfileIdentityForUrl(home.serverUrl, serverId);
+        expect(await TokenStorage.setCredentialsForServerUrl(home.serverUrl, { serverId }, { token: home.token })).toBe(true);
+        profiles.push(home);
+        const features = createRootLayoutFeaturesResponse({ capabilities: { serverIdentity: { serverIdentityId: serverId }, homeSearch: { enabled: true } } });
+        tryWriteServerEnabledBitInPlace(features, 'search', fixture.featureEnabled.search);
+        if (fixture.scopedPluginProjections.size) {
+            tryWriteServerEnabledBitInPlace(features, 'plugins', true);
+            tryWriteServerEnabledBitInPlace(features, 'plugins.ui', true);
+        }
+        primeServerFeaturesSnapshot({ serverId, snapshot: { status: 'ready', features } });
+        primeServerFeaturesSnapshot({ serverId: home.id, snapshot: { status: 'ready', features } });
+    }
+    await upsertAndActivateServer({ serverUrl: homeUrl(fixture.singleHome ? HOME_B : HOME_A), name: fixture.singleHome ? 'Home B' : 'Home A' });
+    publishAppliedActiveServerSnapshot(getActiveServerSnapshot());
+    if (fixture.singleHome) await removeServerProfile(profiles[0]!.id);
+    const machine = fixture.memoryMachine || fixture.scopedPluginProjections.size
+        ? createMachineFixture({ id: fixture.memoryMachine?.machine.id ?? 'machine-b', activeAt: Date.now() }) : null;
+    const httpResponse: Parameters<typeof network.setHttpResponder>[0] = async (input, init) => {
+        const url = new URL(String(input));
+        const serverId = url.origin === homeUrl(HOME_A) ? HOME_A : HOME_B;
+        if (url.pathname === '/v1/features' || url.pathname === '/v1/features/authenticated') {
+            const features = createRootLayoutFeaturesResponse({ capabilities: { serverIdentity: { serverIdentityId: serverId }, homeSearch: { enabled: true } } });
+            tryWriteServerEnabledBitInPlace(features, 'search', fixture.featureEnabled.search);
+            tryWriteServerEnabledBitInPlace(features, 'plugins', fixture.scopedPluginProjections.size > 0);
+            tryWriteServerEnabledBitInPlace(features, 'plugins.ui', fixture.scopedPluginProjections.size > 0);
+            return Response.json(features);
+        }
+        if (url.pathname === '/v2/account/settings') return Response.json({ content: { t: 'plain', v: {
+            experiments: true, featureToggles: { 'memory.search': fixture.featureEnabled['memory.search'] },
+        } }, version: 1 });
+        if (url.pathname === '/v1/home/search') {
+            const authorization = new Headers(init?.headers).get('Authorization');
+            const accountId = authorization?.startsWith('Bearer ') ? parseToken(authorization.slice('Bearer '.length)) : null;
+            return Response.json(await fixture.homeSearch({ ...JSON.parse(String(init?.body)), serverId, accountId }));
+        }
+        if (url.pathname === '/v1/account/encryption') return Response.json({ mode: 'plain', updatedAt: 0 });
+        if (url.pathname === '/v1/account/encryption/currentness') return Response.json({ mode: 'plain', version: 0, signingKeyFingerprint: null, contentKeyFingerprint: null, updatedAt: 0 });
+        if (url.pathname === '/v1/machines') return Response.json(machine ? [createPlainMachineRowFixture({
+            id: fixture.scopedPluginProjections.size && serverId === HOME_A ? 'machine-a' : machine.id,
+            accountId: serverId === HOME_A ? 'account-a' : 'account-1',
+        })] : []);
+        if (url.pathname.startsWith('/v1/machines/')) return Response.json({ machine: createPlainMachineRowFixture({ id: url.pathname.slice('/v1/machines/'.length), accountId: serverId === HOME_A ? 'account-a' : 'account-1' }) });
+        if (url.pathname.startsWith('/v2/sessions/')) {
+            if (url.pathname === '/v2/sessions/active') return Response.json({ sessions: [], hasNext: false, nextCursor: null });
+            if (url.pathname === '/v2/sessions/archived') return Response.json({ sessions: fixture.sessionListRows.filter(row => row.serverId === serverId && row.session.archivedAt).map(row => wireSession(row.session.id, row.session.metadata, row.session.archivedAt, row.session.updatedAt)), hasNext: false, nextCursor: null });
+            return Response.json({ session: wireSession(decodeURIComponent(url.pathname.slice('/v2/sessions/'.length))) });
+        }
+        if (url.pathname === '/v2/sessions') {
+            if (init?.signal) fixture.inventorySignals.push(init.signal);
+            if (fixture.inventoryHold) await fixture.inventoryHold;
+            if (fixture.inventoryFailure) return Response.json({ error: 'unavailable' }, { status: 503 });
+            return Response.json({ sessions: fixture.sessionListRows.filter(row => row.serverId === serverId && !row.session.archivedAt).map(row => wireSession(row.session.id, row.session.metadata, null, row.session.updatedAt)), hasNext: false, nextCursor: null });
+        }
+        return null;
+    };
+    network.setHttpResponder(httpResponse);
+    network.setRpcAckResponder(async call => {
+        const serverId = call.serverUrl === homeUrl(HOME_A) ? HOME_A : HOME_B;
+        try {
+            const result = call.method === RPC_METHODS.DAEMON_MERGED_CONTRIBUTION_REGISTRY_PROJECTION_DESCRIBE
+                ? { protocolVersion: 1, projection: fixture.scopedPluginProjections.get(`${serverId}:${call.targetId}`) ?? PluginProjectionV2Schema.parse({ v: 2, generation: 0 }) }
+                : await fixture.daemonRpc({ method: call.method, payload: call.payload, serverId,
+                    accountId: call.token ? parseToken(call.token) : null, machineId: call.targetId });
+            return { ok: true, result };
+        } catch (error) {
+            if (error instanceof Error && 'rpcErrorCode' in error && typeof error.rpcErrorCode === 'string') {
+                return { ok: false, error: error.message, errorCode: error.rpcErrorCode };
+            }
+            throw error;
+        }
+    });
+    if (fixture.scopedPluginProjections.size) {
+        const { restoreServerAccountForTest } = await import('@/dev/testkit/harness/serverAccountConnectionHarness');
+        controllerConnection = await restoreServerAccountForTest({ serverUrl: homeUrl(fixture.singleHome ? HOME_B : HOME_A),
+            serverIdentityId: fixture.singleHome ? HOME_B : HOME_A, accountId: fixture.singleHome ? 'account-1' : 'account-a',
+            additionalRequestOrigins: [homeUrl(HOME_B)], request: httpResponse });
+        await waitForHomeGovernance(() => {
+            if (!storage.getState().isDataReady) throw new Error('Controller fixture Sync bootstrap is not ready');
+        });
+        // The foreign inventory belongs to the actual multi-Home Account runtime,
+        // so a new Search credential binding can validate rather than retire it.
+        await selectedHomes.selectHomes([HOME_A, HOME_B]);
+        const { startConcurrentSessionCacheSync, isConcurrentSessionListQueryHomeOnline } = await import('@/sync/runtime/orchestration/concurrentSessionCache');
+        startConcurrentSessionCacheSync();
+        concurrentFixtureStarted = true;
+        await waitForHomeGovernance(() => {
+            if (!isConcurrentSessionListQueryHomeOnline(HOME_B)) throw new Error('Home B Account runtime is not established');
+            expect(storage.getState().machineListByServerId[HOME_B]?.some(machine => machine.id === 'machine-b')).toBe(true);
+        });
+    }
+    storage.setState({
+        isDataReady: true,
+        profileScope: { serverId: fixture.singleHome ? HOME_B : HOME_A, accountId: fixture.singleHome ? 'account-1' : 'account-a' }, endpointStatus: 'online',
+        settingsScope: { serverId: fixture.singleHome ? HOME_B : HOME_A, accountId: fixture.singleHome ? 'account-1' : 'account-a' }, settingsVersion: 1,
+        settings: { ...storage.getState().settings, experiments: true, featureToggles: { 'memory.search': fixture.featureEnabled['memory.search'] },
+            machineAdministrationTargetsLocalV1: machine ? { 'memory.settings': { serverIdentityId: HOME_B, machineId: machine.id } } : {} },
+        machines: fixture.scopedPluginProjections.size ? storage.getState().machines : {},
+        machineListByServerId: fixture.scopedPluginProjections.size ? storage.getState().machineListByServerId : machine ? { [HOME_B]: [machine] } : {},
+        machineListStatusByServerId: { [HOME_A]: 'idle', [HOME_B]: 'idle' },
+        sessionListRowsByServerId: {},
+    });
+    applyProjectAccountRowsFixture(storage, { workspaceRefs: fixture.workspaceRefs });
+    if (fixture.sessionOrganizationProjection) {
+        for (const tag of Object.values(fixture.sessionOrganizationProjection.tagsById)) {
+            storage.getState().upsertSessionOrganizationTagOptimistic(HOME_B, tag);
+        }
+        for (const [sessionId, tagIds] of Object.entries(fixture.sessionOrganizationProjection.tagAssignmentsBySessionId)) {
+            storage.getState().setSessionTagAssignmentsOptimistic(HOME_B, sessionId, tagIds);
+        }
+    }
+}
+function AmbientPluginProjectionProbe() {
+    fixture.observedAmbientProjection = useAppShellPluginUiProjection().pluginUiProjection;
+    return null;
+}
+async function renderScreen(element: React.ReactElement<UniversalSearchControllerProps>) {
+    await prepareControllerFixture();
+    // A local profile seed is resolved only after its real Home profile exists.
+    if (fixture.portableIdentity) {
+        if (!element.props.initialScope) throw new Error('Portable profile fixture requires an explicit scope');
+        element = React.cloneElement(element, { initialScope: { ...element.props.initialScope, serverId: localHomeB } });
+    }
+    const ambientWire = fixture.scopedPluginProjections.get(`${HOME_A}:machine-a`);
+    let content: React.ReactNode = element;
+    if (ambientWire) {
+        const accountLifetime = captureActiveServerAccountScopeLifetime();
+        if (!accountLifetime?.isCurrent()) throw new Error('Ambient plugin fixture requires the real active Account lifetime');
+        content = <AppShellPluginUiProjectionValueProvider value={{
+            pluginUiProjection: normalizePluginUiProjection(ambientWire), pluginBrowserProjection: null,
+            phase: 'current', interactionEnabled: true, machineId: 'machine-a', serverId: HOME_A,
+            platform: 'web', accountLifetime, clientExecutableActivation: { status: 'ready' },
+            reloadConnectedAccountProjection: vi.fn(), reloadClientExecutables: vi.fn(),
+        }}><AmbientPluginProjectionProbe />{element}</AppShellPluginUiProjectionValueProvider>;
+    }
+    mountedSearch = await renderScreenWithTestkit(<InjectedAuthProvider credentials={{ token: createAccountTokenForTests('account-a') }}>{content}</InjectedAuthProvider>);
+    await flushHookEffects({ cycles: 4, turns: 2 });
+    return mountedSearch;
+}
+beforeEach(() => {
+    network.resetRequests();
+    retireActiveServerAccountScopeLifetime();
+    clearDaemonMergedProjectionCacheForTests();
+    storage.setState(storage.getInitialState(), true);
+    fixture.homeSearch.mockReset().mockResolvedValue({ v: 1, ok: true, hits: [] });
+    fixture.daemonRpc.mockReset().mockResolvedValue(DEFAULT_MEMORY_SETTINGS);
+    fixture.featureEnabled = { search: true, 'memory.search': false };
+    fixture.memoryMachine = null; fixture.workspaceRefs = []; fixture.sessionListRows = [];
+    fixture.sessionOrganizationProjection = null; fixture.portableIdentity = false; fixture.singleHome = false;
+    fixture.scopedPluginProjections.clear(); fixture.inventoryFailure = false; fixture.inventoryHold = null; fixture.inventorySignals = [];
+    fixture.observedAmbientProjection = null;
     vi.clearAllMocks();
-    standardCleanup();
 });
-
-// Load the real owner outside React act and the behavior-test timeout. Its large
-// transitive graph can take over two minutes to transform on the remote mirror.
+afterEach(async () => {
+    standardCleanup(); mountedSearch = undefined;
+    if (concurrentFixtureStarted) (await import('@/sync/runtime/orchestration/concurrentSessionCache')).stopConcurrentSessionCacheSync();
+    concurrentFixtureStarted = false;
+    if (controllerConnection) await controllerConnection.dispose();
+    else await (await import('@/sync/runtime/orchestration/connectionManager')).disconnectActiveServerConnection();
+    controllerConnection = undefined;
+    retireActiveServerAccountScopeLifetime();
+});
+afterAll(() => network.dispose());
 beforeAll(async () => {
+    ({ SelectionList } = await import('@/components/ui/selectionList'));
     await import('./UniversalSearchController');
 }, 300_000);
 
+function pluginSearchProjection(input: Readonly<{ pluginId: string; title: string; generation: number }>) {
+    const providerId = `searchProvider:${input.pluginId}:entries`;
+    return PluginProjectionV2Schema.parse({
+        v: 2, generation: input.generation,
+        familiesById: { pluginUi: { family: 'pluginUi', entriesById: {
+            [providerId]: { id: providerId, pluginId: input.pluginId, occurrenceId: `occurrence-${input.pluginId}`, contributionKind: 'searchProvider', descriptorId: 'entries',
+                identity: { pluginId: input.pluginId, localId: 'entries' }, action: { pluginId: input.pluginId, localId: 'search' } },
+        } } },
+        actionsById: { [`${input.pluginId}/search`]: { id: 'search', pluginId: input.pluginId, occurrenceId: `occurrence-${input.pluginId}`, title: input.title, icon: 'action',
+            scopes: ['global'], surfaces: ['ui'], execution: { target: 'daemon' }, dangerLevel: 'safe', available: true } },
+    });
+}
+
 describe('UniversalSearchController exact Home scope', () => {
     it('keeps old-daemon Session hits usable with explicit unavailable document coverage', async () => {
-        harness.featureEnabled = { search: false, 'memory.search': true };
-        harness.memoryMachine = { serverId: 'home-b', machine: { id: 'machine-b' } };
-        harness.machineRpc.mockImplementation(async (call) => {
+        fixture.featureEnabled = { search: false, 'memory.search': true };
+        fixture.memoryMachine = { serverId: HOME_B, machine: { id: 'machine-b' } };
+        fixture.daemonRpc.mockImplementation(async (call) => {
             if (call.method === 'daemon.memory.settings.get') return DEFAULT_MEMORY_SETTINGS;
             if (call.method === 'daemon.memory.status') throw Object.assign(new Error('Older daemon'), {
                 rpcErrorCode: RPC_ERROR_CODES.METHOD_NOT_AVAILABLE,
@@ -385,29 +308,27 @@ describe('UniversalSearchController exact Home scope', () => {
         });
         const { UniversalSearchController } = await import('./UniversalSearchController');
         await renderScreen(<UniversalSearchController commands={[]} initialQuery="recovery"
-            initialScope={{ accountId: 'account-1', serverId: 'home-b', sessionId: null, machineId: null, rootPath: null }}
+            initialScope={{ accountId: 'account-1', serverId: HOME_B, sessionId: null, machineId: null, rootPath: null }}
             presentation="modal" onRequestClose={vi.fn()} />);
-        const section = harness.selectionListProps?.rootStep.sections.find((item) => item.id === 'transcript');
+        const section = selectionListProps()?.rootStep.sections.find((item) => item.id === 'transcript');
         if (!section || section.kind !== 'dynamic') throw new Error('Memory search section missing');
         const resolved = await section.resolve('recovery', new AbortController().signal);
         expect(resolved.options).toHaveLength(1);
         expect(resolved.resultHint).toContain('Memory document search is unavailable here.');
-        const query = harness.machineRpc.mock.calls.find(([call]) => call.method === 'daemon.memory.search')?.[0];
+        const query = fixture.daemonRpc.mock.calls.find(([call]) => call.method === 'daemon.memory.search')?.[0];
         expect(query?.payload).not.toHaveProperty('corpora');
         const option = resolved.options[0]!;
         await act(async () => {
             option.onSelect?.();
-            harness.selectionListProps?.onSelect?.(option.id, option);
-            await vi.waitFor(() => expect(harness.navigateToSession).toHaveBeenCalledWith('session-b', {
-                serverId: 'home-b', query: { jumpSeq: 9 },
-            }));
+            selectionListProps()?.onSelect?.(option.id, option);
+            await vi.waitFor(() => expect(harness.routerNavigate).toHaveBeenCalledWith('/session/session-b?serverId=srv_fsp_controller_b&jumpSeq=9', expect.objectContaining({ dangerouslySingular: expect.any(Function) })));
         });
     });
 
     it('keeps mixed memory hits and opens their named topic through the qualified document route', async () => {
-        harness.featureEnabled['memory.search'] = true;
-        harness.memoryMachine = { serverId: 'home-b', machine: { id: 'machine-b' } };
-        harness.searchHomeMemory.mockResolvedValue({ v: 1, ok: true, hits: [{ sessionId: 'session-b',
+        fixture.featureEnabled['memory.search'] = true;
+        fixture.memoryMachine = { serverId: HOME_B, machine: { id: 'machine-b' } };
+        fixture.homeSearch.mockResolvedValue({ v: 1, ok: true, hits: [{ sessionId: 'session-b',
             seqFrom: 7, seqTo: 7, createdAtFromMs: 1, createdAtToMs: 1,
             summary: 'Past release discussion', score: 0.5 }] });
         const statusFixture = {
@@ -420,35 +341,35 @@ describe('UniversalSearchController exact Home scope', () => {
         };
         const resultFixture = {
             v: 1, ok: true, documents: { state: 'ready' }, hits: [
-                { type: 'artifact', ref: { kind: 'doc', serverId: 'home-b', artifactId: 'memory/b' },
+                { type: 'artifact', ref: { kind: 'doc', serverId: HOME_B, artifactId: 'memory/b' },
                     revision: { headerVersion: 1, bodyVersion: 2 },
                     location: { type: 'topic', title: 'Release & recovery' }, factId: 'fact/b',
                     summary: 'Keep release recovery steps', score: 0.8 },
-                { type: 'artifact', ref: { kind: 'doc', serverId: 'home-b', artifactId: 'memory/b' },
+                { type: 'artifact', ref: { kind: 'doc', serverId: HOME_B, artifactId: 'memory/b' },
                     revision: { headerVersion: 1, bodyVersion: 2 },
                     location: { type: 'topic', title: 'facts' }, factId: 'same-fact',
                     summary: 'Named facts topic', score: 0.7 },
-                { type: 'artifact', ref: { kind: 'doc', serverId: 'home-b', artifactId: 'memory/b' },
+                { type: 'artifact', ref: { kind: 'doc', serverId: HOME_B, artifactId: 'memory/b' },
                     revision: { headerVersion: 1, bodyVersion: 2 }, location: 'facts', factId: 'same-fact',
                     summary: 'Key facts section', score: 0.6 },
                 { sessionId: 'session-b', seqFrom: 7, seqTo: 7,
                     createdAtFromMs: 1, createdAtToMs: 1, summary: 'Past release discussion', score: 0.5 },
             ],
         };
-        harness.machineRpc.mockImplementation(async call => call.method === 'daemon.memory.settings.get' ? DEFAULT_MEMORY_SETTINGS
+        fixture.daemonRpc.mockImplementation(async call => call.method === 'daemon.memory.settings.get' ? DEFAULT_MEMORY_SETTINGS
             : call.method === 'daemon.memory.status' ? statusFixture : resultFixture);
         const { UniversalSearchController } = await import('./UniversalSearchController');
         await renderScreen(<UniversalSearchController commands={[]} initialQuery="recovery"
-            initialScope={{ accountId: 'account-1', serverId: 'home-b', sessionId: null, machineId: null, rootPath: null }}
+            initialScope={{ accountId: 'account-1', serverId: HOME_B, sessionId: null, machineId: null, rootPath: null }}
             presentation="modal" onRequestClose={vi.fn()} />);
-        const section = harness.selectionListProps?.rootStep.sections.find((item) => item.id === 'transcript');
+        const section = selectionListProps()?.rootStep.sections.find((item) => item.id === 'transcript');
         if (!section || section.kind !== 'dynamic') throw new Error('Memory search section missing');
         const resolved = await section.resolve('recovery', new AbortController().signal);
         expect(resolved.options.map((option) => option.label))
             .toContain('Keep release recovery steps');
-        expect(harness.searchHomeMemory).toHaveBeenCalledWith(expect.objectContaining({ serverId: 'home-b', accountId: 'account-1' }));
-        const query = harness.machineRpc.mock.calls.find(([call]) => call.method === 'daemon.memory.search')?.[0];
-        expect(query).toMatchObject({ serverId: 'home-b', accountId: 'account-1', machineId: 'machine-b',
+        expect(fixture.homeSearch).toHaveBeenCalledWith(expect.objectContaining({ serverId: HOME_B, accountId: 'account-1' }));
+        const query = fixture.daemonRpc.mock.calls.find(([call]) => call.method === 'daemon.memory.search')?.[0];
+        expect(query).toMatchObject({ serverId: HOME_B, accountId: 'account-1', machineId: 'machine-b',
             payload: { corpora: ['documents'] } });
         expect(resolved.options).toHaveLength(4);
         expect(new Set(resolved.options.map((option) => option.id)).size).toBe(4);
@@ -456,38 +377,36 @@ describe('UniversalSearchController exact Home scope', () => {
         if (!memoryOption) throw new Error('Remembered fact missing');
         await act(async () => {
             memoryOption.onSelect?.();
-            harness.selectionListProps?.onSelect?.(memoryOption.id, memoryOption);
+            selectionListProps()?.onSelect?.(memoryOption.id, memoryOption);
             await vi.waitFor(() => expect(harness.routerPush).toHaveBeenCalledWith(
-                '/settings/prompts/memory/memory%2Fb?serverId=home-b&topic=Release%20%26%20recovery&fact=fact%2Fb',
+                '/settings/prompts/memory/memory%2Fb?serverId=srv_fsp_controller_b&topic=Release%20%26%20recovery&fact=fact%2Fb',
             ));
         });
         const sessionOption = resolved.options.find((option) => option.subtitle === 'Past release discussion');
         if (!sessionOption) throw new Error('Past Session missing');
         await act(async () => {
             sessionOption.onSelect?.();
-            harness.selectionListProps?.onSelect?.(sessionOption.id, sessionOption);
-            await vi.waitFor(() => expect(harness.navigateToSession).toHaveBeenCalledWith('session-b', {
-                serverId: 'home-b', query: { jumpSeq: 7 },
-            }));
+            selectionListProps()?.onSelect?.(sessionOption.id, sessionOption);
+            await vi.waitFor(() => expect(harness.routerNavigate).toHaveBeenCalledWith('/session/session-b?serverId=srv_fsp_controller_b&jumpSeq=7', expect.objectContaining({ dangerouslySingular: expect.any(Function) })));
         });
     });
 
     it('keeps a typed Messages section with a truthful hint when transcript search is disabled', async () => {
-        harness.featureEnabled = { search: false, 'memory.search': false };
+        fixture.featureEnabled = { search: false, 'memory.search': false };
         const { UniversalSearchController } = await import('./UniversalSearchController');
 
         await renderScreen(
             <UniversalSearchController
                 commands={[]}
                 initialQuery="needle"
-                initialScope={{ accountId: 'account-1', serverId: 'home-b', sessionId: null, machineId: null, rootPath: null }}
+                initialScope={{ accountId: 'account-1', serverId: HOME_B, sessionId: null, machineId: null, rootPath: null }}
                 activeSessionId={null}
                 presentation="modal"
                 onRequestClose={vi.fn()}
             />,
         );
 
-        const rootStep = harness.selectionListProps?.rootStep;
+        const rootStep = selectionListProps()?.rootStep;
         const transcript = rootStep?.sections.find((section) => section.id === 'transcript');
         expect(transcript?.kind).toBe('dynamic');
         if (!transcript || transcript.kind !== 'dynamic') throw new Error('Messages availability section missing');
@@ -497,7 +416,7 @@ describe('UniversalSearchController exact Home scope', () => {
         expect(rootStep?.emptyStateLabel).toBe('No matches');
 
         await act(async () => {
-            harness.selectionListProps?.onSelect?.('missing-result', { id: 'missing-result', label: 'Missing' });
+            selectionListProps()?.onSelect?.('missing-result', { id: 'missing-result', label: 'Missing' });
         });
         await vi.waitFor(() => expect(harness.modalAlert).toHaveBeenCalledWith(
             'Error',
@@ -519,15 +438,15 @@ describe('UniversalSearchController exact Home scope', () => {
             />,
         );
 
-        const ids = harness.selectionListProps?.rootStep.sections.map((section) => section.id) ?? [];
+        const ids = selectionListProps()?.rootStep.sections.map((section) => section.id) ?? [];
         expect(ids).not.toContain('transcript');
         expect(ids).not.toContain('sessions');
-        expect(harness.searchHomeMemory).not.toHaveBeenCalled();
+        expect(fixture.homeSearch).not.toHaveBeenCalled();
     });
 
     it('uses the canonical Session organization projection when matching Session tags', async () => {
-        harness.sessionListRows = [{
-            serverId: 'home-b',
+        fixture.sessionListRows = [{
+            serverId: HOME_B,
             serverName: 'Home B',
             session: {
                 id: 'session-b',
@@ -535,7 +454,7 @@ describe('UniversalSearchController exact Home scope', () => {
                 metadata: { name: 'Home B session', path: '/repo/b' },
             },
         }];
-        harness.sessionOrganizationProjection = {
+        fixture.sessionOrganizationProjection = {
             schemaVersion: 1,
             version: 1,
             orderedPinSessionIds: [],
@@ -566,27 +485,25 @@ describe('UniversalSearchController exact Home scope', () => {
         await renderScreen(
             <UniversalSearchController
                 commands={[]}
-                initialScope={{ accountId: 'account-1', serverId: 'home-b', sessionId: null, machineId: null, rootPath: null }}
+                initialQuery="Urgent"
+                initialScope={{ accountId: 'account-1', serverId: HOME_B, sessionId: null, machineId: null, rootPath: null }}
                 activeSessionId={null}
                 presentation="modal"
                 onRequestClose={vi.fn()}
             />,
         );
 
-        const sessionSection = harness.selectionListProps?.rootStep.sections.find((section) => section.id === 'sessions');
-        if (!sessionSection || sessionSection.kind !== 'static') throw new Error('Sessions section missing');
-        expect(sessionSection.options[0]?.searchText).toContain('Urgent');
+        await vi.waitFor(() => {
+            const sessionSection = selectionListProps()?.rootStep.sections.find((section) => section.id === 'sessions');
+            if (!sessionSection || sessionSection.kind !== 'static') throw new Error('Sessions section missing');
+            expect(sessionSection.options[0]?.searchText).toContain('Urgent');
+        });
     });
 
     it('ensures complete inventory once for the scope lifetime without exposing or restarting a result section', async () => {
-        harness.activeAccountLifetime = {
-            scope: { serverId: 'home-a', accountId: 'account-a' },
-            isCurrent: () => true,
-            onRetire: () => ({ dispose: () => undefined }),
-        };
-        harness.sessionListRows = [
+                fixture.sessionListRows = [
             {
-                serverId: 'home-a',
+                serverId: HOME_A,
                 serverName: 'Home A',
                 session: {
                     id: 'unloaded-active',
@@ -596,7 +513,7 @@ describe('UniversalSearchController exact Home scope', () => {
                 },
             },
             {
-                serverId: 'home-a',
+                serverId: HOME_A,
                 serverName: 'Home A',
                 session: {
                     id: 'unloaded-archived',
@@ -612,111 +529,101 @@ describe('UniversalSearchController exact Home scope', () => {
             <UniversalSearchController
                 commands={[]}
                 initialQuery="needle"
-                initialScope={{ accountId: 'account-a', serverId: 'home-a', sessionId: null, machineId: null, rootPath: null }}
+                initialScope={{ accountId: 'account-a', serverId: HOME_A, sessionId: null, machineId: null, rootPath: null }}
                 activeSessionId={null}
                 presentation="modal"
                 onRequestClose={vi.fn()}
             />,
         );
 
-        await vi.waitFor(() => expect(harness.ensureSessionMetadataInventoryForServerAccountScope).toHaveBeenCalledOnce());
-        expect(harness.selectionListProps?.rootStep.sections.some((section) => section.id === 'session-inventory')).toBe(false);
+        await vi.waitFor(() => expect(inventoryRequests()).toHaveLength(1));
+        expect(selectionListProps()?.rootStep.sections.some((section) => section.id === 'session-inventory')).toBe(false);
         await act(async () => {
-            harness.selectionListProps?.onChangeInputValue?.('needle again');
+            selectionListProps()?.onChangeInputValue?.('needle again');
         });
         await act(async () => undefined);
-        expect(harness.ensureSessionMetadataInventoryForServerAccountScope).toHaveBeenCalledTimes(1);
-        expect(harness.ensureSessionMetadataInventoryForServerAccountScope).toHaveBeenCalledWith(expect.objectContaining({
-            scope: { serverId: 'home-a', accountId: 'account-a' },
-        }));
-        const sessions = harness.selectionListProps?.rootStep?.sections.find((section) => section.id === 'sessions');
-        expect(sessions?.kind).toBe('static');
-        if (!sessions || sessions.kind !== 'static') throw new Error('Sessions section not ready');
-        expect(sessions.options.map((option) => option.label)).toEqual([
-            'Unloaded active needle',
-            'Archived needle',
-        ]);
+        expect(inventoryRequests()).toHaveLength(1);
+        expect(inventoryRequests()[0]).toMatchObject({ url: expect.stringContaining(homeUrl(HOME_A)) });
+        await vi.waitFor(() => {
+            const sessions = selectionListProps()?.rootStep?.sections.find((section) => section.id === 'sessions');
+            expect(sessions?.kind).toBe('static');
+            if (!sessions || sessions.kind !== 'static') throw new Error('Sessions section not ready');
+            expect(sessions.options.map((option) => option.label)).toEqual([
+                'Unloaded active needle',
+                'Archived needle',
+            ]);
+        });
     });
 
     it('surfaces Session inventory failures section-locally while silencing cancellation', async () => {
-        const failure = new Error('current inventory unavailable');
-        harness.ensureSessionMetadataInventoryForServerAccountScope.mockRejectedValueOnce(failure);
+        fixture.inventoryFailure = true;
         const { UniversalSearchController } = await import('./UniversalSearchController');
 
         await renderScreen(
             <UniversalSearchController
                 commands={[]}
                 initialQuery="needle"
-                initialScope={{ accountId: 'account-1', serverId: 'home-b', sessionId: null, machineId: null, rootPath: null }}
+                initialScope={{ accountId: 'account-1', serverId: HOME_B, sessionId: null, machineId: null, rootPath: null }}
                 activeSessionId={null}
                 presentation="modal"
                 onRequestClose={vi.fn()}
             />,
         );
 
-        await vi.waitFor(() => expect(harness.ensureSessionMetadataInventoryForServerAccountScope).toHaveBeenCalledOnce());
-        expect(harness.selectionListProps?.rootStep.sections.some((section) => section.id === 'session-inventory')).toBe(false);
+        await vi.waitFor(() => expect(inventoryRequests()).toHaveLength(1));
+        expect(selectionListProps()?.rootStep.sections.some((section) => section.id === 'session-inventory')).toBe(false);
         await vi.waitFor(() => {
-            const sessions = harness.selectionListProps?.rootStep.sections.find((section) => section.id === 'sessions');
+            const sessions = selectionListProps()?.rootStep.sections.find((section) => section.id === 'sessions');
             expect(sessions?.kind).toBe('static');
             expect(sessions && 'resultHint' in sessions ? sessions.resultHint : undefined).toEqual(expect.any(String));
         });
     });
 
     it('pages Session metadata for an explicitly selected inactive Home without borrowing the active Sync scope', async () => {
-        harness.activeAccountLifetime = {
-            scope: { serverId: 'home-a', accountId: 'account-a' },
-            isCurrent: () => true,
-            onRetire: () => ({ dispose: () => undefined }),
-        };
         const { UniversalSearchController } = await import('./UniversalSearchController');
 
         await renderScreen(
             <UniversalSearchController
                 commands={[]}
                 initialQuery="archived needle"
-                initialScope={{ accountId: 'account-1', serverId: 'home-b', sessionId: null, machineId: null, rootPath: null }}
+                initialScope={{ accountId: 'account-1', serverId: HOME_B, sessionId: null, machineId: null, rootPath: null }}
                 activeSessionId={null}
                 presentation="modal"
                 onRequestClose={vi.fn()}
             />,
         );
 
-        await vi.waitFor(() => expect(harness.ensureSessionMetadataInventoryForServerAccountScope).toHaveBeenCalledOnce());
-        expect(harness.ensureSessionMetadataInventoryForServerAccountScope).toHaveBeenCalledWith(expect.objectContaining({
-            scope: { serverId: 'home-b', accountId: 'account-1' },
-        }));
-        expect(harness.fetchAllSessionMetadata).not.toHaveBeenCalled();
+        await vi.waitFor(() => expect(inventoryRequests()).toHaveLength(1));
+        expect(inventoryRequests()[0]).toMatchObject({ url: expect.stringContaining(homeUrl(HOME_B)), token: expect.stringContaining(createAccountTokenForTests('account-1')) });
+        expect(inventoryRequests().every(request => new URL(request.url).origin === homeUrl(HOME_B))).toBe(true);
     });
 
     it('aborts inactive-Home Session metadata paging when that exact credential lifetime retires', async () => {
-        harness.ensureSessionMetadataInventoryForServerAccountScope.mockImplementationOnce(async (params) => await new Promise<void>((_resolve, reject) => {
-            params.accountLifetime.onRetire(() => {
-                reject(Object.assign(new Error('retired'), { name: 'AbortError' }));
-            });
-        }));
+        const held = createDeferred<void>();
+        fixture.inventoryHold = held.promise;
         const { UniversalSearchController } = await import('./UniversalSearchController');
         await renderScreen(
             <UniversalSearchController
                 commands={[]}
                 initialQuery="needle"
-                initialScope={{ accountId: 'account-1', serverId: 'home-b', sessionId: null, machineId: null, rootPath: null }}
+                initialScope={{ accountId: 'account-1', serverId: HOME_B, sessionId: null, machineId: null, rootPath: null }}
                 activeSessionId={null}
                 presentation="modal"
                 onRequestClose={vi.fn()}
             />,
         );
-        await vi.waitFor(() => expect(harness.ensureSessionMetadataInventoryForServerAccountScope).toHaveBeenCalledOnce());
-        const firstSignal = harness.ensureSessionMetadataInventoryForServerAccountScope.mock.calls[0]?.[0]?.signal as AbortSignal;
+        await vi.waitFor(() => expect(inventoryRequests()).toHaveLength(1));
+        const firstSignal = fixture.inventorySignals[0]!;
         expect(firstSignal.aborted).toBe(false);
 
         await act(async () => {
-            for (const listener of harness.homeCredentialMutationListeners) {
-                listener({ kind: 'credentials_set', serverId: 'home-b', serverUrl: 'https://home-b.example.test' });
-            }
+            await mutateHomeBCredentials();
         });
 
         await vi.waitFor(() => expect(firstSignal.aborted).toBe(true));
+        held.resolve();
+        await flushHookEffects();
+        expect(storage.getState().sessionListRowsByServerId[HOME_B]?.['session-b']).toBeUndefined();
     });
 
     it('keeps Search open when a previously rendered command has left the current catalog', async () => {
@@ -740,14 +647,14 @@ describe('UniversalSearchController exact Home scope', () => {
             />
         );
         const screen = await renderScreen(renderController([command]));
-        const staleOption = harness.selectionListProps?.rootStep.sections
+        const staleOption = selectionListProps()?.rootStep.sections
             .flatMap((section) => section.kind === 'static' ? section.options : [])
             .find((option) => option.id === 'command:retired-command');
         expect(staleOption).toBeDefined();
 
-        await act(async () => { screen.tree.update(renderController([])); });
+        await act(async () => { screen.tree.update(<InjectedAuthProvider credentials={{ token: createAccountTokenForTests('account-a') }}>{renderController([])}</InjectedAuthProvider>); });
         await act(async () => {
-            harness.selectionListProps?.onSelect?.(staleOption!.id, staleOption!);
+            selectionListProps()?.onSelect?.(staleOption!.id, staleOption!);
         });
 
         expect(dismiss).not.toHaveBeenCalled();
@@ -755,8 +662,8 @@ describe('UniversalSearchController exact Home scope', () => {
     });
 
     it('canonicalizes a local profile id to portable Home identity for credentials, filtering, query, and result activation', async () => {
-        harness.portableIdentity = true;
-        harness.searchHomeMemory.mockResolvedValue({
+        fixture.portableIdentity = true;
+        fixture.homeSearch.mockResolvedValue({
             v: 1,
             ok: true,
             hits: [{
@@ -775,34 +682,32 @@ describe('UniversalSearchController exact Home scope', () => {
             <UniversalSearchController
                 commands={[]}
                 initialQuery="needle"
-                initialScope={{ accountId: 'account-1', serverId: 'local-home-b', sessionId: 'session-b', machineId: null, rootPath: null }}
+                initialScope={{ accountId: 'account-1', serverId: localHomeB, sessionId: 'session-b', machineId: null, rootPath: null }}
                 activeSessionId={null}
                 presentation="modal"
                 onRequestClose={vi.fn()}
             />,
         );
 
-        const transcript = harness.selectionListProps?.rootStep?.sections.find((section) => section.id === 'transcript');
+        const transcript = selectionListProps()?.rootStep?.sections.find((section) => section.id === 'transcript');
         expect(transcript?.kind).toBe('dynamic');
         if (!transcript || transcript.kind !== 'dynamic') throw new Error('Transcript section not ready');
+        expect(localHomeB).not.toBe(HOME_B);
         const resolved = await transcript.resolve('needle', new AbortController().signal);
         const option = resolved.options[0];
-        expect(harness.searchHomeMemory).toHaveBeenCalledWith(expect.objectContaining({
-            serverId: 'home-b',
+        expect(fixture.homeSearch).toHaveBeenCalledWith(expect.objectContaining({
+            serverId: HOME_B,
             accountId: 'account-1',
         }));
         await act(async () => {
             option?.onSelect?.();
-            harness.selectionListProps?.onSelect?.(option!.id, option!);
-            await vi.waitFor(() => expect(harness.navigateToSession).toHaveBeenCalledWith('session-b', {
-                serverId: 'home-b',
-                query: { jumpSeq: 5 },
-            }));
+            selectionListProps()?.onSelect?.(option!.id, option!);
+            await vi.waitFor(() => expect(harness.routerNavigate).toHaveBeenCalledWith('/session/session-b?serverId=srv_fsp_controller_b&jumpSeq=5', expect.objectContaining({ dangerouslySingular: expect.any(Function) })));
         });
     });
 
     it('keeps a contextual Home B seed through query, result identity, and canonical scoped activation while Home A is focused', async () => {
-        harness.searchHomeMemory.mockResolvedValue({
+        fixture.homeSearch.mockResolvedValue({
             v: 1,
             ok: true,
             hits: [{
@@ -821,47 +726,41 @@ describe('UniversalSearchController exact Home scope', () => {
             <UniversalSearchController
                 commands={[]}
                 initialQuery="needle"
-                initialScope={{ accountId: 'account-1', serverId: 'home-b', sessionId: 'session-b', machineId: null, rootPath: null }}
+                initialScope={{ accountId: 'account-1', serverId: HOME_B, sessionId: 'session-b', machineId: null, rootPath: null }}
                 activeSessionId="ambient-session-a"
                 presentation="modal"
                 onRequestClose={vi.fn()}
             />,
         );
 
-        const rootStep = harness.selectionListProps?.rootStep;
+        const rootStep = selectionListProps()?.rootStep;
         const transcript = rootStep?.sections.find((section) => section.id === 'transcript');
         expect(transcript?.kind).toBe('dynamic');
         if (!transcript || transcript.kind !== 'dynamic') throw new Error('Transcript section not ready');
         const resolved = await transcript.resolve('needle', new AbortController().signal);
         const option = resolved.options[0];
-        expect(harness.searchHomeMemory).toHaveBeenCalledWith(expect.objectContaining({
-            serverId: 'home-b',
+        expect(fixture.homeSearch).toHaveBeenCalledWith(expect.objectContaining({
+            serverId: HOME_B,
             accountId: 'account-1',
             query: 'needle',
         }));
-        expect(option?.id).toContain('home-b');
+        expect(option?.id).toContain(HOME_B);
+        // Search reads are scoped before activation starts the real connection's cleanup/hydration.
+        expect(inventoryRequests().every(request => new URL(request.url).origin === homeUrl(HOME_B))).toBe(true);
 
         await act(async () => {
             option?.onSelect?.();
-            harness.selectionListProps?.onSelect?.(option!.id, option!);
+            selectionListProps()?.onSelect?.(option!.id, option!);
             await vi.waitFor(() => {
-                expect(harness.navigateToSession).toHaveBeenCalledWith('session-b', {
-                    serverId: 'home-b',
-                    query: { jumpSeq: 7 },
-                });
+                expect(harness.routerNavigate).toHaveBeenCalledWith('/session/session-b?serverId=srv_fsp_controller_b&jumpSeq=7', expect.objectContaining({ dangerouslySingular: expect.any(Function) }));
             });
         });
-        expect(harness.fetchAllSessionMetadata).not.toHaveBeenCalled();
     });
 
     it('uses Home B plugin providers from the selected scope while Home A is focused', async () => {
-        harness.appShellPluginProjection = pluginSearchProjection({
-            pluginId: 'acme.home-a',
-            title: 'Home A entities',
-            generation: 11,
-        });
-        harness.scopedPluginProjections.set(
-            'home-b:machine-b',
+        fixture.scopedPluginProjections.set(`${HOME_A}:machine-a`, pluginSearchProjection({ pluginId: 'acme.home-a', title: 'Home A entities', generation: 11 }));
+        fixture.scopedPluginProjections.set(
+            `${HOME_B}:machine-b`,
             pluginSearchProjection({
                 pluginId: 'acme.home-b',
                 title: 'Home B entities',
@@ -876,7 +775,7 @@ describe('UniversalSearchController exact Home scope', () => {
                 initialQuery="needle"
                 initialScope={{
                     accountId: 'account-1',
-                    serverId: 'home-b',
+                    serverId: HOME_B,
                     sessionId: null,
                     machineId: 'machine-b',
                     rootPath: null,
@@ -887,18 +786,17 @@ describe('UniversalSearchController exact Home scope', () => {
             />,
         );
 
-        expect(harness.scopedPluginProjectionCalls).toContainEqual({
-            serverId: 'home-b',
-            machineId: 'machine-b',
-            enabled: true,
-        });
-        const sectionIds = harness.selectionListProps?.rootStep.sections.map((section) => section.id) ?? [];
+        await vi.waitFor(() => expect(network.requests).toContainEqual(expect.objectContaining({ targetId: 'machine-b', serverUrl: homeUrl(HOME_B) })));
+        expect(fixture.observedAmbientProjection?.searchProvidersById)
+            .toHaveProperty(['searchProvider:acme.home-a:entries']);
+        expect(readCurrentAppShellPluginUiProjection()).toBe(fixture.observedAmbientProjection);
+        const sectionIds = selectionListProps()?.rootStep.sections.map((section) => section.id) ?? [];
         expect(sectionIds).toContain('plugin-search:acme.home-b:entries');
         expect(sectionIds).not.toContain('plugin-search:acme.home-a:entries');
     });
 
     it('uses the freshly hydrated exact Session title instead of duplicating the transcript excerpt', async () => {
-        harness.searchHomeMemory.mockResolvedValue({
+        fixture.homeSearch.mockResolvedValue({
             v: 1,
             ok: true,
             hits: [{
@@ -916,14 +814,14 @@ describe('UniversalSearchController exact Home scope', () => {
             <UniversalSearchController
                 commands={[]}
                 initialQuery="needle"
-                initialScope={{ accountId: 'account-1', serverId: 'home-b', sessionId: null, machineId: null, rootPath: null }}
+                initialScope={{ accountId: 'account-1', serverId: HOME_B, sessionId: null, machineId: null, rootPath: null }}
                 activeSessionId={null}
                 presentation="modal"
                 onRequestClose={vi.fn()}
             />,
         );
 
-        const transcript = harness.selectionListProps?.rootStep.sections.find((section) => section.id === 'transcript');
+        const transcript = selectionListProps()?.rootStep.sections.find((section) => section.id === 'transcript');
         if (!transcript || transcript.kind !== 'dynamic') throw new Error('Transcript section missing');
         const result = await transcript.resolve('needle', new AbortController().signal);
 
@@ -932,65 +830,57 @@ describe('UniversalSearchController exact Home scope', () => {
     });
 
     it('lists settings results as one group, pages first, each row with the path the settings rail shows', async () => {
-        harness.settingsCatalog = {
-            tree: [{
-                id: 'root',
-                title: 'Settings',
-                keywords: [],
-                children: [
-                    { id: 'appearance', title: 'Appearance', subtitle: 'Theme, density and fonts', route: '/settings/appearance', keywords: [], children: [
-                        { id: 'terminal', title: 'Terminal', route: '/settings/appearance/terminal', keywords: [] },
-                    ] },
-                ],
-            }],
-            // The catalog ranks a setting above a page; Search still shows pages first.
-            search: () => [
-                { id: 'appearance', route: '/settings/appearance?setting=appearance.theme', setting: { anchor: 'appearance.theme', title: 'Theme', path: ['Appearance'] } },
-                { id: 'terminal', route: '/settings/appearance/terminal' },
-            ],
-        };
         const { UniversalSearchController } = await import('./UniversalSearchController');
 
         await renderScreen(
             <UniversalSearchController
                 commands={[]}
-                initialQuery="the"
-                initialScope={{ accountId: 'account-1', serverId: 'home-b', sessionId: null, machineId: null, rootPath: null }}
+                initialQuery="theme"
+                initialScope={{ accountId: 'account-1', serverId: HOME_B, sessionId: null, machineId: null, rootPath: null }}
                 activeSessionId={null}
                 presentation="modal"
                 onRequestClose={vi.fn()}
             />,
         );
 
-        const sections = harness.selectionListProps?.rootStep.sections ?? [];
+        const sections = selectionListProps()?.rootStep.sections ?? [];
         const settingsSections = sections.filter((section) => section.id === 'settings');
         expect(settingsSections).toHaveLength(1);
         const settings = settingsSections[0];
         if (!settings || settings.kind !== 'dynamic') throw new Error('Settings section missing');
-        const resolved = await settings.resolve('the', new AbortController().signal);
-        expect(resolved.options.map((option) => [option.label, option.subtitle])).toEqual([
-            ['Terminal', 'Appearance'],
-            ['Theme', 'Appearance'],
-        ]);
+        const resolved = await settings.resolve('theme', new AbortController().signal);
+        const pageIndex = resolved.options.findIndex(option => option.label === 'Appearance');
+        const fieldIndex = resolved.options.findIndex(option => option.label === 'Theme');
+        expect(pageIndex).toBeGreaterThanOrEqual(0);
+        expect(fieldIndex).toBeGreaterThan(pageIndex);
+        expect(resolved.options[fieldIndex]?.subtitle).toBe('Appearance');
+        // The shipped catalog has a nested Account → Security page; retain
+        // the nested-page path contract formerly exercised with a fake Terminal page.
+        await act(async () => { selectionListProps()?.onChangeInputValue?.('security'); });
+        const nested = selectionListProps()?.rootStep.sections.find(section => section.id === 'settings');
+        if (!nested || nested.kind !== 'dynamic') throw new Error('Nested Settings search missing');
+        const nestedResults = await nested.resolve('security', new AbortController().signal);
+        expect(nestedResults.options.find(option => option.label === 'Sign-in & security')?.subtitle)
+            .toBe('Profile & account › Account');
     });
 
     it('offers the all-machines choice even when there is only one Home', async () => {
-        harness.singleHome = true;
+        fixture.singleHome = true;
         const { UniversalSearchController } = await import('./UniversalSearchController');
 
         await renderScreen(
             <UniversalSearchController
                 commands={[]}
-                initialScope={{ accountId: 'account-1', serverId: 'home-b', sessionId: null, machineId: null, rootPath: null }}
+                initialScope={{ accountId: 'account-1', serverId: HOME_B, sessionId: null, machineId: null, rootPath: null }}
                 activeSessionId={null}
                 presentation="modal"
                 onRequestClose={vi.fn()}
             />,
         );
 
-        expect(harness.selectionListProps).not.toBeNull();
-        expect(harness.selectionListProps?.filters ?? []).toHaveLength(1);
-        expect(harness.selectionListProps?.filters?.[0].options).toHaveLength(2);
+        expect(selectionListProps()).not.toBeNull();
+        expect(selectionListProps()?.filters ?? []).toHaveLength(1);
+        expect(selectionListProps()?.filters?.[0].options).toHaveLength(2);
     });
 
     it('names the scope chip by the Home display name when there are several Homes', async () => {
@@ -999,14 +889,14 @@ describe('UniversalSearchController exact Home scope', () => {
         await renderScreen(
             <UniversalSearchController
                 commands={[]}
-                initialScope={{ accountId: 'account-1', serverId: 'home-b', sessionId: null, machineId: null, rootPath: null }}
+                initialScope={{ accountId: 'account-1', serverId: HOME_B, sessionId: null, machineId: null, rootPath: null }}
                 activeSessionId={null}
                 presentation="modal"
                 onRequestClose={vi.fn()}
             />,
         );
 
-        const scopeFilter = harness.selectionListProps?.filters?.find((filter) => filter.id === 'scope');
+        const scopeFilter = selectionListProps()?.filters?.find((filter) => filter.id === 'scope');
         if (!scopeFilter) throw new Error('Scope filter missing from Search');
         expect(scopeFilter.valueLabel).toBe('Home B');
     });
@@ -1015,7 +905,7 @@ describe('UniversalSearchController exact Home scope', () => {
     // two-option dropdown; without it Search shows no source chip at all (G1).
     it('shows Text in files as a removable token only while that scope is on', async () => {
         const { UniversalSearchController } = await import('./UniversalSearchController');
-        const workspaceScope = { accountId: 'account-1', serverId: 'home-b', sessionId: null, machineId: 'machine-b', rootPath: '/home/leeroy/code/happier' };
+        const workspaceScope = { accountId: 'account-1', serverId: HOME_B, sessionId: null, machineId: 'machine-b', rootPath: '/home/leeroy/code/happier' };
 
         await renderScreen(
             <UniversalSearchController
@@ -1029,21 +919,21 @@ describe('UniversalSearchController exact Home scope', () => {
             />,
         );
 
-        const token = harness.selectionListProps?.filters?.find((filter) => filter.id === 'source');
+        const token = selectionListProps()?.filters?.find((filter) => filter.id === 'source');
         if (!token) throw new Error('Text in files token missing');
         expect(token.options).toBeUndefined();
         expect(token.onClear).toBeTypeOf('function');
         await act(async () => { token.onClear?.(); });
 
-        expect(harness.selectionListProps?.filters?.some((filter) => filter.id === 'source')).toBe(false);
-        expect(harness.selectionListProps?.inputValue).toBe('routeKey');
+        expect(selectionListProps()?.filters?.some((filter) => filter.id === 'source')).toBe(false);
+        expect(selectionListProps()?.inputValue).toBe('routeKey');
     });
 
     // Find lab ST "Machine offline": one line, under Text in files, not the same sentence in every group.
     it('says once that the folder\'s machine is offline', async () => {
         const { UniversalSearchController } = await import('./UniversalSearchController');
-        const workspaceScope = { accountId: 'account-1', serverId: 'home-b', sessionId: null, machineId: 'machine-offline', rootPath: '/home/leeroy/code/happier' };
-        harness.workspaceRefs = [{ id: 'ws-happier', serverId: 'home-b', machineId: 'machine-offline', rootPath: '/home/leeroy/code/happier', label: 'happier', createdAtMs: 1 }];
+        const workspaceScope = { accountId: 'account-1', serverId: HOME_B, sessionId: null, machineId: 'machine-offline', rootPath: '/home/leeroy/code/happier' };
+        fixture.workspaceRefs = [{ id: 'ws-happier', serverId: HOME_B, machineId: 'machine-offline', rootPath: '/home/leeroy/code/happier', label: 'happier', createdAtMs: 1 }];
 
         await renderScreen(
             <UniversalSearchController
@@ -1056,7 +946,7 @@ describe('UniversalSearchController exact Home scope', () => {
             />,
         );
 
-        const ids = harness.selectionListProps?.rootStep.sections.map((section) => section.id) ?? [];
+        const ids = selectionListProps()?.rootStep.sections.map((section) => section.id) ?? [];
         expect(ids).toContain('fileContent');
         expect(ids).not.toContain('files');
         expect(ids).not.toContain('commits');
@@ -1069,26 +959,26 @@ describe('UniversalSearchController exact Home scope', () => {
             <UniversalSearchController
                 commands={[]}
                 initialQuery="needle"
-                initialScope={{ accountId: 'account-1', serverId: 'home-b', sessionId: null, machineId: null, rootPath: null }}
+                initialScope={{ accountId: 'account-1', serverId: HOME_B, sessionId: null, machineId: null, rootPath: null }}
                 activeSessionId={null}
                 presentation="modal"
                 onRequestClose={vi.fn()}
             />,
         );
 
-        expect(harness.selectionListProps?.rootStep.sections.some((section) => section.id === 'scope')).toBe(false);
+        expect(selectionListProps()?.rootStep.sections.some((section) => section.id === 'scope')).toBe(false);
         // The scope is a filter chip: choosing another Home changes the scope, not the query.
-        const scopeFilter = harness.selectionListProps?.filters?.find((filter) => filter.id === 'scope');
+        const scopeFilter = selectionListProps()?.filters?.find((filter) => filter.id === 'scope');
         if (!scopeFilter) throw new Error('Scope filter missing from Search');
         expect(scopeFilter.testID).toBe('universal-search:scope');
-        const nextScope = scopeFilter.options?.find((option) => option.id.includes('home-a'));
+        const nextScope = scopeFilter.options?.find((option) => option.id.includes(HOME_A));
         expect(nextScope).toBeDefined();
         await act(async () => {
             scopeFilter.onChange?.(nextScope!.id);
         });
 
-        expect(harness.selectionListProps?.inputValue).toBe('needle');
-        expect(harness.selectionListProps?.filters?.find((filter) => filter.id === 'scope')?.selectedId)
+        expect(selectionListProps()?.inputValue).toBe('needle');
+        expect(selectionListProps()?.filters?.find((filter) => filter.id === 'scope')?.selectedId)
             .toBe(nextScope!.id);
     });
 
@@ -1099,28 +989,26 @@ describe('UniversalSearchController exact Home scope', () => {
             <UniversalSearchController
                 commands={[]}
                 initialQuery="needle"
-                initialScope={{ accountId: 'account-1', serverId: 'home-b', sessionId: null, machineId: null, rootPath: null }}
+                initialScope={{ accountId: 'account-1', serverId: HOME_B, sessionId: null, machineId: null, rootPath: null }}
                 activeSessionId={null}
                 presentation="modal"
                 onRequestClose={vi.fn()}
             />,
         );
 
-        const before = harness.selectionListProps?.rootStep?.sections.find((section) => section.id === 'transcript');
+        const before = selectionListProps()?.rootStep?.sections.find((section) => section.id === 'transcript');
         if (!before || before.kind !== 'dynamic') throw new Error('Transcript section not ready');
-        const retiredCache = harness.selectionListProps?.dynamicSectionCache;
+        const retiredCache = selectionListProps()?.dynamicSectionCache;
         if (!retiredCache) throw new Error('Credential-scoped cache not installed');
         retiredCache.set('transcript::old-credential::needle', [{ id: 'sensitive-old-row', label: 'Sensitive old row' }]);
 
         await act(async () => {
-            for (const listener of harness.homeCredentialMutationListeners) {
-                listener({ kind: 'credentials_set', serverId: 'home-b', serverUrl: 'https://home-b.example.test' });
-            }
+            await mutateHomeBCredentials();
         });
 
-        const after = harness.selectionListProps?.rootStep?.sections.find((section) => section.id === 'transcript');
+        const after = selectionListProps()?.rootStep?.sections.find((section) => section.id === 'transcript');
         if (!after || after.kind !== 'dynamic') throw new Error('Transcript section not ready after credential mutation');
-        const activeCache = harness.selectionListProps?.dynamicSectionCache;
+        const activeCache = selectionListProps()?.dynamicSectionCache;
         if (!activeCache) throw new Error('Replacement credential-scoped cache not installed');
         expect(after.resolverKey).not.toBe(before.resolverKey);
         expect(activeCache).not.toBe(retiredCache);
@@ -1133,7 +1021,7 @@ describe('UniversalSearchController exact Home scope', () => {
     });
 
     it('normalizes a provider hit session id once for authorization, identity, and activation', async () => {
-        harness.searchHomeMemory.mockResolvedValue({
+        fixture.homeSearch.mockResolvedValue({
             v: 1,
             ok: true,
             hits: [{
@@ -1154,7 +1042,7 @@ describe('UniversalSearchController exact Home scope', () => {
                 initialQuery="needle"
                 initialScope={{
                     accountId: 'account-1',
-                    serverId: 'home-b',
+                    serverId: HOME_B,
                     sessionId: 'session-b',
                     machineId: null,
                     rootPath: null,
@@ -1165,7 +1053,7 @@ describe('UniversalSearchController exact Home scope', () => {
             />,
         );
 
-        const transcript = harness.selectionListProps?.rootStep?.sections.find((section) => section.id === 'transcript');
+        const transcript = selectionListProps()?.rootStep?.sections.find((section) => section.id === 'transcript');
         if (!transcript || transcript.kind !== 'dynamic') throw new Error('Transcript section not ready');
         const resolved = await transcript.resolve('needle', new AbortController().signal);
         const option = resolved.options[0];
@@ -1173,12 +1061,9 @@ describe('UniversalSearchController exact Home scope', () => {
         expect(option).toBeTruthy();
         await act(async () => {
             option?.onSelect?.();
-            harness.selectionListProps?.onSelect?.(option!.id, option!);
+            selectionListProps()?.onSelect?.(option!.id, option!);
             await vi.waitFor(() => {
-                expect(harness.navigateToSession).toHaveBeenCalledWith('session-b', {
-                    serverId: 'home-b',
-                    query: { jumpSeq: 9 },
-                });
+                expect(harness.routerNavigate).toHaveBeenCalledWith('/session/session-b?serverId=srv_fsp_controller_b&jumpSeq=9', expect.objectContaining({ dangerouslySingular: expect.any(Function) }));
             });
         });
     });

@@ -1,23 +1,60 @@
-import { installFileFindAccountBoundaryMocks } from './fileFindSeedTestHelpers';
+import 'fake-indexeddb/auto';
 import * as React from 'react';
-import { describe, expect, it } from 'vitest';
-import { installAppPaneScopeHostCommonModuleMocks } from '@/components/appShell/panes/appPaneScopeHostTestHelpers';
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
+import { standardCleanup } from '@/dev/testkit';
+import { createHomeGovernanceHarness, installHomeGovernanceBoundaries } from '@/dev/testkit/harness/homeGovernanceHarness';
+import { installDisconnectedServerSocketBoundary, restoreServerAccountForTest } from '@/dev/testkit/harness/serverAccountConnectionHarness';
+import { loadSyncSingletonForTests } from '@/dev/testkit/harness/syncSingletonLoader';
 import { captureActiveServerAccountScopeLifetime } from '@/sync/domains/scope/activeServerAccountScope';
-import { DestinationInstanceHost } from '@/components/appShell/workspace/DestinationInstanceHost';
-import * as findSeedHosts from './fileFindSeedHost';
 import { createFileViewerFindModel } from '@/components/workspaces/files/details/useFileViewerFind';
 import { openChatWithFindSeed } from './fileFindSeedHandoff';
-const { FileFindSeedHost } = findSeedHosts;
+import type { FileFindSeedHostInput } from './fileFindSeedHost';
 
-installAppPaneScopeHostCommonModuleMocks();
-installFileFindAccountBoundaryMocks();
+vi.mock('react-native', async () => {
+    const { createReactNativeWebMock } = await import('@/dev/testkit/mocks/reactNative');
+    return createReactNativeWebMock();
+});
+vi.mock('react-native-unistyles', async () => {
+    const { createUnistylesMock } = await import('@/dev/testkit/mocks/unistyles');
+    return createUnistylesMock();
+});
+vi.mock('@/text', async () => {
+    const { createTextModuleMock } = await import('@/dev/testkit/mocks/text');
+    return createTextModuleMock();
+});
+const homes = createHomeGovernanceHarness();
+installHomeGovernanceBoundaries(homes);
+installDisconnectedServerSocketBoundary();
+await loadSyncSingletonForTests();
 const { renderScreen } = await import('@/dev/testkit');
 const { act } = await import('react-test-renderer');
+const { getStorage } = await import('@/sync/domains/state/storage');
+const { DestinationInstanceHost } = await import('@/components/appShell/workspace/DestinationInstanceHost');
+const findSeedHosts = await import('./fileFindSeedHost');
+const { FileFindSeedHost } = findSeedHosts;
 const { AppPaneProvider, useAppPaneContext } = await import('./AppPaneProvider');
+const initialState = getStorage().getState();
+let connection: Awaited<ReturnType<typeof restoreServerAccountForTest>> | undefined;
+let serverId = '';
 
 const destination = { host: 'project' as const, id: 'project-a', path: 'src/a.ts',
-    scope: { serverId: 'home-a', machineId: 'machine-a', rootPath: '/repo' } };
+    scope: { serverId: '', machineId: 'machine-a', rootPath: '/repo' } };
 const seed = { query: 'needle', options: { matchCase: false, regex: false }, target: { kind: 'file' as const, path: 'src/a.ts' } };
+
+beforeEach(async () => {
+    serverId = await homes.addHome({ name: 'Find Home', serverUrl: 'https://file-find-home.test', accountId: 'account-a' });
+    connection = await restoreServerAccountForTest({ serverUrl: 'https://file-find-home.test', accountId: 'account-a', request: homes.request });
+    getStorage().setState({ profileScope: { serverId, accountId: 'account-a' } });
+    getStorage().getState().applyLocalSettings({ appPaneScopesV1: {} });
+    destination.scope.serverId = serverId;
+});
+afterEach(async () => {
+    standardCleanup();
+    await connection?.dispose();
+    connection = undefined;
+    await homes.reset();
+    getStorage().setState(initialState, true);
+});
 
 function Stage(props: Readonly<{ value?: typeof seed }>) {
     const handoff = useAppPaneContext().fileFindSeedHandoff;
@@ -44,7 +81,7 @@ describe('file Find destination memory', () => {
             target: { kind: 'route-message-id' as const, routeMessageId: 'imported-row' } };
         function Launch() {
             const handoff = useAppPaneContext().fileFindSeedHandoff;
-            open = () => openChatWithFindSeed({ handoff, destination: { sessionId: 'chat-a', serverId: 'home-a' },
+            open = () => openChatWithFindSeed({ handoff, destination: { sessionId: 'chat-a', serverId },
                 seed: chatSeed, authority: captureActiveServerAccountScopeLifetime(),
                 open: () => {
                     if (navigation === 'synchronous push') throw new Error('Navigation failed');
@@ -56,7 +93,7 @@ describe('file Find destination memory', () => {
         function ReopenedChat() {
             return <DestinationInstanceHost tabId="reopened" ref={{ kind: 'session', params: { sessionId: 'chat-a' } }}
                 pathname="/session/chat-a" focused visible navigation={{ push() {}, replace() {}, back() {} }}>
-                <findSeedHosts.ChatFindSeedHost sessionId="chat-a" serverId="home-a" active>{(input) => React.createElement('ChatSeedProbe', input)}</findSeedHosts.ChatFindSeedHost>
+                <findSeedHosts.ChatFindSeedHost sessionId="chat-a" serverId={serverId} active>{(input) => React.createElement('ChatSeedProbe', input)}</findSeedHosts.ChatFindSeedHost>
             </DestinationInstanceHost>;
         }
         const screen = await renderScreen(<AppPaneProvider><Launch /></AppPaneProvider>);
@@ -76,7 +113,7 @@ describe('file Find destination memory', () => {
             }, [handoff]);
             return null;
         }
-        function Consumer(props: findSeedHosts.FileFindSeedHostInput & { loaded: boolean }) {
+        function Consumer(props: FileFindSeedHostInput & { loaded: boolean }) {
             const latest = React.useRef(props.loaded);
             latest.current = props.loaded;
             const model = React.useMemo(() => createFileViewerFindModel(() => ({ path: addressed.path,
@@ -115,7 +152,7 @@ describe('file Find destination memory', () => {
             React.useLayoutEffect(() => {
                 const authority = captureActiveServerAccountScopeLifetime();
                 if (!authority) throw new Error('Expected real Account lifetime');
-                handoff.stageChat({ sessionId: 'chat-a', serverId: 'home-a', accountId: 'account-a' }, chatSeed, authority);
+                handoff.stageChat({ sessionId: 'chat-a', serverId, accountId: 'account-a' }, chatSeed, authority);
             }, [handoff]);
             return null;
         }
@@ -125,11 +162,11 @@ describe('file Find destination memory', () => {
                 <findSeedHosts.ChatFindSeedHost sessionId="chat-a" serverId={props.serverId} active>{(input) => React.createElement('ChatSeedProbe', { tabId: props.tabId, ...input })}</findSeedHosts.ChatFindSeedHost>
             </DestinationInstanceHost>;
         }
-        const screen = await renderScreen(<AppPaneProvider><StageChat /><ChatHost tabId="wrong-home" serverId="home-b" focused /><ChatHost tabId="hidden" serverId="home-a" focused={false} /><ChatHost tabId="selected" serverId="home-a" focused /></AppPaneProvider>);
+        const screen = await renderScreen(<AppPaneProvider><StageChat /><ChatHost tabId="wrong-home" serverId="home-b" focused /><ChatHost tabId="hidden" serverId={serverId} focused={false} /><ChatHost tabId="selected" serverId={serverId} focused /></AppPaneProvider>);
         const probes = screen.root.findAllByType('ChatSeedProbe');
         expect(probes.map(probe => probe.props.findSeed)).toEqual([null, null, chatSeed]);
         await screen.update(<AppPaneProvider><StageChat /></AppPaneProvider>);
-        await screen.update(<AppPaneProvider><StageChat /><ChatHost tabId="reopened" serverId="home-a" focused /></AppPaneProvider>);
+        await screen.update(<AppPaneProvider><StageChat /><ChatHost tabId="reopened" serverId={serverId} focused /></AppPaneProvider>);
         expect(screen.root.findByType('ChatSeedProbe').props.findSeed).toBeNull();
     });
     it('acknowledges only the seed that the destination received, never a replacement seed', async () => {

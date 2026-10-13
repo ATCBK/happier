@@ -1,6 +1,6 @@
 import * as React from 'react';
 import { act } from 'react-test-renderer';
-import { afterEach, describe, expect, it, vi } from 'vitest';
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
 import { renderScreen } from '@/dev/testkit';
 
@@ -20,13 +20,9 @@ vi.mock('react-native', async () => {
     });
 });
 
-vi.mock('@/sync/domains/state/storage', async () => {
-    const { createStorageModuleStub } = await import('@/dev/testkit/mocks/storage');
-    return createStorageModuleStub({
-        useLocalSetting: () => undefined,
-        useLocalSettingMutable: () => [undefined, () => {}],
-    });
-});
+import { storage } from '@/sync/domains/state/storage';
+const initialStorageState = storage.getState();
+beforeEach(() => storage.setState(initialStorageState, true));
 
 import { View } from 'react-native';
 import { ModalPaneBoundaryView, useModalPaneBoundary } from '@/components/ui/panels/ModalPaneBoundary';
@@ -50,6 +46,7 @@ const nativeNodes = {
 let pane: AppPaneScopeApi | null = null;
 
 afterEach(() => {
+    storage.setState(initialStorageState, true);
     pane = null;
     nativeFocus.findNodeHandle.mockClear();
     nativeFocus.setAccessibilityFocus.mockClear();

@@ -1,33 +1,51 @@
-import { installFileFindAccountBoundaryMocks } from './fileFindSeedTestHelpers';
+import 'fake-indexeddb/auto';
 import * as React from 'react';
 
 import { act } from 'react-test-renderer';
-import { beforeEach, describe, expect, it, vi } from 'vitest';
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
 import { renderScreen, standardCleanup } from '@/dev/testkit';
-import { useAppPaneScope } from '@/components/appShell/panes/hooks/useAppPaneScope';
 import { LOCAL_SETTING_DEFINITIONS } from '@/sync/domains/settings/registry/local/localSettingDefinitions';
 import { captureActiveServerAccountScopeLifetime } from '@/sync/domains/scope/activeServerAccountScope';
+import { createHomeGovernanceHarness, installHomeGovernanceBoundaries } from '@/dev/testkit/harness/homeGovernanceHarness';
+import { installDisconnectedServerSocketBoundary, restoreServerAccountForTest } from '@/dev/testkit/harness/serverAccountConnectionHarness';
+import { loadSyncSingletonForTests } from '@/dev/testkit/harness/syncSingletonLoader';
 
-installFileFindAccountBoundaryMocks();
+vi.mock('react-native', async () => {
+    const { createReactNativeWebMock } = await import('@/dev/testkit/mocks/reactNative');
+    return createReactNativeWebMock();
+});
+vi.mock('react-native-unistyles', async () => {
+    const { createUnistylesMock } = await import('@/dev/testkit/mocks/unistyles');
+    return createUnistylesMock();
+});
+vi.mock('@/text', async () => {
+    const { createTextModuleMock } = await import('@/dev/testkit/mocks/text');
+    return createTextModuleMock();
+});
 
-(globalThis as any).IS_REACT_ACT_ENVIRONMENT = true;
+const homes = createHomeGovernanceHarness();
+installHomeGovernanceBoundaries(homes);
+installDisconnectedServerSocketBoundary();
+await loadSyncSingletonForTests();
+const { getStorage } = await import('@/sync/domains/state/storage');
+const { useAppPaneScope } = await import('@/components/appShell/panes/hooks/useAppPaneScope');
+const initialState = getStorage().getState();
+let connection: Awaited<ReturnType<typeof restoreServerAccountForTest>> | undefined;
+let serverId = '';
 
-const setLocalSettingSpy = vi.hoisted(() => vi.fn());
-let localSettingsMock: Record<string, unknown> = {};
-
-vi.mock('@/sync/domains/state/storage', async () => {
-    const { createStorageModuleStub } = await import('@/dev/testkit/mocks/storage');
-    return createStorageModuleStub({
-        useLocalSetting: (key: string) => localSettingsMock[key],
-        useLocalSettingMutable: (key: string) => [
-            localSettingsMock[key],
-            (value: unknown) => {
-                localSettingsMock[key] = value;
-                setLocalSettingSpy(value);
-            },
-        ],
-    });
+beforeEach(async () => {
+    serverId = await homes.addHome({ name: 'Find Home', serverUrl: 'https://file-find-home.test', accountId: 'account-a' });
+    connection = await restoreServerAccountForTest({ serverUrl: 'https://file-find-home.test', accountId: 'account-a', request: homes.request });
+    getStorage().setState({ profileScope: { serverId, accountId: 'account-a' } });
+    getStorage().getState().applyLocalSettings({ appPaneScopesV1: {} });
+});
+afterEach(async () => {
+    standardCleanup();
+    await connection?.dispose();
+    connection = undefined;
+    await homes.reset();
+    getStorage().setState(initialState, true);
 });
 
 function PaneScopeProbe(props: Readonly<{ triggerOpenDetails?: boolean }>) {
@@ -62,7 +80,7 @@ describe('AppPaneProvider persistence', () => {
         function Probe() { context = useAppPaneContext(); return null; }
         const screen = await renderScreen(<AppPaneProvider><Probe /></AppPaneProvider>);
         const destination = { host: 'project' as const, id: 'wr_1', accountId: 'account-a', path: 'src/a.ts',
-            scope: { serverId: 'home-a', machineId: 'machine-a', rootPath: '/repo' } };
+            scope: { serverId, machineId: 'machine-a', rootPath: '/repo' } };
         const seed = { query: 'private needle', options: { matchCase: false, regex: false }, target: { kind: 'file' as const, path: 'src/a.ts' } };
         if (!context) throw new Error('Pane host did not mount');
         const handoff = (context as ReturnType<typeof useAppPaneContext>).fileFindSeedHandoff;
@@ -76,21 +94,17 @@ describe('AppPaneProvider persistence', () => {
         const cancel = handoff.stage(destination, seed, authority);
         cancel();
         expect(handoff.take(destination)).toBeNull();
-        expect(JSON.stringify(localSettingsMock)).not.toContain(seed.query);
+        expect(JSON.stringify(getStorage().getState().localSettings)).not.toContain(seed.query);
         handoff.stage(destination, seed, authority);
         await screen.unmount();
         expect(handoff.take(destination)).toBeNull();
     });
-    beforeEach(() => {
-        standardCleanup();
-        localSettingsMock = {};
-        setLocalSettingSpy.mockReset();
-    });
-
     it('reveals accepted terminal selections through the matching mounted session driver, never a foreign Home', async () => {
         const { AppPaneProvider, useAppPaneContext } = await import('./AppPaneProvider');
         const { useRegisterSessionPaneDriver } = await import('@/components/sessions/panes/useRegisterSessionPaneDriver');
         const { SessionCockpitChromeRegistryProvider, useSessionCockpitChromeRegister } = await import('@/components/workspaceCockpit/session/SessionCockpitChromeRegistry');
+        const accountLifetime = captureActiveServerAccountScopeLifetime();
+        if (!accountLifetime) throw new Error('Expected real Account lifetime');
         const calls: string[] = [];
         let dispatch: ReturnType<typeof useAppPaneContext>['dispatch'] | undefined;
         let scopeId = '';
@@ -98,20 +112,20 @@ describe('AppPaneProvider persistence', () => {
             const register = useSessionCockpitChromeRegister();
             const switchSurface = React.useCallback((surface: string) => { calls.push(`${props.home}:${surface}`); }, [props.home]);
             React.useEffect(() => register({ sessionId: 'same-session', serverId: props.home, activeSurface: 'chat', terminalTabAvailable: true, openDetailsTabCount: 0, switchSurface }), [props.home, register, switchSurface]);
-            scopeId = useRegisterSessionPaneDriver('same-session', 'home-a', undefined, {
+            scopeId = useRegisterSessionPaneDriver('same-session', serverId, undefined, {
                 pluginUiProjection: null, pluginBrowserProjection: null, phase: 'current', interactionEnabled: true,
-                machineId: 'machine-a', serverId: 'home-a', platform: 'ios',
+                machineId: 'machine-a', serverId, platform: 'ios', accountLifetime,
             });
             dispatch = useAppPaneContext().dispatch;
             return null;
         }
         const harness = (home: string) => <AppPaneProvider><SessionCockpitChromeRegistryProvider><Probe home={home} /></SessionCockpitChromeRegistryProvider></AppPaneProvider>;
-        const screen = await renderScreen(harness('home-a'));
+        const screen = await renderScreen(harness(serverId));
         const command = async (command: import('@/components/sessions/terminal/sessionTerminalWorkspace').SessionTerminalWorkspaceCommand) => {
             await act(async () => { dispatch?.({ type: 'terminalWorkspace', scopeId, command }); });
         };
         await command({ type: 'open', terminal: { id: 'shell', target: { kind: 'workspace_shell' } } });
-        expect(calls).toEqual(['home-a:terminal']);
+        expect(calls).toEqual([`${serverId}:terminal`]);
         calls.length = 0;
         await command({ type: 'split', terminal: { id: 'rejected', target: { kind: 'workspace_shell' } }, availableWidthPx: 500, minimumTerminalWidthPx: 320 });
         await command({ type: 'focus', terminalId: 'missing' });
@@ -120,20 +134,20 @@ describe('AppPaneProvider persistence', () => {
         await command({ type: 'focus', terminalId: 'shell' });
         await command({ type: 'focus', terminalId: 'shell' });
         await command({ type: 'detach', terminalId: 'second', newTabId: 'detached-second' });
-        expect(calls).toEqual(['home-a:terminal', 'home-a:terminal', 'home-a:terminal', 'home-a:terminal']);
+        expect(calls).toEqual(Array.from({ length: 4 }, () => `${serverId}:terminal`));
         calls.length = 0;
         await screen.update(harness('home-b'));
         await command({ type: 'open', terminal: { id: 'other', target: { kind: 'workspace_shell' } } });
         await command({ type: 'focus', terminalId: 'shell' });
         expect(calls).toEqual([]);
-        await screen.update(harness('home-a'));
+        await screen.update(harness(serverId));
         await command({ type: 'focus', terminalId: 'shell' });
-        expect(calls).toEqual(['home-a:terminal']);
+        expect(calls).toEqual([`${serverId}:terminal`]);
     });
 
     it('hydrates persisted pane scopes from local settings on mount', async () => {
-        localSettingsMock = {
-            appPaneScopesV1: {
+        getStorage().getState().applyLocalSettings({
+            appPaneScopesV1: LOCAL_SETTING_DEFINITIONS.appPaneScopesV1.schema.parse({
                 'project:wr_1': {
                     right: { isOpen: true, activeTabId: 'git', tabState: {} },
                     details: {
@@ -155,8 +169,8 @@ describe('AppPaneProvider persistence', () => {
                     },
                     bottom: { isOpen: false, activeTabId: null, tabState: {} },
                 },
-            },
-        };
+            }),
+        });
 
         const { AppPaneProvider } = await import('./AppPaneProvider');
         const screen = await renderScreen(
@@ -192,7 +206,7 @@ describe('AppPaneProvider persistence', () => {
 
     it('preserves own Details tab keys through the local-setting boundary and removes inherited-only group references', async () => {
         const tabKey = '__proto__';
-        localSettingsMock = {
+        getStorage().getState().applyLocalSettings({
             appPaneScopesV1: LOCAL_SETTING_DEFINITIONS.appPaneScopesV1.schema.parse(JSON.parse(JSON.stringify({
                 'project:wr_1': {
                     right: { isOpen: false, activeTabId: null, tabState: {} },
@@ -229,7 +243,7 @@ describe('AppPaneProvider persistence', () => {
                     bottom: { isOpen: false, activeTabId: null, tabState: {} },
                 },
             }))),
-        };
+        });
 
         const { AppPaneProvider } = await import('./AppPaneProvider');
         const screen = await renderScreen(
@@ -253,9 +267,8 @@ describe('AppPaneProvider persistence', () => {
         ]);
         expect(Object.prototype.hasOwnProperty.call(scopeState.details.tabState, tabKey)).toBe(true);
         expect(scopeState.details.tabState[tabKey]).toEqual({ scrollY: 240 });
-        expect(setLocalSettingSpy).toHaveBeenCalled();
         const roundTrippedScopes = LOCAL_SETTING_DEFINITIONS.appPaneScopesV1.schema.parse(
-            localSettingsMock.appPaneScopesV1,
+            getStorage().getState().localSettings.appPaneScopesV1,
         );
         expect(roundTrippedScopes).toEqual(expect.objectContaining({
             'project:wr_1': expect.objectContaining({
@@ -291,7 +304,7 @@ describe('AppPaneProvider persistence', () => {
             );
         });
 
-        expect(setLocalSettingSpy).toHaveBeenCalledWith(expect.objectContaining({
+        expect(getStorage().getState().localSettings.appPaneScopesV1).toEqual(expect.objectContaining({
             'project:wr_1': expect.objectContaining({
                 details: expect.objectContaining({
                     focusedGroupId: 'group:1',
@@ -323,7 +336,7 @@ describe('AppPaneProvider persistence', () => {
     });
 
     it('hydrates persisted pane scopes that arrive after the initial mount', async () => {
-        const persistedScopes = {
+        const persistedScopes = LOCAL_SETTING_DEFINITIONS.appPaneScopesV1.schema.parse({
             'project:wr_1': {
                 right: { isOpen: true, activeTabId: 'git', tabState: {} },
                 details: {
@@ -345,7 +358,7 @@ describe('AppPaneProvider persistence', () => {
                 },
                 bottom: { isOpen: false, activeTabId: null, tabState: {} },
             },
-        };
+        });
 
         const { AppPaneProvider } = await import('./AppPaneProvider');
         const screen = await renderScreen(
@@ -354,9 +367,8 @@ describe('AppPaneProvider persistence', () => {
             </AppPaneProvider>,
         );
 
-        localSettingsMock.appPaneScopesV1 = persistedScopes;
-
         await act(async () => {
+            getStorage().getState().applyLocalSettings({ appPaneScopesV1: persistedScopes });
             await screen.update(
                 <AppPaneProvider>
                     <PaneScopeProbe />

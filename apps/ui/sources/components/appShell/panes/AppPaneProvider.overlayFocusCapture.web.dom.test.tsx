@@ -4,19 +4,15 @@
 import * as React from 'react';
 import { act } from 'react';
 import { createRoot, type Root } from 'react-dom/client';
-import { afterEach, describe, expect, it, vi } from 'vitest';
+import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 
 import { useWebOverlayFocusContainment } from '@/keyboard/webOverlayFocusContainment';
 
 (globalThis as typeof globalThis & { IS_REACT_ACT_ENVIRONMENT?: boolean }).IS_REACT_ACT_ENVIRONMENT = true;
 
-vi.mock('@/sync/domains/state/storage', async () => {
-    const { createStorageModuleStub } = await import('@/dev/testkit/mocks/storage');
-    return createStorageModuleStub({
-        useLocalSetting: () => undefined,
-        useLocalSettingMutable: () => [undefined, () => {}],
-    });
-});
+import { storage } from '@/sync/domains/state/storage';
+const initialStorageState = storage.getState();
+beforeEach(() => storage.setState(initialStorageState, true));
 
 import { AppPaneProvider, useAppPaneContext } from './AppPaneProvider';
 import { useAppPaneScope, type AppPaneScopeApi } from './hooks/useAppPaneScope';
@@ -40,6 +36,7 @@ afterEach(async () => {
     detailsDispatch = null;
     bottomDispatch = null;
     document.body.removeAttribute('tabindex');
+    storage.setState(initialStorageState, true);
 });
 
 describe('AppPane overlay focus capture', () => {

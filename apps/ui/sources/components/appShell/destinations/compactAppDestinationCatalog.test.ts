@@ -1,13 +1,14 @@
 import * as React from 'react';
 import { BotsRosterRuntimeProvider, useOptionalBotsRosterRuntime } from '@/components/sessions/bots/BotsRosterRuntime';
-import { describe, expect, it, vi } from 'vitest';
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
 import { renderScreen } from '@/dev/testkit';
+import { storage } from '@/sync/domains/state/storage';
+import { AppShellPluginUiProjectionValueProvider } from '@/components/appShell/plugins/AppShellPluginUiProjection';
 import type { PluginAppPage } from '@/components/appShell/plugins/pluginAppPages';
 import type { RightSidebarPluginTabDefinition } from '@/components/appShell/rightSidebar/rightSidebarBuiltinTabs';
 import {
     EMPTY_PLUGIN_UI_PROJECTION,
-    type PluginUiProjectionModel,
     type PluginUiSurfacePlacementProjection,
 } from '@/sync/domains/plugins/ui/projection';
 
@@ -42,14 +43,14 @@ vi.mock('react-native-enriched-markdown/lib/module/web/streamingReveal.js', () =
     splitStreamingRevealTextParts: () => { throw new Error('Markdown SDK is outside this catalog test'); },
 }));
 
-// Device preference storage is the boundary; catalog and placement owners remain real.
-vi.mock('@/sync/domains/state/storage', async () => {
-    const { createStorageModuleStub, createUseLocalSettingMock, createUseLocalSettingMutableMock } = await import('@/dev/testkit/mocks/storage');
-    const useLocalSetting = createUseLocalSettingMock({ values: {
+const initialStorageState = storage.getState();
+beforeEach(() => {
+    storage.setState(initialStorageState, true);
+    storage.getState().applyLocalSettings({
         navigationSurfacePlacementsV1: { appRail: { orderedIds: ['settings', 'sessions'], placements: { sessions: 'hidden', personalize: 'pinned' } } },
-    } });
-    return createStorageModuleStub({ useLocalSetting, useLocalSettingMutable: createUseLocalSettingMutableMock(useLocalSetting) });
+    }, { persist: false });
 });
+afterEach(() => storage.setState(initialStorageState, true));
 
 describe('workspace route identity round trips', () => {
     it.each([
@@ -190,20 +191,6 @@ vi.mock('@/text', async () => {
     const { createTextModuleMock } = await import('@/dev/testkit/mocks/text');
     return createTextModuleMock();
 });
-
-const compactCatalogProjectionState = vi.hoisted(() => ({
-    value: {
-        interactionEnabled: true,
-        pluginUiProjection: null as PluginUiProjectionModel | null,
-    },
-}));
-
-vi.mock('@/components/appShell/plugins/AppShellPluginUiProjection', () => ({
-    useAppShellPluginUiProjection: () => compactCatalogProjectionState.value,
-    // Localization is not under test here; the catalog falls back to the
-    // projected developer text when no resolver is supplied.
-    useProjectedPluginLocalizedTextResolver: () => undefined,
-}));
 
 const page = Object.freeze({
     id: 'plugin:acme.notes:notes',
@@ -692,8 +679,14 @@ describe('useCompactAppDestinations', () => {
         expect(destinations.find((destination: { id: string }) => destination.id === 'personalize')?.visibility).toBe('hidden');
     });
     it('keeps an admitted app page discoverable while daemon interaction is offline', async () => {
-        compactCatalogProjectionState.value = {
+        const value = {
             interactionEnabled: false,
+            pluginBrowserProjection: null,
+            phase: 'current' as const,
+            machineId: 'machine-a', serverId: 'home-a', platform: 'web' as const,
+            accountLifetime: null,
+            clientExecutableActivation: { status: 'ready' as const },
+            reloadClientExecutables: () => {}, reloadConnectedAccountProjection: () => {},
             pluginUiProjection: {
                 ...EMPTY_PLUGIN_UI_PROJECTION,
                 generation: 1,
@@ -703,7 +696,7 @@ describe('useCompactAppDestinations', () => {
             },
         };
 
-        const screen = await renderScreen(React.createElement(CompactCatalogProbe));
+        const screen = await renderScreen(React.createElement(AppShellPluginUiProjectionValueProvider, { value, children: React.createElement(CompactCatalogProbe) }));
         const probe = screen.tree.findByType('CompactCatalogProbe' as never);
 
         // Built-ins follow their own availability owners; the admitted page is listed regardless.

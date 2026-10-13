@@ -1,4 +1,5 @@
 import * as React from 'react';
+import { useDestinationPageTitle } from '@/components/appShell/workspace/DestinationInstanceHost';
 import { Platform, View } from 'react-native';
 import { Stack } from '@/components/appShell/workspace/destinationRoute';
 import { useDestinationFocus, useDestinationRouter, useDestinationVisibility } from '@/components/appShell/workspace/DestinationInstanceHost';
@@ -237,6 +238,7 @@ export function PluginAppPageScreen(props: Readonly<{
     });
 
     const headerTitle = page?.label ?? t('pluginSurfaces.appPage.title');
+    useDestinationPageTitle(page?.label ?? null);
     const pageHeaderActions = React.useMemo(
         () => resolvePluginAppPageHeaderActions(page),
         [page],

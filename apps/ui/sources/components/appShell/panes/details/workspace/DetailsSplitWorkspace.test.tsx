@@ -1,11 +1,11 @@
 import * as React from 'react';
 import { Platform } from 'react-native';
-import type { ReactTestInstance } from 'react-test-renderer';
+import { act, type ReactTestInstance } from 'react-test-renderer';
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 
 import { renderScreen } from '@/dev/testkit/render/renderScreen';
 import type { AppPaneScopeApi } from '@/components/appShell/panes/hooks/useAppPaneScope';
-import type { SplitCanvasLeafNode, SplitCanvasNode } from '@/components/appShell/splitCanvas/model/splitCanvasTypes';
+import { SplitCanvasHost } from '@/components/appShell/splitCanvas/components/SplitCanvasHost';
 import { resolveMinimumInteractiveTargetSize } from '@/components/ui/interactiveTargetSize';
 import { usePluginSurfaceFocusEligibility } from '@/components/ui/presentation/PluginSurfaceFocusEligibility';
 
@@ -23,19 +23,6 @@ vi.mock('@expo/vector-icons', async () => {
     const { createExpoVectorIconsMock } = await import('@/dev/testkit/mocks/icons');
     return createExpoVectorIconsMock();
 });
-
-vi.mock('@/components/sessions/shell/sessionPinIcons', () => ({
-    PinIcon: (props: Record<string, unknown>) => React.createElement('PinIcon', props),
-    PinSlashIcon: (props: Record<string, unknown>) => React.createElement('PinSlashIcon', props),
-}));
-
-vi.mock('@/components/ui/media/FileIcon', () => ({
-    FileIcon: (props: Record<string, unknown>) => React.createElement('FileIcon', props),
-}));
-
-vi.mock('@/components/ui/scroll/useWebScrollLockBypass', () => ({
-    useWebScrollLockBypass: () => {},
-}));
 
 const nativeBack = vi.hoisted(() => ({
     addEventListener: vi.fn(() => ({ remove: () => {} })),
@@ -55,38 +42,6 @@ vi.mock('react-native', async () => {
         },
     });
 });
-
-const splitCanvasHostSpy = vi.hoisted(() => vi.fn());
-
-function collectLeaves<TLeafPayload>(
-    node: SplitCanvasNode<TLeafPayload> | null,
-): SplitCanvasLeafNode<TLeafPayload>[] {
-    if (!node) return [];
-    if (node.kind === 'leaf') return [node];
-    return [...collectLeaves(node.first), ...collectLeaves(node.second)];
-}
-
-vi.mock('@/components/appShell/splitCanvas/components/SplitCanvasHost', () => ({
-    SplitCanvasHost: (props: {
-        state: { root: SplitCanvasNode<{ groupId: string }> | null };
-        renderLeaf: (input: {
-            leaf: SplitCanvasLeafNode<{ groupId: string }>;
-            isFocused: boolean;
-            isMaximized: boolean;
-        }) => React.ReactNode;
-    }) => {
-        splitCanvasHostSpy(props);
-        return React.createElement(
-            React.Fragment,
-            null,
-            ...collectLeaves(props.state.root).map((leaf) => props.renderLeaf({
-                leaf,
-                isFocused: false,
-                isMaximized: false,
-            })),
-        );
-    },
-}));
 
 const pane = {
     scopeId: 'scope:details',
@@ -179,7 +134,6 @@ await import('./DetailsSplitWorkspace');
 
 describe('DetailsSplitWorkspace', () => {
     beforeEach(() => {
-        splitCanvasHostSpy.mockReset();
         nativeBack.addEventListener.mockClear();
         pane.splitDetailsGroup.mockReset();
         pane.closeDetails.mockReset();
@@ -197,7 +151,7 @@ describe('DetailsSplitWorkspace', () => {
             />,
         );
 
-        expect(splitCanvasHostSpy).toHaveBeenCalledTimes(1);
+        expect(screen.findAllByType(SplitCanvasHost)).toHaveLength(1);
         expect(screen.root.findAllByType('TabContent')).toHaveLength(2);
     });
 
@@ -226,7 +180,7 @@ describe('DetailsSplitWorkspace', () => {
             />,
         );
 
-        expect(splitCanvasHostSpy).toHaveBeenCalledTimes(0);
+        expect(screen.findAllByType(SplitCanvasHost)).toHaveLength(0);
         expect(screen.root.findAllByProps({ testID: 'pane-details-empty-state-title' }).length).toBeGreaterThan(0);
         expect(screen.root.findAllByType('TabContent')).toHaveLength(0);
     });
@@ -255,8 +209,8 @@ describe('DetailsSplitWorkspace', () => {
             />,
         );
 
-        expect(splitCanvasHostSpy).toHaveBeenCalledTimes(1);
-        const [hostProps] = splitCanvasHostSpy.mock.calls[0] ?? [];
+        expect(screen.findAllByType(SplitCanvasHost)).toHaveLength(1);
+        const hostProps = screen.findByType(SplitCanvasHost).props;
         expect(hostProps?.state.root).toEqual({
             id: 'group:legacy',
             kind: 'leaf',
@@ -320,7 +274,7 @@ describe('DetailsSplitWorkspace', () => {
         };
         const presentation = new Map<string, boolean>();
 
-        await renderScreen(
+        const screen = await renderScreen(
             <DetailsSplitWorkspace
                 pane={{
                     ...pane,
@@ -361,15 +315,9 @@ describe('DetailsSplitWorkspace', () => {
         const { DetailsSplitWorkspace } = await import('./DetailsSplitWorkspace');
         const presentation = new Map<string, boolean>();
 
-        await renderScreen(
+        const screen = await renderScreen(
             <DetailsSplitWorkspace
-                pane={{
-                    ...pane,
-                    scopeState: {
-                        ...pane.scopeState!,
-                        details: { ...pane.scopeState!.details, maximizedGroupId: 'group:2' },
-                    },
-                }}
+                pane={pane}
                 renderTabContent={(tab, tabPresentation) => {
                     presentation.set(tab.key, tabPresentation.active);
                     return React.createElement('TabContent', { tabKey: tab.key });
@@ -377,6 +325,20 @@ describe('DetailsSplitWorkspace', () => {
             />,
         );
 
+        await act(async () => {
+            screen.findByTestId('split-canvas-host')!.props.onLayout({
+                nativeEvent: { layout: { width: 1200, height: 800 } },
+            });
+        });
+        await screen.update(
+            <DetailsSplitWorkspace
+                pane={{ ...pane, scopeState: { ...pane.scopeState!, details: { ...pane.scopeState!.details, maximizedGroupId: 'group:2' } } }}
+                renderTabContent={(tab, tabPresentation) => {
+                    presentation.set(tab.key, tabPresentation.active);
+                    return React.createElement('TabContent', { tabKey: tab.key });
+                }}
+            />,
+        );
         expect(Object.fromEntries(presentation)).toEqual({
             'file:a': false,
             'file:b': true,
@@ -386,15 +348,15 @@ describe('DetailsSplitWorkspace', () => {
     it('exposes split requests for the focused details group through the shared split canvas host', async () => {
         const { DetailsSplitWorkspace } = await import('./DetailsSplitWorkspace');
 
-        await renderScreen(
+        const screen = await renderScreen(
             <DetailsSplitWorkspace
                 pane={pane}
                 renderTabContent={(tab) => React.createElement('TabContent', { tabKey: tab.key })}
             />,
         );
 
-        expect(splitCanvasHostSpy).toHaveBeenCalledTimes(1);
-        const [hostProps] = splitCanvasHostSpy.mock.calls[0] ?? [];
+        expect(screen.findAllByType(SplitCanvasHost)).toHaveLength(1);
+        const hostProps = screen.findByType(SplitCanvasHost).props;
         expect(hostProps).toMatchObject({
             onRequestSplitLeaf: expect.any(Function),
         });
@@ -431,15 +393,15 @@ describe('DetailsSplitWorkspace', () => {
     it('keeps shared split-canvas keyboard handling enabled for details groups', async () => {
         const { DetailsSplitWorkspace } = await import('./DetailsSplitWorkspace');
 
-        await renderScreen(
+        const screen = await renderScreen(
             <DetailsSplitWorkspace
                 pane={pane}
                 renderTabContent={(tab) => React.createElement('TabContent', { tabKey: tab.key })}
             />,
         );
 
-        expect(splitCanvasHostSpy).toHaveBeenCalledTimes(1);
-        const [hostProps] = splitCanvasHostSpy.mock.calls[0] ?? [];
+        expect(screen.findAllByType(SplitCanvasHost)).toHaveLength(1);
+        const hostProps = screen.findByType(SplitCanvasHost).props;
         expect(hostProps).toMatchObject({
             keyboardEnabled: true,
         });
@@ -478,7 +440,7 @@ describe('DetailsSplitWorkspace', () => {
             />,
         );
 
-        expect(splitCanvasHostSpy).toHaveBeenCalledTimes(1);
+        expect(screen.findAllByType(SplitCanvasHost)).toHaveLength(1);
         expect(screen.root.findAllByType(FocusEligibilityProbe)).toHaveLength(3);
         expect(screen.root.findByProps({ testID: 'details-workspace-underlay' }).props).toMatchObject({
             pointerEvents: 'none',
@@ -552,15 +514,15 @@ describe('DetailsSplitWorkspace', () => {
     it('forwards split-canvas focus actions to the canonical details group focus API', async () => {
         const { DetailsSplitWorkspace } = await import('./DetailsSplitWorkspace');
 
-        await renderScreen(
+        const screen = await renderScreen(
             <DetailsSplitWorkspace
                 pane={pane}
                 renderTabContent={(tab) => React.createElement('TabContent', { tabKey: tab.key })}
             />,
         );
 
-        expect(splitCanvasHostSpy).toHaveBeenCalledTimes(1);
-        const [hostProps] = splitCanvasHostSpy.mock.calls[0] ?? [];
+        expect(screen.findAllByType(SplitCanvasHost)).toHaveLength(1);
+        const hostProps = screen.findByType(SplitCanvasHost).props;
         expect(hostProps).toMatchObject({
             dispatch: expect.any(Function),
         });

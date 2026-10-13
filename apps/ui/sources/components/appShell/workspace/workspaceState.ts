@@ -43,6 +43,7 @@ export type WorkspaceAction =
         newGroupId: string; axis: SplitCanvasAxis; placement: SplitCanvasPlacement }>)
     | Readonly<{ type: 'activateTab'; groupId: string; tabId: string }>
     | Readonly<{ type: 'closeTab'; groupId: string; tabId: string; newTab: WorkspaceTab; remember?: boolean }>
+    | Readonly<{ type: 'closeTabs'; groupId: string; tabIds: readonly string[]; newTab: WorkspaceTab }>
     | Readonly<{ type: 'reopenTab'; tabId?: string; reuseTabId?: string }>
     | Readonly<{ type: 'moveTab'; tabId: string; sourceGroupId: string; targetGroupId: string; beforeTabId?: string | null }>
     | (Readonly<{ type: 'reorderTab'; groupId: string; tabId: string }> & (
@@ -155,6 +156,12 @@ export function createWorkspaceState(tab: WorkspaceTab): WorkspaceState {
     };
 }
 
+/** Bulk commands retain pins and use strip order, independent of caller order or duplicate ids. */
+export function selectWorkspaceClosableTabIds(state: WorkspaceState, groupId: string, requestedIds: readonly string[]): readonly string[] {
+    const requested = new Set(requestedIds);
+    return state.groups[groupId]?.tabIds.filter(id => requested.has(id) && state.tabs[id] && !state.tabs[id].pinned) ?? [];
+}
+
 export function reduceWorkspaceState(state: WorkspaceState, action: WorkspaceAction): WorkspaceState {
     switch (action.type) {
         case 'openSplitTab': {
@@ -194,6 +201,21 @@ export function reduceWorkspaceState(state: WorkspaceState, action: WorkspaceAct
             if (nextGroup === group && focused.focusedLeafId === state.focusedGroupId
                 && focused.maximizedLeafId === state.maximizedGroupId) return state;
             return { ...fromCanvas(state, focused), groups: { ...state.groups, [group.id]: nextGroup as WorkspaceGroup } };
+        }
+        case 'closeTabs': {
+            const group = state.groups[action.groupId];
+            const tabIds = selectWorkspaceClosableTabIds(state, action.groupId, action.tabIds);
+            if (!group || tabIds.length === 0) return state;
+            if (tabIds.length === group.tabIds.length && Object.keys(state.groups).length === 1
+                && (action.newTab.target.kind !== 'newTab' || state.tabs[action.newTab.id])) return state;
+            let next = state;
+            for (const tabId of tabIds) next = reduceWorkspaceState(next, {
+                type: 'closeTab', groupId: group.id, tabId, newTab: action.newTab,
+            });
+            // The one published batch keeps positions from the original strip for Reopen.
+            const closed = new Set(tabIds);
+            return { ...next, recentlyClosed: next.recentlyClosed.map(entry => closed.has(entry.tab.id)
+                ? { ...entry, index: group.tabIds.indexOf(entry.tab.id) } : entry) };
         }
         case 'closeTab': {
             const group = state.groups[action.groupId];

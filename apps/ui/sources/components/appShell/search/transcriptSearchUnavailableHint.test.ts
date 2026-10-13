@@ -1,6 +1,6 @@
 import { describe, expect, it, vi } from 'vitest';
 
-vi.mock('@/text', () => ({ t: (key: string) => key }));
+vi.mock('@/text', async () => (await import('@/dev/testkit/mocks/text')).createTextModuleMock({ translate: (key: string) => key }));
 
 describe('transcriptSearchUnavailableHint', () => {
     it.each([

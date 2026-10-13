@@ -8,10 +8,10 @@ import { IconButton } from '@/components/ui/buttons/IconButton';
 import { DETAILS_TAB_STRIP_METRICS as M } from '@/components/appShell/panes/details/header/detailsTabHeaderMetrics';
 import { DOCUMENT_TAB_BAR_METRICS as B } from '@/components/ui/navigation/DocumentTabStrip';
 import { useKeyboardShortcutLabel } from '@/keyboard/shortcutLabels';
-import { randomUUID } from '@/platform/randomUUID';
 import { t } from '@/text';
 import { useOptionalWorkspaceNavigation, type WorkspaceNavigationContextValue } from '../WorkspaceNavigationContext';
-import { createWorkspaceSplit } from '../workspaceSplit';
+import { executeWorkspaceUiAction } from '../workspaceActionRuntime';
+import { fireAndForget } from '@/utils/system/fireAndForget';
 import { WorkspaceGroupTabs } from './WorkspaceGroupTabs';
 import {
     resolveWorkspaceTopRowGroupIds, resolveWorkspaceBarSegmentFrame, WORKSPACE_BAR_CONTROL_GAP_PX,
@@ -105,10 +105,10 @@ function WorkspaceSplitButton(props: Readonly<{ workspace: WorkspaceNavigationCo
     const label = shortcut ? `${t('workspaceBar.splitRight')} (${shortcut})` : t('workspaceBar.splitRight');
     const split = React.useCallback(() => {
         const groupId = workspace.state.focusedGroupId;
-        const measurement = workspace.canvasControlsRef?.current?.readSplitMeasurement(groupId, 'right');
-        if (!measurement) return;
-        const action = createWorkspaceSplit(workspace.state, { groupId, direction: 'right', createId: randomUUID, ...measurement });
-        if (action) workspace.dispatch(action);
+        fireAndForget(executeWorkspaceUiAction({ actionId: 'workspace.split', input: { groupId, direction: 'right' } }, href => {
+            const navigation = workspace.navigationForTab(workspace.state.groups[groupId].activeTabId);
+            (navigation.pushRetainingCurrent ?? navigation.push)(href);
+        }), { tag: 'Workspace.split' });
     }, [workspace]);
     return (
         <IconButton

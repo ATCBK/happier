@@ -4,6 +4,8 @@ import type { PluginUiDestinationReferenceV1 } from '@happier-dev/protocol/plugi
 
 import { useAppPaneScope } from '@/components/appShell/panes/hooks/useAppPaneScope';
 import { PaneHeader } from '@/components/appShell/panes/PaneHeader';
+import { useDestinationPageTitle, useDestinationPathname } from '@/components/appShell/workspace/DestinationInstanceHost';
+import { PLUGIN_PANELS_ROUTE } from '@/components/settings/plugins/model/pluginsSurfaceRoutes';
 import { usePaneActionRail, usePaneActionRailRightPaneHiddenByDetails } from '@/components/appShell/panes/PaneActionRailContext';
 import { PaneHeaderSlotScope, PaneHeaderSlotProvider } from '@/components/appShell/panes/paneHeaderSlot';
 import type { BoundPluginSurfaceBinding } from '@/components/plugins/surfaces/boundPluginSurfaceController';
@@ -95,6 +97,7 @@ export function AppScopeRightSidebar(props: AppScopeRightSidebarProps): React.Re
 }
 
 function AppScopeRightSidebarContent(props: AppScopeRightSidebarProps): React.ReactElement | null {
+    const pathname = useDestinationPathname();
     const pane = useAppPaneScope(props.scopeId);
     const hasActionRail = usePaneActionRail();
     const scopeState = pane.scopeState;
@@ -154,6 +157,7 @@ function AppScopeRightSidebarContent(props: AppScopeRightSidebarProps): React.Re
     }), [effectiveSelectedDestination, pluginProjection.hasEstablishingMembers, projectionPhase, props.projectionPhase, scopeState?.right.activeTabId, tabs]);
     const resolvedActiveTabId = tabSelection.kind === 'available' ? tabSelection.tab.id : null;
     const activeTab = tabSelection.kind === 'available' ? tabSelection.tab : null;
+    useDestinationPageTitle(pathname === PLUGIN_PANELS_ROUTE ? activeTab ? getRightSidebarTabLabel(activeTab) : null : undefined);
     const activePlacement = activeTab && isPluginTab(activeTab) ? activeTab.placement : null;
     const activeInstanceKey = scopeState?.right.selectedDestination?.kind === 'plugin'
         ? scopeState.right.selectedDestination.instanceKey

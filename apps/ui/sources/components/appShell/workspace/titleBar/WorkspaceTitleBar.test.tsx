@@ -1,6 +1,7 @@
 import * as React from 'react';
 import { act, type ReactTestInstance } from 'react-test-renderer';
 import { describe, expect, it, vi } from 'vitest';
+import { normalizeActionsSettingsV1 } from '@happier-dev/protocol/actions/actionSettings';
 
 import { renderScreen } from '@/dev/testkit/render/renderScreen';
 import { installPanelCommonModuleMocks } from '@/components/ui/panels/panelTestHelpers';
@@ -24,6 +25,10 @@ vi.mock('@/sync/api/session/sessionDataKeyEnvelopesApi', () => {
 vi.mock('@expo/vector-icons', async () => {
     const { createExpoVectorIconsMock } = await import('@/dev/testkit/mocks/icons');
     return createExpoVectorIconsMock();
+});
+vi.mock('@/modal', async () => {
+    const { createModalModuleMock } = await import('@/dev/testkit/mocks/modal');
+    return createModalModuleMock({ confirmResult: false }).module;
 });
 // The popover's portal/measurement boundary renders open menus inline; the menus themselves are real.
 vi.mock('@/components/ui/popover', async (importOriginal) => {
@@ -103,6 +108,28 @@ function threePanes(): WorkspaceState {
 }
 
 describe('WorkspaceTitleBar', () => {
+    it('honors UI Require over a waiver before closing a tab, then closes when Require is removed', async () => {
+        const { storage } = await import('@/sync/domains/state/storage');
+        const initialSettings = storage.getState().settings;
+        const state = reduceWorkspaceState(createWorkspaceState(tab('keep')), { type: 'openTab', groupId: 'group:1', tab: tab('close') });
+        const screen = await renderScreen(<Harness initial={state} clusterEndPx={200} />, {
+            createNodeMock: windowMeasurement({ 'workspace-title-bar': { x: 0, width: 1440 }, 'workspace-group-group_1': { x: 300, width: 1100 } }),
+        });
+        try {
+            storage.setState({ settings: { ...initialSettings, actionsSettingsV1: normalizeActionsSettingsV1({ v: 1,
+                actions: { 'workspace.tabs.close': { approvalRequiredSurfaces: ['ui'] } },
+                approvalWaivedSurfaces: { 'workspace.tabs.close': ['ui'] } }) } });
+            await screen.pressByTestIdAsync('workspace-tab-close-close');
+            await act(async () => { await new Promise(resolve => setTimeout(resolve, 150)); });
+            expect(stateOf(screen).groups['group:1'].tabIds).toEqual(['keep', 'close']);
+            storage.setState({ settings: { ...initialSettings, actionsSettingsV1: normalizeActionsSettingsV1({ v: 1, actions: {},
+                approvalWaivedSurfaces: { 'workspace.tabs.close': ['ui'] } }) } });
+            await screen.pressByTestIdAsync('workspace-tab-close-close');
+            await act(async () => { await new Promise(resolve => setTimeout(resolve, 150)); });
+            expect(stateOf(screen).groups['group:1'].tabIds).toEqual(['keep']);
+        } finally { storage.setState({ settings: initialSettings }); }
+    });
+
     it('offers close left and close all through the existing tab menu and overflow while preserving pinned tabs', async () => {
         let state = createWorkspaceState(tab('pinned', { pinned: true }));
         for (const id of ['left', 'middle', 'right']) state = reduceWorkspaceState(state, { type: 'openTab', groupId: 'group:1', tab: tab(id) });

@@ -1,13 +1,19 @@
 import * as React from 'react';
 import { act } from 'react-test-renderer';
-import { beforeEach, describe, expect, it, vi } from 'vitest';
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
 import { renderScreen } from '@/dev/testkit';
+import { storage } from '@/sync/domains/state/storage';
 
-const host = vi.hoisted(() => ({ width: 1440, height: 900, enabled: true }));
-beforeEach(() => { host.width = 1440; host.enabled = true; });
+const host = vi.hoisted(() => ({ width: 1440, height: 900 }));
+const initialStorageState = storage.getState();
+function setPanelsEnabled(enabled: boolean) {
+    storage.getState().applyLocalSettings({ uiMultiPanePanelsEnabled: enabled }, { persist: false });
+}
+beforeEach(() => { storage.setState(initialStorageState, true); host.width = 1440; setPanelsEnabled(true); });
+afterEach(() => storage.setState(initialStorageState, true));
 
-// Native geometry and persisted device preferences are platform/storage boundaries.
+// Native geometry is the platform boundary; device preferences use the real store.
 vi.mock('react-native', async () => {
     const { createReactNativeWebMock } = await import('@/dev/testkit/mocks/reactNative');
     return createReactNativeWebMock({
@@ -16,18 +22,14 @@ vi.mock('react-native', async () => {
         useWindowDimensions: () => ({ width: host.width, height: host.height }),
     });
 });
-vi.mock('@/sync/domains/state/storage', async () => {
-    const { createStorageModuleStub } = await import('@/dev/testkit/mocks/storage');
-    return createStorageModuleStub({
-        useLocalSetting: (key: string) => key === 'uiMultiPanePanelsEnabled' ? host.enabled : null,
-        useLocalSettingMutable: () => [null, () => {}],
-    });
-});
+
+await import('../AppPaneProvider');
+await import('./DetailsPaneHost');
 
 describe('destination details presentation continuity', () => {
     it('preserves an ordinary host explicit focus mode and action rail without destination-owned content', async () => {
         const { PaneColumnsHost } = await import('../PaneColumnsHost');
-        host.enabled = false;
+        setPanelsEnabled(false);
         const screen = await renderScreen(<PaneColumnsHost
             main={<div />}
             detailsPane={<div />}
@@ -58,7 +60,7 @@ describe('destination details presentation continuity', () => {
         await act(async () => { screen.root.findByType('DraftEditor').props.onChangeText('Unsubmitted work'); });
         for (const [width, enabled] of [[390, true], [1440, false], [1440, true]] as const) {
             host.width = width;
-            host.enabled = enabled;
+            await act(async () => { setPanelsEnabled(enabled); });
             await screen.update(tree());
             // Feed the real measured host boundary, as native split-window layout does.
             await act(async () => {
@@ -99,7 +101,7 @@ describe('destination details presentation continuity', () => {
         const screen = await renderScreen(tree());
         expect(screen.findByTestId('multi-pane-right-docked')).not.toBeNull();
         expect(screen.findByTestId('multi-pane-bottom-dock')).not.toBeNull();
-        host.enabled = false;
+        await act(async () => { setPanelsEnabled(false); });
         await screen.update(tree());
         expect(screen.findByTestId('multi-pane-details-modal')).not.toBeNull();
         expect(screen.root.findAll((node) => node.props.testID === 'multi-pane-details-overlay' && typeof node.props.widthPx === 'number')[0]?.props.widthPx).toBe(1440);

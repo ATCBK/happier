@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest';
 import { installPanelCommonModuleMocks } from '@/components/ui/panels/panelTestHelpers';
-import { resolveCompactAppDestinations } from '../destinations/compactAppDestinationCatalog';
+import { resolveCompactAppDestinations, resolveDestinationRefFromHref } from '../destinations/compactAppDestinationCatalog';
 import { createWorkspaceNavigationAdapter } from './workspaceNavigationAdapter';
 import { createWorkspaceActionAdapter } from './workspaceActions';
 import { createWorkspaceState, reduceWorkspaceState } from './workspaceState';
@@ -10,6 +10,7 @@ import { isWorkspaceActionId } from '@happier-dev/protocol';
 import { EntityDropAdmissionV1Schema } from '@happier-dev/protocol/plugins/ui';
 import { presentPaneDropAdmission } from '../splitCanvas/presentation/paneDropPresentation';
 import { createWorkspaceDropScene } from './workspaceDropScene';
+import { t } from '@/text';
 
 installPanelCommonModuleMocks();
 const scope = { serverId: 'home', accountId: 'account' };
@@ -35,6 +36,21 @@ function harness() {
 }
 
 describe('workspace entity Action admission', () => {
+    it('uses the same live screen identity in drag scenes and leaves unresolved nested screens unnamed', () => {
+        const h = harness();
+        const ref = resolveDestinationRefFromHref(h.catalog, '/session/existing/info');
+        if (!ref) throw new Error('Registered Session info destination required');
+        h.workspace.dispatch({ type: 'setTarget', tabId: 'anchor', target: ref });
+        h.workspace.dispatch({ type: 'setFallbackTitle', tabId: 'anchor', title: t('tabs.sessions') });
+        const scene = (title: string | null) => createWorkspaceDropScene(h.workspace.state, h.catalog, {
+            paneId: 'group:1', destinationTitles: { anchor: { ref, title } },
+        });
+        expect(scene('Atlas review').paneTitle).toBe('Atlas review');
+        expect(scene('Atlas renamed').locateTab('anchor')).toEqual({ paneId: 'group:1', title: 'Atlas renamed' });
+        expect(scene(null).paneTitle).toBeNull();
+        expect(scene(null).locateTab('anchor')).toBeNull();
+        expect(createWorkspaceDropScene(h.workspace.state, h.catalog, { paneId: 'group:1' }).paneTitle).toBeNull();
+    });
     it('applies an existing tab edge drop beside the hovered pane rather than its source pane', () => {
         const h = harness();
         h.workspace.dispatch({ type: 'openTab', groupId: 'group:1', tab: {

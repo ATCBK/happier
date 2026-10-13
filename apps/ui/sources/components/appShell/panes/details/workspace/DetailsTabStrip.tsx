@@ -37,7 +37,7 @@ export function detailsTabPanelNativeId(groupId: string, tabKey: string): string
 /** Details owns resource semantics; DocumentTabStrip owns the shared document chrome. */
 export const DetailsTabStrip = React.memo((props: DetailsTabStripProps) => {
     const { theme } = useUnistyles();
-    const entries = React.useMemo(() => props.sessionId ? props.group.tabs.map(tab => ({ key: tab.key, ref: {
+    const entries = React.useMemo(() => props.sessionId ? props.group.tabs.map(tab => ({ key: tab.key, fallbackTitle: tab.title, ref: {
         kind: tab.kind === 'session' ? 'session' : 'sessionDetails',
         params: { id: props.sessionId!, ...(props.serverId ? { serverId: props.serverId } : {}), ...buildActiveDetailsRouteParams([tab], tab.key) },
     } })) : [], [props.group.tabs, props.serverId, props.sessionId]);

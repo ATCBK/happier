@@ -194,7 +194,7 @@ const PhoneSplitPager = React.memo(function PhoneSplitPager(props: Readonly<{
     const paneName = (pane: typeof next) => {
         if (pane.target.kind === 'session') return t('phoneNav.rail.chatPane');
         const href = hrefForDestinationRef(props.catalog, pane.target);
-        return titles.get(pane.id) ?? (href ? resolveCurrentAppDestination(props.catalog, href)?.title : null) ?? t('common.unavailable');
+        return titles.get(pane.id) ?? t(href ? 'common.loading' : 'common.unavailable');
     };
     return (
         <View style={styles.pager}>

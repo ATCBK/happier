@@ -1,7 +1,7 @@
 import { WORKSPACE_ACTION_INPUT_SCHEMAS, type WorkspaceActionId, type WorkspaceTabsListOutput, type WorkspaceClosedTabsListOutput } from '@happier-dev/protocol/actions/workspaceActionFamily';
 import type { z } from 'zod';
 import type { SplitCanvasHostControls } from '../splitCanvas/components/SplitCanvasHost';
-import { createWorkspaceEmptyTab, type WorkspaceState } from './workspaceState';
+import { createWorkspaceEmptyTab, selectWorkspaceClosableTabIds, type ClosedWorkspaceTab, type WorkspaceState } from './workspaceState';
 import type { createWorkspaceNavigationAdapter } from './workspaceNavigationAdapter';
 import { createWorkspaceSplit } from './workspaceSplit';
 import type { FileFindSeedHandoff } from '../panes/fileFindSeedHandoff';
@@ -15,6 +15,31 @@ type ParsedWorkspaceRequest = {
 
 export function workspaceActionFailure(errorCode: string): WorkspaceActionOutcome {
     return { ok: false, errorCode, error: errorCode };
+}
+
+/** The guard and effect consume the same admitted pane selection and pinned policy. */
+export function selectWorkspaceTabsToClose(state: WorkspaceState, actionId: WorkspaceActionId, parameters: unknown): Readonly<{
+    groupId: string;
+    tabIds: readonly string[];
+}> | null {
+    const parsed = WORKSPACE_ACTION_INPUT_SCHEMAS[actionId].safeParse(parameters);
+    if (!parsed.success) return null;
+    const request = { actionId, data: parsed.data } as ParsedWorkspaceRequest;
+    if (request.actionId === 'workspace.tabs.close_all') {
+        const groupId = request.data.groupId ?? state.focusedGroupId;
+        const group = state.groups[groupId];
+        return group ? { groupId, tabIds: selectWorkspaceClosableTabIds(state, groupId, group.tabIds) } : null;
+    }
+    if (request.actionId !== 'workspace.tabs.close' && request.actionId !== 'workspace.tabs.close_others'
+        && request.actionId !== 'workspace.tabs.close_left' && request.actionId !== 'workspace.tabs.close_right') return null;
+    const tabId = request.data.tabId;
+    const group = Object.values(state.groups).find(candidate => candidate.tabIds.includes(tabId));
+    if (!group) return null;
+    if (request.actionId === 'workspace.tabs.close') return { groupId: group.id, tabIds: [tabId] };
+    const index = group.tabIds.indexOf(tabId);
+    const candidates = request.actionId === 'workspace.tabs.close_others' ? group.tabIds.filter(id => id !== tabId)
+        : request.actionId === 'workspace.tabs.close_left' ? group.tabIds.slice(0, index) : group.tabIds.slice(index + 1);
+    return { groupId: group.id, tabIds: selectWorkspaceClosableTabIds(state, group.id, candidates) };
 }
 
 export function projectWorkspaceTabsList(state: WorkspaceState): WorkspaceTabsListOutput {
@@ -42,6 +67,8 @@ export function createWorkspaceActionAdapter(input: Readonly<{
     navigation: ReturnType<typeof createWorkspaceNavigationAdapter>;
     readCanvas: () => SplitCanvasHostControls | null;
     createId: () => string;
+    /** Mounted clients project history labels through the same live destination-title owner. */
+    readClosedTitle?: (entry: ClosedWorkspaceTab) => string | null;
     phone?: boolean;
     chatFind?: Readonly<{ handoff: FileFindSeedHandoff; resolveAuthority(serverId: string): ServerAccountScopeLifetime | null }>;
 }>) {
@@ -58,10 +85,12 @@ export function createWorkspaceActionAdapter(input: Readonly<{
             return workspaceActionFailure('workspace_operation_unavailable');
         }
         const state = input.getState();
-        if (parsedActionId === 'workspace.tabs.closed.list') return { ok: true, tabs: state.recentlyClosed.map(entry => ({
-            id: entry.tab.id, target: { kind: entry.tab.target.kind, params: { ...entry.tab.target.params } }, pinned: entry.tab.pinned,
-            ...(entry.fallbackTitle === undefined ? {} : { title: entry.fallbackTitle }),
-        })) };
+        if (parsedActionId === 'workspace.tabs.closed.list') return { ok: true, tabs: state.recentlyClosed.map(entry => {
+            const title = input.readClosedTitle ? input.readClosedTitle(entry) : entry.fallbackTitle;
+            return { id: entry.tab.id, target: { kind: entry.tab.target.kind, params: { ...entry.tab.target.params } }, pinned: entry.tab.pinned,
+                ...(title == null ? {} : { title }),
+            };
+        }) };
         if (parsedActionId === 'workspace.tabs.reopen') return input.navigation.reopenTab('tabId' in data ? data.tabId : undefined)
             ? { ok: true } : workspaceActionFailure('workspace_closed_tab_not_found');
         const requestedGroupId = 'groupId' in data && data.groupId ? data.groupId : undefined;
@@ -134,6 +163,15 @@ export function createWorkspaceActionAdapter(input: Readonly<{
                 if (!tabId || !source) return workspaceActionFailure('workspace_tab_not_found');
                 input.navigation.closeTab(source.id, tabId);
                 break;
+            case 'workspace.tabs.close_others':
+            case 'workspace.tabs.close_left':
+            case 'workspace.tabs.close_right':
+            case 'workspace.tabs.close_all': {
+                const selection = selectWorkspaceTabsToClose(state, parsedActionId, parameters);
+                if (!selection) return workspaceActionFailure('workspace_group_not_found');
+                input.navigation.closeTabs(selection.groupId, selection.tabIds);
+                break;
+            }
             case 'workspace.tabs.pin':
                 if (tabId && 'pinned' in data) input.navigation.dispatch({ type: 'setPinned', tabId, pinned: data.pinned });
                 break;

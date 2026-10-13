@@ -1,10 +1,11 @@
 import * as React from 'react';
-import { afterEach, describe, expect, it, vi } from 'vitest';
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
 import { renderScreen, standardCleanup } from '@/dev/testkit';
 import { WorkflowRunScreen } from '@/components/workflows/screens/WorkflowRunScreen';
 import { DestinationInstanceHost } from './DestinationInstanceHost';
 import { t } from '@/text';
+import { storage } from '@/sync/domains/state/storageStore';
 
 // Signed-out loading bodies do not stream Markdown; this is an unused vendor/native boundary.
 vi.mock('react-native-enriched-markdown/lib/module/web/streamingReveal.js', () => ({
@@ -14,17 +15,6 @@ vi.mock('react-native-enriched-markdown/lib/module/web/streamingReveal.js', () =
 vi.mock('react-native', async () => (await import('@/dev/testkit/mocks/reactNative')).createReactNativeWebMock());
 vi.mock('react-native-unistyles', async () => (await import('@/dev/testkit/mocks/unistyles')).createUnistylesMock());
 vi.mock('@/text', async () => (await import('@/dev/testkit/mocks/text')).createTextModuleMock());
-// The client starts signed out: no private Run is exposed or fetched before an Account owns it.
-// The real Run body, route parsing, state cards and workflow hooks remain in this test.
-vi.mock('@/sync/domains/state/storage', async () => {
-    const { createStorageModuleStub, createStorageStoreMock } = await import('@/dev/testkit/mocks/storage');
-    return createStorageModuleStub({
-        storage: createStorageStoreMock({ workflowRunInvocationsByRunId: {} }),
-        useActiveServerAccountScope: () => null,
-        useWorkflowRun: () => null,
-        useMachine: () => null,
-    });
-});
 vi.mock('expo-router', async () => {
     const module = (await import('@/dev/testkit/mocks/router')).createExpoRouterMock().module;
     const outsideNavigator = () => { throw new Error('Run body has no Expo route'); };
@@ -32,7 +22,13 @@ vi.mock('expo-router', async () => {
         useRouter: outsideNavigator };
 });
 
-afterEach(async () => { await standardCleanup(); });
+let previous = storage.getState();
+beforeEach(() => {
+    previous = storage.getState();
+    storage.getState().clearProfileScope();
+    storage.setState({ workflowRunsById: {}, workflowRunInvocationsByRunId: {} });
+});
+afterEach(async () => { await standardCleanup(); storage.setState(previous, true); });
 
 describe('hosted workflow Run body', () => {
     it.each([false, true])('offers Run Back with a pop-first fallback while loading (history=%s, DESIGN-11 N66)', async history => {

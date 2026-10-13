@@ -334,7 +334,7 @@ const styles = StyleSheet.create((theme) => ({
         borderLeftWidth: StyleSheet.hairlineWidth, borderLeftColor: theme.colors.border.default },
     previewHeading: { flexDirection: 'row', alignItems: 'center', gap: theme.space.s8 },
     previewTitle: { ...Typography.rowTitle(), flex: 1, color: theme.colors.text.primary },
-    previewMessage: { marginTop: theme.space.s6, paddingHorizontal: 14, paddingVertical: theme.space.s10, borderRadius: 12, backgroundColor: theme.colors.surface.inset },
+    previewMessage: { marginTop: theme.space.s6, paddingHorizontal: theme.space.s12, paddingVertical: theme.space.s10, borderRadius: 12, backgroundColor: theme.colors.surface.inset },
     previewGrow: { flex: 1, minHeight: 12 },
     // One rhythm down the exchange (lab `.fd-preview`: 8 between who and what, 13/19 message text).
     previewMessages: { gap: theme.space.s12, paddingBottom: theme.space.s4 },

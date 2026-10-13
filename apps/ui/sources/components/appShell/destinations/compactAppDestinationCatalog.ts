@@ -1,4 +1,5 @@
 import * as React from 'react';
+import { useShallow } from 'zustand/react/shallow';
 import { stripGroupSegmentsFromPath } from 'expo-router/build/matchers';
 import { parseQueryParams } from 'expo-router/build/fork/getStateFromPath-forks';
 import { useRouter } from '@/components/appShell/workspace/destinationRoute';
@@ -41,7 +42,7 @@ import { useFeatureDecision } from '@/hooks/server/useFeatureDecision';
 import { useFriendsEnabled } from '@/hooks/server/useFriendsEnabled';
 import type { KeyboardCommandId } from '@/keyboard/types';
 import { selectPluginRightSidebarTabPlacements } from '@/sync/domains/plugins/ui/surfacePlacementSelectors';
-import { getStorage, useSessionDisplayNameProjections } from '@/sync/domains/state/storage';
+import { getStorage, useActiveServerAccountScopeLifetime, useSessionDisplayNameProjections } from '@/sync/domains/state/storage';
 import { t, type TranslationKeyNoParams } from '@/text';
 import { UNIVERSAL_SEARCH_ROUTE } from '@/components/appShell/search/universalSearchRoutePresentation';
 import {
@@ -56,9 +57,22 @@ import { fireAndForget } from '@/utils/system/fireAndForget';
 import { createSessionPaneDetailsTab, parseSessionPaneUrlState, serializeSessionPaneUrlState } from '@/components/sessions/panes/url/sessionPaneUrlState';
 import { resolveSettingsRouteTitleKey } from '@/components/settings/navigation/settingsRouteRegistry';
 import { readSessionDisplayTitle, sessionDisplayTitle } from '@/utils/sessions/sessionDisplayTitle';
-import { useSessionDiscussionTitleProjections } from '@/sync/ops/sessionDiscussions/useSessionDiscussionRepositorySnapshot';
+import { readSessionDiscussionTitle, useSessionDiscussionTitleProjections } from '@/sync/ops/sessionDiscussions/useSessionDiscussionRepositorySnapshot';
 import { matchWorkspaceDestinationRoute, registeredWorkspaceRoutes } from '@/components/appShell/workspace/workspaceRoutes';
-import { useOptionalWorkspaceNavigation } from '@/components/appShell/workspace/WorkspaceNavigationContext';
+import { useOptionalWorkspaceNavigation, type WorkspaceDestinationTitle } from '@/components/appShell/workspace/WorkspaceNavigationContext';
+import { areServerProfileIdentifiersEquivalent } from '@/sync/domains/server/serverProfiles';
+import { formatWorkflowRunDisplayName, resolveWorkflowRunDisplayName } from '@/components/workflows/presentation/workflowRunDisplayName';
+import { getProfileCatalogSnapshot, subscribeProfileCatalogSnapshots } from '@/sync/store/settings/profileCatalogSnapshot';
+import { getProviderCatalogSnapshot, subscribeProviderCatalogSnapshots } from '@/sync/store/settings/providerCatalogSnapshot';
+import { getMcpServerCatalogSnapshot, subscribeMcpServerCatalogSnapshots } from '@/sync/store/settings/mcpServerCatalogSnapshot';
+import { projectAiLaunchProfileForLegacyUi, readUiProfileCatalogSnapshot } from '@/sync/domains/profiles/aiLaunchProfileCollection';
+import { getProfileDisplayName } from '@/components/profiles/profileDisplay';
+import { getBuiltInProfile } from '@/sync/domains/profiles/profileUtils';
+import { mcpServerDisplayName } from '@/components/settings/mcpServers/collection/mcpServerCollectionModel';
+import { describeAccountProviderConnectionV1 } from '@happier-dev/protocol/providers/connections/accountProviderActionV1';
+import { composeProviderSettingsV1 } from '@happier-dev/protocol/providers/connections/connectionRowsV1';
+import { readAccountProviderDeclarations } from '@/providers/catalog/accountProviderDeclarations';
+import { presentProviderConnectionIdentity } from '@/providers/connection/presentation';
 
 /**
  * The one catalog of shell destinations (user ruling U1, 2026-09-28): the app's own destinations and
@@ -833,7 +847,19 @@ export function useActivateAppDestination(activationOwners: AppDestinationActiva
     }, []);
 }
 
-export type DestinationInstanceTitleEntry = Readonly<{ key: string; ref: DestinationRef; instanceKey?: string }>;
+export type DestinationInstanceTitleEntry = Readonly<{ key: string; ref: DestinationRef; instanceKey?: string; fallbackTitle?: string }>;
+export type DestinationInstanceTitleOptions = Readonly<{ publishedTitle?: WorkspaceDestinationTitle; fallbackTitle?: string }>;
+
+function resolveSavedInstanceTitle(catalog: readonly CompactAppDestination[], ref: DestinationRef, title: string | undefined): string | null {
+    if (!title?.trim()) return null;
+    const href = hrefForDestinationRef(catalog, ref);
+    const destination = href ? resolveCurrentAppDestination(catalog, href) : null;
+    // Earlier layouts could retain an area's generic label for an entity.
+    // Preserve a known entity name, never that misleading area placeholder.
+    if (destination && href && (ref.kind !== destination.id || href.split(/[?#]/, 1)[0] !== destination.routePath)
+        && title === destination.title) return null;
+    return title;
+}
 
 
 /**
@@ -851,6 +877,7 @@ function resolveStaticInstanceTitle(catalog: readonly CompactAppDestination[], r
     const href = hrefForDestinationRef(catalog, ref);
     if (!href) return null;
     const pathname = href.split(/[?#]/, 1)[0]!;
+    if (matchWorkspaceDestinationRoute(pathname)?.routeKey === 'inbox/approvals/[id]') return t('approvals.title');
     if (ref.kind === 'settings') {
         // Entity pages supply their current identity after hydration. The route's
         // generic native-header title must not stand in for that identity.
@@ -879,25 +906,107 @@ function resolveProjectInstanceTitle(ref: DestinationRef, workspaceRefs: readonl
     return project;
 }
 
+/** One fallback rule for live chrome and synchronous history/drag snapshots. */
+function resolvePublishedOrStaticInstanceTitle(catalog: readonly CompactAppDestination[], ref: DestinationRef, options?: DestinationInstanceTitleOptions, storedTitle?: string | null): string | null {
+    if (options?.publishedTitle?.ref === ref) return options.publishedTitle.title;
+    return resolveStaticInstanceTitle(catalog, ref) ?? storedTitle ?? resolveSavedInstanceTitle(catalog, ref, options?.fallbackTitle);
+}
+
 /**
  * The same title, read once without subscribing (a drag preview names what it carries and where it
  * lands only when the verdict changes). `null` when nothing can name it yet.
  */
-export function readDestinationInstanceTitle(catalog: readonly CompactAppDestination[], ref: DestinationRef): string | null {
+export function readDestinationInstanceTitle(catalog: readonly CompactAppDestination[], ref: DestinationRef, options?: DestinationInstanceTitleOptions): string | null {
+    const stored = resolveStoredInstanceTitle(ref, readRegisteredStorageState(), resolveSavedInstanceTitle(catalog, ref, options?.fallbackTitle));
     if (ref.kind === 'project') {
         const state = readRegisteredStorageState();
-        return resolveProjectInstanceTitle(ref, state ? readProjectWorkspaceRefs(state) : EMPTY_WORKSPACE_REFS);
+        const project = resolveProjectInstanceTitle(ref, state ? readProjectWorkspaceRefs(state) : EMPTY_WORKSPACE_REFS);
+        if (project) return project;
     }
-    const title = resolveStaticInstanceTitle(catalog, ref);
-    if (title || ref.kind !== 'session' || !ref.params.id) return title;
-    return readSessionDisplayTitle({ sessionId: ref.params.id, serverId: ref.params.serverId ?? null });
+    if (isSessionTitleRef(ref) && ref.params.id) {
+        const session = readSessionDisplayTitle({ sessionId: ref.params.id, serverId: ref.params.serverId ?? null });
+        if (session) return session;
+    }
+    if (ref.kind === 'sessionDetails' && ref.params.id) {
+        const details = parseSessionPaneUrlState(ref.params)?.details;
+        if (details?.kind === 'discussion') {
+            const discussion = readSessionDiscussionTitle({ sessionId: ref.params.id, serverId: ref.params.serverId ?? null, discussionId: details.discussionId });
+            if (discussion) return discussion;
+        }
+    }
+    return resolvePublishedOrStaticInstanceTitle(catalog, ref, options, stored);
+}
+
+function isSessionTitleRef(ref: DestinationRef): boolean {
+    return ref.kind === 'session' || (ref.kind === 'sessions'
+        && matchWorkspaceDestinationRoute(ref.params.workspacePathname ?? '')?.routeKey === 'session/[id]/info');
+}
+
+function readSettingsEntityTitleDemand(ref: DestinationRef) {
+    if (ref.kind !== 'settings') return null;
+    const route = matchWorkspaceDestinationRoute(`/settings/${ref.params.pageId ?? ''}`);
+    if (route?.routeKey === 'settings/providers/[connectionId]') return { kind: 'provider' as const, id: route.params.connectionId!, serverId: ref.params.serverId };
+    if (route?.routeKey === 'settings/profiles/[profileId]') return { kind: 'profile' as const, id: route.params.profileId!, serverId: ref.params.serverId };
+    // This route's serverId is the MCP entity, not a Home qualifier.
+    if (route?.routeKey === 'settings/mcp/[serverId]') return { kind: 'mcp' as const, id: route.params.serverId!, serverId: undefined };
+    return null;
+}
+
+function resolveSettingsEntityInstanceTitle(ref: DestinationRef, state: ReturnType<typeof readRegisteredStorageState>): string | null {
+    const demand = readSettingsEntityTitleDemand(ref);
+    if (!demand || !state?.profileScope) return null;
+    const scope = state.profileScope;
+    if (demand.serverId && !areServerProfileIdentifiersEquivalent(scope.serverId, demand.serverId)) return t('common.unavailable');
+    if (demand.kind === 'provider') {
+        const snapshot = getProviderCatalogSnapshot(scope);
+        const connection = snapshot?.data?.connections.find(row => row.id === demand.id);
+        if (connection && snapshot?.data) return presentProviderConnectionIdentity(describeAccountProviderConnectionV1(
+            composeProviderSettingsV1(snapshot.data, {}), connection, readAccountProviderDeclarations(),
+        )).title;
+        return snapshot && snapshot.status !== 'loading' ? t('common.unavailable') : null;
+    }
+    if (demand.kind === 'profile') {
+        const snapshot = getProfileCatalogSnapshot(scope);
+        const profile = (snapshot && readUiProfileCatalogSnapshot(snapshot).profiles.find(row => row.id === demand.id))
+            ?? getBuiltInProfile(demand.id);
+        if (profile) return getProfileDisplayName(projectAiLaunchProfileForLegacyUi(profile));
+        return snapshot && snapshot.catalog.status !== 'loading' ? t('common.unavailable') : null;
+    }
+    const snapshot = getMcpServerCatalogSnapshot(scope);
+    const server = snapshot.value?.servers.find(row => row.id === demand.id);
+    return server ? mcpServerDisplayName(server) : snapshot.status !== 'loading' ? t('common.unavailable') : null;
+}
+
+function subscribeSettingsEntityTitles(listener: () => void): () => void {
+    const disposers = [subscribeProfileCatalogSnapshots(listener), subscribeProviderCatalogSnapshots(listener), subscribeMcpServerCatalogSnapshots(listener)];
+    return () => disposers.forEach(dispose => dispose());
+}
+
+/** Retained tabs read the same Account projections as their pages, without mounting page effects. */
+function resolveStoredInstanceTitle(ref: DestinationRef, state: ReturnType<typeof readRegisteredStorageState>, fallbackTitle?: string | null): string | null {
+    if (readSettingsEntityTitleDemand(ref)) return resolveSettingsEntityInstanceTitle(ref, state);
+    if (!state?.profileScope || (ref.params.serverId
+        && !areServerProfileIdentifiersEquivalent(state.profileScope.serverId, ref.params.serverId))) return null;
+    if (ref.kind === 'workflowRun' && ref.params.runId) {
+        const run = state.workflowRunsById[ref.params.runId];
+        return run ? formatWorkflowRunDisplayName(resolveWorkflowRunDisplayName(run.metadata))
+            : fallbackTitle ?? formatWorkflowRunDisplayName(resolveWorkflowRunDisplayName(null));
+    }
+    if (ref.kind === 'workflow' && ref.params.id) {
+        const artifact = state.artifacts[ref.params.id];
+        if (artifact) return artifact.isDecrypted ? artifact.title ?? t('common.unavailable') : t('common.unavailable');
+        // The Artifact list owner publishes headers only after completing its paged census.
+        // A restored pointer to a removed definition is unavailable, never a pending page read.
+        return state.artifactsLoaded ? t('common.unavailable') : null;
+    }
+    return null;
 }
 
 /**
  * The live title of each open destination instance (workspace lab T: "its title comes from the
  * destination"): a session's current name, a Details target's own name, a settings page or plugin
  * page title. One resolver for every tab bar, keyed by the caller's tab key; a key is absent when the
- * instance cannot be named yet, so the caller shows its saved title (loading, unavailable).
+ * instance cannot be named yet, so the caller shows loading/unavailable.
  * Project names and page/checkout qualification come from the Project display owners.
  */
 export function useDestinationInstanceTitles(
@@ -905,9 +1014,56 @@ export function useDestinationInstanceTitles(
     entries: readonly DestinationInstanceTitleEntry[],
 ): ReadonlyMap<string, string> {
     const workspace = useOptionalWorkspaceNavigation();
+    const accountLifetime = useActiveServerAccountScopeLifetime();
+    const settingsDemands = entries.map(entry => readSettingsEntityTitleDemand(entry.ref));
+    const hasProviders = settingsDemands.some(demand => demand?.kind === 'provider');
+    const hasProfiles = settingsDemands.some(demand => demand?.kind === 'profile');
+    const hasMcp = settingsDemands.some(demand => demand?.kind === 'mcp');
+    const subscribeTitles = React.useCallback((listener: () => void) => hasProviders || hasProfiles || hasMcp
+        ? subscribeSettingsEntityTitles(listener) : () => {}, [hasProviders, hasProfiles, hasMcp]);
+    const readSettingsTitles = React.useCallback(() => JSON.stringify(entries.map(entry => resolveSettingsEntityInstanceTitle(
+        entry.ref, readRegisteredStorageState(),
+    ))), [entries, accountLifetime]);
+    const settingsTitlesKey = React.useSyncExternalStore(subscribeTitles, readSettingsTitles, readSettingsTitles);
+    const settingsTitles = React.useMemo(() => JSON.parse(settingsTitlesKey) as readonly (string | null)[], [settingsTitlesKey]);
+    React.useEffect(() => {
+        if (!accountLifetime?.isCurrent()) return;
+        const disposers: (() => void)[] = [];
+        let disposed = false;
+        const scope = accountLifetime.scope;
+        fireAndForget(Promise.all([
+            hasProviders ? import('@/sync/engine/settings/providerCatalogEngine').then(owner => owner.observeProviderCatalog) : null,
+            hasProfiles ? import('@/sync/engine/settings/profileCatalogEngine').then(owner => owner.observeProfileCatalog) : null,
+            hasMcp ? import('@/sync/engine/settings/mcpServerCatalogEngine').then(owner => owner.observeMcpServerCatalog) : null,
+        ]).then(owners => {
+            if (disposed || !accountLifetime.isCurrent()) return;
+            for (const observe of owners) if (observe) disposers.push(observe(scope));
+        }), { tag: 'Workspace.settingsTitles' });
+        return () => { disposed = true; disposers.forEach(dispose => dispose()); };
+    }, [accountLifetime, hasProviders, hasProfiles, hasMcp]);
     const hasProjects = entries.some(entry => entry.ref.kind === 'project');
     const workspaceRefs = getStorage()(state => hasProjects ? readProjectWorkspaceRefs(state) : EMPTY_WORKSPACE_REFS);
-    const sessionEntries = React.useMemo(() => entries.filter((entry) => entry.ref.kind === 'session'
+    const storedTitles = getStorage()(useShallow(state => entries.map(entry => resolveStoredInstanceTitle(
+        entry.ref, state, resolveSavedInstanceTitle(catalog, entry.ref, entry.fallbackTitle),
+    ))));
+    const unreadRunIdsKey = getStorage()(state => JSON.stringify([...new Set(entries.flatMap(entry => {
+        const { ref } = entry;
+        if (ref.kind !== 'workflowRun' || !ref.params.runId || !state.profileScope
+            || (ref.params.serverId && !areServerProfileIdentifiersEquivalent(ref.params.serverId, state.profileScope.serverId))
+            || state.workflowRunsById[ref.params.runId]) return [];
+        return [ref.params.runId];
+    }))].sort()));
+    React.useEffect(() => {
+        if (unreadRunIdsKey === '[]' || !accountLifetime?.isCurrent()) return;
+        // Restored chrome demands only the existing Account summary projection. It never
+        // mounts an inactive page or reads its definition, usage or invocation history.
+        fireAndForget(import('@/sync/engine/workflows/refreshWorkflowRun').then(owner => {
+            if (!accountLifetime.isCurrent()) return;
+            const runIds = JSON.parse(unreadRunIdsKey) as string[];
+            return owner.refreshWorkflowRunSummaries(runIds.map(runId => ({ runId })));
+        }), { tag: 'Workspace.runTitles' });
+    }, [accountLifetime, unreadRunIdsKey]);
+    const sessionEntries = React.useMemo(() => entries.filter((entry) => isSessionTitleRef(entry.ref)
         && typeof entry.ref.params.id === 'string' && entry.ref.params.id.length > 0), [entries]);
     const addresses = React.useMemo(() => sessionEntries.map((entry) => ({
         sessionId: entry.ref.params.id!, serverId: entry.ref.params.serverId ?? null,
@@ -922,24 +1078,24 @@ export function useDestinationInstanceTitles(
     const discussionTitles = useSessionDiscussionTitleProjections(discussionEntries);
     return React.useMemo(() => {
         const titles = new Map<string, string>();
-        for (const entry of entries) {
+        for (const [index, entry] of entries.entries()) {
             const published = workspace?.destinationTitles?.[entry.instanceKey ?? entry.key];
-            const screenTitle = published?.ref === entry.ref ? published.title : undefined;
+            const fallback = resolvePublishedOrStaticInstanceTitle(catalog, entry.ref, { publishedTitle: published, fallbackTitle: entry.fallbackTitle }, settingsTitles[index] ?? storedTitles[index]);
             const title = entry.ref.kind === 'project'
-                ? resolveProjectInstanceTitle(entry.ref, workspaceRefs)
-                : screenTitle ?? resolveStaticInstanceTitle(catalog, entry.ref);
+                ? resolveProjectInstanceTitle(entry.ref, workspaceRefs) ?? fallback
+                : fallback;
             if (title) titles.set(entry.key, title);
         }
         sessionEntries.forEach((entry, index) => {
             const name = sessionTitles[index];
             if (!name) return;
             // A Details tab names its target; a session tab names the session.
-            if (entry.ref.kind === 'session') titles.set(entry.key, name);
+            titles.set(entry.key, name);
         });
         discussionEntries.forEach((entry, index) => {
             const name = discussionTitles[index];
             if (name) titles.set(entry.key, name);
         });
         return titles;
-    }, [catalog, entries, workspaceRefs, sessionEntries, sessionTitles, discussionEntries, discussionTitles, workspace?.destinationTitles]);
+    }, [catalog, entries, storedTitles, settingsTitles, workspaceRefs, sessionEntries, sessionTitles, discussionEntries, discussionTitles, workspace?.destinationTitles]);
 }

@@ -1,26 +1,15 @@
 import * as React from 'react';
-import { afterEach, describe, expect, it, vi } from 'vitest';
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { act } from 'react-test-renderer';
 
 import { renderScreen } from '@/dev/testkit';
 import { RightSidebarActionRail } from './RightSidebarActionRail';
 import { DropdownMenu } from '@/components/ui/forms/dropdown/DropdownMenu';
+import { storage } from '@/sync/domains/state/storage';
 
 (globalThis as any).IS_REACT_ACT_ENVIRONMENT = true;
 
-const preferencesState = vi.hoisted(() => ({
-    value: {} as Record<string, { orderedIds: string[]; placements: Record<string, 'pinned' | 'overflow' | 'hidden'> }>,
-    set: vi.fn(),
-}));
-vi.mock('@/sync/domains/state/storage', async () => {
-    const { createStorageModuleStub, createLiveStorageStoreMock } = await import('@/dev/testkit/mocks/storage');
-    const { localSettingsDefaults } = await import('@/sync/domains/settings/localSettings');
-    return createStorageModuleStub({
-        storage: createLiveStorageStoreMock(() => ({ localSettings: { ...localSettingsDefaults, navigationSurfacePlacementsV1: preferencesState.value } })),
-        useLocalSetting: (key: string) => key === 'navigationSurfacePlacementsV1' ? preferencesState.value : null,
-        useLocalSettingMutable: () => [preferencesState.value, preferencesState.set],
-    });
-});
+const initialStorageState = storage.getState();
 vi.mock('@/modal', async () => (await import('@/dev/testkit/mocks/modal')).createModalModuleMock().module);
 
 vi.mock('react-native', async () => {
@@ -46,13 +35,14 @@ vi.mock('@/text', async () => {
 await import('@/components/ui/navigation/NavigationPlacementCustomizer');
 
 describe('RightSidebarActionRail', () => {
-    afterEach(() => { preferencesState.value = {}; preferencesState.set.mockClear(); });
+    beforeEach(() => storage.setState(initialStorageState, true));
+    afterEach(() => storage.setState(initialStorageState, true));
 
     it('uses shared ordering and placements, overflowing only after the measured rail no longer fits', async () => {
-        preferencesState.value = { sessionRail: {
+        storage.getState().applyLocalSettings({ navigationSurfacePlacementsV1: { sessionRail: {
             orderedIds: ['plugin:acme.review:panel', 'git', 'files', 'hidden'],
             placements: { hidden: 'hidden', files: 'overflow' },
-        } };
+        } } }, { persist: false });
         const screen = await renderScreen(<RightSidebarActionRail surfaceId="sessionRail" testIDPrefix="rail" actions={[
             ...['git', 'files', 'hidden', 'plugin:acme.review:panel'].map((id) => ({
                 id, label: id, icon: 'folder' as const, active: false, onPress: () => {},
@@ -85,7 +75,7 @@ describe('RightSidebarActionRail', () => {
     });
 
     it('offers long-press and context customization after every action is hidden, retaining those actions in its catalog', async () => {
-        preferencesState.value = { sessionRail: { orderedIds: [], placements: { git: 'hidden' } } };
+        storage.getState().applyLocalSettings({ navigationSurfacePlacementsV1: { sessionRail: { orderedIds: [], placements: { git: 'hidden' } } } }, { persist: false });
         const { Modal } = await import('@/modal');
         const screen = await renderScreen(<RightSidebarActionRail surfaceId="sessionRail" testIDPrefix="rail" actions={[
             { id: 'git', label: 'Git', icon: 'folder', active: false, onPress: () => {} },

@@ -4,12 +4,12 @@ import { afterEach, describe, expect, it, vi } from 'vitest';
 
 import { renderScreen, standardCleanup } from '@/dev/testkit';
 import type { SelectionListStep } from '@/components/ui/selectionList';
+import { setReducedMotionPreferenceOverride } from '@/hooks/ui/useReducedMotionPreference';
 
 (globalThis as any).IS_REACT_ACT_ENVIRONMENT = true;
 
 const keyboardState = vi.hoisted(() => ({ height: 0 }));
 const safeAreaState = vi.hoisted(() => ({ top: 59, bottom: 34, left: 0, right: 0 }));
-const reducedMotionState = vi.hoisted(() => ({ value: false }));
 const keyboardDismiss = vi.hoisted(() => vi.fn());
 
 vi.mock('react-native', async () => {
@@ -31,19 +31,18 @@ vi.mock('react-native-safe-area-context', () => ({
     },
 }));
 
-// The scrim, the keyboard frame and the capsule are shared primitives with their own suites; here
-// they only have to prove the host hands them the right presentation facts.
-vi.mock('@/components/ui/overlays/OverlayScrim', () => ({
-    OverlayScrim: (props: Record<string, unknown>) => React.createElement('OverlayScrim', props),
-    OVERLAY_SCRIM_RAMP_HEIGHT: 88,
-}));
-
-vi.mock('@/hooks/ui/useKeyboardHeight', () => ({
-    useKeyboardHeight: () => keyboardState.height,
-}));
-
-vi.mock('@/hooks/ui/useReducedMotionPreference', () => ({
-    useReducedMotionPreference: () => reducedMotionState.value,
+// The Node resolver selects the base/web sibling. Map this iOS suite to the
+// genuine native sibling; it retains the owner's safe-area normalization.
+vi.mock('@/hooks/ui/useKeyboardHeight', () => import('@/hooks/ui/useKeyboardHeight.native'));
+// Only the native controller observation is substituted, preserving the rest
+// of the package's canonical Node adapter used by KeyboardAwareScreen.
+vi.mock('react-native-keyboard-controller', async importOriginal => ({
+    ...await importOriginal<typeof import('react-native-keyboard-controller')>(),
+    useKeyboardState: () => ({
+        height: keyboardState.height > 0 ? keyboardState.height + safeAreaState.bottom : 0,
+        isVisible: keyboardState.height > 0,
+        progress: keyboardState.height > 0 ? 1 : 0,
+    }),
 }));
 
 function makeStep(overrides: Partial<SelectionListStep> = {}): SelectionListStep {
@@ -81,8 +80,9 @@ afterEach(() => {
     safeAreaState.left = 0;
     safeAreaState.right = 0;
     keyboardDismiss.mockReset();
-    reducedMotionState.value = false;
+    setReducedMotionPreferenceOverride(null);
     standardCleanup();
+    vi.restoreAllMocks();
 });
 
 describe('UniversalSearchNativeHost', () => {
@@ -331,11 +331,22 @@ describe('UniversalSearchNativeHost', () => {
     });
 
     it('settles the scrim immediately under Reduced Motion', async () => {
-        reducedMotionState.value = true;
+        setReducedMotionPreferenceOverride(true);
+        const reanimated = await import('react-native-reanimated');
+        const timing = vi.spyOn(reanimated, 'withTiming');
+        const { motionTokens } = await import('@/components/ui/motion/motionTokens');
         const { UniversalSearchNativeHost } = await import('./UniversalSearchNativeHost');
+        const { OverlayScrim } = await import('@/components/ui/overlays/OverlayScrim');
+        // The renderer's instance type is the function inside React.memo.
+        const ScrimRender = (OverlayScrim as unknown as { readonly type: React.ElementType }).type;
         const screen = await renderScreen(<UniversalSearchNativeHost {...(defaultProps() as any)} />);
 
-        expect(screen.root.findByType('OverlayScrim' as unknown as React.ComponentType)
+        expect(screen.root.findByType(ScrimRender)
             .props.progress.value).toBe(1);
+        // The Node animation adapter settles immediately; the native SDK call
+        // distinguishes a truly motion-free entrance from an animated one.
+        expect(timing).not.toHaveBeenCalledWith(1, expect.objectContaining({
+            duration: motionTokens.overlay.modal.enterMs,
+        }));
     });
 });

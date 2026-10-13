@@ -1,15 +1,44 @@
-import { describe, expect, it, vi } from 'vitest';
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
+import { createHomeGovernanceHarness, createAccountTokenForTests } from '@/dev/testkit/harness/homeGovernanceHarness';
+import { createPlainMachineRowFixture } from '@/dev/testkit/fixtures/machineFixtures';
+import { installSessionActionRpcBoundary } from '@/dev/testkit/harness/sessionActionRpcBoundary';
+import { TokenStorage } from '@/auth/storage/tokenStorage';
+import { setRuntimeFetch, resetRuntimeFetch } from '@/utils/system/runtimeFetch';
 
 import type { PluginProjectedActionV2 } from '@happier-dev/protocol';
 import type { PluginUiActionProjection, PluginUiProjectionModel } from '@/sync/domains/plugins/ui/projection';
 import { EMPTY_PLUGIN_UI_PROJECTION } from '@/sync/domains/plugins/ui/projection';
 import { PLUGIN_UI_CONTRIBUTION_ORIGIN_KEY } from '@/sync/domains/plugins/ui/projectionUnion';
 
-const machineRpcWithServerScopeMock = vi.hoisted(() => vi.fn());
-
-vi.mock('@/sync/runtime/orchestration/serverScopedRpc/serverScopedMachineRpc', () => ({
-    machineRpcWithServerScope: machineRpcWithServerScopeMock,
-}));
+vi.mock('socket.io-client', async original =>
+    (await import('@/dev/testkit/harness/serverAccountConnectionHarness')).createSocketIoClientBoundary(original));
+const daemonRequests = installSessionActionRpcBoundary(() => ({ ok: true, result: { shouldNotIssue: true } }));
+let homes: ReturnType<typeof createHomeGovernanceHarness>;
+let serverId: string;
+let credential: Awaited<ReturnType<typeof TokenStorage.setCredentialsForServerUrlWithRollback>>;
+beforeEach(async () => {
+    daemonRequests.length = 0;
+    homes = createHomeGovernanceHarness();
+    setRuntimeFetch(homes.request);
+    serverId = await homes.addHome({ name: 'Current UI abort Home', serverUrl: 'https://current-ui-abort.test',
+        serverIdentityId: 'srv_current_ui', accountId: 'abort-account', currentAccount: true });
+    credential = await TokenStorage.setCredentialsForServerUrlWithRollback('https://current-ui-abort.test', { serverId },
+        { token: createAccountTokenForTests('abort-account', { currentAccount: true }) });
+    if (!credential) throw new Error('Abort fixture credentials were not persisted');
+    homes.answer(serverId, '/v1/auth/ping', { body: { ok: true } });
+    homes.answer(serverId, '/health', { body: { status: 'ok' } });
+    homes.answer(serverId, '/v1/machines/machine-current-ui', {
+        body: { machine: createPlainMachineRowFixture({ id: 'machine-current-ui', accountId: 'abort-account' }) },
+    });
+});
+afterEach(async () => {
+    const { serverScopedRpcSocketPool } = await import('@/sync/runtime/orchestration/serverScopedRpc/serverScopedRpcSocketPool');
+    await serverScopedRpcSocketPool.stopAll();
+    serverScopedRpcSocketPool.resetForTests();
+    await credential?.rollback();
+    await homes.reset();
+    resetRuntimeFetch();
+});
 
 import type { CurrentUiContextResolvedCommand } from './CurrentUiContextProvider';
 import { createCurrentUiContextVoiceToolPort } from './currentUiContextVoiceToolPort';
@@ -18,7 +47,7 @@ const COMMAND_ID = 'current-ui-command:native-abort';
 const ACTION_ID = Object.freeze({ pluginId: 'acme.current-ui', localId: 'retiring-action' });
 const ACTION_ORIGIN = Object.freeze({
     machineId: 'machine-current-ui',
-    serverId: 'server-current-ui',
+    get serverId() { return serverId; },
     generation: 41,
     interactionEnabled: true,
     phase: 'current' as const,
@@ -82,8 +111,6 @@ describe('current UI context Voice command retirement signal', () => {
             },
             retirementSignal: retirement.signal,
         };
-        machineRpcWithServerScopeMock.mockReset();
-        machineRpcWithServerScopeMock.mockResolvedValue({ ok: true, result: { shouldNotIssue: true } });
         const port = createCurrentUiContextVoiceToolPort({
             reader: {
                 readCurrentUiContext: () => null,
@@ -105,6 +132,7 @@ describe('current UI context Voice command retirement signal', () => {
         } finally {
             restoreAbortSignalAny();
         }
-        expect(machineRpcWithServerScopeMock).not.toHaveBeenCalled();
+        expect(daemonRequests).toEqual([]);
+        expect(homes.requests.filter(request => request.path === '/v1/machines/machine-current-ui')).toEqual([]);
     });
 });

@@ -1,3 +1,4 @@
+/** @vitest-environment jsdom */
 import * as React from 'react';
 import { act } from 'react-test-renderer';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
@@ -6,13 +7,15 @@ import { WORKSPACE_ACTION_OUTPUT_SCHEMAS } from '@happier-dev/protocol';
 import { storage } from '@/sync/domains/state/storage';
 import { hrefForDestinationRef, resolveCompactAppDestinations, useDestinationInstanceTitles } from '../destinations/compactAppDestinationCatalog';
 import { PageHeader } from '@/components/ui/layout/PageHeader';
+import { ConnectedAccountActionApprovalNotice } from '@/components/settings/connectedServices/ConnectedAccountActionApprovalNotice';
+import { t } from '@/text';
 import { DestinationInstanceHost, useDestinationInstanceKey, useDestinationParams, useDestinationRouter } from './DestinationInstanceHost';
 import type { WorkspaceNavigationContextValue } from './WorkspaceNavigationContext';
 import { WorkspaceProvider } from './WorkspaceProvider';
 import { WorkspaceShell } from './WorkspaceShell';
 import { captureMountedWorkspaceAction, invokeWorkspaceAction } from './workspaceActionRuntime';
 import { clearActiveUnsavedChangesGuard, setActiveUnsavedChangesGuard, type ActiveUnsavedChangesGuard } from '@/utils/navigation/runGuardedNavigation';
-import { useActiveUnsavedChangesGuard } from '@/utils/navigation/useActiveUnsavedChangesGuard';
+import { useUnsavedChangesBeforeRemoveGuard } from '@/utils/navigation/useUnsavedChangesBeforeRemoveGuard';
 import { KeyboardShortcutProvider, useKeyboardCommand, type KeyboardCommandId } from '@/keyboard';
 import { createWorkspaceState, reduceWorkspaceState } from './workspaceState';
 import { serializeWorkspaceLayout, workspaceLayoutScopeKey } from './workspacePersistence';
@@ -78,6 +81,10 @@ vi.mock('expo-router', async () => {
         return presentation && presentation !== 'card' ? React.createElement('RouteModalShell', { presentation }, scene) : scene;
     }, { Screen: module.Stack.Screen }) };
 });
+vi.mock('@react-navigation/native', async () => {
+    const { createReactNavigationNativeMock } = await import('@/dev/testkit/mocks/reactNavigation');
+    return createReactNavigationNativeMock();
+});
 const initialStorageState = storage.getState();
 // Test inputs use the same store snapshots and selectors as the mounted workspace.
 Object.defineProperties(boundary, {
@@ -125,10 +132,17 @@ function ResizeEditor() {
     return React.createElement('ResizeEditor', { draft, setDraft, params });
 }
 
-function RetainedDirtyEditor(props: Readonly<{ tabId: string; focused: boolean; guard: ActiveUnsavedChangesGuard }>) {
-    const registration = { navigation: null, guard: props.guard, tabId: props.tabId, focused: props.focused };
-    useActiveUnsavedChangesGuard(registration);
+function RegisteredDirtyEditor(props: Readonly<{ guard: ActiveUnsavedChangesGuard }>) {
+    useUnsavedChangesBeforeRemoveGuard({ ...props.guard, ignoreRef: props.guard.ignoreRef ?? undefined,
+        isDirty: props.guard.isDirtyRef.current, onContinue: () => {} });
     return null;
+}
+
+function RetainedDirtyEditor(props: Readonly<{ tabId: string; focused: boolean; guard: ActiveUnsavedChangesGuard }>) {
+    return <DestinationInstanceHost tabId={props.tabId} ref={{ kind: 'session', params: { id: props.tabId } }}
+        pathname={`/session/${props.tabId}`} focused={props.focused} visible={props.focused}>
+        <RegisteredDirtyEditor guard={props.guard} />
+    </DestinationInstanceHost>;
 }
 
 /** Real event dispatch beneath the external browser URL/history fixtures. */
@@ -142,8 +156,38 @@ function installBrowserBoundary(input: Record<string, unknown> & { history: obje
 }
 
 describe('consumed workspace navigation owner', () => {
+    it('does not publish a generic chrome header as a loading screen identity', async () => {
+        boundary.pathname = '/session/A1/info';
+        const catalog = resolveCompactAppDestinations({ pages: [], builtins: {
+            externalSessions: false, inbox: false, workflows: false, friends: false,
+        } });
+        let options: React.ComponentProps<typeof Stack.Screen>['options'] = { headerTitle: 'Session info' };
+        const element = () => <WorkspaceProvider enabled catalog={catalog}>{navigation => {
+            const group = navigation.state.groups[navigation.state.focusedGroupId];
+            const tab = navigation.state.tabs[group.activeTabId];
+            return <>
+                <DestinationTitlesProbe navigation={navigation} catalog={catalog} />
+                <DestinationInstanceHost tabId={tab.id} ref={tab.target} pathname={boundary.pathname} focused visible>
+                    <Stack.Screen options={options} />
+                </DestinationInstanceHost>
+            </>;
+        }}</WorkspaceProvider>;
+        const screen = await renderScreen(element());
+        const titles = () => screen.root.findByType('DestinationTitles').props.titles as ReadonlyMap<string, string>;
+        expect(titles().size).toBe(0);
+        options = { title: 'A named app page' };
+        await screen.update(element());
+        expect([...titles().values()]).toEqual(['A named app page']);
+        options = { title: undefined, headerTitle: 'App page' };
+        await screen.update(element());
+        expect(titles().size).toBe(0);
+    });
     it('shares live page identity across tabs, keeps inactive names fresh and retires it before a new route loads without persisting title publication', async () => {
         boundary.pathname = '/workflows/deploy'; boundary.params = { id: 'deploy' };
+        boundary.platform = 'web';
+        const history = { state: null as unknown, pushState(data: unknown) { this.state = data; }, replaceState(data: unknown) { this.state = data; } };
+        installBrowserBoundary({ location: { pathname: boundary.pathname, search: '', hash: '' }, history, sessionStorage: { getItem: () => 'main' } });
+        document.title = 'Happier';
         const catalog = resolveCompactAppDestinations({ pages: [], builtins: { externalSessions: false, inbox: false, workflows: true, friends: false } });
         const names = new Map([['deploy', 'Deploy Lumen'], ['release', 'Release Atlas']]);
         const element = () => <WorkspaceProvider enabled catalog={catalog}>{navigation => <>
@@ -152,7 +196,7 @@ describe('consumed workspace navigation owner', () => {
             {Object.values(navigation.state.tabs).map(tab => <DestinationInstanceHost key={tab.id} tabId={tab.id}
                 ref={tab.target} pathname={hrefForDestinationRef(catalog, tab.target) ?? ''} focused={tab.id === navigation.state.groups[navigation.state.focusedGroupId].activeTabId}
                 visible navigation={navigation.navigationForTab(tab.id)}>
-                <Stack.Screen options={{ title: 'Workflow' }} />
+                <Stack.Screen options={{ headerTitle: 'Workflow' }} />
                 {names.has(tab.target.params.id) ? <PageHeader alwaysShowTitle title={names.get(tab.target.params.id)!} /> : null}
             </DestinationInstanceHost>)}
         </>}</WorkspaceProvider>;
@@ -161,9 +205,17 @@ describe('consumed workspace navigation owner', () => {
         const titles = () => screen.root.findByType('DestinationTitles').props.titles as ReadonlyMap<string, string>;
         const first = navigation().state.groups[navigation().state.focusedGroupId].activeTabId;
         expect(titles().get(first)).toBe('Deploy Lumen');
+        expect(document.title).toBe('Deploy Lumen');
+        names.set('deploy', '');
+        await screen.update(element());
+        expect(titles().get(first)).toBeUndefined();
+        expect(document.title).toBe(t('common.loading'));
+        names.set('deploy', 'Deploy Lumen');
+        await screen.update(element());
         await act(async () => { navigation().openHref('/workflows/release', { mode: 'newTab' }); });
         const second = navigation().state.groups[navigation().state.focusedGroupId].activeTabId;
         expect(titles().get(second)).toBe('Release Atlas');
+        expect(document.title).toBe('Release Atlas');
         names.set('deploy', 'Deploy renamed');
         await screen.update(element());
         expect(titles().get(first)).toBe('Deploy renamed');
@@ -171,6 +223,13 @@ describe('consumed workspace navigation owner', () => {
         await act(async () => { navigation().openHref('/workflows/not-loaded', { tabId: second }); });
         expect(titles().get(second)).toBeUndefined();
         expect(titles().get(first)).toBe('Deploy renamed');
+        const latePublisher = navigation().publishDestinationTitle!;
+        const oldTarget = navigation().state.tabs[first].target;
+        names.clear();
+        await act(async () => { boundary.scope = { ...boundary.scope, accountId: 'another-account' }; });
+        await screen.update(element());
+        await act(async () => { latePublisher(first, oldTarget, 'Old Account name'); });
+        expect(titles().size).toBe(0);
     });
     it.each([false, true])('retains a Board source on cancelled navigation and hands it off on admission (phone=%s)', async phone => {
         const catalog = resolveCompactAppDestinations({ pages: [], builtins: {
@@ -197,10 +256,20 @@ describe('consumed workspace navigation owner', () => {
         expect(sidebar.tabsByKey.board).toBeUndefined();
         expect(sidebar.isOpen).toBe(false);
     });
-    it('opens approval review beside a dirty preview and preserves it through subsequent preview navigation', async () => {
+    it('opens Connected Account approval review beside a dirty preview and preserves it through subsequent preview navigation', async () => {
         const catalog = resolveCompactAppDestinations({ pages: [], builtins: { externalSessions: false, inbox: true, workflows: false, friends: false } });
         const screen = await renderScreen(<WorkspaceProvider enabled catalog={catalog}>
-            {navigation => React.createElement('WorkspaceOwner', { navigation })}
+            {navigation => {
+                const tab = navigation.state.tabs[navigation.state.groups[navigation.state.focusedGroupId].activeTabId];
+                return <>
+                    {React.createElement('WorkspaceOwner', { navigation })}
+                    <DestinationInstanceHost tabId={tab.id} ref={tab.target} pathname={hrefForDestinationRef(catalog, tab.target) ?? ''}
+                        focused visible navigation={navigation.navigationForTab(tab.id)}>
+                        <ConnectedAccountActionApprovalNotice execution={{ approval: { approvalId: 'request-a', approvalPending: true },
+                            binding: { scope: { serverId: 'home-a', accountId: 'alice' } } }} />
+                    </DestinationInstanceHost>
+                </>;
+            }}
         </WorkspaceProvider>);
         const navigation = () => screen.root.findByType('WorkspaceOwner').props.navigation as WorkspaceNavigationContextValue;
         const before = navigation().state;
@@ -211,7 +280,7 @@ describe('consumed workspace navigation owner', () => {
         const requestDecision = vi.fn(async () => 'keepEditing' as const);
         setActiveUnsavedChangesGuard({ isDirtyRef: dirty, requestDecision, tag: 'approval-retention-test' });
         await act(async () => {
-            navigation().navigationForTab(editorTabId).pushRetainingCurrent!('/inbox/approvals/request-a?serverId=home-a');
+            invokeTestInstanceHandler(screen.root.findByProps({ title: t('approvals.review') }), 'onPress');
         });
         const reviewed = navigation().state;
         expect(reviewed.tabs[editorTabId]).toMatchObject({ target, preview: false });
@@ -241,6 +310,9 @@ describe('consumed workspace navigation owner', () => {
         expect(boundary.mirrors.at(-1)).toBe(href);
     });
     beforeEach(() => {
+        // Existing navigation fixtures model a native/no-browser runtime unless
+        // a test explicitly installs its own web History and location boundary.
+        vi.stubGlobal('window', undefined);
         storage.setState({ ...initialStorageState, profileScope: { serverId: 'home-a', accountId: 'alice' }, isDataReady: true,
             localSettings: { ...initialStorageState.localSettings, workspaceLayoutV1: {}, titleStripThemeToggleVisible: false } }, true);
     });
@@ -557,8 +629,8 @@ describe('consumed workspace navigation owner', () => {
                 switch (operation) {
                     case 'open': source.openHref('/session/A4?serverId=home-a', { mode: 'newTab' }); break;
                     case 'activate': source.activateTab('group:1', 'a2'); break;
-                    case 'close': source.closeTab('group:1', 'a1'); break;
-                    case 'bulk-close': source.closeTabs('group:1', ['a1', 'a2']); break;
+                    case 'close': source.closeTab('group:1', source.state.groups['group:1'].activeTabId); break;
+                    case 'bulk-close': source.closeTabs('group:1', ['a1', source.state.groups['group:1'].activeTabId]); break;
                     case 'dispatch': source.dispatch({ type: 'openTab', groupId: 'group:1', tab: tab('a4') }); break;
                     case 'back': source.back(); break;
                     case 'forward': source.forward(); break;
@@ -612,7 +684,7 @@ describe('consumed workspace navigation owner', () => {
         expect(navigation().state.groups[group.id].tabIds).toEqual([pinnedId]);
         expect(navigation().state.recentlyClosed).toHaveLength(3);
     });
-    it('protects a retained inactive editor from bulk close through keep-editing, failed save and save-owned continuation', async () => {
+    it.each(['single', 'bulk'] as const)('protects a retained inactive editor from %s close through keep-editing, failed save and save-owned continuation', async mode => {
         const catalog = resolveCompactAppDestinations({ pages: [], builtins: { externalSessions: false, inbox: true, workflows: false, friends: false } });
         let editorTabId: string | null = null;
         let decision: 'keepEditing' | 'save' | 'discard' = 'keepEditing';
@@ -631,37 +703,53 @@ describe('consumed workspace navigation owner', () => {
         expect(guard.requestDecision).not.toHaveBeenCalled();
         const before = navigation().state;
         const group = before.groups[before.focusedGroupId];
+        const close = () => mode === 'bulk' ? navigation().closeTabs(group.id, group.tabIds) : navigation().closeTab(group.id, editorTabId!);
         expect(group.activeTabId).not.toBe(editorTabId);
-        await act(async () => { navigation().closeTabs(group.id, group.tabIds); });
+        await act(async () => { close(); });
         expect(navigation().state).toBe(before);
         decision = 'save';
-        await act(async () => { navigation().closeTabs(group.id, group.tabIds); });
+        await act(async () => { close(); });
         expect(navigation().state).toBe(before);
         expect(guard.isDirtyRef.current).toBe(true);
         saveSucceeds = true;
-        await act(async () => { navigation().closeTabs(group.id, group.tabIds); });
+        await act(async () => { close(); });
         expect(navigation().state).toBe(before);
         expect(guard.isDirtyRef.current).toBe(false);
         guard.isDirtyRef.current = true;
         decision = 'discard';
-        await act(async () => { navigation().closeTabs(group.id, group.tabIds); });
+        await act(async () => { close(); });
         expect(navigation().state.tabs[editorTabId!]).toBeUndefined();
-        expect(navigation().state.recentlyClosed).toHaveLength(2);
+        expect(navigation().state.recentlyClosed).toHaveLength(mode === 'bulk' ? 2 : 1);
     });
-    it('does not prompt a dirty active editor when only pinned or other tabs are selected', async () => {
+    it.each(['direct', 'action'] as const)('does not prompt a dirty active editor when %s close selects only pinned or other tabs', async mode => {
         const catalog = resolveCompactAppDestinations({ pages: [], builtins: { externalSessions: false, inbox: false, workflows: false, friends: false } });
-        const screen = await renderScreen(<WorkspaceProvider enabled catalog={catalog}>{navigation => React.createElement('WorkspaceOwner', { navigation })}</WorkspaceProvider>);
+        let retainedPinnedTabId: string | null = null;
+        const pinnedGuard: ActiveUnsavedChangesGuard = { isDirtyRef: { current: true }, requestDecision: vi.fn(async () => 'keepEditing'), tag: 'pinned-dirty-editor' };
+        const element = () => <WorkspaceProvider enabled catalog={catalog}>{navigation => <>
+            {React.createElement('WorkspaceOwner', { navigation })}
+            {retainedPinnedTabId && navigation.state.tabs[retainedPinnedTabId]
+                ? <RetainedDirtyEditor tabId={retainedPinnedTabId} focused={false} guard={pinnedGuard} /> : null}
+        </>}</WorkspaceProvider>;
+        const screen = await renderScreen(element());
         const navigation = () => screen.root.findByType('WorkspaceOwner').props.navigation as WorkspaceNavigationContextValue;
         await act(async () => { navigation().openHref('/session/A2?serverId=home-a', { mode: 'newTab' }); });
         const group = navigation().state.groups[navigation().state.focusedGroupId];
         const inactiveId = group.tabIds.find(id => id !== group.activeTabId)!;
         await act(async () => { navigation().dispatch({ type: 'setPinned', tabId: inactiveId, pinned: true }); });
+        retainedPinnedTabId = inactiveId;
+        await screen.update(element());
         const requestDecision = vi.fn(async () => 'keepEditing' as const);
         setActiveUnsavedChangesGuard({ isDirtyRef: { current: true }, requestDecision, tag: 'surviving-active-editor' });
         const before = navigation().state;
-        await act(async () => { navigation().closeTabs(group.id, [inactiveId]); });
+        const close = async () => {
+            if (mode === 'direct') navigation().closeTabs(group.id, [inactiveId]);
+            else expect(await invokeWorkspaceAction({ actionId: 'workspace.tabs.close_others', input: { tabId: group.activeTabId } })).toMatchObject({ ok: true });
+        };
+        await act(async () => { await close(); });
         expect(navigation().state).toBe(before);
-        await act(async () => { navigation().dispatch({ type: 'setPinned', tabId: inactiveId, pinned: false }); navigation().closeTabs(group.id, [inactiveId]); });
+        expect(pinnedGuard.requestDecision).not.toHaveBeenCalled();
+        pinnedGuard.isDirtyRef.current = false;
+        await act(async () => { navigation().dispatch({ type: 'setPinned', tabId: inactiveId, pinned: false }); await close(); });
         expect(navigation().state.tabs[inactiveId]).toBeUndefined();
         expect(navigation().state.groups[group.id].activeTabId).toBe(group.activeTabId);
         expect(requestDecision).not.toHaveBeenCalled();
@@ -696,6 +784,37 @@ describe('consumed workspace navigation owner', () => {
         expect(await pending).toMatchObject({ ok: false, errorCode: transition === 'cancel' ? 'action_cancelled'
             : transition === 'account' ? 'workspace_unavailable' : 'workspace_navigation_cancelled' });
         expect(navigation().state).toBe(before);
+    });
+    it.each(['single', 'bulk', 'action'] as const)('does not carry a held %s close into a replacement destination with the same tab identity', async mode => {
+        const catalog = resolveCompactAppDestinations({ pages: [], builtins: { externalSessions: false, inbox: false, workflows: false, friends: false } });
+        let editorTabId: string | null = null;
+        let resolveDecision!: (decision: 'discard') => void;
+        const guard: ActiveUnsavedChangesGuard = { isDirtyRef: { current: true }, tag: 'held-retarget-close',
+            requestDecision: () => new Promise(resolve => { resolveDecision = resolve; }) };
+        const screen = await renderScreen(<WorkspaceProvider enabled catalog={catalog}>{navigation => {
+            const state = navigation.state;
+            const group = state.groups[state.focusedGroupId];
+            editorTabId ??= group.activeTabId;
+            return <>{React.createElement('WorkspaceOwner', { navigation })}{state.tabs[editorTabId]
+                ? <RetainedDirtyEditor tabId={editorTabId} guard={guard} focused={group.activeTabId === editorTabId} /> : null}</>;
+        }}</WorkspaceProvider>);
+        const navigation = () => screen.root.findByType('WorkspaceOwner').props.navigation as WorkspaceNavigationContextValue;
+        const groupId = navigation().state.focusedGroupId;
+        let pending: ReturnType<typeof invokeWorkspaceAction> | undefined;
+        await act(async () => {
+            if (mode === 'action') pending = invokeWorkspaceAction({ actionId: 'workspace.tabs.close_all', input: {} });
+            else if (mode === 'single') navigation().closeTab(groupId, editorTabId!);
+            else navigation().closeTabs(groupId, [editorTabId!]);
+            await Promise.resolve();
+        });
+        expect(typeof resolveDecision).toBe('function');
+        await act(async () => { navigation().dispatch({ type: 'setTarget', tabId: editorTabId!,
+            target: { kind: 'session', params: { id: 'replacement', serverId: 'home-a' } } }); });
+        const before = navigation().state;
+        await act(async () => { resolveDecision('discard'); });
+        if (pending) expect(await pending).toMatchObject({ ok: false, errorCode: 'workspace_navigation_cancelled' });
+        expect(navigation().state).toBe(before);
+        expect(navigation().state.tabs[editorTabId!].target.params.id).toBe('replacement');
     });
     it('admits the current browser location when readiness arrives before the Expo URL mirror', async () => {
         boundary.platform = 'web';
@@ -801,7 +920,8 @@ describe('consumed workspace navigation owner', () => {
         await act(async () => { invoke('workspace.tab.close'); });
         expect(state()).toBe(beforeOutOfRange);
         clearActiveUnsavedChangesGuard();
-        await act(async () => { invoke('workspace.tab.close'); invoke('workspace.tab.close'); });
+        await act(async () => { invoke('workspace.tab.close'); });
+        await act(async () => { invoke('workspace.tab.close'); });
         expect(state().groups['other-group']).toBeUndefined();
         expect(state().focusedGroupId).toBe(originalGroupId);
         expect(state().groups[originalGroupId].tabIds).toEqual([originalTabId]);

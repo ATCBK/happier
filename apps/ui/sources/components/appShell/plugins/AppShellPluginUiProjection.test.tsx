@@ -17,6 +17,7 @@ import {
     computePluginUiArtifactFileSetSha256DigestV1,
     computePluginUiArtifactSha256DigestV1,
     normalizePluginUiDestinationBindingV1,
+    normalizePluginUiSettingsPageBindingV1,
 } from '@happier-dev/protocol/plugins/ui';
 
 import { createDeferred, createMachineFixture, flushHookEffects, renderScreen, standardCleanup } from '@/dev/testkit';
@@ -31,7 +32,8 @@ import {
     useAppShellPluginUiProjection,
 } from './AppShellPluginUiProjection';
 import { selectPluginSurfacePlacementsForBinding } from '@/sync/domains/plugins/ui/surfacePlacementSelectors';
-import { selectPluginAppPagePlacements } from './pluginAppPages';
+import { resolveAdmittedPluginSettingsPage } from '@/components/settings/catalog/runtime/pluginSettingsPageCatalog';
+import { resolvePluginAppPages, selectPluginAppPagePlacements } from './pluginAppPages';
 import { readPluginUiContributionOrigin } from '@/sync/domains/plugins/ui/projectionUnion';
 import {
     getQualifiedConnectedServiceRegistryEntry,
@@ -596,6 +598,7 @@ function pluginUiProjectionWithAppTab(input: Readonly<{
     localId?: string;
     origin?: PluginMachineMaterializationExecutionOriginV1;
     container?: 'rightSidebarTab' | 'appPage';
+    title?: string;
 }>): PluginProjectionV2 {
     const localId = input.localId ?? 'panel';
     const id = `surfacePlacement:${input.pluginId}:${localId}`;
@@ -637,7 +640,7 @@ function pluginUiProjectionWithAppTab(input: Readonly<{
                         binding,
                         target: { kind: 'app' },
                         renderer: { kind: 'declarative', contributionId: 'inspector' },
-                        display: { developerFallback: 'Panel' },
+                        display: { developerFallback: input.title ?? 'Panel' },
                         availability: { state: 'available', reason: 'available', diagnostics: [] },
                     },
                 },
@@ -2075,6 +2078,26 @@ describe('AppShellPluginUiProjectionProvider', () => {
         });
     });
 
+    it('admits a bundled Connected Account occurrence with no UI contributions or Account installation', async () => {
+        const pluginId = 'acme.accounts-only';
+        const occurrenceId = `${pluginId}:account:occurrence`;
+        storageState.machines = [createLiveMachine('machine-a')];
+        projectionDescribeSpy.mockResolvedValue({ supported: true, projection: PluginProjectionV2Schema.parse({
+            ...projectionWithConnectedAccount({ serviceId: 'bitbucket', pluginId }),
+            installedPackagesById: { [pluginId]: { id: pluginId, displayName: 'Accounts only', version: '1.0.0',
+                enabled: true, source: { kind: 'bundled', locator: '@acme/accounts-only' }, sourceCustody: { kind: 'bundled_first_party',
+                    packagedRuntime: { kind: 'cli_version_root', versionRootId: 'accounts-fixture' } }, occurrenceId } },
+            familiesById: { connectedAccounts: { family: 'connectedAccounts', entriesById: {
+                account: { ...projectionWithConnectedAccount({ serviceId: 'bitbucket', pluginId }).familiesById.connectedAccounts!.entriesById.account, occurrenceId },
+            } } },
+        }) });
+        const { AppShellPluginUiProjectionProvider } = await import('./AppShellPluginUiProjection');
+        await renderScreen(<AppShellPluginUiProjectionProvider><ProjectionProbe /></AppShellPluginUiProjectionProvider>);
+        await flushHookEffects({ cycles: 8 });
+        expect(getConnectedServiceRegistrySnapshot()).toMatchObject({ status: 'ready', errorReason: null });
+        expect(getProjectedEntry(pluginId)).toMatchObject({ projectionStatus: 'ready', executable: true });
+    });
+
     it('keeps a divergent same-owner descriptor visible as a fail-closed conflict', async () => {
         storageState.machines = [
             { id: 'machine-a', active: true, activeAt: Date.now(), metadata: { host: 'a' } },
@@ -2159,8 +2182,8 @@ describe('AppShellPluginUiProjectionProvider', () => {
         await flushHookEffects({ cycles: 4 });
         expect(getConnectedServiceRegistrySnapshot()).toMatchObject({ status: 'loading', errorReason: null });
         expect(getProjectedEntry('acme.plugin.a')).toMatchObject({
-            projectionStatus: 'loading',
-            executable: false,
+            projectionStatus: 'ready',
+            executable: true,
             projectedDescriptor: expect.objectContaining({ pluginId: 'acme.plugin.a' }),
         });
 
@@ -2651,53 +2674,109 @@ describe('AppShellPluginUiProjectionProvider', () => {
         expect(value.machineId).toBeNull();
     });
 
-    it('keeps different app plugins visible before selection across heartbeats', async () => {
+    it('binds the union of strict machine projections to app pages and Settings before selection across heartbeats', async () => {
+        const { loadSyncSingletonForTests } = await import('@/dev/testkit/harness/syncSingletonLoader');
+        await loadSyncSingletonForTests();
+        const { AppShellPluginUiProjectionProvider } = await import('./AppShellPluginUiProjection');
+        const { AppPaneProvider } = await import('@/components/appShell/panes/AppPaneProvider');
+        const { PluginAppPageScreen } = await import('./PluginAppPageScreen');
+        const { PluginSettingsPageScreen } = await import('@/components/settings/plugins/PluginSettingsPageScreen');
+        const { PluginSettingsPageHost } = await import('@/components/plugins/surfaces');
         const renderApp = () => (
-            <AppShellPluginUiProjectionProvider>
-                <ProjectionProbe />
-            </AppShellPluginUiProjectionProvider>
+            <AppPaneProvider>
+                <AppShellPluginUiProjectionProvider>
+                    <ProjectionProbe />
+                    <PluginAppPageScreen pluginId="acme.alpha" localId="panel" subPath="" />
+                    <PluginAppPageScreen pluginId="acme.beta" localId="panel" subPath="" />
+                    <PluginSettingsPageScreen pluginId="acme.alpha" pageId="preferences" />
+                    <PluginSettingsPageScreen pluginId="acme.beta" pageId="preferences" />
+                </AppShellPluginUiProjectionProvider>
+            </AppPaneProvider>
         );
         storageState.machines = [
             { id: 'machine-a', active: true, activeAt: Date.now(), metadata: { host: 'a' } },
             { id: 'machine-b', active: true, activeAt: Date.now() - 20_000, metadata: { host: 'b' } },
         ];
+        const machinePage = (input: Readonly<{
+            generation: number; machineId: string; pluginId: string; title: string;
+        }>) => {
+            const settingsBinding = normalizePluginUiSettingsPageBindingV1({
+                pluginId: input.pluginId, pageId: 'preferences', rendererId: 'settings-renderer',
+            });
+            if (!settingsBinding) throw new Error('The Registry must admit the settings fixture binding');
+            const appPage = pluginUiProjectionWithAppTab({
+                generation: input.generation, pluginId: input.pluginId, container: 'appPage',
+                title: `${input.title} panel`,
+                origin: unselectedAppScopeOrigin({ machineId: input.machineId, pluginId: input.pluginId }),
+            });
+            const projection = PluginProjectionV2Schema.parse({
+                ...appPage,
+                familiesById: { ...appPage.familiesById, pluginUi: {
+                    family: 'pluginUi', entriesById: {
+                        ...appPage.familiesById.pluginUi?.entriesById,
+                        [`settingsPage:${input.pluginId}:preferences`]: {
+                            id: `settingsPage:${input.pluginId}:preferences`, pluginId: input.pluginId,
+                            occurrenceId: `${input.pluginId}:preferences:occurrence`,
+                            contributionKind: 'settingsPage', descriptorId: 'preferences',
+                            page: {
+                                id: { pluginId: input.pluginId, localId: 'preferences' },
+                                group: { kind: 'plugin', id: { pluginId: input.pluginId, localId: 'general' } },
+                                title: `${input.title} preferences`,
+                            },
+                            binding: settingsBinding,
+                            renderer: { kind: 'declarative', contributionId: 'settings-renderer' },
+                            availability: { state: 'available', reason: 'available', diagnostics: [] },
+                        },
+                    },
+                } },
+            });
+            return { projection, settingsBinding };
+        };
+        const alpha = machinePage({ generation: 3, machineId: 'machine-a', pluginId: 'acme.alpha', title: 'Alpha' });
+        const beta = machinePage({ generation: 4, machineId: 'machine-b', pluginId: 'acme.beta', title: 'Beta' });
         projectionDescribeSpy.mockImplementation(async (machineId: string) => ({
             supported: true,
-            projection: machineId === 'machine-a'
-                // Displaying these distinct plugins does not elect one
-                // machine as Account catalog authority.
-                ? pluginUiProjectionWithAppTab({
-                    generation: 3,
-                    pluginId: 'acme.alpha',
-                    origin: unselectedAppScopeOrigin({
-                        machineId: 'machine-a',
-                        pluginId: 'acme.alpha',
-                    }),
-                })
-                : pluginUiProjectionWithAppTab({
-                    generation: 4,
-                    pluginId: 'acme.beta',
-                    origin: unselectedAppScopeOrigin({
-                        machineId: 'machine-b',
-                        pluginId: 'acme.beta',
-                    }),
-                }),
+            projection: machineId === 'machine-a' ? alpha.projection : beta.projection,
         }));
-
-        const { AppShellPluginUiProjectionProvider } = await import('./AppShellPluginUiProjection');
         const screen = await renderScreen(renderApp());
         await flushHookEffects({ cycles: 6 });
 
-        const readPlacements = () => {
-            const projection = screen.tree.findByType('ProjectionProbe' as never).props.value.pluginUiProjection;
-            return projection
-                ? selectPluginSurfacePlacementsForBinding(projection, {
-                    container: 'rightSidebarTab',
-                    targetKind: 'app',
-                })
-                : [];
+        const assertScreenRoutes = () => {
+            const appPageScreens = screen.tree.findAllByType(PluginAppPageScreen);
+            expect(appPageScreens.map(page => page.findByType('StackScreen' as never).props.options.headerTitle))
+                .toEqual(['Alpha panel', 'Beta panel']);
+            for (const page of appPageScreens) {
+                expect(page.findAllByProps({ testID: 'plugin-app-page-host' })).not.toHaveLength(0);
+                expect(page.findAllByProps({ testID: 'plugin-app-page-unavailable' })).toHaveLength(0);
+            }
+            const settingsPageScreens = screen.tree.findAllByType(PluginSettingsPageScreen);
+            expect(settingsPageScreens.map(page => page.findByType('StackScreen' as never).props.options.headerTitle))
+                .toEqual(['Alpha preferences', 'Beta preferences']);
+            expect(settingsPageScreens.map(page => page.findByType(PluginSettingsPageHost).props.page))
+                .toEqual([
+                    expect.objectContaining({ pluginId: 'acme.alpha', descriptorId: 'preferences', binding: alpha.settingsBinding }),
+                    expect.objectContaining({ pluginId: 'acme.beta', descriptorId: 'preferences', binding: beta.settingsBinding }),
+                ]);
+            for (const page of settingsPageScreens) {
+                expect(page.findAllByProps({ testID: 'plugin-settings-page-unavailable' })).toHaveLength(0);
+            }
         };
-        expect(readPlacements().map(placement => placement.pluginId)).toEqual(['acme.alpha', 'acme.beta']);
+        assertScreenRoutes();
+
+        const readCatalogs = () => {
+            const projection = screen.tree.findByType('ProjectionProbe' as never).props.value.pluginUiProjection;
+            return {
+                appPages: resolvePluginAppPages({ placements: selectPluginAppPagePlacements(projection) }),
+                settingsPage: resolveAdmittedPluginSettingsPage({
+                    projection, pluginId: 'acme.beta', pageId: 'preferences', locale: 'en',
+                }),
+            };
+        };
+        expect(readCatalogs().appPages.map(page => page.routePath)).toEqual([
+            '/plugins/acme.alpha/panel', '/plugins/acme.beta/panel',
+        ]);
+        expect(readCatalogs().settingsPage?.title).toBe('Beta preferences');
+        expect(readCatalogs().settingsPage?.page.binding).toEqual(beta.settingsBinding);
         const projectionBeforeHeartbeat = screen.tree.findByType('ProjectionProbe' as never)
             .props.value.pluginUiProjection;
 
@@ -2712,6 +2791,8 @@ describe('AppShellPluginUiProjectionProvider', () => {
 
         expect(screen.tree.findByType('ProjectionProbe' as never).props.value.pluginUiProjection)
             .toBe(projectionBeforeHeartbeat);
+        expect(readCatalogs().settingsPage?.title).toBe('Beta preferences');
+        assertScreenRoutes();
     });
 
     it('keeps divergent originless UI visible without inventing an execution conflict when the Administration machine changes', async () => {

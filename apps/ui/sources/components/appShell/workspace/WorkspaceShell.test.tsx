@@ -1,18 +1,28 @@
+/** @vitest-environment jsdom */
 import * as React from 'react';
+import 'fake-indexeddb/auto';
 import { act } from 'react-test-renderer';
-import { describe, expect, it, vi } from 'vitest';
-import { renderScreen } from '@/dev/testkit/render/renderScreen';
+import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it, vi } from 'vitest';
+import { installBrowserStorageLockBoundary, renderScreen, standardCleanup } from '@/dev/testkit';
+import { serveActionHomes } from '@/dev/testkit/harness/actionHomesHttpHarness';
+import { installDisconnectedServerSocketBoundary } from '@/dev/testkit/harness/serverAccountConnectionHarness';
 import { installPanelCommonModuleMocks } from '@/components/ui/panels/panelTestHelpers';
-import { resolveDestinationRefFromHref, type CompactAppDestination } from '@/components/appShell/destinations/compactAppDestinationCatalog';
-import { DestinationInstanceHost, useDestinationInstanceKey } from './DestinationInstanceHost';
-import { WorkspaceNavigationContext, type WorkspaceNavigationContextValue } from './WorkspaceNavigationContext';
-import { createWorkspaceState, reduceWorkspaceState, type WorkspaceAction, type WorkspaceState } from './workspaceState';
-import { WorkspaceShell } from './WorkspaceShell';
-import type { SplitCanvasHostControls } from '../splitCanvas/components/SplitCanvasHost';
+import type { ActionId } from '@happier-dev/protocol/actions/actionIds';
+import type { ActionExecuteResult } from '@happier-dev/protocol/actions/actionExecutionResult';
+import type { CompactAppDestination } from '@/components/appShell/destinations/compactAppDestinationCatalog';
+import { createWorkspaceState, reduceWorkspaceState, type WorkspaceState } from './workspaceState';
 import { registerWorkspaceRouteContext } from './workspaceRouteContext';
 
 installPanelCommonModuleMocks();
-// Expo's module-loader boundary supplies the empty new-tab body used by this shell journey.
+vi.mock('expo-router', async () => {
+    const { createExpoRouterMock } = await import('@/dev/testkit/mocks/router');
+    return createExpoRouterMock({ pathname: () => '/', params: () => ({}) }).module;
+});
+vi.mock('@/modal', async () => {
+    const { createModalModuleMock } = await import('@/dev/testkit/mocks/modal');
+    return createModalModuleMock({ confirmResult: true }).module;
+});
+// Expo's module-loader boundary supplies the Sessions-list body used by this shell journey.
 registerWorkspaceRouteContext((key) => {
     if (key !== './(app)/index.tsx') throw new Error(`Unexpected shell route: ${key}`);
     return { WorkspaceRouteBody: StatefulRouteBody };
@@ -42,33 +52,70 @@ vi.mock('@expo/vector-icons', async () => {
     return createExpoVectorIconsMock();
 });
 
-function Harness(props: Readonly<{ initial: WorkspaceState }>) {
-    const [state, dispatch] = React.useReducer(reduceWorkspaceState, props.initial);
-    // The provider's handle on the canvas, as WorkspaceProvider supplies it.
-    const canvasControlsRef = React.useRef<SplitCanvasHostControls | null>(null);
-    const closeTab = (groupId: string, tabId: string) => dispatch({ type: 'closeTab', groupId, tabId,
-        newTab: { id: 'empty', target: { kind: 'newTab', params: {} }, pinned: false, preview: false } });
-    const value: WorkspaceNavigationContextValue = {
-        active: true, state, dispatch, closeTab, canvasControlsRef,
-        closeTabs: (groupId, tabIds) => { for (const tabId of tabIds) if (!state.tabs[tabId]?.pinned) closeTab(groupId, tabId); },
-        activateTab: (groupId, tabId) => dispatch({ type: 'activateTab', groupId, tabId }),
-        canGoBack: false, canGoForward: false, openHref: () => false,
-        navigationForTab: () => ({ push: () => {}, replace: () => {}, back: () => {} }),
-        registerBackStep: () => () => {}, back: () => {}, forward: () => {},
-    };
-    return <WorkspaceNavigationContext.Provider value={value}>
-        <StateProbe state={state} dispatch={dispatch} />
-        <WorkspaceShell catalog={[]} />
-    </WorkspaceNavigationContext.Provider>;
-}
+const WINDOW_ID = 'workspace-shell-test';
+const loadProduction = () => Promise.all([
+    import('./WorkspaceProvider'), import('./WorkspaceShell'), import('./DestinationInstanceHost'),
+    import('../destinations/compactAppDestinationCatalog'), import('./workspacePersistence'),
+    import('@/keyboard/KeyboardShortcutProvider'), import('@/sync/ops/actions/frontDoorRuntimeActionExecutor'),
+    import('@/sync/domains/state/storage'), import('@/modal'),
+]);
+let production!: Awaited<ReturnType<typeof loadProduction>>;
+let DestinationInstanceHost!: (Awaited<ReturnType<typeof loadProduction>>)[2]['DestinationInstanceHost'];
+let useDestinationInstanceKey!: (Awaited<ReturnType<typeof loadProduction>>)[2]['useDestinationInstanceKey'];
+let resolveDestinationRefFromHref!: (Awaited<ReturnType<typeof loadProduction>>)[3]['resolveDestinationRefFromHref'];
+let fixture: Awaited<ReturnType<typeof serveActionHomes>> | undefined;
+let disconnect: (() => Promise<unknown>) | undefined;
+let restoreLocks: (() => void) | undefined;
+let baseline: ReturnType<(Awaited<ReturnType<typeof loadProduction>>)[7]['storage']['getState']> | undefined;
 
-function StateProbe(props: Readonly<{ state: WorkspaceState; dispatch: React.Dispatch<WorkspaceAction> }>) {
-    return React.createElement('WorkspaceStateProbe', props);
+beforeAll(async () => {
+    restoreLocks = installBrowserStorageLockBoundary();
+    installDisconnectedServerSocketBoundary();
+    fixture = await serveActionHomes({ homes: [{ key: 'import', serverUrl: 'https://workspace-shell-import.test', accountId: 'alice', currentAccount: true }], route: () => undefined });
+    disconnect = await fixture.restoreActiveConnection();
+    production = await loadProduction();
+    ({ DestinationInstanceHost, useDestinationInstanceKey } = production[2]);
+    ({ resolveDestinationRefFromHref } = production[3]);
+    await disconnect(); disconnect = undefined;
+    await fixture.dispose(); fixture = undefined;
+    restoreLocks(); restoreLocks = undefined;
+});
+beforeEach(() => {
+    baseline = production[7].storage.getState();
+    window.history.replaceState(null, '', '/');
+    // Session storage is the platform boundary read by useWorkspaceState's window owner.
+    window.sessionStorage.setItem('happier.workspace.windowIdV1', WINDOW_ID);
+    vi.mocked(production[8].Modal.alertAsync).mockClear();
+});
+afterEach(async () => {
+    standardCleanup();
+    try { await disconnect?.(); }
+    finally {
+        disconnect = undefined; await fixture?.dispose(); fixture = undefined;
+        restoreLocks?.(); restoreLocks = undefined;
+        if (baseline) production[7].storage.setState(baseline, true);
+        vi.restoreAllMocks();
+    }
+});
+afterAll(async () => { await disconnect?.(); await fixture?.dispose(); restoreLocks?.(); });
+
+function Harness(props: Readonly<{ catalog: readonly CompactAppDestination[] }>) {
+    const [{ WorkspaceProvider }, { WorkspaceShell }, , , , { KeyboardShortcutProvider }] = production;
+    return <KeyboardShortcutProvider handlers={{}}><WorkspaceProvider enabled catalog={props.catalog}>{navigation => <>
+        {React.createElement('WorkspaceStateProbe', { state: navigation.state, navigation })}
+        <WorkspaceShell catalog={props.catalog} />
+    </>}</WorkspaceProvider></KeyboardShortcutProvider>;
 }
 
 function initialState() {
-    return reduceWorkspaceState(createWorkspaceState({ id: 'a', target: { kind: 'removed:a', params: {} }, pinned: false, preview: false }),
-        { type: 'openTab', groupId: 'group:1', tab: { id: 'b', target: { kind: 'removed:b', params: {} }, pinned: false, preview: true } });
+    return reduceWorkspaceState(createWorkspaceState(restoredTab('a')),
+        { type: 'openTab', groupId: 'group:1', tab: restoredTab('b', true) });
+}
+
+// Distinct canonical root-route anchors let initial URL admission restore the
+// selected instance rather than open the separate Sessions-list preview at '/'.
+function restoredTab(id: string, preview = false) {
+    return { id, target: { kind: 'sessions', params: { anchor: id } }, pinned: false, preview };
 }
 
 function stateOf(screen: Awaited<ReturnType<typeof renderScreen>>): WorkspaceState {
@@ -86,18 +133,52 @@ async function measureContentSlots(screen: Awaited<ReturnType<typeof renderScree
 }
 
 async function renderWorkspace(initial: WorkspaceState) {
-    const screen = await renderScreen(<Harness initial={initial} />);
+    restoreLocks = installBrowserStorageLockBoundary();
+    installDisconnectedServerSocketBoundary();
+    fixture = await serveActionHomes({ homes: [{ key: 'home', serverUrl: 'https://workspace-shell.test', accountId: 'alice', currentAccount: true,
+        settings: { keyboardShortcutsV2Enabled: true } }], route: () => undefined });
+    disconnect = await fixture.restoreActiveConnection();
+    const { storage } = production[7];
+    const scope = storage.getState().profileScope;
+    if (!scope) throw new Error('Shell fixture requires the restored Account scope');
+    const { serializeWorkspaceLayout, workspaceLayoutScopeKey } = production[4];
+    storage.setState({ isDataReady: true, localSettings: { ...storage.getState().localSettings, workspaceLayoutV1: {
+        [workspaceLayoutScopeKey({ ...scope, windowId: WINDOW_ID })]: serializeWorkspaceLayout(initial),
+    } } });
+    const catalog = production[3].resolveCompactAppDestinations({ pages: [], builtins: { externalSessions: false, inbox: false, workflows: false, friends: false } });
+    const activeTab = initial.tabs[initial.groups[initial.focusedGroupId].activeTabId];
+    const href = production[3].hrefForDestinationRef(catalog, activeTab.target);
+    if (!href) throw new Error('Shell fixture requires a catalog-admitted initial route');
+    window.history.replaceState(null, '', href);
+    const screen = await renderScreen(<Harness catalog={catalog} />);
+    await settle(() => { expect(Object.keys(stateOf(screen).tabs)).toEqual(Object.keys(initial.tabs)); });
     await measureContentSlots(screen);
     return screen;
 }
 
+async function settle(outcome: () => void) {
+    await vi.waitFor(async () => { await act(async () => {}); outcome(); });
+}
+
+async function action(actionId: ActionId, input: unknown) {
+    const scope = production[7].storage.getState().profileScope;
+    if (!scope) throw new Error('Shell Action requires its Account scope');
+    let result!: ActionExecuteResult;
+    await act(async () => { result = await production[6].createFrontDoorActionExecute()(actionId, input, {
+        surface: 'ui', authority: 'present_user', actionCaller: { kind: 'host' }, serverId: scope.serverId, expectedAccountId: scope.accountId,
+    }); });
+    expect(result.ok).toBe(true);
+    if (!result.ok) throw new Error(result.errorCode);
+    return result.result;
+}
+
 /** Opens a tab's menu (press and hold) and chooses one of its items; the menu commits once closed. */
-async function chooseFromTabMenu(screen: Awaited<ReturnType<typeof renderScreen>>, tabId: string, itemTestId: string) {
+async function chooseFromTabMenu(screen: Awaited<ReturnType<typeof renderScreen>>, tabId: string, itemTestId: string, outcome: () => void) {
     const tab = screen.findAllByTestId(`workspace-tab-${tabId}`).find((node) => typeof node.props.onLongPress === 'function');
     if (!tab) throw new Error(`Tab ${tabId} offers no menu`);
     await act(async () => { tab.props.onLongPress({}); });
     await screen.pressByTestIdAsync(itemTestId);
-    await act(async () => { await new Promise((resolve) => setTimeout(resolve, 150)); });
+    await settle(outcome);
     await measureContentSlots(screen);
 }
 
@@ -108,23 +189,20 @@ function measureCanvas(screen: Awaited<ReturnType<typeof renderScreen>>, width: 
 }
 
 describe('WorkspaceShell', () => {
-    it('provides discoverable toolbar actions through the shared button interaction owner', async () => {
+    it('provides an accessible new-tab action and closes that tab through the registered keyboard owner', async () => {
         const screen = await renderWorkspace(initialState());
-        const button = screen.findByTestId('workspace-new-tab-group_1');
+        const button = screen.findHostByTestId('workspace-new-tab-group_1');
         expect(button?.props.accessibilityLabel).toBe('workspaceBar.newTab');
-        const background = () => {
-            const style = screen.findByTestId('workspace-new-tab-group_1')?.props.style;
-            const resolved = typeof style === 'function' ? style({ pressed: false }) : style;
-            const entries = Array.isArray(resolved) ? resolved.flat(Infinity) : [resolved];
-            return Object.assign({}, ...entries.filter(Boolean)).backgroundColor;
-        };
-        const idleBackground = background();
-        await act(async () => {
-            button?.props.onHoverIn?.({});
-        });
-        expect(background()).not.toBe(idleBackground);
-        await act(async () => { button?.props.onPress(); });
+        expect(button?.props.accessibilityRole).toBe('button');
+        await screen.pressByTestIdAsync('workspace-new-tab-group_1');
+        await settle(() => { expect(stateOf(screen).groups['group:1'].tabIds).toHaveLength(3); });
         expect(stateOf(screen).tabs[stateOf(screen).groups['group:1'].activeTabId].target.kind).toBe('newTab');
+        const openedTab = stateOf(screen).groups['group:1'].activeTabId;
+        const closeKey = new KeyboardEvent('keydown', { key: 'w', code: 'KeyW', ctrlKey: true, bubbles: true, cancelable: true });
+        await act(async () => { window.dispatchEvent(closeKey); });
+        expect(closeKey.defaultPrevented).toBe(true);
+        await settle(() => { expect(stateOf(screen).tabs[openedTab]).toBeUndefined(); });
+        expect(stateOf(screen).groups['group:1'].tabIds).toEqual(['a', 'b']);
     });
 
     it('moves a singleton plugin tab into a split and leaves a new-tab target in its empty source', () => {
@@ -151,10 +229,9 @@ describe('WorkspaceShell', () => {
     });
 
     it('restores 50 tabs without mounting unopened bodies, retains visited state and releases closed bodies', async () => {
-        const restoredTab = (index: number) => ({ id: `restored-${index}`, target: { kind: 'newTab', params: {} }, pinned: false, preview: false });
-        let initial = createWorkspaceState(restoredTab(0));
+        let initial = createWorkspaceState(restoredTab('restored-0'));
         for (let index = 1; index < 50; index++) {
-            initial = reduceWorkspaceState(initial, { type: 'openTab', groupId: 'group:1', tab: restoredTab(index) });
+            initial = reduceWorkspaceState(initial, { type: 'openTab', groupId: 'group:1', tab: restoredTab(`restored-${index}`) });
         }
         const screen = await renderWorkspace(initial);
         const body = (tabId: string) => screen.root.findAllByType('StatefulRouteBodyProbe').find(node => node.props.tabId === tabId)!;
@@ -168,7 +245,7 @@ describe('WorkspaceShell', () => {
             body('restored-49').props.setViewport(387);
             screen.findByTestId('workspace-tab-restored-0')?.props.onPress();
         });
-        expect(stateOf(screen).groups['group:1'].activeTabId).toBe('restored-0');
+        await settle(() => { expect(stateOf(screen).groups['group:1'].activeTabId).toBe('restored-0'); });
         expect(screen.root.findAllByType(DestinationInstanceHost).map((node) => [node.props.tabId, node.props.visible, node.props.focused]))
             .toEqual([['restored-0', true, true], ['restored-49', false, false]]);
         expect(mountedBodies()).toEqual(['restored-0', 'restored-49']);
@@ -179,15 +256,16 @@ describe('WorkspaceShell', () => {
             body('restored-0').props.setViewport(92);
             screen.findByTestId('workspace-tab-restored-49')?.props.onPress();
         });
+        await settle(() => { expect(stateOf(screen).groups['group:1'].activeTabId).toBe('restored-49'); });
         expect(screen.root.findAllByType(DestinationInstanceHost).map((node) => [node.props.tabId, node.props.visible, node.props.focused]))
             .toEqual([['restored-0', false, false], ['restored-49', true, true]]);
         expect(body('restored-49').props).toMatchObject({ mount: lastMount, draft: 'Keep the restored draft', viewport: 387 });
         expect(body('restored-0').props).toMatchObject({ mount: firstMount, draft: 'Keep the newly visited draft', viewport: 92 });
-        await chooseFromTabMenu(screen, 'restored-0', 'workspace-tab-menu-pin');
+        await chooseFromTabMenu(screen, 'restored-0', 'workspace-tab-menu-pin', () => { expect(stateOf(screen).tabs['restored-0'].pinned).toBe(true); });
         expect(stateOf(screen).tabs['restored-0']).toMatchObject({ pinned: true, preview: false });
-        await chooseFromTabMenu(screen, 'restored-49', 'workspace-tab-menu-pin');
+        await chooseFromTabMenu(screen, 'restored-49', 'workspace-tab-menu-pin', () => { expect(stateOf(screen).tabs['restored-49'].pinned).toBe(true); });
         expect(stateOf(screen).tabs['restored-49']).toMatchObject({ pinned: true, preview: false });
-        await chooseFromTabMenu(screen, 'restored-0', 'workspace-tab-menu-close');
+        await chooseFromTabMenu(screen, 'restored-0', 'workspace-tab-menu-close', () => { expect(stateOf(screen).tabs['restored-0']).toBeUndefined(); });
         expect(stateOf(screen).tabs['restored-0']).toBeUndefined();
         expect(stateOf(screen).groups['group:1'].activeTabId).toBe('restored-49');
         expect(screen.root.findAllByType(DestinationInstanceHost).map((node) => node.props.tabId)).toEqual(['restored-49']);
@@ -196,8 +274,8 @@ describe('WorkspaceShell', () => {
     });
 
     it('preserves the mounted body, draft and viewport when a tab moves across groups', async () => {
-        const initial = reduceWorkspaceState(createWorkspaceState({ id: 'a', target: { kind: 'newTab', params: {} }, pinned: false, preview: false }),
-            { type: 'openTab', groupId: 'group:1', tab: { id: 'b', target: { kind: 'newTab', params: {} }, pinned: false, preview: false } });
+        const initial = reduceWorkspaceState(createWorkspaceState(restoredTab('a')),
+            { type: 'openTab', groupId: 'group:1', tab: restoredTab('b') });
         const screen = await renderWorkspace(initial);
         const body = () => screen.root.findAllByType('StatefulRouteBodyProbe').find(node => node.props.tabId === 'b')!;
         const mount = body().props.mount;
@@ -206,23 +284,20 @@ describe('WorkspaceShell', () => {
             body().props.setViewport(387);
             measureCanvas(screen, 1200, 800);
         });
-        await chooseFromTabMenu(screen, 'b', 'workspace-tab-menu-split-right');
+        await chooseFromTabMenu(screen, 'b', 'workspace-tab-menu-split-right', () => { expect(Object.keys(stateOf(screen).groups)).toHaveLength(2); });
         expect(stateOf(screen).groups[stateOf(screen).focusedGroupId].tabIds).toEqual(['b']);
         expect(body().props).toMatchObject({ mount, draft: 'Keep this unsent draft', viewport: 387 });
-        const stateProbe = screen.root.findByType('WorkspaceStateProbe');
-        await act(async () => {
-            stateProbe.props.dispatch({ type: 'moveTab', tabId: 'b', sourceGroupId: stateOf(screen).focusedGroupId, targetGroupId: 'group:1' });
-        });
+        await action('workspace.tabs.move', { tabId: 'b', targetGroupId: 'group:1' });
         expect(stateOf(screen).groups['group:1'].tabIds).toContain('b');
         expect(body().props).toMatchObject({ mount, draft: 'Keep this unsent draft', viewport: 387 });
     });
 
     it('refuses an unmeasured split, then moves the selected tab using the measured group extent', async () => {
         const screen = await renderWorkspace(initialState());
-        await chooseFromTabMenu(screen, 'b', 'workspace-tab-menu-split-right');
+        await chooseFromTabMenu(screen, 'b', 'workspace-tab-menu-split-right', () => { expect(production[8].Modal.alertAsync).toHaveBeenCalled(); });
         expect(Object.keys(stateOf(screen).groups)).toHaveLength(1);
         await act(async () => { measureCanvas(screen, 1200, 800); });
-        await chooseFromTabMenu(screen, 'b', 'workspace-tab-menu-split-right');
+        await chooseFromTabMenu(screen, 'b', 'workspace-tab-menu-split-right', () => { expect(Object.keys(stateOf(screen).groups)).toHaveLength(2); });
         const state = stateOf(screen);
         expect(Object.keys(state.groups)).toHaveLength(2);
         expect(state.groups['group:1'].tabIds).toEqual(['a']);
@@ -234,24 +309,25 @@ describe('WorkspaceShell', () => {
     it('keeps a split below the two existing minimum widths in one pane', async () => {
         const screen = await renderWorkspace(initialState());
         await act(async () => { measureCanvas(screen, 500, 800); });
-        await chooseFromTabMenu(screen, 'b', 'workspace-tab-menu-split-right');
+        const before = stateOf(screen);
+        await chooseFromTabMenu(screen, 'b', 'workspace-tab-menu-split-right', () => { expect(production[8].Modal.alertAsync).toHaveBeenCalled(); });
         expect(Object.keys(stateOf(screen).groups)).toHaveLength(1);
-        expect(stateOf(screen).tabs.b.target.kind).toBe('removed:b');
+        expect(stateOf(screen)).toBe(before);
     });
 
     it('splits down using the existing minimum height and collapses the new pane when its tab closes', async () => {
         const screen = await renderWorkspace(initialState());
         await act(async () => { measureCanvas(screen, 800, 800); });
-        await chooseFromTabMenu(screen, 'b', 'workspace-tab-menu-split-down');
+        await chooseFromTabMenu(screen, 'b', 'workspace-tab-menu-split-down', () => { expect(stateOf(screen).root).toMatchObject({ kind: 'split', axis: 'column' }); });
         expect(stateOf(screen).root).toMatchObject({ kind: 'split', axis: 'column' });
         await act(async () => { screen.findByTestId('workspace-tab-close-b')?.props.onPress({}); });
-        expect(stateOf(screen).root).toMatchObject({ kind: 'leaf', id: 'group:1' });
+        await settle(() => { expect(stateOf(screen).root).toMatchObject({ kind: 'leaf', id: 'group:1' }); });
         expect(screen.root.findAllByType(DestinationInstanceHost).map((node) => node.props.tabId)).toEqual(['a']);
     });
 
     it('uses the normal canvas budget while maximized and reveals the focused destination after an admitted split', async () => {
         let initial = reduceWorkspaceState(initialState(), { type: 'openTab', groupId: 'group:1',
-            tab: { id: 'c', target: { kind: 'removed:c', params: {} }, pinned: false, preview: false } });
+            tab: restoredTab('c') });
         initial = reduceWorkspaceState(initial, { type: 'splitTab', tabId: 'c', sourceGroupId: 'group:1',
             targetGroupId: 'group:1', newGroupId: 'group:2', axis: 'row', placement: 'after',
             availableSizePx: 2190, minimumFirstSizePx: 420, minimumSecondSizePx: 420 });
@@ -261,12 +337,12 @@ describe('WorkspaceShell', () => {
 
         // The maximized leaf reports the whole canvas; its normal half is too small to split.
         await act(async () => { measureCanvas(screen, 1600, 800); });
-        await chooseFromTabMenu(screen, 'b', 'workspace-tab-menu-split-right');
+        await chooseFromTabMenu(screen, 'b', 'workspace-tab-menu-split-right', () => { expect(production[8].Modal.alertAsync).toHaveBeenCalled(); });
         expect(Object.keys(stateOf(screen).groups)).toHaveLength(2);
         expect(stateOf(screen).maximizedGroupId).toBe('group:1');
 
         await act(async () => { measureCanvas(screen, 2200, 800); });
-        await chooseFromTabMenu(screen, 'b', 'workspace-tab-menu-split-right');
+        await chooseFromTabMenu(screen, 'b', 'workspace-tab-menu-split-right', () => { expect(Object.keys(stateOf(screen).groups)).toHaveLength(3); });
         expect(Object.keys(stateOf(screen).groups)).toHaveLength(3);
         expect(stateOf(screen).maximizedGroupId).toBeNull();
         expect(screen.root.findAllByType(DestinationInstanceHost).filter((node) => node.props.focused)

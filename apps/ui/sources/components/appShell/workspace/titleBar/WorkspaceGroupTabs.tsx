@@ -4,7 +4,6 @@ import { StyleSheet, useUnistyles } from 'react-native-unistyles';
 
 import { hrefForDestinationRef, resolveCurrentAppDestination, useDestinationInstanceTitles, type CompactAppDestination } from '@/components/appShell/destinations/compactAppDestinationCatalog';
 import { DETAILS_TAB_STRIP_METRICS as M } from '@/components/appShell/panes/details/header/detailsTabHeaderMetrics';
-import type { SplitCanvasDirection } from '@/components/appShell/splitCanvas/model/splitCanvasTypes';
 import { IconButton } from '@/components/ui/buttons/IconButton';
 import { DropdownMenu, type DropdownMenuItem } from '@/components/ui/forms/dropdown/DropdownMenu';
 import { Icon, type IconName } from '@/components/ui/icons/Icon';
@@ -15,12 +14,13 @@ import { resolvePointerMenuAnchor } from '@/components/ui/popover/resolvePointer
 import { Text } from '@/components/ui/text/Text';
 import { Typography } from '@/constants/Typography';
 import { KeyboardShortcutLabelsContext } from '@/keyboard/shortcutLabels';
-import { randomUUID } from '@/platform/randomUUID';
 import { t } from '@/text';
 import { toTestIdSafeValue } from '@/utils/ui/toTestIdSafeValue';
 import type { WorkspaceNavigationContextValue } from '../WorkspaceNavigationContext';
-import { createWorkspaceEmptyTab, type WorkspaceGroup } from '../workspaceState';
-import { createWorkspaceSplit } from '../workspaceSplit';
+import type { WorkspaceGroup } from '../workspaceState';
+import { selectWorkspaceTabsToClose } from '../workspaceActions';
+import { executeWorkspaceUiAction } from '../workspaceActionRuntime';
+import { fireAndForget } from '@/utils/system/fireAndForget';
 import { useWorkspaceRefs, useActiveServerAccountScope } from '@/sync/domains/state/storage';
 import { useEntityDragDropRuntime } from '@/components/ui/treeDragDrop/entityDragDropHooks';
 import { useEntityDropDomBinding } from '@/components/ui/treeDragDrop/useEntityDragDomBinding';
@@ -93,15 +93,17 @@ export function WorkspaceGroupTabs(props: Readonly<{
 
     const titleEntries = React.useMemo(() => group.tabIds.flatMap((id) => {
         const tab = workspace.state.tabs[id];
-        return tab ? [{ key: id, ref: tab.target }] : [];
-    }), [group.tabIds, workspace.state.tabs]);
+        return tab ? [{ key: id, ref: tab.target, fallbackTitle: workspace.state.fallbackTitlesByTabId[id] }] : [];
+    }), [group.tabIds, workspace.state.tabs, workspace.state.fallbackTitlesByTabId]);
     // The live instance title (a session's name, a file, a page); the title saved with the layout
     // stands in only while the instance cannot be named yet.
     const titleResolutionEntries = React.useMemo(() => overflowOpen
-        ? [...titleEntries, ...workspace.state.recentlyClosed.map(entry => ({ key: `closed:${entry.tab.id}`, ref: entry.tab.target }))]
+        ? [...titleEntries, ...workspace.state.recentlyClosed.map(entry => ({ key: `closed:${entry.tab.id}`, instanceKey: entry.tab.id, ref: entry.tab.target, fallbackTitle: entry.fallbackTitle }))]
         : titleEntries, [overflowOpen, titleEntries, workspace.state.recentlyClosed]);
     const liveTitles = useDestinationInstanceTitles(props.catalog, titleResolutionEntries);
     const hasRecentlyClosed = workspace.state.recentlyClosed.length > 0;
+    const hasClosableTabs = (selectWorkspaceTabsToClose(workspace.state, 'workspace.tabs.close_all', { groupId: group.id })?.tabIds.length ?? 0) > 0;
+    const hasOverflow = hasRecentlyClosed || hasClosableTabs;
     const tabs = React.useMemo(() => {
         const byId = new Map<string, WorkspaceDocumentTab>();
         for (const id of group.tabIds) {
@@ -111,7 +113,7 @@ export function WorkspaceGroupTabs(props: Readonly<{
             const destination = href ? resolveCurrentAppDestination(props.catalog, href) : null;
             byId.set(id, {
                 key: tab.id,
-                title: liveTitles.get(id) ?? workspace.state.fallbackTitlesByTabId[tab.id] ?? t('common.unavailable'),
+                title: liveTitles.get(id) ?? t(href ? 'common.loading' : 'common.unavailable'),
                 isPinned: tab.pinned, isPreview: tab.preview, canPin: !tab.pinned,
                 icon: destination?.icon ?? 'file',
             });
@@ -124,10 +126,10 @@ export function WorkspaceGroupTabs(props: Readonly<{
     const capacity = React.useMemo(() => {
         if (widthPx === null) return unpinnedIds.length;
         const pinnedPx = pinnedIds.length * (tabHeightPx + B.stripGapPx) + (pinnedIds.length > 0 ? PIN_SEPARATOR_PX : 0);
-        const room = widthPx - pinnedPx - ACTION_SLOT_PX - (hasRecentlyClosed ? OVERFLOW_SLOT_PX : 0);
+        const room = widthPx - pinnedPx - ACTION_SLOT_PX - (hasOverflow ? OVERFLOW_SLOT_PX : 0);
         if (room >= unpinnedIds.length * (B.tabMinWidthPx + B.stripGapPx)) return unpinnedIds.length;
-        return Math.max(1, Math.floor((room - (hasRecentlyClosed ? 0 : OVERFLOW_SLOT_PX)) / (B.tabMinWidthPx + B.stripGapPx)));
-    }, [hasRecentlyClosed, pinnedIds.length, tabHeightPx, unpinnedIds.length, widthPx]);
+        return Math.max(1, Math.floor((room - (hasOverflow ? 0 : OVERFLOW_SLOT_PX)) / (B.tabMinWidthPx + B.stripGapPx)));
+    }, [hasOverflow, pinnedIds.length, tabHeightPx, unpinnedIds.length, widthPx]);
     const visibleUnpinned = selectVisibleWorkspaceTabs({ tabIds: unpinnedIds, activeTabId: group.activeTabId, mru: group.mru, capacity });
     const hiddenCount = unpinnedIds.length - visibleUnpinned.length;
     const pinnedTabs = pinnedIds.flatMap((id) => tabs.get(id) ?? []);
@@ -141,22 +143,35 @@ export function WorkspaceGroupTabs(props: Readonly<{
         setWidthPx((current) => (current === next ? current : next));
     }, []);
 
-    const split = React.useCallback((tabId: string, direction: SplitCanvasDirection) => {
-        const measurement = workspace.canvasControlsRef?.current?.readSplitMeasurement(group.id, direction);
-        if (!measurement) return;
-        const action = createWorkspaceSplit(workspace.state, {
-            groupId: group.id, tabId, direction, createId: randomUUID, ...measurement,
-        });
-        if (action) workspace.dispatch(action);
-    }, [group.id, workspace]);
+    const execute = React.useCallback((request: Parameters<typeof executeWorkspaceUiAction>[0]) => {
+        fireAndForget(executeWorkspaceUiAction(request, href => {
+            const navigation = workspace.navigationForTab(group.activeTabId);
+            (navigation.pushRetainingCurrent ?? navigation.push)(href);
+        }), { tag: 'Workspace.tabs' });
+    }, [group.activeTabId, workspace]);
+    const closeItems = React.useCallback((tabId: string, prefix: 'workspace-tab-menu' | 'workspace-overflow'): readonly DropdownMenuItem[] => [
+        { id: 'closeOthers', actionId: 'workspace.tabs.close_others' as const, title: t('workspaceBar.closeOtherTabs'), testID: `${prefix}-close-others` },
+        { id: 'closeLeft', actionId: 'workspace.tabs.close_left' as const, title: t('workspaceBar.closeTabsToLeft'), testID: `${prefix}-close-left` },
+        { id: 'closeRight', actionId: 'workspace.tabs.close_right' as const, title: t('workspaceBar.closeTabsToRight'), testID: `${prefix}-close-right` },
+        { id: 'closeAll', actionId: 'workspace.tabs.close_all' as const, title: t('workspaceBar.closeAllTabs'), testID: `${prefix}-close-all`, shortcut: shortcutLabels['workspace.tab.closeAll'] },
+    ].filter(item => (selectWorkspaceTabsToClose(workspace.state, item.actionId,
+        item.actionId === 'workspace.tabs.close_all' ? { groupId: group.id } : { tabId })?.tabIds.length ?? 0) > 0),
+    [group.id, shortcutLabels, workspace.state]);
+
+    const close = React.useCallback((itemId: string, tabId: string) => {
+        switch (itemId) {
+            case 'closeOthers': execute({ actionId: 'workspace.tabs.close_others', input: { tabId } }); return true;
+            case 'closeLeft': execute({ actionId: 'workspace.tabs.close_left', input: { tabId } }); return true;
+            case 'closeRight': execute({ actionId: 'workspace.tabs.close_right', input: { tabId } }); return true;
+            case 'closeAll': execute({ actionId: 'workspace.tabs.close_all', input: { groupId: group.id } }); return true;
+            default: return false;
+        }
+    }, [execute, group.id]);
 
     const menuTab = menu ? workspace.state.tabs[menu.tabId] : undefined;
     const menuItems = React.useMemo((): readonly DropdownMenuItem[] => {
         if (!menuTab) return [];
         const glyph = (name: IconName) => <Icon name={name} size={16} color={theme.colors.text.secondary} />;
-        const index = group.tabIds.indexOf(menuTab.id);
-        const hasOthers = group.tabIds.some((id) => id !== menuTab.id && !workspace.state.tabs[id]?.pinned);
-        const hasRight = group.tabIds.slice(index + 1).some((id) => !workspace.state.tabs[id]?.pinned);
         const multiplePanes = Object.keys(workspace.state.groups).length > 1;
         const maximized = workspace.state.maximizedGroupId === group.id;
         return [
@@ -170,36 +185,30 @@ export function WorkspaceGroupTabs(props: Readonly<{
                 title: maximized ? t('workspaceBar.restorePane') : t('workspaceBar.maximizePane'),
                 icon: glyph('arrows-out'), shortcut: shortcutLabels['workspace.toggleMaximize'],
             }] : []),
-            { id: 'close', testID: 'workspace-tab-menu-close', title: t('workspaceBar.closeTab'), icon: glyph('x') },
+            { id: 'close', testID: 'workspace-tab-menu-close', title: t('workspaceBar.closeTab'), icon: glyph('x'), shortcut: shortcutLabels['workspace.tab.close'] },
             ...(hasRecentlyClosed ? [{ id: 'reopen', testID: 'workspace-tab-menu-reopen', title: t('workspaceTabs.reopenTab'), shortcut: shortcutLabels['workspace.tab.reopen'], icon: glyph('clock-counter-clockwise') }] : []),
-            ...(hasOthers ? [{ id: 'closeOthers', testID: 'workspace-tab-menu-close-others', title: t('workspaceBar.closeOtherTabs') }] : []),
-            ...(hasRight ? [{ id: 'closeRight', testID: 'workspace-tab-menu-close-right', title: t('workspaceBar.closeTabsToRight') }] : []),
+            ...closeItems(menuTab.id, 'workspace-tab-menu'),
         ];
-    }, [group.id, group.tabIds, hasRecentlyClosed, menuTab, shortcutLabels, theme.colors.text.secondary, workspace.state.groups,
+    }, [closeItems, group.id, hasRecentlyClosed, menuTab, shortcutLabels, theme.colors.text.secondary, workspace.state.groups,
         workspace.state.maximizedGroupId, workspace.state.tabs]);
 
     const selectMenu = React.useCallback((itemId: string) => {
         const tabId = menu?.tabId;
         setMenu(null);
         if (!tabId) return;
+        if (close(itemId, tabId)) return;
         switch (itemId) {
-            case 'pin': workspace.dispatch({ type: 'setPinned', tabId, pinned: true }); break;
-            case 'unpin': workspace.dispatch({ type: 'setPinned', tabId, pinned: false }); break;
-            case 'splitRight': split(tabId, 'right'); break;
-            case 'splitDown': split(tabId, 'down'); break;
-            case 'maximize': workspace.dispatch({ type: 'toggleMaximize', groupId: group.id }); break;
-            case 'close': workspace.closeTab(group.id, tabId); break;
-            case 'reopen': workspace.dispatch({ type: 'reopenTab' }); break;
-            case 'closeOthers':
-                workspace.closeTabs(group.id, group.tabIds.filter((id) => id !== tabId));
-                break;
-            case 'closeRight': {
-                const index = group.tabIds.indexOf(tabId);
-                workspace.closeTabs(group.id, group.tabIds.slice(index + 1));
-                break;
-            }
+            case 'pin': execute({ actionId: 'workspace.tabs.pin', input: { tabId, pinned: true } }); break;
+            case 'unpin': execute({ actionId: 'workspace.tabs.pin', input: { tabId, pinned: false } }); break;
+            case 'splitRight': execute({ actionId: 'workspace.split', input: { tabId, groupId: group.id, direction: 'right' } }); break;
+            case 'splitDown': execute({ actionId: 'workspace.split', input: { tabId, groupId: group.id, direction: 'down' } }); break;
+            case 'maximize': execute(workspace.state.maximizedGroupId === group.id
+                ? { actionId: 'workspace.groups.restore', input: {} }
+                : { actionId: 'workspace.groups.maximize', input: { groupId: group.id } }); break;
+            case 'close': execute({ actionId: 'workspace.tabs.close', input: { tabId } }); break;
+            case 'reopen': execute({ actionId: 'workspace.tabs.reopen', input: {} }); break;
         }
-    }, [group.id, group.tabIds, menu?.tabId, split, workspace]);
+    }, [close, execute, group.id, menu?.tabId, workspace.state.maximizedGroupId]);
 
     const overflowItems = React.useMemo((): readonly DropdownMenuItem[] => [...group.tabIds.flatMap((id) => {
         const tab = tabs.get(id);
@@ -211,11 +220,12 @@ export function WorkspaceGroupTabs(props: Readonly<{
         }] : [];
     }), ...workspace.state.recentlyClosed.map((entry, index) => ({
         id: `closed:${entry.tab.id}`, testID: `workspace-reopen-tab-${toTestIdSafeValue(entry.tab.id)}`,
-        title: liveTitles.get(`closed:${entry.tab.id}`) ?? entry.fallbackTitle ?? t('common.unavailable'),
+        title: liveTitles.get(`closed:${entry.tab.id}`) ?? t('common.loading'),
         category: t('workspaceTabs.recentlyClosed'),
         icon: <Icon name="clock-counter-clockwise" size={16} color={theme.colors.text.secondary} />,
         ...(index === 0 ? { shortcut: shortcutLabels['workspace.tab.reopen'] } : {}),
-    }))], [group.activeTabId, group.tabIds, hasRecentlyClosed, liveTitles, shortcutLabels, tabs, theme.colors.text.secondary, workspace.state.recentlyClosed]);
+    })), ...closeItems(group.activeTabId, 'workspace-overflow').map(item => ({ ...item, category: t('workspaceBar.tabMenuLabel') }))],
+    [closeItems, group.activeTabId, group.tabIds, hasRecentlyClosed, liveTitles, shortcutLabels, tabs, theme.colors.text.secondary, workspace.state.recentlyClosed]);
 
     const entityDragDrop: DocumentTabEntityDragDrop | undefined = scope ? {
         runtime, id: `workspace-tabs:${group.id}`, scope, acceptedKinds: WORKSPACE_ENTITY_KINDS,
@@ -226,7 +236,7 @@ export function WorkspaceGroupTabs(props: Readonly<{
         resolve: ({ item, beforeTabId }) => presentPaneDropAdmission(resolveWorkspaceEntityDrop({
             workspace, scope, item, beforeTabId, target: { leafId: group.id, placement: 'center' },
             catalog: props.catalog, workspaceRefs,
-        }), createWorkspaceDropScene(workspace.state, props.catalog, { paneId: group.id, beforeTabId })),
+        }), createWorkspaceDropScene(workspace.state, props.catalog, { paneId: group.id, beforeTabId, destinationTitles: workspace.destinationTitles })),
         execute: effect => executeWorkspaceEntityDrop(effect, scope),
     } : undefined;
     const latestEntity = React.useRef(entityDragDrop);
@@ -268,10 +278,10 @@ export function WorkspaceGroupTabs(props: Readonly<{
             activeTabKey={group.activeTabId}
             resolveTabPresentation={(tab) => livePresentations.get(tab.key)}
             accessibilityLabel={t('workspaceBar.tabsLabel')}
-            onActivate={(tabId) => workspace.activateTab(group.id, tabId)}
-            onPin={(tabId) => workspace.dispatch({ type: 'setPinned', tabId, pinned: true })}
-            onUnpin={(tabId) => workspace.dispatch({ type: 'setPinned', tabId, pinned: false })}
-            onClose={(tabId) => workspace.closeTab(group.id, tabId)}
+            onActivate={(tabId) => execute({ actionId: 'workspace.tabs.activate', input: { tabId } })}
+            onPin={(tabId) => execute({ actionId: 'workspace.tabs.pin', input: { tabId, pinned: true } })}
+            onUnpin={(tabId) => execute({ actionId: 'workspace.tabs.pin', input: { tabId, pinned: false } })}
+            onClose={(tabId) => execute({ actionId: 'workspace.tabs.close', input: { tabId } })}
             onTabMenu={(tabId, event) => setMenu({ tabId, anchor: resolvePointerMenuAnchor(event) })}
             onDismissTabMenu={(tabId) => setMenu(current => current?.tabId === tabId ? null : current)}
             entityDragDrop={entityDragDrop}
@@ -290,15 +300,16 @@ export function WorkspaceGroupTabs(props: Readonly<{
             <View style={styles.tabs}>
                 {renderStrip([...pinnedTabs, ...visibleTabs])}
             </View>
-            {hiddenCount > 0 || hasRecentlyClosed ? (
+            {hiddenCount > 0 || hasOverflow ? (
                 <DropdownMenu
                     open={overflowOpen}
                     onOpenChange={setOverflowOpen}
                     items={overflowItems}
                     onSelect={(tabId) => {
+                        if (close(tabId, group.activeTabId)) return;
                         const closed = workspace.state.recentlyClosed.find(entry => `closed:${entry.tab.id}` === tabId);
-                        if (closed) workspace.dispatch({ type: 'reopenTab', tabId: closed.tab.id });
-                        else workspace.activateTab(group.id, tabId);
+                        if (closed) execute({ actionId: 'workspace.tabs.reopen', input: { tabId: closed.tab.id } });
+                        else execute({ actionId: 'workspace.tabs.activate', input: { tabId } });
                     }}
                     search
                     searchPlaceholder={t('workspaceBar.searchTabs')}
@@ -311,8 +322,8 @@ export function WorkspaceGroupTabs(props: Readonly<{
                             testID={`workspace-overflow-${safeGroup}`}
                             variant="plain"
                             size={actionSize}
-                            accessibilityLabel={hiddenCount > 0 ? t('workspaceBar.moreTabs', { count: hiddenCount }) : t('workspaceTabs.recentlyClosed')}
-                            tooltip={hiddenCount > 0 ? t('workspaceBar.moreTabs', { count: hiddenCount }) : t('workspaceTabs.recentlyClosed')}
+                            accessibilityLabel={hiddenCount > 0 ? t('workspaceBar.moreTabs', { count: hiddenCount }) : hasRecentlyClosed ? t('workspaceTabs.recentlyClosed') : t('workspaceBar.tabMenuLabel')}
+                            tooltip={hiddenCount > 0 ? t('workspaceBar.moreTabs', { count: hiddenCount }) : hasRecentlyClosed ? t('workspaceTabs.recentlyClosed') : t('workspaceBar.tabMenuLabel')}
                             tooltipPlacement="bottom"
                             hasPopup="menu"
                             expanded={overflowOpen}
@@ -331,7 +342,7 @@ export function WorkspaceGroupTabs(props: Readonly<{
                 accessibilityLabel={t('workspaceBar.newTab')}
                 tooltip={t('workspaceBar.newTab')}
                 tooltipPlacement="bottom"
-                onPress={() => workspace.dispatch({ type: 'openTab', groupId: group.id, tab: createWorkspaceEmptyTab(randomUUID()) })}
+                onPress={() => execute({ actionId: 'workspace.tabs.open', input: { groupId: group.id } })}
             />
             <View style={styles.grow} />
             {props.trailing}

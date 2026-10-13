@@ -1,4 +1,4 @@
-import { describe, expect, it, vi } from 'vitest';
+import { describe, expect, it } from 'vitest';
 import {
     buildUniversalSearchScopeChoices,
     buildUniversalSearchScopeKeyFromSeed,
@@ -22,10 +22,11 @@ describe('Universal Search local scope', () => {
         expect(key).not.toBe(buildUniversalSearchScopeKeyFromSeed({ accountId: 'account', serverId: 'home-a', sessionId: null, machineId: null, rootPath: null }));
     });
 
-    it('projects exact Home and workspace alternatives without mutating global focus or fanout', () => {
-        const readMachineTarget = vi.fn((target: { accountId: string; serverId: string; sessionId: string }) => target.sessionId === 'session-b'
+    it('projects exact Home and workspace alternatives from their Account-bound targets', () => {
+        const readMachineTarget = (target: { accountId: string; serverId: string; sessionId: string }) => target.sessionId === 'session-b'
+            && target.accountId === 'account-b' && target.serverId === 'home-b'
             ? { machineId: 'machine-b', basePath: '/repo/b' }
-            : null);
+            : null;
         const choices = buildUniversalSearchScopeChoices({
             accountIdByServerId: new Map([
                 ['home-a', 'account-a'],
@@ -45,12 +46,6 @@ describe('Universal Search local scope', () => {
             { accountId: 'account-b', serverId: 'home-b', machineId: null, rootPath: null, sessionId: null },
             { accountId: 'account-b', serverId: 'home-b', machineId: 'machine-b', rootPath: '/repo/b', sessionId: 'session-b' },
         ]);
-        expect(readMachineTarget).toHaveBeenCalledTimes(1);
-        expect(readMachineTarget).toHaveBeenCalledWith({
-            accountId: 'account-b',
-            serverId: 'home-b',
-            sessionId: 'session-b',
-        });
     });
 
     it('names a workspace scope by its project name, never its absolute path', () => {

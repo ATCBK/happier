@@ -5,27 +5,28 @@ import { resolveHref } from 'expo-router/build/link/href';
 import { randomUUID } from '@/platform/randomUUID';
 
 import { useActiveServerAccountScope } from '@/sync/domains/state/storage';
-import { getActiveUnsavedChangesGuard, runGuardedNavigation } from '@/utils/navigation/runGuardedNavigation';
+import { getActiveUnsavedChangesGuard, runGuardedNavigation, runGuardedTabNavigation } from '@/utils/navigation/runGuardedNavigation';
 import { fireAndForget } from '@/utils/system/fireAndForget';
-import { resolveDestinationRefFromHref, type CompactAppDestination } from '../destinations/compactAppDestinationCatalog';
-import { createWorkspaceNavigationAdapter, type WorkspaceOpenOptions } from './workspaceNavigationAdapter';
+import { readDestinationInstanceTitle, resolveDestinationRefFromHref, type CompactAppDestination, type DestinationRef } from '../destinations/compactAppDestinationCatalog';
+import { createWorkspaceNavigationAdapter, sameDestinationRef, type WorkspaceOpenOptions } from './workspaceNavigationAdapter';
 import { bindWorkspaceBrowserHistory, createWorkspaceBrowserTransport, installWorkspaceBrowserHistory } from './workspaceBrowserTransport';
 import type { WorkspaceNavigationEntry } from './workspaceNavigationHistory';
 import { useWorkspaceState } from './useWorkspaceState';
 import { useWorkspaceTabSync } from './useWorkspaceTabSync';
-import { WorkspaceNavigationContext, type WorkspaceNavigationContextValue, type WorkspacePhoneControls } from './WorkspaceNavigationContext';
+import { WorkspaceNavigationContext, type WorkspaceNavigationContextValue, type WorkspacePhoneControls, type WorkspaceDestinationTitle } from './WorkspaceNavigationContext';
 import type { DestinationNavigation } from './DestinationInstanceHost';
 import type { SplitCanvasHostControls } from '../splitCanvas/components/SplitCanvasHost';
-import { createWorkspaceActionAdapter, workspaceActionFailure, type WorkspaceActionOutcome } from './workspaceActions';
+import { createWorkspaceActionAdapter, selectWorkspaceTabsToClose, workspaceActionFailure, type WorkspaceActionOutcome } from './workspaceActions';
 import { registerMountedWorkspaceAction } from './workspaceActionRuntime';
 import { admitWorkspaceSingletonState, workspaceSingletonDestinationIds } from './workspaceDestinationPolicy';
-import type { WorkspaceState } from './workspaceState';
+import { selectWorkspaceClosableTabIds, type WorkspaceState } from './workspaceState';
 import { resolvePhoneWorkspaceTabHref } from './workspacePhoneProjection';
 import { useWorkspaceKeyboardShortcuts } from './useWorkspaceKeyboardShortcuts';
 import { WorkspaceRouteHostingContext } from './WorkspaceRouteHostingContext';
 import { useOptionalAppPaneFindSeedContext } from '../panes/AppPaneProvider';
 import { resolveServerProfileScopeIdForIdentifier } from '@/sync/domains/server/serverProfiles';
 import { BROWSER_HISTORY_NAVIGATION_CHANGED } from '@/utils/navigation/browserHistoryNavigation';
+import { WorkspaceWindowTitle } from './WorkspaceWindowTitle';
 
 function readBrowserHref(): string | null {
     return Platform.OS === 'web' && typeof window !== 'undefined'
@@ -44,6 +45,7 @@ function subscribeBrowserHref(changed: () => void): () => void {
 }
 
 const readServerHref = () => null;
+const NO_DESTINATION_TITLES: Readonly<Record<string, WorkspaceDestinationTitle>> = Object.freeze({});
 
 function runNavigation(navigate: () => void, intent?: 'history'): void {
     const result = runGuardedNavigation(navigate, intent);
@@ -113,8 +115,28 @@ export function WorkspaceProvider(props: Readonly<{
     const localOwner = useWorkspaceState({ initialTab, admitState });
     const owner = useWorkspaceTabSync({ local: localOwner, catalog: props.catalog, enabled: props.enabled || phone });
     const [historyVersion, changed] = React.useReducer((value: number) => value + 1, 0);
-    const latest = React.useRef({ owner, router, catalog: props.catalog, enabled: props.enabled, phone, phoneTransport, hostsRoute, scope, scopeKey, phoneTabHref, findSeedContext });
-    latest.current = { owner, router, catalog: props.catalog, enabled: props.enabled, phone, phoneTransport, hostsRoute, scope, scopeKey, phoneTabHref, findSeedContext };
+    const [publishedTitles, setPublishedTitles] = React.useState<Readonly<{
+        scopeKey: string | null; titles: Readonly<Record<string, WorkspaceDestinationTitle>>;
+    }>>({ scopeKey, titles: {} });
+    const destinationTitles = publishedTitles.scopeKey === scopeKey ? publishedTitles.titles : NO_DESTINATION_TITLES;
+    const latest = React.useRef({ owner, router, catalog: props.catalog, enabled: props.enabled, phone, phoneTransport, hostsRoute, scope, scopeKey, phoneTabHref, findSeedContext, destinationTitles });
+    latest.current = { owner, router, catalog: props.catalog, enabled: props.enabled, phone, phoneTransport, hostsRoute, scope, scopeKey, phoneTabHref, findSeedContext, destinationTitles };
+    const publishDestinationTitle = React.useCallback((tabId: string, ref: DestinationRef, title: string | null) => {
+        // The body may finish an effect after navigation. Its old identity must
+        // never name the new destination retained under the same tab key.
+        if (latest.current.scopeKey !== scopeKey || latest.current.owner.getState().tabs[tabId]?.target !== ref) return () => {};
+        setPublishedTitles(current => current.scopeKey === scopeKey && current.titles[tabId]?.ref === ref && current.titles[tabId]?.title === title
+            ? current : { scopeKey, titles: { ...(current.scopeKey === scopeKey ? current.titles : {}), [tabId]: { ref, title } } });
+        return () => setPublishedTitles(current => {
+            if (current.scopeKey !== scopeKey || current.titles[tabId]?.ref !== ref || current.titles[tabId]?.title !== title) return current;
+            const state = latest.current.owner.getState();
+            // Keep the last known title through refresh and explicit close/reopen.
+            // Replaced previews and destinations have no surviving title lifetime.
+            if (latest.current.scopeKey === scopeKey && (state.tabs[tabId]?.target === ref
+                || state.recentlyClosed.some(entry => entry.tab.id === tabId && entry.tab.target === ref))) return current;
+            const next = { ...current.titles }; delete next[tabId]; return { scopeKey, titles: next };
+        });
+    }, [scopeKey]);
     const projectedHref = React.useRef<string | null>(null);
     const backSteps = React.useRef(new Map<string, () => boolean>());
     const canvasControlsRef = React.useRef<SplitCanvasHostControls | null>(null);
@@ -183,6 +205,9 @@ export function WorkspaceProvider(props: Readonly<{
         const execute = createWorkspaceActionAdapter({
             getState: () => latest.current.owner.getState(), navigation: runtime.adapter,
             readCanvas: () => canvasControlsRef.current, createId: randomUUID,
+            readClosedTitle: entry => readDestinationInstanceTitle(latest.current.catalog, entry.tab.target, {
+                publishedTitle: latest.current.destinationTitles[entry.tab.id], fallbackTitle: entry.fallbackTitle,
+            }),
             phone,
             ...(findHandoff ? { chatFind: { handoff: findHandoff, resolveAuthority: (serverId: string) =>
                 latest.current.findSeedContext?.fileFindSeedAccountBindings.get(resolveServerProfileScopeIdForIdentifier(serverId)) ?? null } } : {}),
@@ -191,8 +216,30 @@ export function WorkspaceProvider(props: Readonly<{
             const isCurrent = () => current && isCurrentUiOwner();
             if (!isCurrent()) return workspaceActionFailure('workspace_unavailable');
             if (request.signal?.aborted) return workspaceActionFailure('action_cancelled');
+            const state = latest.current.owner.getState();
+            const closing = selectWorkspaceTabsToClose(state, request.actionId, request.input);
+            if (closing) {
+                if (!closing.tabIds.length) return execute(request.actionId, request.input);
+                let outcome: WorkspaceActionOutcome = workspaceActionFailure('workspace_navigation_cancelled');
+                await runGuardedTabNavigation(closing.tabIds, () => {
+                    const selection = selectWorkspaceTabsToClose(latest.current.owner.getState(), request.actionId, request.input);
+                    if (!selection || selection.groupId !== closing.groupId || selection.tabIds.length !== closing.tabIds.length
+                        || selection.tabIds.some((id, index) => id !== closing.tabIds[index])) return;
+                    if (phone) runtime.initialized = true;
+                    outcome = execute(request.actionId, request.input);
+                }, {
+                    includeActiveGuard: state.focusedGroupId === closing.groupId
+                        && closing.tabIds.includes(state.groups[closing.groupId].activeTabId),
+                    isCurrent: () => isCurrent() && !request.signal?.aborted && closing.tabIds.every(id => {
+                        const tab = latest.current.owner.getState().tabs[id];
+                        return tab && sameDestinationRef(tab.target, state.tabs[id].target);
+                    }),
+                });
+                return !isCurrent() ? workspaceActionFailure('workspace_unavailable')
+                    : request.signal?.aborted ? workspaceActionFailure('action_cancelled') : outcome;
+            }
             const navigates = request.actionId === 'workspace.tabs.open' || request.actionId === 'workspace.tabs.activate'
-                || request.actionId === 'workspace.tabs.close' || request.actionId === 'workspace.tabs.move'
+                || request.actionId === 'workspace.tabs.move'
                 || request.actionId === 'workspace.tabs.reopen'
                 || request.actionId === 'workspace.groups.focus' || request.actionId === 'workspace.split';
             if (!navigates) return execute(request.actionId, request.input);
@@ -241,6 +288,27 @@ export function WorkspaceProvider(props: Readonly<{
             runtime.adapter.activateTab(groupId, tabId);
         });
     }, [isCurrentUiOwner, phoneTransport, runUiNavigation, runtime]);
+    const closeTabs = React.useCallback((groupId: string, tabIds: readonly string[], bulk: boolean) => {
+        if (!isCurrentUiOwner()) return;
+        const state = latest.current.owner.getState();
+        const group = state.groups[groupId];
+        if (!group) return;
+        const closingIds = bulk ? selectWorkspaceClosableTabIds(state, groupId, tabIds) : tabIds.filter(id => group.tabIds.includes(id));
+        if (!closingIds.length) return;
+        const result = runGuardedTabNavigation(closingIds, () => {
+            runtime.initialized = true;
+            if (bulk) runtime.adapter.closeTabs(groupId, closingIds);
+            else runtime.adapter.closeTab(groupId, closingIds[0]);
+        }, {
+            includeActiveGuard: state.focusedGroupId === groupId && closingIds.includes(group.activeTabId),
+            isCurrent: () => isCurrentUiOwner() && closingIds.every(id => {
+                const current = latest.current.owner.getState();
+                const tab = current.tabs[id];
+                return current.groups[groupId]?.tabIds.includes(id) && tab && sameDestinationRef(tab.target, state.tabs[id].target);
+            }),
+        });
+        if (result !== true) fireAndForget(result, { tag: 'Workspace.closeTabs' });
+    }, [isCurrentUiOwner, runtime]);
     const phoneOnTab = phoneTabHref !== null;
     const phoneControls = React.useMemo<WorkspacePhoneControls | null>(() => {
         if (!phone || !owner.isReady) return null;
@@ -263,14 +331,12 @@ export function WorkspaceProvider(props: Readonly<{
                 if (group) activateTab(group.id, tabId);
             },
             closeTab: (tabId) => {
-                navigate(() => {
-                    const state = latest.current.owner.getState();
-                    const group = Object.values(state.groups).find((item) => item.tabIds.includes(tabId));
-                    if (group) runtime.adapter.closeTab(group.id, tabId);
-                });
+                const state = latest.current.owner.getState();
+                const group = Object.values(state.groups).find((item) => item.tabIds.includes(tabId));
+                if (group) closeTabs(group.id, [tabId], false);
             },
         };
-    }, [activateTab, owner.isReady, phone, phoneOnTab, props.catalog, runUiNavigation, runtime]);
+    }, [activateTab, closeTabs, owner.isReady, phone, phoneOnTab, props.catalog, runUiNavigation, runtime]);
 
     const openHref = React.useCallback((href: string, options?: WorkspaceOpenOptions) => {
         if (!isCurrentUiOwner() || !latest.current.hostsRoute
@@ -323,6 +389,7 @@ export function WorkspaceProvider(props: Readonly<{
         phone: phoneControls,
         state: owner.state,
         catalog: props.catalog,
+        destinationTitles, publishDestinationTitle,
         sharedTabs: owner.sharedTabs,
         tabSyncStatus: owner.tabSyncStatus,
         handoffSource: owner.handoffSource,
@@ -335,8 +402,8 @@ export function WorkspaceProvider(props: Readonly<{
             return () => { if (backSteps.current.get(tabId) === consume) backSteps.current.delete(tabId); };
         },
         activateTab,
-        closeTab: (groupId, tabId) => runUiNavigation(() => runtime.adapter.closeTab(groupId, tabId)),
-        closeTabs: (groupId, tabIds) => runUiNavigation(() => runtime.adapter.closeTabs(groupId, tabIds)),
+        closeTab: (groupId, tabId) => closeTabs(groupId, [tabId], false),
+        closeTabs: (groupId, tabIds) => closeTabs(groupId, tabIds, true),
         dispatch: (action) => {
             if (!isCurrentUiOwner()) return;
             if (action.type === 'activateTab') {
@@ -358,9 +425,12 @@ export function WorkspaceProvider(props: Readonly<{
             if (runtime.browser) runtime.adapter.step(1);
             else guardTraversal(1, () => runtime.adapter.step(1), 'history');
         },
-    }), [activateTab, eligible, guardTraversal, historyVersion, hostsRoute, isCurrentUiOwner, navigationForTab, openHref, ownsRoute, phoneControls, owner.isRestored, owner.state, owner.sharedTabs, owner.tabSyncStatus, owner.handoffSource, runUiNavigation, runtime]);
-    useWorkspaceKeyboardShortcuts(navigation.active, () => latest.current.owner.getState());
+    }), [activateTab, closeTabs, destinationTitles, publishDestinationTitle, eligible, guardTraversal, historyVersion, hostsRoute, isCurrentUiOwner, navigationForTab, openHref, ownsRoute, phoneControls, owner.isRestored, owner.state, owner.sharedTabs, owner.tabSyncStatus, owner.handoffSource, runUiNavigation, runtime]);
+    useWorkspaceKeyboardShortcuts(navigation.active, () => latest.current.owner.getState(), href => {
+        const state = latest.current.owner.getState();
+        navigationForTab(state.groups[state.focusedGroupId].activeTabId).pushRetainingCurrent?.(href);
+    });
     return <WorkspaceRouteHostingContext.Provider value={ownsHref}>
-        <WorkspaceNavigationContext.Provider value={navigation}>{typeof props.children === 'function' ? props.children(navigation) : props.children}</WorkspaceNavigationContext.Provider>
+        <WorkspaceNavigationContext.Provider value={navigation}><WorkspaceWindowTitle />{typeof props.children === 'function' ? props.children(navigation) : props.children}</WorkspaceNavigationContext.Provider>
     </WorkspaceRouteHostingContext.Provider>;
 }

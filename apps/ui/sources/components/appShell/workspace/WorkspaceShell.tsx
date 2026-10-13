@@ -145,11 +145,11 @@ function WorkspaceCanvas(props: Readonly<{
             label: target => {
                 const group = workspace.state.groups[target.leafId];
                 return describePaneDropDestination(target.placement,
-                    group ? readWorkspaceTabTitle(workspace.state, props.catalog, group.activeTabId) : null);
+                    group ? readWorkspaceTabTitle(workspace.state, props.catalog, group.activeTabId, workspace.destinationTitles) : null);
             },
             resolve: ({ declinedSplit, ...input }) => presentPaneDropAdmission(
                 resolveWorkspaceEntityDrop({ ...input, workspace, scope, catalog: props.catalog, workspaceRefs }),
-                createWorkspaceDropScene(workspace.state, props.catalog, { paneId: input.target.leafId, declinedSplit: Boolean(declinedSplit) })),
+                createWorkspaceDropScene(workspace.state, props.catalog, { paneId: input.target.leafId, declinedSplit: Boolean(declinedSplit), destinationTitles: workspace.destinationTitles })),
             execute: effect => executeWorkspaceEntityDrop(effect, scope),
         } : undefined}
         controlsRef={workspace.canvasControlsRef}

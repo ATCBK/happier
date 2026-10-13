@@ -23,6 +23,7 @@ import {
     resolveScaledPaneWidthPxUncapped,
 } from './layout/paneSizing';
 import { resolveMultiPaneDeviceType } from './layout/resolveMultiPaneDeviceType';
+import { useReportSessionCockpitActionRailRect } from '@/components/workspaceCockpit/session/SessionCockpitChromeRegistry';
 import { PaneActionRailContext, PANE_ACTION_RAIL_WIDTH } from './PaneActionRailContext';
 
 /**
@@ -210,6 +211,14 @@ export const PaneColumnsHost = React.memo(function PaneColumnsHost(props: PaneCo
         baseLayout,
     });
     const showActionRail = props.actionRail != null && !destinationDetailOnly;
+    // A floating companion (the Voice Orb) keeps clear of the rail: its window rectangle is published.
+    const railColumnRef = React.useRef<View | null>(null);
+    const reportRailRectValue = useReportSessionCockpitActionRailRect(showActionRail);
+    const reportRailRect = React.useCallback(() => {
+        railColumnRef.current?.measureInWindow((x, y, width, height) => {
+            reportRailRectValue(width > 0 && height > 0 ? { x, y, width, height } : null);
+        });
+    }, [reportRailRectValue]);
     const containerWidthPx = destinationDetailOnly ? Math.max(0, hostWidthPx) : panelContainerWidthPx;
     const effectiveBottomPresentation = destinationDetailOnly ? 'hidden' : resolvedBottomLayout.presentation;
 
@@ -500,7 +509,11 @@ export const PaneColumnsHost = React.memo(function PaneColumnsHost(props: PaneCo
                 bottomOverlayFocusReturnRef={props.bottomOverlayFocusReturnRef}
             />
             {showActionRail ? (
-                <View style={[styles.railColumn, { backgroundColor: materialColor(theme.colors.surface.base, 'transparent') }]}>
+                <View
+                    ref={railColumnRef}
+                    onLayout={reportRailRect}
+                    style={[styles.railColumn, { backgroundColor: materialColor(theme.colors.surface.base, 'transparent') }]}
+                >
                     <PaneRegionProvider region="main">{props.actionRail}</PaneRegionProvider>
                 </View>
             ) : null}

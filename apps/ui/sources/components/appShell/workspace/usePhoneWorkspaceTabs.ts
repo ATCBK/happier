@@ -65,8 +65,8 @@ export function usePhoneWorkspaceTabs(): PhoneWorkspaceTabs {
     }, [phone, state]);
     const titleEntries = React.useMemo(() => (projected.length === 0 ? NO_ENTRIES : projected.flatMap((tab) => {
         const pane = tab.panes.find((item) => item.id === tab.activeTabId) ?? tab.panes[0];
-        return [{ key: tab.id, ref: pane.target }];
-    })), [projected]);
+        return [{ key: tab.id, instanceKey: pane.id, ref: pane.target, fallbackTitle: state?.fallbackTitlesByTabId[pane.id] }];
+    })), [projected, state?.fallbackTitlesByTabId]);
     const catalog = phone?.catalog ?? null;
     const titles = useDestinationInstanceTitles(catalog ?? [], titleEntries);
     const tabs = React.useMemo((): readonly PhoneWorkspaceTab[] => projected.map((tab) => {
@@ -74,7 +74,7 @@ export function usePhoneWorkspaceTabs(): PhoneWorkspaceTabs {
         const href = catalog ? hrefForDestinationRef(catalog, pane.target) : null;
         const destination = href && catalog ? resolveCurrentAppDestination(catalog, href) : null;
         const isSession = pane.target.kind === 'session' && typeof pane.target.params.id === 'string';
-        const title = titles.get(tab.id) ?? state?.fallbackTitlesByTabId[pane.id] ?? t('common.unavailable');
+        const title = titles.get(tab.id) ?? t(href ? 'common.loading' : 'common.unavailable');
         const unavailable = href === null || (destination?.kind === 'plugin' && destination.availability === 'unavailable');
         const position = tab.panes.findIndex((item) => item.id === pane.id) + 1;
         const context = unavailable

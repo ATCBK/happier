@@ -8,7 +8,7 @@ import type { WorkspaceTabSyncStatus } from './useWorkspaceTabSync';
 import type { WorkspaceTabsHandoffSource } from './workspaceTabsHandoff';
 import type { CompactAppDestination, DestinationRef } from '../destinations/compactAppDestinationCatalog';
 
-export type WorkspaceDestinationTitle = Readonly<{ ref: DestinationRef; title: string }>;
+export type WorkspaceDestinationTitle = Readonly<{ ref: DestinationRef; title: string | null }>;
 
 /**
  * The phone's controls over the same owner. The phone keeps its own stack navigation: these move the
@@ -35,7 +35,7 @@ export type WorkspaceNavigationContextValue = Readonly<{
     catalog?: readonly CompactAppDestination[];
     /** Current mounted screen identities, local to this owner and never persisted. */
     destinationTitles?: Readonly<Record<string, WorkspaceDestinationTitle>>;
-    publishDestinationTitle?: (tabId: string, ref: DestinationRef, title: string) => () => void;
+    publishDestinationTitle?: (tabId: string, ref: DestinationRef, title: string | null) => () => void;
     sharedTabs?: SharedWorkspaceTabs | null;
     tabSyncStatus?: WorkspaceTabSyncStatus;
     handoffSource?: WorkspaceTabsHandoffSource | null;

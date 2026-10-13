@@ -1,0 +1,295 @@
+/** @vitest-environment jsdom */
+import * as React from 'react';
+import 'fake-indexeddb/auto';
+import { act } from 'react-test-renderer';
+import { afterAll, afterEach, beforeAll, describe, expect, it, vi } from 'vitest';
+import { WorkspaceClosedTabsListOutputSchema } from '@happier-dev/protocol/actions/workspaceActionFamily';
+import { createSessionFixture, installBrowserStorageLockBoundary, invokeTestInstanceHandler, renderScreen, standardCleanup } from '@/dev/testkit';
+import { serveActionHomes } from '@/dev/testkit/harness/actionHomesHttpHarness';
+import { installDisconnectedServerSocketBoundary } from '@/dev/testkit/harness/serverAccountConnectionHarness';
+import type { WorkspaceNavigationContextValue } from './WorkspaceNavigationContext';
+
+const route = vi.hoisted(() => ({ pathname: '/session/named/info', params: { id: 'named' } as Record<string, string>, platform: 'web' as 'web' | 'ios' }));
+// Expo supplies a local module and local params for each retained native scene.
+const NativeSceneContext = React.createContext<Readonly<{ contextKey: string; params: Record<string, string> }> | null>(null);
+vi.mock('react-native', async () => {
+    const { createReactNativeWebMock } = await import('@/dev/testkit/mocks/reactNative');
+    const module = await createReactNativeWebMock();
+    Object.defineProperty(module.Platform, 'OS', { configurable: true, get: () => route.platform });
+    module.Platform.select = values => values[route.platform] ?? values.default;
+    return module;
+});
+vi.mock('react-native-unistyles', async () => {
+    const { createUnistylesMock } = await import('@/dev/testkit/mocks/unistyles');
+    return createUnistylesMock();
+});
+vi.mock('@expo/vector-icons', async () => {
+    const { createExpoVectorIconsMock } = await import('@/dev/testkit/mocks/icons');
+    return createExpoVectorIconsMock();
+});
+vi.mock('expo-router', async () => {
+    const { createExpoRouterMock } = await import('@/dev/testkit/mocks/router');
+    const module = createExpoRouterMock({ pathname: () => route.pathname, params: () => route.params }).module;
+    return { ...module, useLocalSearchParams: () => React.useContext(NativeSceneContext)?.params ?? module.useLocalSearchParams() };
+});
+vi.mock('expo-router/build/Route', () => ({ useRouteNode: () => React.useContext(NativeSceneContext) }));
+vi.mock('@react-navigation/native', async () => {
+    const { createReactNavigationNativeMock } = await import('@/dev/testkit/mocks/reactNavigation');
+    return createReactNavigationNativeMock();
+});
+vi.mock('@/modal', async () => {
+    const { createModalModuleMock } = await import('@/dev/testkit/mocks/modal');
+    return createModalModuleMock({ confirmResult: true }).module;
+});
+// Portal placement and native measurement are platform boundaries; the tab menus remain real.
+vi.mock('@/components/ui/popover', async importOriginal => {
+    const { createInlinePopoverModuleMock } = await import('@/dev/testkit/mocks/popover');
+    return createInlinePopoverModuleMock(importOriginal);
+});
+// This journey does not render Markdown; importing the vendor's DOM stream SDK must stay cold.
+vi.mock('react-native-enriched-markdown/lib/module/web/streamingReveal.js', () => ({
+    splitStreamingRevealTextParts: () => { throw new Error('Unexpected Markdown in workspace tab seam'); },
+}));
+
+let restoreBrowserLocks: (() => void) | undefined;
+let disposeHome: (() => Promise<void>) | undefined;
+let disconnectHome: (() => Promise<unknown>) | undefined;
+const loadWorkspaceProduction = () => Promise.all([
+    import('./WorkspaceProvider'), import('./WorkspaceNavigationContext'), import('./DestinationInstanceHost'), import('./titleBar/WorkspaceTitleBar'),
+    import('./titleBar/workspaceBarGeometry'), import('@/keyboard/KeyboardShortcutProvider'),
+    import('../panes/AppPaneProvider'), import('@/app/(app)/session/[id]/info'),
+    import('../destinations/compactAppDestinationCatalog'), import('@/sync/ops/actions/frontDoorRuntimeActionExecutor'),
+]);
+let production!: Awaited<ReturnType<typeof loadWorkspaceProduction>>;
+let warmHomes: Awaited<ReturnType<typeof serveActionHomes>> | undefined;
+let warmLocks: (() => void) | undefined;
+let warmDisconnect: (() => Promise<unknown>) | undefined;
+beforeAll(async () => {
+    warmLocks = installBrowserStorageLockBoundary();
+    installDisconnectedServerSocketBoundary();
+    warmHomes = await serveActionHomes({ homes: [{ key: 'warm', serverUrl: 'https://workspace-import.test', accountId: 'alice', currentAccount: true }], route: () => undefined });
+});
+beforeAll(async () => {
+    if (!warmHomes) throw new Error('Workspace import Home is unavailable');
+    warmDisconnect = await warmHomes.restoreActiveConnection();
+    production = await loadWorkspaceProduction();
+    await warmDisconnect(); warmDisconnect = undefined;
+    await warmHomes.dispose(); warmHomes = undefined;
+    warmLocks?.(); warmLocks = undefined;
+});
+afterAll(async () => {
+    try { await warmDisconnect?.(); }
+    finally { await warmHomes?.dispose(); warmLocks?.(); }
+});
+afterEach(async () => {
+    route.platform = 'web'; route.pathname = '/session/named/info'; route.params = { id: 'named' };
+    standardCleanup();
+    try { await disconnectHome?.(); }
+    finally { await disposeHome?.(); restoreBrowserLocks?.(); vi.restoreAllMocks(); }
+});
+
+describe('workspace tabs production composition', () => {
+    it('names the real native Session info route in the phone rail and switcher and follows its rename', async () => {
+        route.platform = 'ios';
+        restoreBrowserLocks = installBrowserStorageLockBoundary();
+        installDisconnectedServerSocketBoundary();
+        const homes = await serveActionHomes({ homes: [{ key: 'home', serverUrl: 'https://workspace-phone-title.test', accountId: 'alice', currentAccount: true }], route: () => undefined });
+        disposeHome = homes.dispose;
+        disconnectHome = await homes.restoreActiveConnection();
+        const { storage } = await import('@/sync/domains/state/storage');
+        const initial = storage.getState();
+        const homeId = homes.homes.home!.id;
+        route.params = { id: 'named', serverId: homeId };
+        const named = (title: string) => {
+            const session = createSessionFixture({ id: 'named', serverId: homeId });
+            return { ...session, metadata: { ...session.metadata!, summary: { text: title, updatedAt: 1 } } };
+        };
+        storage.setState({ isDataReady: true });
+        storage.getState().applySessions([named('Native workspace identity')]);
+        const other = createSessionFixture({ id: 'other', serverId: homeId });
+        storage.getState().applySessions([{ ...other, metadata: { ...other.metadata!, summary: { text: 'Foreground stays other', updatedAt: 1 } } }]);
+        const [{ WorkspaceProvider }, { AppPaneProvider }, { default: SessionInfoRoute }, catalogModule,
+            stateModule, persistenceModule, { PhoneOpenTabsRail }, { useSessionSwitcher }, { InjectedAuthProvider }, { TokenStorage }] = await Promise.all([
+            import('./WorkspaceProvider'), import('../panes/AppPaneProvider'), import('@/app/(app)/session/[id]/info'),
+            import('../destinations/compactAppDestinationCatalog'), import('./workspaceState'), import('./workspacePersistence'),
+            import('./PhoneOpenTabsRail'), import('@/components/navigation/mobile/chrome/lateralSwipe/useSessionSwitcher'),
+            import('@/auth/context/AuthContext'), import('@/auth/storage/tokenStorage'),
+        ]);
+        const catalog = catalogModule.resolveCompactAppDestinations({ pages: [], builtins: { externalSessions: false, inbox: false, workflows: false, friends: false } });
+        const target = catalogModule.resolveDestinationRefFromHref(catalog, `${route.pathname}?serverId=${homeId}`);
+        if (!target) throw new Error('Session info must be workspace-admitted');
+        let saved = stateModule.createWorkspaceState({ id: 'native-info', target, pinned: false, preview: false });
+        const otherTarget = catalogModule.resolveDestinationRefFromHref(catalog, `/session/other/info?serverId=${homeId}`);
+        if (!otherTarget) throw new Error('The other native scene must be workspace-admitted');
+        saved = stateModule.reduceWorkspaceState(saved, { type: 'openTab', groupId: saved.focusedGroupId,
+            tab: { id: 'native-other', target: otherTarget, pinned: false, preview: false } });
+        saved = stateModule.reduceWorkspaceState(saved, { type: 'activateTab', groupId: saved.focusedGroupId, tabId: 'native-info' });
+        const scope = storage.getState().profileScope;
+        if (!scope) throw new Error('Native title journey requires the restored Account scope');
+        storage.setState({ localSettings: { ...storage.getState().localSettings, workspaceLayoutV1: {
+            [persistenceModule.workspaceLayoutScopeKey({ ...scope, windowId: 'main' })]: persistenceModule.serializeWorkspaceLayout(saved),
+        } } });
+        let navigation!: WorkspaceNavigationContextValue;
+        function Switcher() {
+            const switcher = useSessionSwitcher({ sessionId: null, serverId: homeId });
+            return React.createElement('NativeTitleSwitcher', { switcher });
+        }
+        const namedScene = { contextKey: './(app)/session/[id]/info.tsx', params: { id: 'named', serverId: homeId } };
+        const otherScene = { contextKey: namedScene.contextKey, params: { id: 'other', serverId: homeId } };
+        const credentials = await TokenStorage.getCredentialsForServerUrl(homes.homes.home!.serverUrl);
+        const element = () => <InjectedAuthProvider credentials={credentials}><AppPaneProvider><WorkspaceProvider enabled={false} phone catalog={catalog}>{owner => {
+            navigation = owner;
+            return <>
+                <NativeSceneContext.Provider value={namedScene}><SessionInfoRoute /></NativeSceneContext.Provider>
+                {route.pathname === '/session/other/info' ? <NativeSceneContext.Provider value={otherScene}><SessionInfoRoute /></NativeSceneContext.Provider> : null}
+                <PhoneOpenTabsRail /><Switcher />
+            </>;
+        }}</WorkspaceProvider></AppPaneProvider></InjectedAuthProvider>;
+        const screen = await renderScreen(element());
+        const railTitles = () => screen.findByTestId('phone-open-tabs-rail')?.findAll(node => typeof node.type === 'string' && typeof node.props.children === 'string').map(node => node.props.children);
+        const switcherTitles = () => (screen.root.findByType('NativeTitleSwitcher').props.switcher as ReturnType<typeof useSessionSwitcher>).prepare().rows.up.map(row => row.title);
+        try {
+            expect(navigation.active).toBe(false);
+            expect(navigation.phone?.onTab).toBe(true);
+            expect(navigation.state.tabs['native-info']?.target).toMatchObject({ kind: 'sessions', params: { workspacePathname: '/session/named/info' } });
+            expect(screen.findHostByTestId('session-info-screen')).not.toBeNull();
+            expect(railTitles()).toContain('Native workspace identity');
+            expect(switcherTitles()).toContain('Native workspace identity');
+            await act(async () => { storage.getState().applySessions([named('Native identity renamed')]); });
+            expect(railTitles()).toContain('Native identity renamed');
+            expect(switcherTitles()).toContain('Native identity renamed');
+            await act(async () => { navigation.phone?.activateTab('native-other'); });
+            route.pathname = '/session/other/info'; route.params = otherScene.params;
+            await screen.update(element());
+            await act(async () => { storage.getState().applySessions([named('Inactive native identity renamed')]); });
+            expect(railTitles()).toContain('Inactive native identity renamed');
+            expect(railTitles()).toContain('Foreground stays other');
+            expect(switcherTitles()).toContain('Inactive native identity renamed');
+            expect(switcherTitles()).toContain('Foreground stays other');
+        } finally {
+            await screen.unmount();
+            storage.setState(initial, true);
+        }
+    });
+    it('names a real Session route live and shares bulk-close Actions, menus and registered shortcuts', async () => {
+        restoreBrowserLocks = installBrowserStorageLockBoundary();
+        installDisconnectedServerSocketBoundary();
+        const homes = await serveActionHomes({ homes: [{ key: 'home', serverUrl: 'https://workspace-seam.test', accountId: 'alice', currentAccount: true,
+            settings: { keyboardShortcutsV2Enabled: true } }], route: () => undefined });
+        disposeHome = homes.dispose;
+        disconnectHome = await homes.restoreActiveConnection();
+        const { storage } = await import('@/sync/domains/state/storage');
+        const initial = storage.getState();
+        const homeId = homes.homes.home!.id;
+        route.params = { id: 'named', serverId: homeId };
+        window.history.replaceState(null, '', `${route.pathname}?serverId=${homeId}`);
+        const named = (title: string) => {
+            const session = createSessionFixture({ id: 'named', serverId: homeId });
+            return { ...session, metadata: { ...session.metadata!, summary: { text: title, updatedAt: 1 } } };
+        };
+        storage.setState({ isDataReady: true });
+        storage.getState().applySessions([named('Fix workspace tabs')]);
+        const [{ WorkspaceProvider }, { WorkspaceNavigationContext }, { DestinationInstanceHost }, { WorkspaceTitleBar }, geometryModule,
+            { KeyboardShortcutProvider }, { AppPaneProvider }, { default: SessionInfoRoute }, catalogModule,
+            { createFrontDoorActionExecute }] = production;
+        const catalog = catalogModule.resolveCompactAppDestinations({ pages: [], builtins: { externalSessions: false, inbox: false, workflows: false, friends: false } });
+        const geometry = geometryModule.createWorkspaceBarGeometry();
+        geometry.setGroupFrame('group:1', { x: 220, width: 1000 });
+        let navigation!: WorkspaceNavigationContextValue;
+        const element = (unbindTitlePublisher = false) => <KeyboardShortcutProvider handlers={{}}><AppPaneProvider>
+            <WorkspaceProvider enabled catalog={catalog}>{owner => {
+                navigation = owner;
+                const detail = Object.values(owner.state.tabs).find(tab => tab.target.params.id === 'named' && tab.target.kind !== 'session');
+                const detailActive = detail?.id === owner.state.groups[owner.state.focusedGroupId]?.activeTabId;
+                return <geometryModule.WorkspaceBarGeometryContext.Provider value={geometry}>
+                    <WorkspaceTitleBar catalog={catalog} clusterEndPx={200} stripHeightPx={40} />
+                    {detail ? <WorkspaceNavigationContext.Provider value={unbindTitlePublisher ? { ...owner, publishDestinationTitle: undefined } : owner}>
+                        <DestinationInstanceHost tabId={detail.id} ref={detail.target} pathname={route.pathname}
+                            focused={detailActive} visible={detailActive} navigation={owner.navigationForTab(detail.id)}><SessionInfoRoute /></DestinationInstanceHost>
+                    </WorkspaceNavigationContext.Provider> : null}
+                </geometryModule.WorkspaceBarGeometryContext.Provider>;
+            }}</WorkspaceProvider>
+        </AppPaneProvider></KeyboardShortcutProvider>;
+        const renderOptions = {
+            createNodeMock: (element: React.ReactElement<Record<string, unknown>>) => element.props.testID === 'workspace-title-bar'
+                ? { measureInWindow: (callback: (x: number, y: number, width: number, height: number) => void) => callback(0, 0, 1440, 800) } : null,
+        };
+        // Cold broken composition: retained last-known titles must not mask a missing publisher.
+        let screen = await renderScreen(element(true), renderOptions);
+        const unboundTab = navigation.state.groups[navigation.state.focusedGroupId]!.activeTabId;
+        const unboundText = screen.findByTestId(`workspace-tab-${unboundTab}`)?.findAll(node => typeof node.type === 'string' && typeof node.props.children === 'string').map(node => node.props.children);
+        expect(screen.findHostByTestId('session-info-screen')).not.toBeNull();
+        expect(unboundText).not.toContain('Fix workspace tabs');
+        await screen.unmount();
+        screen = await renderScreen(element(), renderOptions);
+        const execute = createFrontDoorActionExecute();
+        const action = async (actionId: Parameters<typeof execute>[0], input: unknown) => {
+            let result!: Awaited<ReturnType<typeof execute>>;
+            await act(async () => { result = await execute(actionId, input, { surface: 'ui', authority: 'present_user', actionCaller: { kind: 'host' }, serverId: homeId, expectedAccountId: 'alice' }); });
+            expect(result.ok).toBe(true);
+            if (!result.ok) throw new Error(result.errorCode);
+            return result.result;
+        };
+        const group = () => navigation.state.groups[navigation.state.focusedGroupId]!;
+        const open = async (href: string) => {
+            await action('workspace.tabs.open', { href, mode: 'newTab' });
+            return group().activeTabId;
+        };
+        const settle = async (assertion: () => void) => {
+            await vi.waitFor(async () => { await act(async () => {}); assertion(); });
+        };
+        const choose = async (tabId: string, command: string) => {
+            const tab = screen.findAllByTestId(`workspace-tab-${tabId}`).find(node => typeof node.props.onLongPress === 'function');
+            await act(async () => { invokeTestInstanceHandler(tab, 'onLongPress', {}); });
+            await screen.pressByTestIdAsync(command);
+        };
+        try {
+            expect(navigation.active).toBe(true);
+            expect(screen.findHostByTestId('session-info-screen')).not.toBeNull();
+            const sessionTab = group().activeTabId;
+            const label = () => screen.findByTestId(`workspace-tab-${sessionTab}`)?.findAll(node => typeof node.type === 'string' && typeof node.props.children === 'string')
+                .map(node => node.props.children);
+            expect(label()).toContain('Fix workspace tabs');
+            await act(async () => { storage.getState().applySessions([named('Workspace tabs renamed')]); });
+            expect(label()).toContain('Workspace tabs renamed');
+            await action('workspace.tabs.pin', { tabId: sessionTab, pinned: true });
+            const middle = await open(`/session/middle?serverId=${homeId}`);
+            const right = await open(`/session/right?serverId=${homeId}`);
+            await action('workspace.tabs.close_right', { tabId: middle });
+            expect(navigation.state.tabs[right]).toBeUndefined();
+            expect(navigation.state.tabs[middle]).toBeDefined();
+            const menuRight = await open(`/session/menu-right?serverId=${homeId}`);
+            await choose(middle, 'workspace-tab-menu-close-right');
+            await settle(() => { expect(navigation.state.tabs[menuRight]).toBeUndefined(); });
+            await action('workspace.tabs.close_all', {});
+            expect(group().tabIds).toEqual([sessionTab]);
+            await open(`/session/menu-all?serverId=${homeId}`);
+            await screen.pressByTestIdAsync('workspace-overflow-group_1');
+            await settle(() => { expect(screen.findByTestId('workspace-overflow-close-all')).not.toBeNull(); });
+            await screen.pressByTestIdAsync('workspace-overflow-close-all');
+            await settle(() => { expect(group().tabIds).toEqual([sessionTab]); });
+            await open(`/session/keyboard-all?serverId=${homeId}`);
+            expect(storage.getState().settings.keyboardShortcutsV2Enabled).toBe(true);
+            const closeAllKey = new KeyboardEvent('keydown', { key: 'w', code: 'KeyW', ctrlKey: true, shiftKey: true, bubbles: true, cancelable: true });
+            await act(async () => {
+                window.dispatchEvent(closeAllKey);
+            });
+            expect(closeAllKey.defaultPrevented).toBe(true);
+            await settle(() => { expect(group().tabIds).toEqual([sessionTab]); });
+            await action('workspace.tabs.close', { tabId: sessionTab });
+            expect(navigation.state.tabs[sessionTab]).toBeUndefined();
+            const closed = WorkspaceClosedTabsListOutputSchema.parse(await action('workspace.tabs.closed.list', {}));
+            expect(closed.tabs.find(tab => tab.id === sessionTab)?.title).toBe('Workspace tabs renamed');
+            await action('workspace.tabs.reopen', { tabId: sessionTab });
+            await action('workspace.tabs.pin', { tabId: sessionTab, pinned: false });
+            expect(label()).toContain('Workspace tabs renamed');
+            // The same front door loses workspace Actions when the production mount retires.
+            await screen.unmount();
+            expect(await execute('workspace.tabs.close_all', {}, { surface: 'ui', authority: 'present_user', actionCaller: { kind: 'host' }, serverId: homeId, expectedAccountId: 'alice' }))
+                .toMatchObject({ ok: false, errorCode: 'unsupported_action' });
+        } finally {
+            await screen.unmount();
+            storage.setState(initial, true);
+        }
+    });
+});

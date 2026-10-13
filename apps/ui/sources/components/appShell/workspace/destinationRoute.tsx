@@ -22,7 +22,7 @@ export { useDestinationParams as useLocalSearchParams, useDestinationGlobalParam
 /** A leaf's options go to its current navigation owner; named Screens are layout declarations. */
 function Screen(props: React.ComponentProps<typeof ExpoRouter.Stack.Screen>) {
     const hosted = useDestinationInstanceKey() !== null;
-    useDestinationScreenOptions(hosted && !props.name && typeof props.options !== 'function' ? props.options : undefined);
+    useDestinationScreenOptions(!props.name && typeof props.options !== 'function' ? props.options : undefined);
     return hosted ? null : <ExpoRouter.Stack.Screen {...props} />;
 }
 
