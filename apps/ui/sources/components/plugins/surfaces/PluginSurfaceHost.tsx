@@ -1021,7 +1021,11 @@ function PluginHostedWebArtifactAdoptionPane(props: Readonly<{
     return (
         <>
             {unavailableDiagnosticCode ? (
-                <PluginHostedWebUnavailable diagnosticCode={unavailableDiagnosticCode} onRetry={retry} />
+                <PluginHostedWebUnavailable
+                    diagnosticCode={unavailableDiagnosticCode}
+                    onRetry={retry}
+                    recoveryAction={props.paneProps.unavailableAction}
+                />
             ) : null}
             {renderPane(mountedNativeArtifact, false)}
             {pendingNativeArtifact ? (
@@ -1281,7 +1285,11 @@ function PluginHostedWebBrowserArtifactFramePane(props: Readonly<{
     return (
         <>
             {unavailableDiagnosticCode ? (
-                <PluginHostedWebUnavailable diagnosticCode={unavailableDiagnosticCode} onRetry={retry} />
+                <PluginHostedWebUnavailable
+                    diagnosticCode={unavailableDiagnosticCode}
+                    onRetry={retry}
+                    recoveryAction={props.paneProps.unavailableAction}
+                />
             ) : null}
             {renderFramePane(appliedFrame, false)}
             {pendingFrame ? (

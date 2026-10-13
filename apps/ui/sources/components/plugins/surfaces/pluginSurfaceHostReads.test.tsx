@@ -29,10 +29,10 @@ const accounting = (input: number): UsageAnalyticsQueryResponse => ({ v: 1, tota
     cost: { reportedUsd: 1, estimatedUsd: 0, currency: 'USD' } } });
 let home: Awaited<ReturnType<typeof serveAccountHomes>> | undefined;
 const controllers: ReturnType<typeof createBoundPluginSurfaceController>[] = [];
-afterEach(() => {
+afterEach(async () => {
     standardCleanup();
     for (const controller of controllers.splice(0)) controller.dispose();
-    retireActiveServerAccountScopeLifetime(); home?.dispose(); home = undefined;
+    retireActiveServerAccountScopeLifetime(); await home?.dispose(); home = undefined;
 });
 
 async function mount(route: Parameters<typeof serveAccountHomes>[0]['route'], enabled: boolean | (() => boolean) = true,

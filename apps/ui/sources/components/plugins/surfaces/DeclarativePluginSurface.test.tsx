@@ -46,18 +46,11 @@ vi.mock('@/sync/domains/plugins/settings/scopedPluginSettingsRuntime', async (im
     };
 });
 
-vi.mock('@/hooks/server/useActiveServerSnapshot', () => ({
-    useActiveServerSnapshot: () => Object.freeze({
-        serverId: 'account-secret-surface',
-        serverUrl: 'https://account-secret-surface',
-        generation: 1,
-    }),
-}));
-
 import { DeclarativePluginSurface } from './DeclarativePluginSurface';
 import { renderScreen } from '@/dev/testkit';
 import {
     setServerProfileIdentityForUrl,
+    setActiveServerId,
     upsertServerProfile,
 } from '@/sync/domains/server/serverProfiles';
 
@@ -147,6 +140,7 @@ beforeEach(async () => {
         name: 'Account secret surface',
     });
     expect(profile.id).toBe('account-secret-surface');
+    await setActiveServerId(profile.id);
     expect(await setServerProfileIdentityForUrl(
         profile.serverUrl,
         ACCOUNT_TARGET.serverIdentityId,

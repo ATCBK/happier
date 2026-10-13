@@ -2,6 +2,7 @@ import { act } from 'react-test-renderer';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
 import type { AuthCredentials } from '@/auth/storage/tokenStorage';
+import { setActiveServerId, upsertServerProfile } from '@/sync/domains/server/serverProfiles';
 import {
     flushHookEffects,
     renderHook,
@@ -18,19 +19,10 @@ import {
 
 const accountModeTransport = vi.hoisted(() => ({
     serverFetch: vi.fn(),
-    activeServer: {
-        serverId: 'server-1',
-        serverUrl: 'https://relay.example.test',
-        generation: 1,
-    },
 }));
 
 vi.mock('@/sync/http/client', () => ({
     serverFetch: (...args: unknown[]) => accountModeTransport.serverFetch(...args),
-}));
-
-vi.mock('@/sync/domains/server/serverRuntime', () => ({
-    getActiveServerSnapshot: () => accountModeTransport.activeServer,
 }));
 
 type AccountModeDeferred = Readonly<{
@@ -79,7 +71,9 @@ const credentialsA: AuthCredentials = { token: 'token-a' };
 const credentialsB: AuthCredentials = { token: 'token-b' };
 
 describe('usePluginSurfaceAccountEncryptionMode', () => {
-    beforeEach(() => {
+    beforeEach(async () => {
+        const profile = await upsertServerProfile({ serverUrl: 'https://server-1', name: 'Account mode Home' });
+        await setActiveServerId(profile.id);
         accountModeTransport.serverFetch.mockReset();
         invalidateAccountEncryptionModeCache();
     });

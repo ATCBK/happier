@@ -38,11 +38,6 @@ vi.mock('react-native', async () => {
     };
 });
 
-vi.mock('@/sync/domains/state/storage', async () => {
-    const { createStorageModuleStub, createUseLocalSettingMock } = await import('@/dev/testkit/mocks/storage');
-    return createStorageModuleStub({ useLocalSetting: createUseLocalSettingMock() });
-});
-
 vi.mock('react-native-unistyles', async () => {
     const { createUnistylesMock } = await import('@/dev/testkit/mocks/unistyles');
     return createUnistylesMock();

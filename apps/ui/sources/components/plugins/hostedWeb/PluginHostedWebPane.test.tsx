@@ -3,11 +3,19 @@ import { act } from 'react-test-renderer';
 import { afterEach, beforeEach, describe, expect, it, onTestFinished, vi } from 'vitest';
 
 import type { PluginUiLaunchInputV1, PluginUiSurfaceContextV1 } from '@happier-dev/protocol/plugins/ui';
+import { artifactHtmlBundleFromBodyV1 } from '@happier-dev/protocol/artifacts/artifactHtmlV1';
 import type { PluginSurfaceTarget, SurfaceContext } from '@happier-dev/plugin-sdk/ui';
 
 import { renderScreen } from '@/dev/testkit';
 import { createPluginSurfaceMountLifetimeFixture } from '@/dev/testkit/fixtures/pluginSurfaceMountLifetimeFixture';
 import { createTestMessageChannel } from '@/dev/testkit/mocks/messageChannel';
+
+// react-test-renderer owns this test tree; browser DOM portal attachment is the
+// external renderer boundary. The real shell, guest engine and bridge stay mounted.
+vi.mock('react-dom', async (importOriginal) => ({
+    ...(await importOriginal<typeof import('react-dom')>()),
+    createPortal: (children: React.ReactNode) => children,
+}));
 
 let mountLifetime: ReturnType<typeof createPluginSurfaceMountLifetimeFixture>;
 beforeEach(() => { mountLifetime = createPluginSurfaceMountLifetimeFixture(); });
@@ -46,10 +54,6 @@ vi.mock('react-native-unistyles', async () => {
     const { createUnistylesMock } = await import('@/dev/testkit/mocks/unistyles');
     return createUnistylesMock();
 });
-
-vi.mock('@/components/ui/text/Text', () => ({
-    Text: (props: any) => React.createElement('Text', props, props.children),
-}));
 
 vi.mock('@/text', async () => {
     const { createTextModuleMock } = await import('@/dev/testkit/mocks/text');
@@ -151,7 +155,9 @@ const projection: PluginUiProjectionModel = {
 type RenderedScreen = Awaited<ReturnType<typeof renderScreen>>;
 
 function findHostedWebIframe(screen: RenderedScreen) {
-    const frames = screen.root.findAllByType('iframe');
+    const frames = screen.root.findAllByType('iframe').filter((node) => (
+        node.props['data-testid'] === 'plugin-hosted-web-frame'
+    ));
     expect(frames).toHaveLength(1);
     return frames[0];
 }
@@ -182,8 +188,15 @@ describe('PluginHostedWebPane', () => {
         const unavailable = screen.findByTestId('plugin-hosted-web-unavailable');
         expect(unavailable).toBeTruthy();
         expect(screen.findByTestId('plugin-hosted-web-unavailable-diagnostic-hosted_web_preview_unavailable')).toBeTruthy();
-        expect(unavailable?.props.role).toBe('status');
-        expect(unavailable?.props['aria-live']).toBe('polite');
+        const statusRegions = screen.findAll((node) => (
+            typeof node.type === 'string'
+            && node.props.role === 'status'
+            && node.props['aria-live'] === 'polite'
+        ));
+        expect(statusRegions).toHaveLength(1);
+        expect(statusRegions[0].findAll((node) => (
+            node.props.children === 'pluginRuntime.hostedWebUnavailableTitle'
+        ))).not.toHaveLength(0);
         expect(screen.getTextContent()).toContain('pluginRuntime.hostedWebUnavailableTitle');
         expect(screen.getTextContent()).not.toContain('hosted_web_preview_unavailable');
     });
@@ -1297,6 +1310,10 @@ describe('PluginHostedWebPane', () => {
     });
 
     it.each(['url', 'inlineHtml'] as const)('falls back when %s bridge ready is not received before the host timeout', async (sourceKind) => {
+        if (sourceKind === 'inlineHtml') {
+            const { loadPluginUiHostSupport } = await import('@/components/plugins/hostApi/loadPluginUiHostSupport');
+            await loadPluginUiHostSupport();
+        }
         vi.useFakeTimers();
         const previousLocation = Object.getOwnPropertyDescriptor(globalThis, 'location');
         Object.defineProperty(globalThis, 'location', {
@@ -1329,6 +1346,20 @@ describe('PluginHostedWebPane', () => {
 
         expect(screen.findByTestId('plugin-hosted-web-frame')).toBeTruthy();
 
+        await act(async () => {
+            await Promise.resolve();
+        });
+        if (sourceKind === 'inlineHtml') {
+            const shell = screen.root.findAllByType('iframe').find((node) => (
+                node.props['data-testid'] === 'plugin-hosted-web-frame-navigation-shell'
+            ));
+            expect(shell).toBeDefined();
+            await act(async () => {
+                // A real browser supplies its loaded shell document before the
+                // engine can attach the opaque guest to that document's body.
+                shell?.props.onLoad({ currentTarget: { contentDocument: { body: {} } } });
+            });
+        }
         await act(async () => {
             findHostedWebIframe(screen).props.onLoad?.();
         });

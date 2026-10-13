@@ -37,8 +37,9 @@ export function isPluginSurfaceMachineBound(params: Readonly<{
     if (methods === null) return false;
     // The same Resource methods also serve Account-owned borrowed host reads.
     // Only the selected member's declared daemon Resource capability implies a target.
-    if ((methods.includes('readResource') && params.resourceCapability?.readable === true)
-        || (methods.includes('watchResource') && params.resourceCapability?.dynamic === true)) return true;
+    // requiredHostMethods is the renderer's compatibility minimum, not an
+    // inventory of the selected member's declared daemon Resource reads.
+    if (params.resourceCapability?.readable === true) return true;
     if (methods.some(method => method === 'readStoredImage' || method === 'watchLiveStream'
         || method === 'statOpenableContent' || method === 'readOpenableContent'
         || method === 'selectActionInput')) return true;

@@ -2,9 +2,12 @@ import * as React from 'react';
 import { act } from 'react-test-renderer';
 import { describe, expect, it, vi } from 'vitest';
 
-import { renderScreen } from '@/dev/testkit';
+import { findAllHostTestInstances, renderScreen } from '@/dev/testkit';
 import { t } from '@/text';
 import { PluginReactNativeUnavailable } from './PluginReactNativeUnavailable';
+import { PluginHostedWebUnavailable, readPluginHostedWebUnavailableDiagnosticCode } from '../hostedWeb/PluginHostedWebUnavailable';
+import { acquirePluginSelectedArtifactLease } from '@/sync/domains/plugins/availability/artifactLease';
+import { createPluginAccountAvailabilityReaderStore } from '@/sync/domains/plugins/availability/reader';
 
 vi.mock('react-native', async () => {
     const { createReactNativeWebMock } = await import('@/dev/testkit/mocks/reactNative');
@@ -19,11 +22,45 @@ vi.mock('react-native-unistyles', async () => {
 });
 
 describe('PluginReactNativeUnavailable', () => {
+    it('preserves a real Artifact graph refusal through hosted presentation and its repair action', async () => {
+        const slot = { pluginId: 'com.acme.fixture', contributionId: 'view', tier: 'hostedWeb', platform: 'web' } as const;
+        const result = await acquirePluginSelectedArtifactLease({
+            reader: createPluginAccountAvailabilityReaderStore().bind({ serverId: 'home', accountId: 'account' }),
+            slot,
+            daemonProjectionSelection: {
+                occurrenceId: 'fixture-occurrence',
+                artifact: { ...slot, artifactId: 'view', digest: `sha256:${'a'.repeat(64)}`, hostUiApiRange: '^1.0.0', releaseVersion: '1.0.0' },
+                isCurrent: () => true,
+            },
+            artifactGraph: null,
+            sources: [],
+        });
+        expect(result.kind).toBe('unavailable');
+        if (result.kind !== 'unavailable') throw new Error('Expected graph admission refusal');
+        const repair = vi.fn();
+        const retry = vi.fn();
+        const screen = await renderScreen(
+            <PluginHostedWebUnavailable
+                diagnosticCode={readPluginHostedWebUnavailableDiagnosticCode(result.code) ?? 'response_invalid'}
+                onRetry={retry}
+                recoveryAction={{ label: 'route fallback', onPress: repair }}
+            />,
+        );
+        expect(screen.findByTestId('plugin-hosted-web-unavailable-diagnostic-artifact_graph_invalid')).toBeTruthy();
+        expect(screen.getTextContent()).toContain(t('pluginRuntime.authorFailure'));
+        expect(screen.findByTestId('plugin-hosted-web-unavailable-action')?.props.accessibilityLabel).toBe(t('settingsPlugins.managePlugin'));
+        await act(async () => { screen.pressByTestId('plugin-hosted-web-unavailable-action'); });
+        expect(repair).toHaveBeenCalledOnce();
+        expect(retry).not.toHaveBeenCalled();
+    });
+
     it('preserves unavailable, Retry, and pending accessibility semantics', async () => {
         const unavailable = await renderScreen(
             <PluginReactNativeUnavailable diagnostics={['artifact_unavailable']} />,
         );
-        expect(unavailable.findByTestId('plugin-rn-ui-unavailable')?.props.accessibilityLiveRegion).toBe('polite');
+        // Diagnostic Details stays outside the live region; the shared card announces its sentence.
+        expect(findAllHostTestInstances(unavailable.root, (node) => node.props.accessibilityLiveRegion === 'polite'))
+            .not.toHaveLength(0);
         expect(unavailable.findByTestId('plugin-rn-ui-unavailable-action')).toBeNull();
 
         const onRetry = vi.fn();
@@ -39,6 +76,17 @@ describe('PluginReactNativeUnavailable', () => {
         expect(retrying.findByTestId('plugin-rn-ui-unavailable-loading-spinner')).toBeTruthy();
         expect(retrying.findByTestId('plugin-rn-ui-unavailable')?.props.accessibilityLiveRegion).toBe('polite');
         expect(retrying.findByTestId('plugin-rn-ui-unavailable-action')).toBeNull();
+    });
+
+    it('explains a disabled plugin before offering the route-owned Enable action', async () => {
+        const onPress = vi.fn();
+        const screen = await renderScreen(
+            <PluginReactNativeUnavailable diagnostics={['plugin_disabled']} recoveryAction={{ label: 'route fallback', onPress }} />,
+        );
+        expect(screen.getTextContent()).toContain(t('pluginRuntime.disabledByPolicy'));
+        expect(screen.findByTestId('plugin-rn-ui-unavailable-action')?.props.accessibilityLabel).toBe(t('common.enable'));
+        await act(async () => { screen.pressByTestId('plugin-rn-ui-unavailable-action'); });
+        expect(onPress).toHaveBeenCalledOnce();
     });
 
     it.each([

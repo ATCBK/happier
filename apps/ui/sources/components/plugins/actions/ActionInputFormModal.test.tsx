@@ -47,14 +47,6 @@ vi.mock('expo-router', () => ({
     useRouter: () => ({ push: routerPush }),
 }));
 
-vi.mock('@/components/sessions/actions/ActionInputFields', () => ({
-    ActionInputFields: () => null,
-}));
-
-vi.mock('@/components/ui/buttons/RoundButton', () => ({
-    RoundButton: (props: RoundButtonProps) => React.createElement('RoundButton', props),
-}));
-
 function failedForm(): ActionInputForm {
     return {
         presentation: {

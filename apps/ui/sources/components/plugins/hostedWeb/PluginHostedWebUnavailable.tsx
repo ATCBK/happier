@@ -6,9 +6,16 @@ import { resolvePluginSurfaceStatePresentation } from '@/sync/domains/surfaces/c
 import { t } from '@/text';
 
 export type PluginHostedWebUnavailableDiagnosticCode =
+    | 'account_availability_not_loaded'
+    | 'account_availability_scope_mismatch'
     | 'account_scope_changed'
+    | 'artifact_graph_invalid'
+    | 'artifact_graph_mismatch'
     | 'artifact_incompatible'
     | 'artifact_lease_revoked'
+    | 'artifact_not_current'
+    | 'artifact_slot_ambiguous'
+    | 'artifact_source_ambiguous'
     | 'artifact_source_integrity_invalid'
     | 'artifact_source_unavailable'
     | 'artifact_hosting_not_opted_in'
@@ -16,6 +23,7 @@ export type PluginHostedWebUnavailableDiagnosticCode =
     | 'e2ee_unavailable'
     | 'disabled'
     | 'feature_disabled'
+    | 'hosted_web_artifact_tier_invalid'
     | 'hosted_web_bridge_nonce_unavailable'
     | 'hosted_web_bridge_policy_absent'
     | 'hosted_web_bridge_timeout'
@@ -25,6 +33,7 @@ export type PluginHostedWebUnavailableDiagnosticCode =
     | 'hosted_web_policy_denied'
     | 'hosted_web_preview_expired'
     | 'hosted_web_preview_unavailable'
+    | 'hosted_web_profile_isolation_unavailable'
     | 'hosted_web_sandbox_unavailable'
     | 'hosted_web_security_unavailable'
     | 'hosted_web_static_artifact_missing'
@@ -32,6 +41,10 @@ export type PluginHostedWebUnavailableDiagnosticCode =
     | 'host_ui_api_incompatible'
     | 'invalid_executable_export'
     | 'module_instantiation_failed'
+    | 'native_artifact_resource_registration_failed'
+    | 'native_artifact_response_table_invalid'
+    | 'native_artifact_revocation_pending'
+    | 'native_artifact_store_unavailable'
     | 'plugin_disabled'
     | 'plugin_revoked'
     | 'plugin_uninstalled'
@@ -52,9 +65,16 @@ export function readPluginHostedWebUnavailableDiagnosticCode(
     value: unknown,
 ): PluginHostedWebUnavailableDiagnosticCode | null {
     switch (value) {
+        case 'account_availability_not_loaded':
+        case 'account_availability_scope_mismatch':
         case 'account_scope_changed':
+        case 'artifact_graph_invalid':
+        case 'artifact_graph_mismatch':
         case 'artifact_incompatible':
         case 'artifact_lease_revoked':
+        case 'artifact_not_current':
+        case 'artifact_slot_ambiguous':
+        case 'artifact_source_ambiguous':
         case 'artifact_source_integrity_invalid':
         case 'artifact_source_unavailable':
         case 'artifact_hosting_not_opted_in':
@@ -62,6 +82,7 @@ export function readPluginHostedWebUnavailableDiagnosticCode(
         case 'e2ee_unavailable':
         case 'disabled':
         case 'feature_disabled':
+        case 'hosted_web_artifact_tier_invalid':
         case 'hosted_web_bridge_nonce_unavailable':
         case 'hosted_web_bridge_policy_absent':
         case 'hosted_web_bridge_timeout':
@@ -71,12 +92,17 @@ export function readPluginHostedWebUnavailableDiagnosticCode(
         case 'hosted_web_policy_denied':
         case 'hosted_web_preview_expired':
         case 'hosted_web_preview_unavailable':
+        case 'hosted_web_profile_isolation_unavailable':
         case 'hosted_web_sandbox_unavailable':
         case 'hosted_web_security_unavailable':
         case 'hosted_web_static_artifact_missing':
         case 'host_ui_api_incompatible':
         case 'invalid_executable_export':
         case 'module_instantiation_failed':
+        case 'native_artifact_resource_registration_failed':
+        case 'native_artifact_response_table_invalid':
+        case 'native_artifact_revocation_pending':
+        case 'native_artifact_store_unavailable':
         case 'operation_cancelled':
         case 'plugin_disabled':
         case 'plugin_revoked':

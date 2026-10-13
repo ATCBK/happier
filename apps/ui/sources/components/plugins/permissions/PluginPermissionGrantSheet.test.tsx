@@ -5,11 +5,6 @@ import { afterEach, describe, expect, it, vi } from 'vitest';
 import { pressTestInstanceAsync, renderScreen } from '@/dev/testkit';
 import { setPreferredLanguageFromSettings } from '@/text';
 
-vi.mock('@/components/ui/text/Text', async () => {
-    const { createUiTextModuleMock } = await import('@/dev/testkit/mocks/uiText');
-    return createUiTextModuleMock();
-});
-
 type SheetModule = Readonly<{
     PluginPermissionGrantSheet: React.ComponentType<{
         pendingRequest: unknown;

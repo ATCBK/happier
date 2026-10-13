@@ -50,14 +50,6 @@ vi.mock('@/sync/api/plugins/data/queryPluginCollectionUiQuery', () => ({
     createActivePluginCollectionUiQueryPager,
 }));
 
-vi.mock('@/hooks/server/useActiveServerSnapshot', () => ({
-    useActiveServerSnapshot: () => Object.freeze({
-        serverId: 'collection-locality-server',
-        serverUrl: 'https://collection-locality.example',
-        generation: 1,
-    }),
-}));
-
 import {
     DeclarativeCollectionList,
     type DeclarativeCollectionRowCommandContext,
@@ -66,6 +58,7 @@ import { DeclarativePluginSurface } from './DeclarativePluginSurface';
 import { DropdownMenu } from '@/components/ui/forms/dropdown/DropdownMenu';
 import { renderScreen } from '@/dev/testkit';
 import { completePresentationPluginUiDataClient } from '@/dev/testkit/pluginUiDataClient';
+import { setActiveServerId, upsertServerProfile } from '@/sync/domains/server/serverProfiles';
 
 const presentationTheme = Object.freeze({
     version: 1 as const,
@@ -247,7 +240,12 @@ function installDataPager(initialSnapshot: DataPagerSnapshot) {
     });
 }
 
-beforeEach(() => {
+beforeEach(async () => {
+    const profile = await upsertServerProfile({
+        serverUrl: 'https://collection-locality-server',
+        name: 'Collection locality Home',
+    });
+    await setActiveServerId(profile.id);
     vi.resetAllMocks();
 });
 

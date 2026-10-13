@@ -248,12 +248,15 @@ describe('plugin surface execution requirement', () => {
         expect(isPluginSurfaceMachineBound({ pluginId: 'acme.panel', projection: EMPTY_PLUGIN_UI_PROJECTION,
             renderer: { kind: 'hostedHtml', contributionId: 'home', requiredHostMethods: ['readResource', 'watchResource'] } })).toBe(false);
         expect(isPluginSurfaceMachineBound({ pluginId: 'acme.panel', projection: EMPTY_PLUGIN_UI_PROJECTION,
+            renderer: { kind: 'hostedHtml', contributionId: 'home', requiredHostMethods: [] },
+            resourceCapability: { readable: false, dynamic: true } })).toBe(false);
+        expect(isPluginSurfaceMachineBound({ pluginId: 'acme.panel', projection: EMPTY_PLUGIN_UI_PROJECTION,
             renderer: { kind: 'hostedHtml', contributionId: 'home', requiredHostMethods: ['selectActionInput'] } })).toBe(true);
         expect(isPluginSurfaceMachineBound({ pluginId: 'acme.panel', projection: {
             ...EMPTY_PLUGIN_UI_PROJECTION,
             reactNativeBundlesById: { 'reactNativeBundle:acme.panel:home': {
                 id: 'reactNativeBundle:acme.panel:home', pluginId: 'acme.panel', contributionKind: 'reactNativeBundle',
-                contributionId: 'home', requiredHostMethods: ['readResource'],
+                contributionId: 'home', requiredHostMethods: [],
             } },
         }, renderer: { kind: 'reactNative', contributionId: 'home' },
             resourceCapability: { readable: true, dynamic: false } })).toBe(true);

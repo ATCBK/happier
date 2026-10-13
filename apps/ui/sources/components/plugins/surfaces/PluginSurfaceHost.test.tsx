@@ -1221,6 +1221,8 @@ vi.mock('@/text', async () => {
             open: 'Open',
             refresh: 'Refresh',
             loading: 'Loading',
+            refreshing: 'Refreshing plugin content',
+            stale: 'Plugin content may be out of date',
             empty: 'Nothing to show',
             error: 'Something went wrong',
             moreActions: 'More actions',
@@ -1236,6 +1238,8 @@ vi.mock('@/text', async () => {
             open: 'Abrir',
             refresh: 'Actualizar',
             loading: 'Cargando',
+            refreshing: 'Actualizando contenido',
+            stale: 'El contenido puede estar desactualizado',
             empty: 'Nada que mostrar',
             error: 'Algo salió mal',
             moreActions: 'Más acciones',
@@ -1255,6 +1259,8 @@ vi.mock('@/text', async () => {
                 if (key === 'common.open') return chrome?.open ?? key;
                 if (key === 'common.refresh') return chrome?.refresh ?? key;
                 if (key === 'ui.pluginUi.loading') return chrome?.loading ?? key;
+                if (key === 'pluginSurfaces.state.refreshing.title') return chrome?.refreshing ?? key;
+                if (key === 'pluginSurfaces.state.stale.title') return chrome?.stale ?? key;
                 if (key === 'ui.pluginUi.empty') return chrome?.empty ?? key;
                 if (key === 'ui.pluginUi.error') return chrome?.error ?? key;
                 if (key === 'ui.pluginUi.moreActions') return chrome?.moreActions ?? key;
@@ -11306,6 +11312,8 @@ describe('mounted plugin surface context (§3.2, §3.3, UI-D11/D12/D13)', () => 
             'happier.plugin-ui.action.open': 'Open',
             'happier.plugin-ui.action.refresh': 'Refresh',
             'happier.plugin-ui.state.loading': 'Loading',
+            'happier.plugin-ui.state.refreshing': 'Refreshing plugin content',
+            'happier.plugin-ui.state.stale': 'Plugin content may be out of date',
             'happier.plugin-ui.state.empty': 'Nothing to show',
             'happier.plugin-ui.state.error': 'Something went wrong',
             'happier.plugin-ui.state.details': 'Details',
@@ -11330,6 +11338,8 @@ describe('mounted plugin surface context (§3.2, §3.3, UI-D11/D12/D13)', () => 
             'happier.plugin-ui.action.open': 'Abrir',
             'happier.plugin-ui.action.refresh': 'Actualizar',
             'happier.plugin-ui.state.loading': 'Cargando',
+            'happier.plugin-ui.state.refreshing': 'Actualizando contenido',
+            'happier.plugin-ui.state.stale': 'El contenido puede estar desactualizado',
             'happier.plugin-ui.state.empty': 'Nada que mostrar',
             'happier.plugin-ui.state.error': 'Algo salió mal',
             'happier.plugin-ui.state.details': 'Detalles',
