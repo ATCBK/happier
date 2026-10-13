@@ -74,6 +74,31 @@ function createHarness(overrides: Partial<Parameters<typeof createSessionHandoff
 }
 
 describe('sessionHandoffCoordinator', () => {
+  it('refuses existing state before source mutation unless both peers advertise support', async () => {
+    for (const [sourceSupports, targetSupports] of [[false, true], [true, false], [undefined, true]]) {
+      const harness = createHarness({
+        probeSourceCapability: async () => ({ protocolVersion: 2, atomicTargetResume: true, targetCleanup: true, existingState: sourceSupports }),
+        probeTargetCapability: async () => ({ protocolVersion: 2, atomicTargetResume: true, targetCleanup: true, existingState: targetSupports }),
+      });
+      await expect(harness.coordinator.admit({ ...baseInput, stateTransfer: 'existing' })).rejects.toThrow('existing');
+      expect(harness.port.startSource).not.toHaveBeenCalled();
+    }
+  });
+
+  it('uses existing state without a transfer carrier and preserves the atomic cutover sequence', async () => {
+    const harness = createHarness({
+      probeSourceCapability: async () => ({ protocolVersion: 2, atomicTargetResume: true, targetCleanup: true, existingState: true }),
+      probeTargetCapability: async () => ({ protocolVersion: 2, atomicTargetResume: true, targetCleanup: true, existingState: true }),
+      readServerFeatures: async () => FeaturesResponseSchema.parse({ features: { sessions: { enabled: true, handoff: { enabled: true } }, machines: { enabled: true, transfer: { enabled: false } } }, capabilities: {} }),
+      directPeerAvailable: false,
+    });
+    const result = await (await harness.coordinator.admit({ ...baseInput, stateTransfer: 'existing' })).execute({ update: harness.update });
+    expect(result).toMatchObject({ ok: true });
+    expect(harness.port.startSource).toHaveBeenCalledWith(expect.objectContaining({ stateTransfer: 'existing' }));
+    expect(harness.port.prepareTarget).toHaveBeenCalledWith(expect.objectContaining({ stateTransfer: 'existing' }));
+    expect(harness.calls).toEqual(['start', 'prepare', 'resume', 'confirm', 'bind', 'commit', 'cleanup', 'bind']);
+  });
+
   it('admits a local move only on a daemon that advertises same-machine lifecycle support', async () => {
     const input = { ...baseInput, targetMachineId: baseInput.sourceMachineId, targetPath: '/workspace/my-app' };
     const old = createHarness();
