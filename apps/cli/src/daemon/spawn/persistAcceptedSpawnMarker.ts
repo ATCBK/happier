@@ -71,9 +71,13 @@ export async function persistAcceptedSpawnMarker(params: Readonly<{
       'Accepted spawn process identity changed before marker persistence',
     );
   }
-  trackedSession.processStartTimeMs = processIdentity.processStartTimeMs;
-  trackedSession.processCommand = observedProcessCommand || undefined;
-  trackedSession.processCommandHash = observedProcessCommandHash ?? undefined;
+  // These fields witness the tracked launcher, which can differ from the
+  // runner whose accepted marker is being refreshed.
+  if (processPid === trackedSession.pid) {
+    trackedSession.processStartTimeMs = processIdentity.processStartTimeMs;
+    trackedSession.processCommand = observedProcessCommand || undefined;
+    trackedSession.processCommandHash = observedProcessCommandHash ?? undefined;
+  }
   const startupInstructions =
     trackedSession.spawnOptions.agentSessionStartupInstructionsV1;
   const startupInstructionsMarker = startupInstructions

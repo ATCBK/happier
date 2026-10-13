@@ -223,7 +223,7 @@ describe('commitDaemonLaunchSession', () => {
       created: true,
       sessionCreationOutcome: { disposition: 'created' },
       attachPayload: { v: 2, encryptionMode: 'plain' },
-      options: { attachMetadataIdentityPolicy: 'replace_with_runtime_identity' },
+      options: { existingSessionId: 'session-committed', attachMetadataIdentityPolicy: 'replace_with_runtime_identity' },
     });
     expect(withoutFreshSessionCreationFields(committed.session.options)).not.toHaveProperty('teamCredentialBindings');
     expect(withoutFreshSessionCreationFields(committed.session.options)).not.toHaveProperty('creationAuthorization');
@@ -256,7 +256,7 @@ describe('commitDaemonLaunchSession', () => {
       ok: true,
       session: {
         created: false,
-        options: { connectedServiceMaterializationIdentityV1: persistedIdentity },
+        options: { existingSessionId: 'session-rejoined', connectedServiceMaterializationIdentityV1: persistedIdentity },
       },
     });
   });

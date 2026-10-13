@@ -2,7 +2,7 @@ import type { PersistedTakeoverAdmissionWaitRegistration } from './persistedTake
 import { spawn as spawnChildProcess } from 'node:child_process';
 import { isPidPresent } from '@happier-dev/cli-common/process';
 
-import { redactBugReportSensitiveText, trimBugReportTextToMaxBytes } from '@happier-dev/protocol/bugs/reports/redaction';
+import { appendBoundedStderrTail, sanitizeChildStderrTail } from './childStderrDiagnostic';
 
 import type { ChildExit } from '../sessions/onChildExited';
 import { resolveSpawnWebhookResult } from '../sessions/resolveSpawnWebhookResult';
@@ -32,31 +32,12 @@ import type { ProviderStreamingSanitizer } from '@/providers/spawn/redaction';
 import {
   completeStartupCancellationCleanup,
   resolveSpawnErrorAfterStartupCancellation,
+  projectRetiredStartupLaunchResult,
   type CancelStartupLaunch,
 } from './startupLaunchCancellation';
 import { terminateProcessTree } from '@/processes/terminate/terminateProcessTree';
 import { createExactWindowsProcessCancellation } from '../platform/windows/windowsProcessCustody';
 import { classifySpawnFailure, spawnFailureMessage, type SpawnFailureLimitsReader } from '@/processes/spawnFailure/classifySpawnFailure';
-
-const CHILD_STDERR_CAPTURE_MAX_CHARS = 16_384;
-const CHILD_STDERR_DIAGNOSTIC_MAX_BYTES = 2_048;
-
-function appendBoundedStderrTail(current: string, chunk: unknown): string {
-  const next = `${current}${String(chunk ?? '')}`;
-  return next.length > CHILD_STDERR_CAPTURE_MAX_CHARS
-    ? next.slice(-CHILD_STDERR_CAPTURE_MAX_CHARS)
-    : next;
-}
-
-function sanitizeChildStderrTail(
-  stderrTail: string,
-  sanitizeDiagnosticText: (value: string) => string,
-): string | null {
-  const trimmed = stderrTail.trim();
-  if (!trimmed) return null;
-  const redacted = redactBugReportSensitiveText(sanitizeDiagnosticText(trimmed));
-  return trimBugReportTextToMaxBytes(redacted, CHILD_STDERR_DIAGNOSTIC_MAX_BYTES).trim() || null;
-}
 
 function appendRecentStderrDiagnostic(message: string, stderrTail: string | null): string {
   return stderrTail ? `${message}; recent stderr: ${stderrTail}` : message;
@@ -550,6 +531,12 @@ export async function spawnRegularProcessAndWaitForWebhook(params: Readonly<{
         errorMessage: incompleteRetirement,
       };
     }
+    // Generic SPAWN_FAILED is not terminal custody evidence. Publish this
+    // exact proof only after the incumbent cancellation owner verified exit
+    // and completed cleanup; a deadline or failed retirement supplies none.
+    return projectRetiredStartupLaunchResult({ result: spawnResult,
+      readinessFailure: trackedSession.spawnStartupReadinessFailure,
+      spawnNonce: params.options.spawnNonce, wrapperPid: pid });
   }
   if (spawnResult.type === 'success') {
     delete trackedSession.cancelStartupLaunchBeforeAck;

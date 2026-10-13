@@ -1,9 +1,10 @@
 import { unexpectedProjectNativeAdapterResolution } from "@/plugins/testkit/unexpectedProjectNativeAdapterResolution";
 import { unexpectedCaptureSourceResolution } from "@/plugins/testkit/unexpectedCaptureSourceResolution";
-import { describe, expect, it } from 'vitest';
+import { describe, expect, it, vi } from 'vitest';
+import axios from 'axios';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
-import { mkdir, rm, writeFile } from 'node:fs/promises';
+import { mkdir, readFile, rm, writeFile } from 'node:fs/promises';
 import { PluginManifestV2Schema, ProviderConnectionIdSchema } from '@happier-dev/protocol';
 import { PLUGIN_MANIFEST as CODEX_MANIFEST } from '@happier-dev/plugins-codex/manifest';
 import { PLUGIN_MANIFEST as ANTIGRAVITY_MANIFEST } from '@happier-dev/plugins-antigravity/manifest';
@@ -15,12 +16,14 @@ import { projectAgentCliAuthCatalogEntry } from '@/plugins/projection/registry/a
 import type { ResolvedExecutablePluginRuntimeRegistry } from '@/plugins/runtime/resolveExecutablePluginRuntimeRegistry';
 import { writeExecutableShimSync } from '@/testkit/fs/executableShim';
 import { createTempDir, removeTempDir } from '@/testkit/fs/tempDir';
-import { createAdmittedPluginRuntimeFixture } from '@/plugins/testkit/admittedRuntime';
+import { createAdmittedPluginRuntimeFixture, createAuthoredAdmittedPluginRuntimeFixture } from '@/plugins/testkit/admittedRuntime';
 import { createProviderLaunchResourceScope } from '@/providers/lifecycle/resourceScope';
 import { createProviderRedactionLease } from '@/providers/spawn/redaction';
 import { resolveSpawnChildEnvironment } from './resolveSpawnChildEnvironment';
 import { SPAWN_SESSION_ERROR_CODES } from '@/session/shared/spawnSessionContract';
 import { prepareDaemonSpawnChildEnvironment } from './prepareDaemonSpawnChildEnvironment';
+import { commitDaemonLaunchSession } from './commitDaemonLaunchSession';
+import { createAccountEncryptionCurrentnessFixture, createPlainSessionFixture, createSessionRecordFixture } from '@/testkit/backends/sessionFixtures';
 
 function createPinnedSpawnAgentRegistry(): ResolvedExecutablePluginRuntimeRegistry {
   const manifests = [CODEX_MANIFEST, ANTIGRAVITY_MANIFEST].map((manifest) => PluginManifestV2Schema.parse(manifest));
@@ -70,6 +73,41 @@ function createPinnedSpawnAgentRegistry(): ResolvedExecutablePluginRuntimeRegist
 }
 
 describe('daemon Agent preconditions', () => {
+  it('admits a validated custom Session factory without an undeclared CLI prerequisite', async () => {
+    const fixtureRoot = new URL('../../../../../packages/tests/fixtures/plugin-platform/agent-runtime-conformance/', import.meta.url);
+    const sourceManifest = PluginManifestV2Schema.parse(JSON.parse(await readFile(new URL('.happier-plugin/plugin.json', fixtureRoot), 'utf8')));
+    const nativeManifest = { ...sourceManifest, contributes: { ...sourceManifest.contributes,
+      agents: sourceManifest.contributes.agents.map(({ cli: _cli, ...agent }) => agent) } };
+    const fixture = await createAuthoredAdmittedPluginRuntimeFixture({
+      plugins: [{ manifest: nativeManifest,
+        files: { 'daemon.mjs': await readFile(new URL('daemon.mjs', fixtureRoot), 'utf8'),
+          'agent-runtime.mjs': await readFile(new URL('agent-runtime.mjs', fixtureRoot), 'utf8') } }],
+      runtimeOptions: { pluginIds: ['acme.native-runtime-proof'] },
+    });
+    try {
+      await fixture.registry.activateContributionsOnDemand([
+        { pluginId: 'acme.native-runtime-proof', family: 'agents', localId: 'novel-native-agent' },
+      ]);
+      const agentId = 'acme.native-runtime-proof/novel-native-agent';
+      expect(fixture.registry.agentRuntimesByAgentId.get(agentId)?.sessionRunnerFactoryBinding).toBeDefined();
+      const spawnInput = {
+        happyHomeDir: fixture.happyHomeDir, pluginRuntimeRegistry: fixture.registry, resolvedAgentId: agentId,
+        options: { directory: fixture.happyHomeDir,
+          backendTarget: { kind: 'backend', backendId: agentId, sourceKind: 'built_in' },
+          agentTarget: { kind: 'agent', identity: { pluginId: 'acme.native-runtime-proof', localId: 'novel-native-agent' } } },
+        profileEnvironmentVariables: {}, daemonSpawnHooks: null,
+        processEnv: { PATH: '', HAPPIER_HOME_DIR: fixture.happyHomeDir },
+        logDebug: () => {}, logInfo: () => {}, logWarn: () => {},
+      } satisfies Parameters<typeof resolveSpawnChildEnvironment>[0];
+      const result = await resolveSpawnChildEnvironment(spawnInput);
+      expect(result, JSON.stringify(result)).toMatchObject({ ok: true });
+      expect(result).not.toHaveProperty('agentCliLaunchSpec');
+      fixture.registry.retireConsumers();
+      expect(await resolveSpawnChildEnvironment(spawnInput)).toMatchObject({ ok: false,
+        errorCode: SPAWN_SESSION_ERROR_CODES.AGENT_CLI_MISSING, agentId });
+    } finally { await fixture.dispose(); }
+  });
+
   it('uses the activated native auth probe for an OAuth-only connected home and still rejects a missing credential', async () => {
     const home = await createTempDir('happier-spawn-activated-auth-', tmpdir());
     const fixture = await createAdmittedPluginRuntimeFixture({
@@ -132,6 +170,50 @@ process.exit(auth.tokens.access_token === 'fixture-access' ? 0 : 1); } catch { p
       });
       expect(requester).toMatchObject({ ok: true, extraEnvForChild: { CODEX_HOME: connectedHome } });
       if (requester.ok) expect(requester.unsetEnvKeys).toContain('OPENAI_API_KEY');
+      const sessionId = 'session-requester-committed';
+      const requesterCredentials = { token: 'fixture-requester-token', encryption: null } as const;
+      let createdSession: ReturnType<typeof createPlainSessionFixture> | null = null;
+      const network = vi.spyOn(axios, 'get').mockImplementation(async (url) => {
+        if (String(url).includes('/v1/account/encryption/currentness')) return {
+          status: 200, data: createAccountEncryptionCurrentnessFixture(),
+        };
+        if (String(url).includes(`/v2/sessions/${sessionId}`) && createdSession) return { status: 200,
+          data: { session: createSessionRecordFixture({ id: sessionId, encryptionMode: 'plain',
+            metadata: JSON.stringify(createdSession.metadata), dataEncryptionKey: null }) } };
+        throw new Error(`Unexpected Home read: ${String(url)}`);
+      });
+      const launchResourceScope = createProviderLaunchResourceScope();
+      const providerDiagnosticRedactionLease = createProviderRedactionLease({ values: [] });
+      try {
+        // Home creation/read transports are the boundary; the real committed
+        // launch and child-environment owners carry the requester identity.
+        const committed = await commitDaemonLaunchSession({
+          api: { getOrCreateSession: async input => {
+            createdSession = createPlainSessionFixture({ id: sessionId, metadata: input.metadata,
+              sessionCreationOutcome: { disposition: 'created', organizationPlacement: { folderId: null, tagIds: [] } },
+            });
+            return createdSession;
+          } },
+          credentials: requesterCredentials, directory: home, options: params.options, accountSettings: {},
+        });
+        expect(committed.ok).toBe(true);
+        if (!committed.ok) throw new Error('Fixture committed Session could not attach');
+        const child = await prepareDaemonSpawnChildEnvironment({
+          options: { ...committed.session.options, requesterSessionCredentialFile: join(home, 'requester.json') },
+          pluginRuntimeRegistry: fixture.registry, effectiveModelSelection: undefined, terminal: undefined,
+          profileEnvironmentVariables: {}, daemonSpawnHooks: null, processEnv: params.processEnv,
+          connectedServiceAuth: params.connectedServiceAuth!, connectedServiceMaterializationIdentity: null,
+          providerBindingAttempt: null, providerAgentTargetKey: null, launchResourceScope, providerDiagnosticRedactionLease,
+        });
+        expect(child).toMatchObject({ ok: true, extraEnvForChild: {
+          HAPPIER_SESSION_REQUESTER_CREDENTIAL_FILE: join(home, 'requester.json'),
+          HAPPIER_SESSION_REQUESTER_SESSION_ID: sessionId, CODEX_HOME: connectedHome,
+        } });
+      } finally {
+        network.mockRestore();
+        await launchResourceScope.release();
+        providerDiagnosticRedactionLease.close();
+      }
       await expect(resolveSpawnChildEnvironment({ ...params, allowNativeAccountCredentials: false,
         connectedServiceAuth: { ...params.connectedServiceAuth!, targetMaterializedRoot: connectedHome },
         profileEnvironmentVariables: { OPENAI_API_KEY: '${CUSTODIAN_PRIVATE_KEY}' },

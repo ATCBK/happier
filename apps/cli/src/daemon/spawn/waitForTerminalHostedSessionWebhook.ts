@@ -9,6 +9,7 @@ import type { PersistedTakeoverAdmissionWaitRegistration } from './persistedTake
 import {
   completeStartupCancellationCleanup,
   resolveSpawnErrorAfterStartupCancellation,
+  projectRetiredStartupLaunchResult,
   type CancelStartupLaunch,
 } from './startupLaunchCancellation';
 import { armSessionWebhookStartupCustody, waitForSessionWebhook } from './waitForSessionWebhook';
@@ -164,6 +165,10 @@ export async function waitForTerminalHostedSessionWebhook(params: Readonly<{
         errorCode: SPAWN_SESSION_ERROR_CODES.SPAWN_FAILED,
         errorMessage: incompleteRetirement,
       };
+    } else {
+      spawnResult = projectRetiredStartupLaunchResult({ result: spawnResult,
+        readinessFailure: trackedSession.spawnStartupReadinessFailure,
+        spawnNonce: params.trackedSpawnOptions.spawnNonce, wrapperPid: params.pid });
     }
   }
   if (spawnResult.type === 'success') delete trackedSession.cancelStartupLaunchBeforeAck;

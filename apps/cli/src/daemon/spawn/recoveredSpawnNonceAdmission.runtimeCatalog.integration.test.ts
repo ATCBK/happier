@@ -10,7 +10,7 @@ import { createTestMetadata } from '@/testkit/backends/sessionMetadata';
 import { createTerminalAttachmentId, readTerminalHostAttachmentState, writeTerminalHostAttachmentInfo, writeTerminalAttachmentInfo } from '@/terminal/attachment/terminalAttachmentInfo';
 import { buildTerminalMetadataFromHostHandle } from '@/terminal/runtime/terminalMetadata';
 import { readProcessIdentityByPid } from '../processIdentity';
-import { writeSessionMarker } from '../sessionRegistry';
+import { hashProcessCommand, writeSessionMarker } from '../sessionRegistry';
 import { probeSessionRunnerServiceability } from '../sessions/isSessionRunnerActive';
 import { probeAlreadyRunningExistingSessionServiceability } from '../startup/pendingQueueNudge';
 import type { TrackedSession } from '../types';
@@ -22,7 +22,7 @@ import { resolveRecoveredSpawnNonceAdmission } from './recoveredSpawnNonceAdmiss
 afterEach(() => { vi.unstubAllEnvs(); reloadConfiguration(); });
 
 describe('recovered spawn readiness through real marker, host and RPC owners', () => {
-  it.each(['host-ready', 'host-absent', 'host-replacement', 'host-unreadable', 'plain-ready', 'plain-unready', 'startup-pending', 'marker-unbound', 'completed-cache-race', 'host-missing-id-ready', 'host-missing-id-replacement', 'host-same-id-wrong-terminal', 'host-same-id-wrong-mode', 'windows-console-ready', 'windows-console-mismatch', 'windows-terminal-ready', 'windows-terminal-mismatch', 'windows-terminal-absent', 'windows-pty-ready', 'windows-pty-published-id-ready', 'windows-pty-unknown-id', 'windows-pty-replacement', 'await-windows-pty-replacement', 'await-stable', 'await-marker-rebound', 'await-tracked-nonce-rebound', 'await-host-replacement', 'await-host-geometry', 'await-host-inplace-geometry', 'await-host-missing-id-replacement', 'await-windows-replacement'] as const)(
+  it.each(['host-ready', 'host-absent', 'host-replacement', 'host-unreadable', 'plain-ready', 'plain-wrapper-ready', 'plain-unready', 'startup-pending', 'marker-unbound', 'completed-cache-race', 'host-missing-id-ready', 'host-missing-id-replacement', 'host-same-id-wrong-terminal', 'host-same-id-wrong-mode', 'windows-console-ready', 'windows-console-mismatch', 'windows-terminal-ready', 'windows-terminal-mismatch', 'windows-terminal-absent', 'windows-pty-ready', 'windows-pty-published-id-ready', 'windows-pty-unknown-id', 'windows-pty-replacement', 'await-windows-pty-replacement', 'await-stable', 'await-marker-rebound', 'await-tracked-nonce-rebound', 'await-host-replacement', 'await-host-geometry', 'await-host-inplace-geometry', 'await-host-missing-id-replacement', 'await-windows-replacement'] as const)(
     'admits only completed accepted custody and serviceability: %s', async (state) => {
       const home = await mkdtemp(join(tmpdir(), 'happier-recovered-nonce-'));
       const sessionId = 'session-recovered';
@@ -61,6 +61,14 @@ describe('recovered spawn readiness through real marker, host and RPC owners', (
         const tracked: TrackedSession = { startedBy: 'daemon', pid: process.pid, happySessionId: sessionId,
           reattachedFromDiskMarker: true, processStartTimeMs: identity.processStartTimeMs,
           spawnOptions: { directory: home, spawnNonce: nonce, terminal: { mode: plain ? 'plain' : 'herdr' } } };
+        if (state === 'plain-wrapper-ready') {
+          tracked.pid = process.pid + 1;
+          tracked.processStartTimeMs = identity.processStartTimeMs + 1;
+          tracked.processCommandHash = hashProcessCommand('wrapper');
+          tracked.sessionRunnerPid = process.pid;
+          tracked.runnerProcessIdentity = { pid: process.pid, processStartTimeMs: identity.processStartTimeMs,
+            processCommandHash: hashProcessCommand(identity.command) };
+        }
         await writeSessionMarker({ pid: process.pid, happySessionId: sessionId, startedBy: 'daemon',
           processStartTimeMs: identity.processStartTimeMs,
           respawn: { version: 1, directory: home, spawnNonce: state === 'marker-unbound' ? 'another-nonce' : nonce,
@@ -172,7 +180,7 @@ describe('recovered spawn readiness through real marker, host and RPC owners', (
             expect((await pendingLookup).json()).toEqual(state === 'await-stable'
               ? { success: true, status: 'success', sessionId } : { success: true, status: 'pending' });
           } else {
-            expect((await lookup()).json()).toEqual(state === 'host-ready' || state === 'plain-ready' || state === 'host-missing-id-ready'
+            expect((await lookup()).json()).toEqual(state === 'host-ready' || state === 'plain-ready' || state === 'plain-wrapper-ready' || state === 'host-missing-id-ready'
               || state === 'windows-console-ready' || state === 'windows-terminal-ready'
               || state === 'windows-pty-ready' || state === 'windows-pty-published-id-ready'
               ? { success: true, status: 'success', sessionId } : { success: true, status: 'pending' });

@@ -4,6 +4,7 @@ import { readTerminalAttachmentInfo, readTerminalHostAttachmentState, terminalMe
 import { windowsHostedAttachmentMatchesRunner } from '../platform/windows/windowsHostedSessionRuntime';
 import { readSessionMarkerForPid } from '../sessionRegistry';
 import { isCanonicalSpawnSessionId } from '../sessions/resolveSpawnWebhookResult';
+import { resolveTrackedSessionRunnerIdentity } from '../sessions/sessionReportCorrelation';
 import type { SessionRunnerServiceabilityProbe } from '../sessions/isSessionRunnerActive';
 import type { TrackedSession } from '../types';
 
@@ -23,26 +24,27 @@ export async function resolveRecoveredSpawnNonceAdmission(input: Readonly<{
   const tracked = input.getChildren().find(child => child.spawnOptions?.spawnNonce?.trim() === nonce);
   if (!nonce || !tracked) return { type: 'not_found' };
   const sessionId = tracked.happySessionId?.trim();
-  const runnerPid = tracked.sessionRunnerPid ?? tracked.childProcess?.pid ?? tracked.pid;
-  const processIdentity = { pid: runnerPid, processStartTimeMs: tracked.processStartTimeMs,
-    processCommandHash: tracked.processCommandHash };
+  const processIdentity = resolveTrackedSessionRunnerIdentity(tracked);
+  if (!processIdentity) return { type: 'pending' };
+  const runnerPid = processIdentity.pid;
   const initialTerminal = tracked.hostedTerminal ?? tracked.happySessionMetadataFromLocalWebhook?.terminal;
   // Metadata is schema-owned JSON. Keep the original launch facts across OS/RPC awaits.
   const terminal = initialTerminal ? structuredClone(initialTerminal) : undefined;
   const requestedMode = tracked.spawnOptions?.terminal?.mode;
   const expectedId = terminal?.controlServiceabilityV1?.attachmentId
     ?? tracked.publishedTerminalControlServiceabilityAttachmentId;
-  const stillAdmissible = () => input.getChildren().includes(tracked)
-    && tracked.happySessionId?.trim() === sessionId
-    && tracked.spawnOptions?.spawnNonce?.trim() === nonce
-    && tracked.spawnOptions?.terminal?.mode === requestedMode
-    && (tracked.sessionRunnerPid ?? tracked.childProcess?.pid ?? tracked.pid) === runnerPid
-    && processIdentityMatches(processIdentity, { pid: runnerPid,
-      processStartTimeMs: tracked.processStartTimeMs, processCommandHash: tracked.processCommandHash })
-    && !tracked.startupCustody && !tracked.spawnStartupReadinessFailure
-    && !tracked.reportMarkerCustody?.retiring
-    && tracked.stopRequestedAtMs === undefined
-    && tracked.sessionWebhookTimedOutAtMs === undefined;
+  const stillAdmissible = () => {
+    const currentIdentity = resolveTrackedSessionRunnerIdentity(tracked);
+    return Boolean(currentIdentity && input.getChildren().includes(tracked)
+      && tracked.happySessionId?.trim() === sessionId
+      && tracked.spawnOptions?.spawnNonce?.trim() === nonce
+      && tracked.spawnOptions?.terminal?.mode === requestedMode
+      && processIdentityMatches(processIdentity, currentIdentity)
+      && !tracked.startupCustody && !tracked.spawnStartupReadinessFailure
+      && !tracked.reportMarkerCustody?.retiring
+      && tracked.stopRequestedAtMs === undefined
+      && tracked.sessionWebhookTimedOutAtMs === undefined);
+  };
   if (!isCanonicalSpawnSessionId(sessionId) || !stillAdmissible()) return { type: 'pending' };
   const marker = await readSessionMarkerForPid(runnerPid);
   if (!marker || marker.startedBy !== 'daemon' || marker.happySessionId !== sessionId

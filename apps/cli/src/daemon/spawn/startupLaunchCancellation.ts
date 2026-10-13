@@ -1,5 +1,7 @@
 import type { ChildExit } from '../sessions/onChildExited';
 import type { TrackedSession } from '../types';
+import { SessionLaunchRetiredV1Schema } from '@happier-dev/protocol/spawnSession';
+import { SPAWN_SESSION_ERROR_CODES, type SpawnSessionResult } from '@/session/shared/spawnSessionContract';
 
 export type StartupLaunchCancellationResult =
   | Readonly<{ status: 'stopped' }>
@@ -78,4 +80,17 @@ export function resolveSpawnErrorAfterStartupCancellation(
   return result.status === 'stopped'
     ? null
     : `startup_retirement_incomplete:${result.reason}`;
+}
+
+/** Called by launch owners only after their physical cancellation and cleanup succeeded. */
+export function projectRetiredStartupLaunchResult(params: Readonly<{
+  result: SpawnSessionResult;
+  readinessFailure: TrackedSession['spawnStartupReadinessFailure'];
+  spawnNonce: string | undefined;
+  wrapperPid: number;
+}>): SpawnSessionResult {
+  if (params.result.type !== 'error' || params.result.errorCode !== SPAWN_SESSION_ERROR_CODES.SPAWN_FAILED
+    || !params.readinessFailure || !params.spawnNonce) return params.result;
+  return { ...params.result, errorDetail: SessionLaunchRetiredV1Schema.parse({ kind: 'launch_retired',
+    spawnNonce: params.spawnNonce, wrapperPid: params.wrapperPid }) };
 }

@@ -34,6 +34,8 @@ describe('persistAcceptedSpawnMarker native runner witness', () => {
                 linuxLaunchUnit: 'happier-session-0123456789ab.session-0123456789abcdef0123456789abcdef.scope',
                 spawnOptions: { directory: home, backendTarget: { kind: 'backend', backendId: 'codex', sourceKind: 'built_in' } } };
             const readIdentity: typeof readProcessIdentityByPid = pid => readProcessIdentityByPid(pid, { platform: 'linux', linuxBoundary });
+            const wrapperIdentity = await readIdentity(tracked.pid);
+            tracked.processStartTimeMs = wrapperIdentity!.processStartTimeMs;
             await persistAcceptedSpawnMarker({ trackedSession: tracked, deviceLocalSecretStorage: storage, readProcessIdentityByPidFn: readIdentity });
             const marker = await readSessionMarkerForPid(2222);
             expect(marker).toMatchObject({ pid: 2222, processStartTimeMs: 4560, linuxLaunchUnit: tracked.linuxLaunchUnit });
@@ -43,7 +45,7 @@ describe('persistAcceptedSpawnMarker native runner witness', () => {
             await writeSessionMarker({ pid: 2222, happySessionId: 's1', startedBy: 'daemon', processStartTimeMs: 4560 });
             expect(await readSessionMarkerForPid(2222)).toHaveProperty('linuxLaunchUnit', tracked.linuxLaunchUnit);
             expect(await readSessionMarkerForPid(1111)).toBeNull();
-            expect(tracked.processStartTimeMs).toBe(4560);
+            expect(tracked.processStartTimeMs).toBe(1230);
             await persistAcceptedSpawnMarker({ trackedSession: tracked, processPid: 1111, deviceLocalSecretStorage: storage, readProcessIdentityByPidFn: readIdentity });
             expect(await readSessionMarkerForPid(1111)).toMatchObject({ pid: 1111, processStartTimeMs: 1230 });
         } finally {

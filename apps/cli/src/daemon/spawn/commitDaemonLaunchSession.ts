@@ -164,6 +164,7 @@ export async function commitDaemonLaunchSession(input: Readonly<{
       attachPayload: attach.attachPayload,
       options: {
         ...optionsWithoutIdentity,
+        existingSessionId: created.id,
         ...(identity ? { connectedServiceMaterializationIdentityV1: identity } : {}),
         attachMetadataIdentityPolicy: options.attachMetadataIdentityPolicy ?? 'replace_with_runtime_identity',
       },

@@ -50,6 +50,7 @@ import { HAPPIER_SESSION_CREATE_ORIGIN_ENV_KEY, pickSessionCreateOriginFields } 
 import { HAPPIER_SESSION_CREATE_REPORTS_TO_ENV_KEY } from '@/session/shared/sessionCreateReportsTo';
 import { HAPPIER_SESSION_CREATE_ROLES_ENV_KEY } from '@/session/shared/sessionCreateRoles';
 import { resolveExistingSessionHandoffState } from '@/session/handoff/agentBundle/import';
+import { requiresAgentSessionCli } from '@/agent/catalog/runtimeEntry';
 
 type ResolveSpawnChildEnvironmentSuccess = {
   ok: true;
@@ -248,6 +249,9 @@ async function resolveSpawnChildEnvironmentImpl(params: {
     : null;
   const resolvedAgentId = normalizedResolvedAgentId
     ?? (backendTarget?.sourceKind === 'built_in' ? backendTarget.backendId : null);
+  const agentCliRequired = resolvedAgentId && params.pluginRuntimeRegistry
+    ? requiresAgentSessionCli(resolvedAgentId, params.pluginRuntimeRegistry)
+    : true;
   const selectedAgentCredentialEnvironmentVariables = resolvedAgentId
     ? params.pluginRuntimeRegistry?.contributes.agentDefinitionsById
       .get(resolvedAgentId)?.cliMetadata?.auth.environmentVariables ?? []
@@ -461,7 +465,7 @@ async function resolveSpawnChildEnvironmentImpl(params: {
   );
 
   async function validateAgentCliLaunch(agentId: string, processEnv: NodeJS.ProcessEnv): Promise<Readonly<
-    | { ok: true; launchSpec: AgentCliLaunchSpec }
+    | { ok: true; launchSpec?: AgentCliLaunchSpec }
     | { ok: false; errorMessage: string }
   >> {
     // Every installed Agent is validated here, bundled or externally
@@ -479,6 +483,9 @@ async function resolveSpawnChildEnvironmentImpl(params: {
     if (launchSpec !== null) {
       return { ok: true, launchSpec };
     }
+    // A factory without a static CLI may still resolve an executable from its
+    // admitted definition. Only a genuinely absent spec uses the factory proof.
+    if (!agentCliRequired) return { ok: true };
     try {
       return {
         ok: false,
@@ -751,7 +758,7 @@ async function resolveSpawnChildEnvironmentImpl(params: {
     agentCliLaunchSpec = validation.launchSpec;
     // A successfully authorized and materialized Provider binding owns its
     // credential transport; its adapter can deliberately clear native login.
-    const auth = params.providerBindingContext && lateProviderMaterialization?.ok === true
+    const auth = !agentCliLaunchSpec || (params.providerBindingContext && lateProviderMaterialization?.ok === true)
       ? null
       : await detectNativeAgentCliAuthStatus({
         agentId: resolvedAgentId,
