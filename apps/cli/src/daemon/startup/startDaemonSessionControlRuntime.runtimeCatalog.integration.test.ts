@@ -5,6 +5,7 @@ import { readFileSync } from 'node:fs';
 import { createHash } from 'node:crypto';
 import { EventEmitter } from 'node:events';
 import { chmod, mkdir, mkdtemp, readFile, rm, writeFile } from 'node:fs/promises';
+import * as filesystem from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join, resolve } from 'node:path';
 
@@ -16,7 +17,9 @@ import { ApprovalRequestV2Schema } from '@happier-dev/protocol/approvals/approva
 import { ACTION_OPERATION_RPC_METHODS_V2, ActionOperationGetV1ResponseSchema, ActionOperationListV1ResponseSchema } from '@happier-dev/protocol/actions/operations/v1';
 import { PROFILE_ROWS_ROUTE_V1 } from '@happier-dev/protocol/profiles/profileRecordV1';
 import { PROFILE_TRANSFER_ROUTE_V1 } from '@happier-dev/protocol/profiles/profileTransferV1';
-import { ManagedAdmissionOutputV1Schema, managedMachineActionEndpointPathV1 } from '@happier-dev/protocol/machines/managed/actionsV1';
+import { ManagedAdmissionOutputV1Schema, MachineEnvironmentResolveResultV1Schema, MachineEnvironmentReportInputV1Schema, MachineEnvironmentApplyResultV1Schema, managedMachineActionEndpointPathV1 } from '@happier-dev/protocol/machines/managed/actionsV1';
+import * as ptyProviderBoundary from '@/terminal/pty/provider';
+import type { PtyExitEvent, PtyProcess, PtySpawnParams } from '@/terminal/pty/provider';
 import { deriveManagedDevcontainerChildProjectionV1 } from '@happier-dev/protocol/machines/managed/devcontainerV1';
 import { ManagedPolicyAdmissionInputV1Schema, ManagedPolicyAdmissionOutputV1Schema, ManagedPolicyCensusInputV1Schema, MANAGED_POLICY_PROOF_HEADER, createManagedPolicyProofV1, decodeManagedPolicyProofV1, managedPolicyDigestV1 } from '@happier-dev/protocol/machines/managed/managedPolicyV1';
 import { verifyMachineInstallationProof } from '@happier-dev/protocol/machines/identity/installationIdentity';
@@ -131,6 +134,18 @@ import type {
 import { logger } from '@/ui/logger';
 import { configuration } from '@/configuration';
 import { createTestMetadata } from '@/testkit/backends/sessionMetadata';
+import { procfsFileHandle } from '@/testkit/process/procfsFileHandle';
+
+// Genuine descriptor/directory OS boundaries remain real until a fixture selects
+// procfs; wrapped exports permit that fixture under native ESM namespaces.
+vi.mock('node:fs/promises', async (importOriginal) => {
+    const actual = await importOriginal<typeof import('node:fs/promises')>();
+    return { ...actual, open: vi.fn(actual.open), readdir: vi.fn(actual.readdir) };
+});
+vi.mock('@/terminal/pty/provider', async importOriginal => {
+    const actual = await importOriginal<typeof import('@/terminal/pty/provider')>();
+    return { ...actual, createNodePtyProvider: vi.fn(actual.createNodePtyProvider) };
+});
 import { resetInMemoryAccountSettingsContextForTests } from '@/settings/accountSettings/bootstrapAccountSettingsContext';
 import type { ActiveAccountSettingsSnapshot } from '@/settings/accountSettings/activeAccountSettingsSnapshot';
 import {
@@ -170,6 +185,8 @@ import { createConnectedAccountPurposeBindingOwner } from '../connectedServices/
 import { setActiveAccountSettingsSnapshot } from '@/settings/accountSettings/activeAccountSettingsSnapshot';
 import { resolveAccountSettingsScopeKeyForToken } from '@/settings/accountSettings/accountSettingsScopeKey';
 import { ARTIFACT_PLAIN_DATA_KEY_MARKER, decodePlainArtifactStoredContent, encodePlainArtifactStoredContent } from '@happier-dev/protocol/storage/artifactStoredContent';
+import { MACHINE_PLAIN_DATA_KEY_MARKER } from '@happier-dev/protocol/machines/machineStoredContent';
+import { ExternalActionMachineBootstrapV1Schema } from '@happier-dev/protocol/actions/externalActionApi';
 import { createWorkBoardV1 } from '@happier-dev/protocol/boards/workBoardV1';
 import { buildWorkBoardArtifactHeaderV1 } from '@happier-dev/protocol/boards/workBoardArtifactV1';
 import { createDaemonManagedMachinePolicyRuntime, readManagedMachinePolicyCensus } from './managedMachinePolicyRuntime';
@@ -223,6 +240,8 @@ import {
 import {
     isRetainedManagedProviderSettingsGrantCurrent,
 } from '@/providers/sessions/retainedManagedProviderPolicy';
+import { readProviderSettingsForCli } from '@/providers/settings/read';
+import { splitProviderSettingsV1 } from '@happier-dev/protocol/providers/connections/connectionRowsV1';
 import {
     readPluginRegistryCommitRecord,
     replacePluginRegistryCommitRecord,
@@ -1832,7 +1851,7 @@ describe('startDaemonSessionControlRuntime', () => {
     it.each(['allow', 'ask', 'revoked', 'changed-root', 'revoked-after-ask'] as const)('runs shared finite wake RPC with requester custody (%s)', async scenario => {
         await runPrivateManagedRequesterFixture(true, false, scenario);
     });
-    async function runManagedPolicyFixture(policy: 'disabled' | 'approve' | 'reject' | 'cancel' | 'changed-policy' | 'explicit-delete-waiver' | 'event-driven-policy' | 'creation-cleanup' | 'resource-replacement' | 'wake-native-refused' | 'wake-native-unknown' | 'guard-cleanup-ask' | 'deferred-acquire') {
+    async function runManagedPolicyFixture(policy: 'disabled' | 'approve' | 'reject' | 'cancel' | 'changed-policy' | 'explicit-delete-waiver' | 'event-driven-policy' | 'creation-cleanup' | 'resource-replacement' | 'wake-native-refused' | 'wake-native-unknown' | 'guard-cleanup-ask' | 'deferred-acquire' | 'environment-approved', nativeExecEnvironment = false) {
         const acceptedWake = policy === 'wake-native-refused' || policy === 'wake-native-unknown';
         const socketPolicy = policy === 'event-driven-policy' || policy === 'creation-cleanup' || policy === 'resource-replacement';
         if (socketPolicy) {
@@ -1867,7 +1886,7 @@ describe('startDaemonSessionControlRuntime', () => {
         await writeStoredCredentialsForServerId(configuration.activeServerId, credentials);
         expect((await readStoredCredentials())?.token).toBe(token);
         const serverUrl = 'https://policy-gate.example.test';
-        if (socketPolicy) Object.assign(configuration, { serverUrl, apiServerUrl: serverUrl });
+        if (socketPolicy || policy === 'environment-approved') Object.assign(configuration, { serverUrl, apiServerUrl: serverUrl });
         const homeId = 'srv_policy_gate';
         const installation = await readOrCreateInstallationIdentity();
         await updateSettings(settings => ({ ...settings, servers: { ...settings.servers,
@@ -1909,13 +1928,53 @@ describe('startDaemonSessionControlRuntime', () => {
             ManagedMachineV1Schema.parse({ ...machine, id: 'ordinary-until-delete', creationState: 'active', cleanup: undefined }),
         ] : [];
         const nativeEffects: string[] = [];
+        const setupLaunches: PtySpawnParams[] = [];
+        const environmentReports: unknown[] = [];
+        // Only the OS PTY is substituted. The installed terminal, operation,
+        // approval, signing and native environment owners remain real.
+        const setupPtyBoundary = policy === 'environment-approved' ? vi.spyOn(ptyProviderBoundary, 'createNodePtyProvider').mockReturnValue({
+            spawn(launch) {
+                setupLaunches.push(launch);
+                const exits = new Set<(event: PtyExitEvent) => void>();
+                const pty: PtyProcess = { pid: 23456, ownedProcessGroupId: 23456, write() {}, resize() {}, kill() {},
+                    onData: () => ({ dispose() {} }),
+                    onExit(listener) { exits.add(listener); queueMicrotask(() => listener({ exitCode: 0, signal: 0 }));
+                        return { dispose: () => exits.delete(listener) }; } };
+                return pty;
+            },
+        }) : undefined;
+        onTestFinished(() => setupPtyBoundary?.mockRestore());
         const nativeInputs: unknown[] = [];
+        if (nativeExecEnvironment) {
+            vi.stubEnv('UNRELATED_SECRET', 'ambient-secret');
+            vi.stubEnv('NATIVE_CONFIGURATION', 'ambient-configuration');
+            onTestFinished(() => vi.unstubAllEnvs());
+        }
+        const nativeExecObservations: unknown[] = [];
         let notifyDeleteEffect: () => void = () => {};
         const deleteEffect = new Promise<void>(resolve => { notifyDeleteEffect = resolve; });
         const nativeOptions: NonNullable<Parameters<typeof managedNativeFixture>[0]> = { privateNative: true,
+            ...(nativeExecEnvironment ? {
+                // Select the existing fixture's process declaration, substituting
+                // only executable/path resolution. Invocation and supervision stay real.
+                nativeCommandArgs: ['-e', 'void 0'],
+                nativeRoleResults: { check: { available: true }, inspect: { observedAt: 0, availability: 'present' }, destroy: { kind: 'confirmed' } },
+                hostServiceAdapters: { exec: {
+                    resolveExecutable: async () => ({ command: process.execPath, env: {} }),
+                    resolvePath: async () => process.cwd(),
+                } },
+            } : {}),
             ...(acceptedWake ? { supportedIntents: ['start' as const], nativeRoleResults: {
                 power: policy === 'wake-native-refused' ? { kind: 'refused', code: 'provider_unavailable' } : { kind: 'unknown' },
-            } } : {}), onNativeRole: (role, input) => {
+            } } : {}), onNativeRole: async (role, input, context) => {
+            if (nativeExecEnvironment && role === 'destroy') {
+                const result = await context.services.exec.run({ executable: { kind: 'systemTool', id: 'fixture-node' },
+                    args: ['-e', 'process.stdout.write(JSON.stringify({selected:process.env.NATIVE_CONFIGURATION, unrelated:process.env.UNRELATED_SECRET ?? null}))'],
+                    env: { NATIVE_CONFIGURATION: 'selected-configuration' } });
+                expect(result.termination.observed).toEqual({ kind: 'exit', exitCode: 0 });
+                nativeExecObservations.push(JSON.parse(Buffer.from(result.stdout).toString()));
+                expect(nativeExecObservations).toEqual([{ selected: 'selected-configuration', unrelated: null }]);
+            }
             nativeEffects.push(role);
             if (role === 'destroy') nativeInputs.push(input);
             if (role === 'destroy') notifyDeleteEffect();
@@ -2015,6 +2074,15 @@ describe('startDaemonSessionControlRuntime', () => {
         const post = vi.spyOn(axios, 'post').mockImplementation(async (url, body, options) => {
             const path = new URL(String(url)).pathname;
             observedTransport.push({ method: 'POST', path });
+            if (policy === 'environment-approved' && path.endsWith('/execution-authorization/verify')) return { status: 200, data: { ok: true } };
+            if (policy === 'environment-approved' && path === '/v1/machines/environment/resolve') {
+                expect(body).toEqual({ homeId, machineId: machine.controller.machineId, presetId: 'environment-preset', presetRevision: 0 });
+                return { status: 200, data: MachineEnvironmentResolveResultV1Schema.parse({ environment: { setupScript: 'printf environment-setup' } }) };
+            }
+            if (policy === 'environment-approved' && path === '/v1/machines/environment/report') {
+                environmentReports.push(MachineEnvironmentReportInputV1Schema.parse(body));
+                return { status: 200, data: { reported: true } };
+            }
             if (path.endsWith('/activation-failed')) {
                 activationFailures.push(body);
                 const proof = decodeManagedPolicyProofV1(String(options?.headers?.[MANAGED_POLICY_PROOF_HEADER]));
@@ -2093,8 +2161,14 @@ describe('startDaemonSessionControlRuntime', () => {
             const path = new URL(String(url)).pathname;
             observedTransport.push({ method: 'GET', path });
             if (path === '/v1/account/profile') return { status: 200, data: { id: machine.custodianAccountId } };
+            if (policy === 'environment-approved' && path === `/v1/machines/${machine.controller.machineId}`) {
+                return { status: 200, data: { machine: { ...ExternalActionMachineBootstrapV1Schema.parse({
+                    id: machine.controller.machineId, active: true, kind: 'persistent', revokedAt: null, replacedByMachineId: null,
+                    installationId: installation.installationId, dataEncryptionKey: MACHINE_PLAIN_DATA_KEY_MARKER,
+                }), storageMode: 'plain', installationPublicKey: encodeBase64(decodeBase64(installation.publicKey, 'base64url'), 'base64') } } };
+            }
             if (socketPolicy && path === '/v1/auth/ping') return { status: 200, data: {} };
-            if (policy === 'explicit-delete-waiver') {
+            if (policy === 'explicit-delete-waiver' || policy === 'environment-approved') {
                 if (path === '/v1/artifacts') { censusReads.push('boards'); return { status: 200, data: [...artifacts.values()] }; }
                 if (path === '/v3/automations') { censusReads.push('assignments'); return { status: 200, data: { automations: [], nextCursor: null } }; }
                 if (path === '/v2/account/settings') return { status: 200, data: { version: 1, content: { t: 'plain', v: {} } } };
@@ -2149,6 +2223,59 @@ describe('startDaemonSessionControlRuntime', () => {
             origin: { kind: 'session-input' as const, session: { homeId, sessionId: 'session-policy-gate' },
                 pendingRequestId: 'pending-policy-gate', requestedAt: 1 }, reason: 'admitted-work' as const };
         try {
+            if (policy === 'environment-approved') {
+                const ingress = runtime.externalActionIngressOwner;
+                if (!ingress) throw new Error('Expected installed Action ingress');
+                const actionId = 'machines.environment.apply' as const;
+                const input = { homeId, machineId: machine.controller.machineId, presetId: 'environment-preset', presetRevision: 0 };
+                const target = { kind: 'machine' as const, machineId: machine.controller.machineId };
+                const envelope = { v: 1 as const, requestId: 'environment-approved-request', target, input };
+                const authorization = ExternalActionExecutionAuthorizationV1Schema.parse({ v: 1, token: 'environment-root', binding: {
+                    accountId: machine.custodianAccountId, custodianAccountId: machine.custodianAccountId,
+                    authentication: { kind: 'account', tokenEpoch: 0 }, accountEncryptionMode: 'plain',
+                    serverIdentityId: homeId, machineId: machine.controller.machineId, installationId: installation.installationId,
+                    actionId, requestId: envelope.requestId, target, requestEnvelopeDigest: computeExternalActionRequestEnvelopeDigestV1(envelope),
+                } });
+                const ask = await executeExternalAction({ ...ingress, actionId, envelope, executionAuthorization: authorization,
+                    currentMachineId: machine.controller.machineId, currentAccountId: machine.custodianAccountId,
+                    currentInstallationId: installation.installationId, principal: { accountId: machine.custodianAccountId,
+                        authentication: { kind: 'account', tokenEpoch: 0 }, authority: 'account_automation' },
+                    verifyExecutionAuthorization: async request => {
+                        const { verifyExternalActionExecutionAuthorizationCurrent } = await import('@/api/externalActionExecutionAuthorization');
+                        return verifyExternalActionExecutionAuthorizationCurrent({ ...request, installationId: installation.installationId,
+                            privateKey: installation.privateKey, serverHttpBaseUrl: serverUrl });
+                    }, surface: 'cli', signal: new AbortController().signal });
+                expect(ask, JSON.stringify({ ask, observedTransport })).toMatchObject({ kind: 'response', response: { execution: { ok: true,
+                    result: { kind: 'approval_request_created', actionId } } } });
+                expect(setupLaunches).toEqual([]);
+                const rpc = apiMachine.getPeerMediationMachineRpcHandlerManager();
+                expect(ActionOperationListV1ResponseSchema.parse(await rpc.invokeLocal(ACTION_OPERATION_RPC_METHODS_V2.list, {})).items).toEqual([]);
+                const artifactId = [...artifacts.keys()][0]!;
+                expect(ApprovalRequestV2Schema.parse(approvals[0]).executionOriginV1.requestId).toBe(envelope.requestId);
+                const decision = await ingress.executor.execute('approval.request.decide', { artifactId, decision: 'approve' },
+                    { surface: 'cli', serverId: configuration.activeServerId, actionRequestId: 'environment-human-answer', signal: new AbortController().signal });
+                expect(decision, JSON.stringify({ decision, observedTransport })).toMatchObject({ ok: true });
+                const stored = artifacts.get(artifactId)!;
+                const content = decodePlainArtifactStoredContent(String(stored.body));
+                if (!content || typeof content !== 'object' || !('body' in content) || typeof content.body !== 'string') throw new Error('Missing settled approval');
+                const approval = ApprovalRequestV2Schema.parse(JSON.parse(content.body));
+                expect(approval, JSON.stringify({ approval, observedTransport })).toMatchObject({ status: 'executed', execution: { ok: true } });
+                if (!approval.execution?.ok) throw new Error('Expected successful approved setup');
+                const output = MachineEnvironmentApplyResultV1Schema.parse(approval.execution.result);
+                expect(setupLaunches).toHaveLength(1);
+                expect(setupLaunches[0]).toMatchObject({ args: ['-c', 'printf environment-setup'] });
+                const listed = ActionOperationListV1ResponseSchema.parse(await rpc.invokeLocal(ACTION_OPERATION_RPC_METHODS_V2.list, {}));
+                expect(listed.items).toHaveLength(1);
+                expect(listed.items[0]).toMatchObject({ actionId, requestId: envelope.requestId, operationId: output.operationId, state: 'succeeded',
+                    domainRef: { kind: 'machineEnvironment', machineId: machine.controller.machineId, preset: { id: input.presetId, revision: 0 }, terminalId: output.terminalId } });
+                expect(await ingress.executor.execute('approval.request.decide', { artifactId, decision: 'approve' },
+                    { surface: 'cli', serverId: configuration.activeServerId, actionRequestId: 'environment-repeated-answer' })).toMatchObject({ ok: true });
+                expect(setupLaunches).toHaveLength(1);
+                expect(ActionOperationListV1ResponseSchema.parse(await rpc.invokeLocal(ACTION_OPERATION_RPC_METHODS_V2.list, {}))
+                    .items.map(operation => operation.operationId)).toEqual([output.operationId]);
+                expect(environmentReports).toEqual([]); // Existing machine has no managed creation stage.
+                return;
+            }
             if (policy === 'deferred-acquire') {
                 const ingress = runtime.externalActionIngressOwner;
                 if (!ingress) throw new Error('Expected the installed credentialed Action ingress');
@@ -2433,6 +2560,7 @@ describe('startDaemonSessionControlRuntime', () => {
                 expect(activationFailures).toEqual(policy === 'wake-native-refused' ? [{ target: wakeTarget, failureCode: 'runtime_start_failed' }] : []);
             }
             expect(nativeEffects.filter(role => role === 'destroy')).toHaveLength(policy === 'approve' ? 1 : 0);
+            if (nativeExecEnvironment) expect(nativeExecObservations).toEqual([{ selected: 'selected-configuration', unrelated: null }]);
             expect(approvals).toHaveLength(1);
             expect(getSharedBlockingApprovalCoordinator().getLiveWaiterCount(artifactId)).toBe(0);
             expect(ActionOperationGetV1ResponseSchema.parse(await apiMachine.getPeerMediationMachineRpcHandlerManager()
@@ -2452,8 +2580,12 @@ describe('startDaemonSessionControlRuntime', () => {
     }
 
     it.each(['disabled', 'approve', 'reject', 'cancel', 'changed-policy', 'explicit-delete-waiver'] as const)(
-        'keeps automatic managed policy behind current %s Actions policy without terminal consent', runManagedPolicyFixture,
+        'keeps automatic managed policy behind current %s Actions policy without terminal consent', async policy => runManagedPolicyFixture(policy),
     );
+
+    it('preserves selected native exec environment through installed daemon approval and native effect without ambient secret disclosure', async () => {
+        await runManagedPolicyFixture('approve', true);
+    });
 
     it('reconstructs managed policy from real Account edges and reconnect', async () => {
         await runManagedPolicyFixture('event-driven-policy');
@@ -2464,6 +2596,10 @@ describe('startDaemonSessionControlRuntime', () => {
 
     it('keeps a deferred acquisition Ask out of native operation settlement before approval', async () => {
         await runManagedPolicyFixture('deferred-acquire');
+    });
+
+    it('runs approved environment setup through the installed native adapter and operation store', async () => {
+        await runManagedPolicyFixture('environment-approved');
     });
 
     it('runs signed canceled creation cleanup behind one real Ask while leaving manual retirement and until-delete peers alone', async () => {
@@ -9078,6 +9214,7 @@ describe('startDaemonSessionControlRuntime', () => {
             'capability-digest';
         tracked.processStartTimeMs = 123;
         tracked.processCommandHash = '5'.repeat(64);
+        tracked.runnerProcessIdentity = { pid: runner.pid, processStartTimeMs: runner.processStartTimeMs, processCommandHash: runner.processCommandHash };
         tracked.runnerAgentInvocationContext = {
             cwd: '/workspace',
             environment: {
@@ -9430,32 +9567,47 @@ describe('startDaemonSessionControlRuntime', () => {
                     },
                 }),
         };
-        getActiveAccountSettingsSnapshotMock.mockReturnValue({
+        const retainedProviderSettings = splitProviderSettingsV1(
+            ProviderSettingsV1Schema.parse({
+                ...DEFAULT_PROVIDER_SETTINGS_V1,
+                connections: [{
+                    v: 1,
+                    id: retainedConnectionId,
+                    source: {
+                        kind: 'contribution',
+                        contributionKey:
+                            retainedRuntimeBindingBasis.contributionKey,
+                    },
+                    role: 'default',
+                    displayName: 'Retained P',
+                    displayNameMode: 'automatic',
+                    deployment: { kind: 'managedLocal' },
+                    revision: 1,
+                    createdAt: 1,
+                    updatedAt: 1,
+                }],
+                machineGrants: [retainedMachineGrant],
+            }),
+        );
+        resetInMemoryAccountSettingsContextForTests();
+        onTestFinished(resetInMemoryAccountSettingsContextForTests);
+        getActiveAccountSettingsSnapshotMock.mockImplementation(
+            () => getActiveAccountSettingsSnapshotActual.current?.() ?? null,
+        );
+        setActiveAccountSettingsSnapshot({
+            source: 'network',
+            settingsVersion: 1,
+            loadedAtMs: Date.now(),
             settings: AccountSettingsSchema.parse({
-                schemaVersion: 2,
-                providerSettingsV1: {
-                    ...DEFAULT_PROVIDER_SETTINGS_V1,
-                    connections: [{
-                        v: 1,
-                        id: retainedConnectionId,
-                        source: {
-                            kind: 'contribution',
-                            contributionKey:
-                                retainedRuntimeBindingBasis
-                                    .contributionKey,
-                        },
-                        role: 'default',
-                        displayName: 'Retained P',
-                        displayNameMode: 'automatic',
-                        deployment: { kind: 'managedLocal' },
-                        revision: 1,
-                        createdAt: 1,
-                        updatedAt: 1,
-                    }],
-                    machineGrants: [retainedMachineGrant],
-                },
+                providerDefaultModelSelectionsByAgentTargetKeyV1:
+                    retainedProviderSettings.defaults,
             }),
             settingsSecretsReadKeys: [],
+            providerConnectionsCatalog: {
+                status: 'ready',
+                revision: 1,
+                catalog: retainedProviderSettings.catalog,
+            },
         });
         const retainedProviderSourceRoot = await mkdtemp(join(
             tmpdir(),
@@ -9957,14 +10109,16 @@ describe('startDaemonSessionControlRuntime', () => {
                     retainedProviderImmutableGenerationId,
             }),
         ).resolves.toBe(true);
-        const activeRetainedProviderSettings =
-            getActiveAccountSettingsSnapshotMock()?.settings
-                ?.providerSettingsV1;
-        if (!activeRetainedProviderSettings) {
+        const activeRetainedAccountSnapshot =
+            getActiveAccountSettingsSnapshotActual.current?.();
+        if (!activeRetainedAccountSnapshot) {
             throw new Error(
-                'Expected active retained Provider settings',
+                'Expected active retained Account snapshot',
             );
         }
+        const activeRetainedProviderSettings = readProviderSettingsForCli(
+            activeRetainedAccountSnapshot,
+        ).settings;
         expect(isRetainedManagedProviderSettingsGrantCurrent({
             machineId: 'machine-1',
             providerSettings: ProviderSettingsV1Schema.parse(
@@ -10360,12 +10514,17 @@ describe('startDaemonSessionControlRuntime', () => {
             startedBy: 'daemon',
             happySessionId: 'session-hard-revoked',
             childProcess: revokedChildProcess as never,
-            processStartTimeMs: 789,
+            processStartTimeMs: 780,
             processCommandHash: '7'.repeat(64),
+            runnerProcessIdentity: {
+                pid: 95,
+                processStartTimeMs: 790,
+                processCommandHash: '7'.repeat(64),
+            },
         };
         const revokedRunner = Object.freeze({
             pid: 95,
-            processStartTimeMs: 789,
+            processStartTimeMs: 790,
             processCommandHash: '7'.repeat(64),
             snapshotIdentity: 'snapshot:runner',
         });
@@ -10447,10 +10606,47 @@ describe('startDaemonSessionControlRuntime', () => {
             pidSafetyModule,
             'isPidSafeHappySessionProcess',
         ).mockResolvedValue(true);
+        // The real census/terminator reads procfs before signaling. Model only
+        // this fixture PID's OS files; all unrelated filesystem I/O stays real.
+        const actualOpen = filesystem.open;
+        const procfsOpen = vi.spyOn(filesystem, 'open').mockImplementation(
+            async (path, flags, mode) => {
+                const file = String(path);
+                if (!file.startsWith(`/proc/${revokedPid}/`)) {
+                    return actualOpen(path, flags, mode);
+                }
+                if (!pidToTrackedSession.has(revokedPid)) {
+                    throw Object.assign(new Error('Fixture process exited'), { code: 'ENOENT' });
+                }
+                if (file.endsWith('/status')) {
+                    return procfsFileHandle(`Uid:\t${process.getuid?.() ?? 1000}\t0\t0\t0\n`);
+                }
+                if (file.endsWith('/stat')) {
+                    const fields = Array<string>(22).fill('0');
+                    fields[0] = 'S';
+                    fields[1] = '1';
+                    fields[2] = String(revokedPid);
+                    fields[3] = String(revokedPid);
+                    fields[19] = String(revokedTracked.processStartTimeMs! / 10);
+                    return procfsFileHandle(`${revokedPid} (fixture-runner) ${fields.join(' ')}`);
+                }
+                return actualOpen(path, flags, mode);
+            },
+        );
+        onTestFinished(() => procfsOpen.mockRestore());
+        const actualReaddir = filesystem.readdir;
+        // Procfs directory enumeration must include the same observed fixture
+        // process as its descriptors. Other directory reads keep their options.
+        const procfsReaddir = vi.spyOn(filesystem, 'readdir').mockImplementation(
+            (async (path, options) => String(path) === '/proc'
+                ? [String(process.pid), ...(pidToTrackedSession.has(revokedPid) ? [String(revokedPid)] : [])]
+                : actualReaddir(path, options)) as typeof filesystem.readdir,
+        );
+        onTestFinished(() => procfsReaddir.mockRestore());
         const processKill = vi.spyOn(process, 'kill')
             .mockImplementation(((targetPid: number, signal?: number | NodeJS.Signals) => {
                 if (
-                    targetPid === -revokedPid
+                    targetPid === revokedPid
                     && signal === 'SIGTERM'
                 ) {
                     pidToTrackedSession.delete(revokedPid);
@@ -10521,7 +10717,7 @@ describe('startDaemonSessionControlRuntime', () => {
         try {
             await vi.waitFor(() => {
                 expect(processKill).toHaveBeenCalledWith(
-                    -revokedPid,
+                    revokedPid,
                     'SIGTERM',
                 );
                 expect(pidToTrackedSession.has(revokedPid))
@@ -10534,7 +10730,7 @@ describe('startDaemonSessionControlRuntime', () => {
             hardRevocationStopped = false;
         }
         expect.soft(processKill).not.toHaveBeenCalledWith(
-            -nonTargetTracked.pid,
+            nonTargetTracked.pid,
             'SIGTERM',
         );
         pidSafetySpy.mockRestore();
@@ -10983,6 +11179,11 @@ describe('startDaemonSessionControlRuntime', () => {
             happySessionId: sessionId,
             processStartTimeMs: 789,
             processCommandHash: '7'.repeat(64),
+            runnerProcessIdentity: {
+                pid: 197,
+                processStartTimeMs: 799,
+                processCommandHash: 'a'.repeat(64),
+            },
             ...(markerOnly
                 ? {}
                 : {
@@ -11055,8 +11256,8 @@ describe('startDaemonSessionControlRuntime', () => {
         });
         const agentRunner = Object.freeze({
             pid: 197,
-            processStartTimeMs: 789,
-            processCommandHash: '7'.repeat(64),
+            processStartTimeMs: 799,
+            processCommandHash: 'a'.repeat(64),
             snapshotIdentity: 'snapshot:runner',
         });
         if (active) {
@@ -11104,9 +11305,9 @@ describe('startDaemonSessionControlRuntime', () => {
                         startedBy: 'daemon',
                         happyHomeDir: '/tmp/happier-test-home',
                         processStartTimeMs:
-                            tracked.processStartTimeMs,
+                            tracked.runnerProcessIdentity?.processStartTimeMs,
                         processCommandHash:
-                            tracked.processCommandHash,
+                            tracked.runnerProcessIdentity?.processCommandHash,
                         runnerManagedDependencyRetentionV1: {
                             v: 1,
                             adoptedManagedProviderAuthority: {
@@ -11305,6 +11506,11 @@ describe('startDaemonSessionControlRuntime', () => {
                     v: 1,
                     kind: 'fenceHardRevocation',
                     pluginId: 'plugin.provider',
+                    sourceCustody: {
+                        kind: 'managed',
+                        immutableGenerationId: 'generation-provider',
+                        installSource: 'npm',
+                    },
                 },
                 mode: 'plain',
             });

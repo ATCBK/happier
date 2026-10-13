@@ -23,7 +23,7 @@ import {
   type MachineLiveStreamCaptureRegistry,
 } from '../peer/mediation/stream';
 import type { DaemonPeerMediationObservabilityEmitter } from '../peer/mediation/observability/events';
-import type { StoredCredentials } from '@/persistence';
+import { readStoredCredentialsForServerId, sameStoredCredentials, type StoredCredentials } from '@/persistence';
 import type { NormalizedLocalServiceInventorySnapshot } from '../local/services/inventory/scanner';
 import type { LocalServicesDaemonRuntime } from '../local/services/runtime';
 import type { MachineResourceSummary } from '../resources/machineResourceSummary';
@@ -56,7 +56,8 @@ import type { ProjectFiniteActionRuntime } from '@/workspaces/projectSetup/proje
 import { ProjectDefinitionInspectOutputSchema } from '@happier-dev/protocol/actions/projectDefinitionActionFamily';
 import { createCliActionExecutorFromCredentials } from '@/session/actions/createCliActionExecutorFromCredentials';
 import { buildActionExecutorContextForRpc } from '@/rpc/handlers/_actionDispatchAdapter';
-import { runWithServerHttpBaseUrl } from '@/api/client/serverHttpBaseUrl';
+import { resolveServerHttpBaseUrl, runWithServerHttpBaseUrl } from '@/api/client/serverHttpBaseUrl';
+import { createMachineSkillHostService, resolveMachineSkillInstallTarget } from '@/prompts/skills/machineInstall/machineSkillHost';
 import { readInstallationIdentityIfExistsSync } from '../identity/store';
 import { readAccountIdFromToken } from '@/cloud/decodeJwtPayload';
 import type { RequesterWorkAttributionV1 } from '../lifecycle/requesterWorkAttribution';
@@ -203,7 +204,7 @@ export function createDaemonMachineBootstrapRuntime(
     acquireWorkspaceSyncMachineIngress?: BootstrapRuntime['acquireWorkspaceSyncMachineIngress'];
     acquireLocalServicePreviewApplication?: BootstrapRuntime['acquireLocalServicePreviewApplication'];
     directTransferPromptAssetAdapterRegistry: BootstrapRuntime['directTransferPromptAssetAdapterRegistry'];
-    directTransferPromptRegistryRegistry: BootstrapRuntime['directTransferPromptRegistryRegistry'];
+    directTransferRegistryHost: BootstrapRuntime['directTransferRegistryHost'];
     daemonServerWorkScheduler: BootstrapRuntime['daemonServerWorkScheduler'];
     cancelConnectedServiceRuntimeAuthRecovery?: BootstrapRuntime['cancelConnectedServiceRuntimeAuthRecovery'];
     checkRuntimeAuthUsageLimitRecovery?: BootstrapRuntime['checkRuntimeAuthUsageLimitRecovery'];
@@ -287,6 +288,7 @@ export function createDaemonMachineBootstrapRuntime(
   // The same authenticated constructor facts used by Machine work-summary
   // composition. A later claim cannot choose its Account, Home or installation.
   const automationHomeId = params.requesterServerId ?? configuration.activeServerId;
+  const machineSkillHomeUrl = resolveServerHttpBaseUrl();
   const automationAccountId = readAccountIdFromToken(params.credentials.token);
   const automationInstallationId = readInstallationIdentityIfExistsSync()?.installationId;
   const runnerBrokerReadinessApplication = createRunnerBrokerReadinessApplicationLifecycle({
@@ -409,6 +411,14 @@ export function createDaemonMachineBootstrapRuntime(
         ?? params.workspaceSyncHandoffAdapter;
       const workspaceSync = workspaceRuntime?.workspaceSync ?? params.workspaceSync;
       workspaceSyncService = workspaceSync;
+      // Optional Skills demand is bound before connection; unavailable Home identity
+      // does not prevent unrelated daemon startup. The next existing bootstrap may recover it.
+      const machineSkillTarget = await resolveMachineSkillInstallTarget({ serverId: automationHomeId,
+        serverHttpBaseUrl: machineSkillHomeUrl, machineId: registeredMachine.id }).catch(error => {
+          logger.debug('[DAEMON RUN] Machine Skill install Home unavailable', { message: String(error) });
+          return null;
+        });
+      if (!machineSkillTarget) logger.debug('[DAEMON RUN] Machine Skill installs require the current Home identity');
       const apiMachine = params.api.machineSyncClient(registeredMachine, {
             runtimeId: params.runtimeId,
             cliVersion: packageJson.version,
@@ -420,6 +430,24 @@ export function createDaemonMachineBootstrapRuntime(
             isDaemonQuiescing: params.isPublicationQuiescing ?? params.isShuttingDown,
             readSpawnFailureLimits: params.readSpawnFailureLimits,
             ownerRemainder: params.ownerRemainder,
+            ...(machineSkillTarget ? { machineSkillInstalls: {
+              target: machineSkillTarget, libraryServerIdentityId: machineSkillTarget.serverIdentityId,
+              refresh: async ({ signal, artifactIds }) => {
+                signal.throwIfAborted();
+                if (params.isShuttingDown() || !sameStoredCredentials(params.credentials,
+                  await readStoredCredentialsForServerId(automationHomeId))) return;
+                signal.throwIfAborted();
+                const currentTarget = await resolveMachineSkillInstallTarget({ serverId: automationHomeId,
+                  serverHttpBaseUrl: machineSkillHomeUrl, machineId: registeredMachine.id, signal });
+                if (!currentTarget || currentTarget.serverIdentityId !== machineSkillTarget.serverIdentityId) return;
+                const service = createMachineSkillHostService({ credentials: params.credentials, serverId: automationHomeId,
+                  serverHttpBaseUrl: machineSkillHomeUrl, target: currentTarget });
+                const outcome = await service.refresh({ signal, ...(artifactIds ? { artifactIds } : {}) });
+                if (outcome.row.status === 'conflict' || outcome.row.status === 'unavailable') {
+                  logger.warn('[DAEMON RUN] Machine Skill refresh receipt unavailable', { status: outcome.row.status });
+                }
+              },
+            } } : {}),
             ...(params.requesterServerId && params.resolveRequesterSessionRuntimeContext && params.releaseRequesterSessionRuntimeContext ? {
               requesterSessionRuntime: { serverId: params.requesterServerId,
                 resolve: params.resolveRequesterSessionRuntimeContext, release: params.releaseRequesterSessionRuntimeContext,
@@ -647,7 +675,7 @@ export function createDaemonMachineBootstrapRuntime(
     requestShutdown: params.requestShutdown,
     directPeerServerLifecycle: params.directPeerServerLifecycle,
     directTransferPromptAssetAdapterRegistry: params.directTransferPromptAssetAdapterRegistry,
-    directTransferPromptRegistryRegistry: params.directTransferPromptRegistryRegistry,
+    directTransferRegistryHost: params.directTransferRegistryHost,
     ...(params.cancelConnectedServiceRuntimeAuthRecovery
       ? { cancelConnectedServiceRuntimeAuthRecovery: params.cancelConnectedServiceRuntimeAuthRecovery }
       : {}),

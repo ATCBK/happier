@@ -35,7 +35,7 @@ import { resolveRunningCliRuntimeIdentity } from '@/packagedRuntime/resolveRunni
 import { createPromptAssetAdapterRegistry } from '@/prompts/assets/createPromptAssetAdapterRegistry';
 import { resolveFirstPartyLegacyConnectedServiceIdForQualifiedServiceKey } from '@/plugins/projection/registry/connectedAccountPurposeCompatibility';
 import { pluginReloadController } from '@/plugins/runtime/reload/singleton';
-import { createPromptRegistryAdapterRegistry } from '@/prompts/registries/createPromptRegistryAdapterRegistry';
+import { createCliRegistryHostV1 } from '@/registries/createCliRegistryHost';
 import {
   createActiveDaemonComposerMediaStageStore,
   runActiveDaemonComposerMediaStageStartupMaintenance,
@@ -95,7 +95,6 @@ import type { CatalogAgentId } from '@/agent/catalog/types';
 
 import type { DaemonLocallyPersistedState, StoredCredentials } from '@/persistence';
 import { configuration } from '@/configuration';
-import type { PromptRegistryRegistry } from '@/prompts/registries/createPromptRegistryAdapterRegistry';
 import type { DaemonStartupSource } from '../ownership/daemonOwnershipMetadata';
 import { isDaemonStartupSourceServiceManaged } from '../ownership/daemonOwnershipMetadata';
 import type { TrackedSession } from '../types';
@@ -236,7 +235,7 @@ export type StartDaemonRuntimeBootstrapResult = Readonly<{
   directPeerServerLifecycle: DirectTransferServerLifecycle | null;
   transferLiveWorkProducer: LiveWorkProducerV1;
   directTransferPromptAssetAdapterRegistry: ReturnType<typeof createPromptAssetAdapterRegistry>;
-  directTransferPromptRegistryRegistry: PromptRegistryRegistry;
+  directTransferRegistryHost: ReturnType<typeof createCliRegistryHostV1>;
   transferRuntimeStatePublisher: ReturnType<typeof createDaemonTransferRuntimeStatePublisher>;
   connectedServiceRefreshCoordinator: ConnectedServiceRefreshCoordinator | null;
   connectedServiceRefreshLoopHandle: ConnectedServiceRefreshLoopHandle;
@@ -262,7 +261,7 @@ export async function startDaemonRuntimeBootstrap(
       pluginReloadController.getState().activeRegistry?.promptAssetAdapters ?? new Map()
     ),
   });
-  const directTransferPromptRegistryRegistry = createPromptRegistryAdapterRegistry();
+  const directTransferRegistryHost = createCliRegistryHostV1({credentials:params.credentials});
   const directPeerServerEnabled = directPeerRuntimeConfig.directPeer.serverEnabled;
   const directPeerLocalListenerClasses = ['loopback_http' as const];
   const directPeerTransferListenerClasses = [
@@ -410,7 +409,7 @@ export async function startDaemonRuntimeBootstrap(
     directPeerServerLifecycle,
     transferLiveWorkProducer,
     directTransferPromptAssetAdapterRegistry,
-    directTransferPromptRegistryRegistry,
+    directTransferRegistryHost,
     transferRuntimeStatePublisher,
     connectedServiceRefreshCoordinator,
     connectedServiceRefreshLoopHandle,

@@ -13,7 +13,7 @@
  * daemon (routed into the real dispatcher), the Home broker open (network), the
  * OS process-identity read, and the Home/session network reads.
  */
-import { afterEach, describe, expect, it, vi } from 'vitest';
+import { afterAll, beforeAll, describe, expect, it, vi } from 'vitest';
 import type { TeamCredentialProviderModelSelectionV1 } from '@happier-dev/protocol';
 import { createModelIntentV2MetadataCasCandidate } from '@happier-dev/agents/session/state/metadataWriters';
 
@@ -53,7 +53,8 @@ vi.mock('@/daemon/controlServer', () => ({
 }));
 
 // OS boundary: process identity of the runner.
-vi.mock('@/daemon/processIdentity', () => ({
+vi.mock('@/daemon/processIdentity', async (importOriginal) => ({
+    ...await importOriginal<typeof import('@/daemon/processIdentity')>(),
     readProcessIdentityByPid: testState.readProcessIdentityByPid,
 }));
 
@@ -101,16 +102,40 @@ vi.mock('@/rpc/handlers/executionRuns', async (importOriginal) => {
     };
 });
 
-vi.mock('@/ui/logger', () => ({
-    logger: { debug: vi.fn(), info: vi.fn(), warn: vi.fn(), error: vi.fn() },
-}));
+vi.mock('@/ui/logger', async (importOriginal) => {
+    const actual = await importOriginal<typeof import('@/ui/logger')>();
+    const quietMethods = { debug: vi.fn(), info: vi.fn(), warn: vi.fn(), error: vi.fn() };
+    return {
+        ...actual,
+        logger: new Proxy(actual.logger, {
+            get(target, property, receiver) {
+                if (property in quietMethods) return Reflect.get(quietMethods, property);
+                const value = Reflect.get(target, property, receiver);
+                return typeof value === 'function' ? value.bind(target) : value;
+            },
+        }),
+    };
+});
 
 const envScope = createEnvKeyScope(['HAPPIER_HOME_DIR']);
 
 describe('attached Execution Run Team credential binding (composed runner → daemon)', () => {
     const cleanups: Array<() => void | Promise<void>> = [];
+    let journey: Awaited<ReturnType<typeof composeAttachedRunJourney>>;
 
-    afterEach(async () => {
+    // The process-wide registry has one terminal lifetime. Both contracts use
+    // the same real composition and release it only after the suite finishes.
+    beforeAll(async () => {
+        journey = await composeAttachedRunJourney({
+            cleanups,
+            parentDeliveryMode: 'brokered',
+            testState,
+            envScope,
+            withOptionalPromptAsset: true,
+        });
+    }, 180_000);
+
+    afterAll(async () => {
         while (cleanups.length > 0) {
             await cleanups.pop()?.();
         }
@@ -132,12 +157,7 @@ describe('attached Execution Run Team credential binding (composed runner → da
             runAgent,
             startRun,
             runOpenOperations,
-        } = await composeAttachedRunJourney({
-            cleanups,
-            parentDeliveryMode: 'brokered',
-            testState,
-            envScope,
-        });
+        } = journey;
 
         // --- 1. A brokered Run on B, in another Team, for another Agent and model. ---
         const selectionB: TeamCredentialProviderModelSelectionV1 = {
@@ -316,5 +336,27 @@ describe('attached Execution Run Team credential binding (composed runner → da
         await runB2.dispose();
         expect(homeCleanups.filter((cleanup) => cleanup.mock.calls.length > 0).length).toBe(releasedBefore + 4);
         expect(homeCleanups[0]).not.toHaveBeenCalled();
+    }, 180_000);
+
+    it('SESSIONOPEN optional prompt asset producer retains available AUTO assets and reports unavailable optional extras', async () => {
+        const { sessionId, promptBridge, daemonRequests } = journey;
+
+        if (!promptBridge) throw new Error('Expected the real Runner prompt contributions bridge');
+        const prompt = await promptBridge.resolvePrompt({ sessionId });
+        expect(prompt.optionalPromptAssetsUnavailable).toBe(true);
+        expect(prompt.promptAssetBlocks).toEqual([expect.objectContaining({
+            id: 'plugin_prompt_asset.acme.public-handoff-agent/available-startup',
+            scope: 'first_turn',
+            text: expect.stringContaining('fixtureAgentGeneration = "G"'),
+        })]);
+        expect(daemonRequests.some(request => request.operation.kind === 'turn_contributions.resolve'
+            && request.operation.request.kind === 'prompt'
+            && request.operation.request.selectedAsset === undefined)).toBe(true);
+        const excludedPrompt = await promptBridge.resolvePrompt({
+            sessionId,
+            excludePluginIds: ['acme.public-handoff-agent'],
+        });
+        expect(excludedPrompt.optionalPromptAssetsUnavailable).toBeUndefined();
+        expect(excludedPrompt.promptAssetBlocks).toEqual([]);
     }, 180_000);
 });

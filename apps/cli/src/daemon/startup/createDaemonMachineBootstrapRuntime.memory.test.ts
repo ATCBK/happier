@@ -28,7 +28,7 @@ function createBaseRuntimeParams(
     directPeerServerLifecycle: null,
     // Test fixture boundary: these pass-through runtime dependencies are not invoked by Memory startup.
     directTransferPromptAssetAdapterRegistry: {} as never,
-    directTransferPromptRegistryRegistry: {} as never,
+    directTransferRegistryHost: {} as never,
     daemonServerWorkScheduler: {} as never,
     setDaemonServerWorkOnline: vi.fn(),
     onMachineConnectionOnline: vi.fn(),

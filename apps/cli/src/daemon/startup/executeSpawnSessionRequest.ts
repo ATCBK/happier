@@ -117,6 +117,7 @@ type SpawnPredictiveSwitchGuard = Parameters<typeof resolveConnectedServiceAuthF
 export type ExecuteSpawnSessionRequestParams = Readonly<{
     readMachineResourcesPolicy?: import('@/processes/toolIdleTimeouts').MachineResourcesPolicyReader;
     readSpawnFailureLimits?: SpawnFailureLimitsReader;
+    checkRegistryUpdates?: () => Promise<void>;
     options: SpawnSessionOptions;
     requesterSessionRuntimeContext?: RequesterSessionRuntimeContext;
     retainedTerminalRecovery?: 'adopt';
@@ -247,6 +248,8 @@ export async function executeSpawnSessionRequest(
         const profileSettings = readProfileSettingsFromAccountSnapshot(activeAccountSettingsSnapshot);
         const launchProfileArtifacts = profilesSnapshot?.artifactsById;
         const acpOperationContext = requesterRuntime?.bootstrap.savedSecretOperationContext;
+        void params.checkRegistryUpdates?.()
+            .catch(error => logger.warn('[DAEMON RUN] Registry update check failed before spawn', error));
         const acpScopeKey = (acpOperationContext ? acpOperationContext.readSnapshot() : activeAccountSettingsSnapshot)?.scopeKey;
         const acpLifetimeToken = getActiveAccountSettingsSnapshotLifetimeToken();
         const readAcpCatalogSnapshot = async (): Promise<AcpCatalogSnapshotV1> => {
@@ -668,7 +671,12 @@ export async function executeSpawnSessionRequest(
                     processEnv: selectedLaunchEnvironment });
                 selectedTerminalRequest = { requested: 'herdr', herdr: context };
             }
-            const startupRuntimeDescriptorV1 = terminalPresentation.runtimeDescriptorV1 ?? options.runtimeDescriptorV1;
+            // A precommitted Session is attached before the runner can publish
+            // runtime metadata. Carry the already-resolved Agent identity at
+            // birth too; absent descriptor state is the same empty native
+            // state the host Session metadata producer uses for a fresh Agent.
+            const startupRuntimeDescriptorV1 = terminalPresentation.runtimeDescriptorV1 ?? options.runtimeDescriptorV1
+                ?? (catalogAgentId ? { v: 1 as const, agentId: catalogAgentId, agent: {} } : undefined);
             const runnerAgentSessionBootstrap =
                 await prepareRunnerAgentSessionBootstrapForLease({
                     target: effectiveBackendTargetV2,

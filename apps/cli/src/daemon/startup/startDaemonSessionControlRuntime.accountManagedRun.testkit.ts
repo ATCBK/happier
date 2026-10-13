@@ -74,7 +74,9 @@ vi.mock('@/ui/logger', () => ({ logger: { debug: () => {}, info: () => {}, warn:
 export async function createAttachedManagedRunFixture(input: Readonly<{ directory?: string; issuedRequester?: boolean;
   resolveRunAuthority?(request: SessionExecutionRunBrokerAuthorityRequestV1): SessionExecutionRunBrokerAuthorityResponseV1;
   browserStartup?: Pick<Parameters<typeof startDaemonSessionControlRuntime>[0],
-    'browserSidecarControlAdapterFactory' | 'resolveServerFeaturesSnapshot' | 'onBrowserControlRoutesReady'>;
+    'browserSidecarControlAdapterFactory' | 'resolveServerFeaturesSnapshot' | 'onBrowserControlRoutesReady'> & Readonly<{
+      readMachineMemory?: () => import('@happier-dev/protocol').MachineVitalsSampleV1['memory'] | null;
+    }>;
 }> = {}) {
   boundary.resolveRunAuthority = input.resolveRunAuthority ?? null;
   const directory = input.directory ?? await mkdtemp(join(tmpdir(), 'happier-attached-managed-run-'));

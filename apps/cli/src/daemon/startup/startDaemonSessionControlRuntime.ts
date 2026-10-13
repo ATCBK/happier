@@ -197,6 +197,7 @@ import {
 } from '@/agent/catalog/registry';
 import {
   getConnectedServiceRuntimeAuthAdapter,
+  classifyConnectedServiceRuntimeFailureForTarget,
   getConnectedServiceStateSharingDescriptor,
   resolveLegacyConnectedServiceRuntimeAuthFailureSourceRevisionThroughCatalog,
   resolveConnectedServiceGenerationApplicationScope,
@@ -298,7 +299,7 @@ import {
   type ConnectedServiceQualifiedAuthGroupApi,
 } from '../connectedServices/resolveConnectedServiceAuthForSpawn';
 import { isValidConnectedServiceRunMaterializeToken } from '../connectedServices/runs/capabilityToken';
-import { createExecutionRunConnectedServicesBridge, registerExecutionRunConnectedServicesTarget } from '../connectedServices/runs/executionRunMaterialization';
+import { createExecutionRunConnectedServicesBridge, registerExecutionRunConnectedServicesTarget, type CreateExecutionRunConnectedServicesBridgeDeps } from '../connectedServices/runs/executionRunMaterialization';
 import { isExecutionRunConnectedServiceGenerationCurrent } from '../connectedServices/runs/executionRunGenerationAdmission';
 import {
   reattestRunningExecutionRunConnectedServices,
@@ -449,6 +450,8 @@ import type { LocalServicePreviewRoutes } from '../local/services/preview/routes
 import { createLocalServicePublicPreviewServerRoutes } from '../local/services/public/routes';
 import { resolveHostedWebStaticAssetLifecycleSource } from '../local/services/plugins/staticAssets/source';
 import { createOnChildExited } from '../sessions/onChildExited';
+import type { SkillStore } from '@/prompts/skills/store/skillStore';
+import type { SkillUsageRecorder } from '@/prompts/skills/store/skillUsage';
 import { resolveRecoveredSpawnNonceAdmission } from '../spawn/recoveredSpawnNonceAdmission';
 import { applyTrackedSessionTurnLifecycle } from '../sessions/applyTrackedSessionTurnLifecycle';
 import {
@@ -485,6 +488,7 @@ import {
 import { resolveTrackedSessionTerminalPresentation } from '../sessions/resolveTrackedSessionTerminalPresentation';
 import { createDisconnectedTerminalHostResumeLifecycle } from './disconnectedTerminalHostResumeLifecycle';
 import { resolveTrackedSessionCatalogAgentId } from '../sessions/resolveTrackedSessionCatalogAgentId';
+import { resolveTrackedSessionRunnerIdentity } from '../sessions/sessionReportCorrelation';
 import {
   clearSessionMarkerConnectedServiceRestartIntent,
   readSessionMarkerForPid,
@@ -724,6 +728,8 @@ import {
 } from '../connectedServices/runtimeAuth/RuntimeAuthRecoveryScheduler';
 import { createRuntimeAuthRecoverySchedulerForDaemon } from '../connectedServices/runtimeAuth/createRuntimeAuthRecoverySchedulerForDaemon';
 import { ConnectedServiceTemporaryThrottleRetryScheduler } from '../connectedServices/runtimeAuth/temporaryThrottleRetryScheduler';
+import { recoverConnectedServiceRuntimeFailure, readConnectedServiceRuntimeAuthFailureSourceBinding } from '../connectedServices/runtimeAuth/handleConnectedServiceRuntimeAuthFailure';
+import { connectedServiceRecoveryScopeKey } from '../connectedServices/runtimeRegistry/target';
 import {
   resolveInactiveTemporaryThrottleResumeSource,
   type TemporaryThrottleResumeSource,
@@ -2347,6 +2353,8 @@ export async function startDaemonSessionControlRuntime(
     observeSessionScopeExit?: (tracked: TrackedSession) => Promise<void>;
     readMachineResourcesPolicy?: import('@/processes/toolIdleTimeouts').MachineResourcesPolicyReader;
     readSpawnFailureLimits?: import('@/processes/spawnFailure/classifySpawnFailure').SpawnFailureLimitsReader;
+    readDoctorResourceVitals?: Parameters<typeof startDaemonControlServer>[0]['readDoctorResourceVitals'];
+    checkRegistryUpdates?: () => Promise<void>;
     machineId: string;
     /**
      * Account identity resolved from this daemon's authenticated lifecycle.
@@ -2453,6 +2461,8 @@ export async function startDaemonSessionControlRuntime(
     connectedServiceRuntimeRegistry?: ConnectedServiceRuntimeRegistry;
     ownedConnectedServiceRuntimeRegistry?: ConnectedServiceRuntimeRegistry;
     pidToTrackedSession: Map<number, TrackedSession>;
+    skillStore?: SkillStore;
+    skillUsageRecorder?: SkillUsageRecorder;
     endedProcessRoots?: () => readonly HappierProcessRootSource[];
     retainEndedProcessRoots?: (roots: readonly HappierProcessRoot[]) => void;
     pidToAwaiter: Map<number, (session: TrackedSession) => void>;
@@ -4254,10 +4264,11 @@ export async function startDaemonSessionControlRuntime(
           resolveConnectedServiceMaterializationIdentityFromTrackedSession(
             tracked,
           );
+        const expectedRunnerIdentity = resolveTrackedSessionRunnerIdentity(tracked);
         const expectedProcessCommandHash = normalizeOptionalString(
-          tracked.processCommandHash,
+          expectedRunnerIdentity?.processCommandHash,
         );
-        const expectedProcessStartTimeMs = tracked.processStartTimeMs;
+        const expectedProcessStartTimeMs = expectedRunnerIdentity?.processStartTimeMs;
         const authorityPath =
           tracked.agentRuntimeDaemonServiceAuthorityFilePath;
         const parsedBindings =
@@ -4540,8 +4551,8 @@ export async function startDaemonSessionControlRuntime(
                 params.pidToTrackedSession.get(trackedMapPid) !== tracked ||
                 params.sessionAttachCleanupByPid.get(trackedMapPid) !==
                   lifecycleCleanup ||
-                tracked.processCommandHash !== expectedProcessCommandHash ||
-                tracked.processStartTimeMs !== expectedProcessStartTimeMs ||
+                resolveTrackedSessionRunnerIdentity(tracked)?.processCommandHash !== expectedProcessCommandHash ||
+                resolveTrackedSessionRunnerIdentity(tracked)?.processStartTimeMs !== expectedProcessStartTimeMs ||
                 !subject.isCurrent()
               ) {
                 throw new Error('reattached_agent_process_identity_changed');
@@ -5230,6 +5241,7 @@ export async function startDaemonSessionControlRuntime(
               await executeSpawnSessionRequest({
                 readMachineResourcesPolicy: params.readMachineResourcesPolicy,
                 readSpawnFailureLimits: params.readSpawnFailureLimits,
+                checkRegistryUpdates: params.checkRegistryUpdates,
                 options,
                 ...(requesterRuntime
                   ? { requesterSessionRuntimeContext: requesterRuntime }
@@ -5518,6 +5530,7 @@ export async function startDaemonSessionControlRuntime(
     new ConnectedServiceTemporaryThrottleRetryScheduler({
       nowMs: () => Date.now(),
       onStateChange: async (sessionId, intent, previous) => {
+        if (intent?.scope?.kind === 'run' || previous?.scope?.kind === 'run') return;
         try {
           const accountContext = await resolveSessionAccountContext(sessionId);
           await withSessionAccountHome(accountContext, async () => {
@@ -9481,6 +9494,7 @@ export async function startDaemonSessionControlRuntime(
     },
   });
   const onChildExitedBase = createOnChildExited({
+    skillStore: params.skillStore,
     observeSessionScopeExit: params.observeSessionScopeExit,
     ownerRemainder,
     pidToTrackedSession: params.pidToTrackedSession,
@@ -10354,17 +10368,7 @@ export async function startDaemonSessionControlRuntime(
       target.sessionId !== liveSessionId
     )
       return null;
-    const binding = target.activeBindings.find(
-      (candidate) => candidate.serviceId === serviceId,
-    );
-    if (!binding) return null;
-    return {
-      serviceId,
-      groupId: binding.groupId,
-      profileId: binding.profileId,
-      generation: binding.groupGeneration,
-      credentialRevision: binding.credentialRevision,
-    };
+    return readConnectedServiceRuntimeAuthFailureSourceBinding(target, serviceId);
   };
   const runConnectedServiceRuntimeAuthFailureRecovery = async (
     input: Readonly<{
@@ -12293,6 +12297,45 @@ export async function startDaemonSessionControlRuntime(
       } satisfies ConnectedServiceDaemonAuthBridgeRegistration),
     });
   };
+  const recoverExecutionRunRuntimeFailure: NonNullable<CreateExecutionRunConnectedServicesBridgeDeps['recoverRuntimeFailure']> = async ({ runId, parentSessionId, interruptedOriginId, selection, classification, isCurrent, signal, refreshCredential }) => {
+        const context = await resolveSessionAccountContext(parentSessionId);
+        const service = resolveQualifiedConnectedAccountServiceForIngressServiceId(selection.serviceId);
+        if (!service || !isCurrent()) return { status: 'failed', reason: 'runtime_recovery_stale' };
+        const groupId = selection.kind === 'group' ? selection.groupId : null;
+        const resumePromptMode = await resolveContinuationResumePromptMode({ serviceId: selection.serviceId, groupId,
+          readAccountSettings: context ? () => context.readAccountSettingsSnapshot().settings : undefined,
+          loadGroupPolicy: groupId ? async () => (await readQualifiedConnectedServiceAuthGroup({ serviceId: selection.serviceId, groupId, sessionId: parentSessionId }))?.policy ?? null : undefined });
+        const continuation = { interruptedOriginId, resumePromptMode, recoveryKind: classification.kind,
+          customResumePrompt: readContinuationCustomResumePrompt(context ? context.readAccountSettingsSnapshot().settings : (getActiveAccountSettingsSnapshot()?.settings ?? null)) };
+        const coordinator = await createSessionQualifiedAuthGroupSwitchCoordinator({ sessionId: parentSessionId,
+          serviceId: selection.serviceId, reason: classification.kind, applyGeneration: async () => ({ ok: true }) });
+        const scope = { kind: 'run' as const, runId };
+        const switchAttemptKey = { sessionId: connectedServiceRecoveryScopeKey(scope), serviceId: selection.serviceId,
+          groupId: groupId ?? '', profileId: selection.kind === 'group' ? selection.activeProfileId : selection.profileId,
+          credentialRevision: selection.credentialRevision ?? null };
+        return await withSessionAccountHome(context, async () => {
+          await assertSessionAccountCurrent(parentSessionId, context);
+          if (!isCurrent()) return { status: 'failed' as const, reason: 'runtime_recovery_stale' };
+          const result = await recoverConnectedServiceRuntimeFailure({ scope, selection, classification, signal, isCurrent, continuation, temporaryThrottleScheduler, refreshCredential, nowMs: () => Date.now(),
+            switchesThisTurn: connectedServiceRuntimeAuthSwitchAttempts.resolveSwitchesThisTurn({ ...switchAttemptKey, reportedSwitchesThisTurn: 0 }),
+            sessionSwitchesThisHour: connectedServiceRuntimeAuthSwitchAttempts.countRecordedSwitchesInWindow({ ...switchAttemptKey, windowMs: SESSION_SWITCH_LIMIT_WINDOW_MS }),
+            switchCoordinator: { switchAfterClassifiedFailure: async (input) => {
+              if (!coordinator || !isCurrent()) return { status: 'stale_context', generation: selection.kind === 'group' ? selection.generation : 0 };
+              await assertSessionAccountCurrent(parentSessionId, context);
+              const switched = await coordinator.switchAfterClassifiedFailure({ ...input, serviceId: service,
+                ...(selection.kind === 'group' && selection.credentialRevision ? { expectedFailureSource: {
+                  profileId: selection.activeProfileId, groupGeneration: selection.generation,
+                  credentialRevision: selection.credentialRevision, isCurrent,
+                } } : {}) });
+              connectedServiceRuntimeAuthSwitchAttempts.recordSwitchResult({ ...switchAttemptKey, resultStatus: switched.status });
+              return switched;
+            } },
+          });
+          await assertSessionAccountCurrent(parentSessionId, context);
+          return isCurrent() ? result
+            : { status: 'failed' as const, reason: 'runtime_recovery_stale' };
+        });
+      };
   const handleSessionConnectedServiceRuntimeAuthRefresh =
     createSessionConnectedServiceRuntimeAuthRefreshHandler({
       registry: connectedServiceRuntimeRegistry,
@@ -12380,6 +12423,14 @@ export async function startDaemonSessionControlRuntime(
   };
   const executionRunConnectedServicesBridge =
     createExecutionRunConnectedServicesBridge({
+      classifyRuntimeFailure: classifyConnectedServiceRuntimeFailureForTarget,
+      recoverRuntimeFailure: recoverExecutionRunRuntimeFailure,
+      recordRuntimeTurnCompleted: async ({ runId }) => {
+        const lifecycle = { sessionId: connectedServiceRecoveryScopeKey({ kind: 'run', runId }),
+          event: 'assistant_message_end' as const, terminalStatus: 'completed' as const };
+        connectedServiceRuntimeAuthSwitchAttempts.recordTurnLifecycle(lifecycle);
+        await temporaryThrottleScheduler.recordTurnLifecycle({ ...lifecycle, observedAtMs: Date.now() });
+      },
       getRunRuntimeTarget: (runKey) =>
         connectedServiceRuntimeRegistry.getRunTargetByRunKey(runKey),
       adoptRunCredentialRevision: (input) =>
@@ -12499,6 +12550,10 @@ export async function startDaemonSessionControlRuntime(
       },
       unregisterRunTargets: (runKey) => {
         connectedServiceRuntimeRegistry.unregisterRunKey(runKey);
+      },
+      finishRunRecovery: async (runKey) => {
+        connectedServiceRuntimeAuthSwitchAttempts.clearSession(connectedServiceRecoveryScopeKey({ kind: 'run', runId: runKey }));
+        await temporaryThrottleScheduler.finishRun(runKey);
       },
       resolveRunMaterializedRoot: async ({
         runKey,
@@ -13846,8 +13901,9 @@ export async function startDaemonSessionControlRuntime(
         const agentTargeted = (async (): Promise<boolean> => {
           const authorityPath =
             tracked.agentRuntimeDaemonServiceAuthorityFilePath;
-          const processStartTimeMs = tracked.processStartTimeMs;
-          const processCommandHash = tracked.processCommandHash;
+          const runnerIdentity = resolveTrackedSessionRunnerIdentity(tracked);
+          const processStartTimeMs = runnerIdentity?.processStartTimeMs;
+          const processCommandHash = runnerIdentity?.processCommandHash;
           if (
             !sessionId ||
             !authorityPath ||
@@ -13892,8 +13948,8 @@ export async function startDaemonSessionControlRuntime(
           const capturedRunnerIdentity = {
             pid: tracked.pid,
             sessionRunnerPid: tracked.sessionRunnerPid,
-            processStartTimeMs,
-            processCommandHash,
+            processStartTimeMs: tracked.processStartTimeMs,
+            processCommandHash: tracked.processCommandHash,
           };
           const activeTurnId =
             tracked.activeTurnId ??
@@ -13921,7 +13977,9 @@ export async function startDaemonSessionControlRuntime(
             tracked.processStartTimeMs !==
               capturedRunnerIdentity.processStartTimeMs ||
             tracked.processCommandHash !==
-              capturedRunnerIdentity.processCommandHash
+              capturedRunnerIdentity.processCommandHash ||
+            resolveTrackedSessionRunnerIdentity(tracked)?.processStartTimeMs !== processStartTimeMs ||
+            resolveTrackedSessionRunnerIdentity(tracked)?.processCommandHash !== processCommandHash
           ) {
             return true;
           }
@@ -13950,11 +14008,14 @@ export async function startDaemonSessionControlRuntime(
           const persistedMarker = sessionId
             ? await readSessionMarkerForPid(runnerPid)
             : null;
+          const runnerIdentity = resolveTrackedSessionRunnerIdentity(tracked);
           const persistedMarkerIsExact = Boolean(
             persistedMarker &&
+            runnerIdentity &&
+            persistedMarker.pid === runnerIdentity.pid &&
             persistedMarker.happySessionId === sessionId &&
-            persistedMarker.processCommandHash === tracked.processCommandHash &&
-            persistedMarker.processStartTimeMs === tracked.processStartTimeMs,
+            persistedMarker.processCommandHash === runnerIdentity.processCommandHash &&
+            persistedMarker.processStartTimeMs === runnerIdentity.processStartTimeMs,
           );
           const persistedManagedProviderAuthority = persistedMarkerIsExact
             ? (persistedMarker?.runnerManagedDependencyRetentionV1
@@ -14552,8 +14613,31 @@ export async function startDaemonSessionControlRuntime(
           managedAgentStartMachineId
           ? undefined
           : currentSessionSpawnDirectTargetTransport;
+      const requesterSpawnCustody = requesterRuntime
+        ? {
+            machineAdmission: requesterRuntime.bootstrap.savedSecretOperationContext.machineAdmission,
+            attribution: requesterRuntime.bootstrap.attribution,
+            serverHttpBaseUrl: requesterRuntime.bootstrap.serverHttpBaseUrl,
+            isCurrent: () => requesterRuntime.isCurrent(),
+          }
+        : requesterAccountContext
+          ? {
+              machineAdmission: {
+                actorAccountId: requesterAccountContext.authorization.binding.accountId,
+                custodianAccountId: requesterAccountContext.authorization.binding.custodianAccountId,
+              },
+              attribution: {
+                serverId: params.serverId,
+                accountId: requesterAccountContext.authorization.binding.accountId,
+                machineId: requesterAccountContext.authorization.binding.machineId,
+                installationId: requesterAccountContext.authorization.binding.installationId,
+              },
+              serverHttpBaseUrl: requesterAccountContext.serverHttpBaseUrl,
+              isCurrent: () => requesterAccountContext.isCurrent(),
+            }
+          : null;
       const sessionSpawnDirectTargetTransport =
-        requesterRuntime && resolvedSessionSpawnDirectTargetTransport
+        requesterSpawnCustody && resolvedSessionSpawnDirectTargetTransport
           ? {
               ...resolvedSessionSpawnDirectTargetTransport,
               spawnedSession: {
@@ -14565,16 +14649,16 @@ export async function startDaemonSessionControlRuntime(
                 ) => {
                   const prepared = await prepareRequesterSessionBootstrap({
                     credentials,
-                    machineAdmission: requesterRuntime.bootstrap.savedSecretOperationContext.machineAdmission,
-                    attribution: requesterRuntime.bootstrap.attribution,
+                    machineAdmission: requesterSpawnCustody.machineAdmission,
+                    attribution: requesterSpawnCustody.attribution,
                     boundary: {
                       serverId: params.serverId,
                       serverHttpBaseUrl:
-                        requesterRuntime.bootstrap.serverHttpBaseUrl,
+                        requesterSpawnCustody.serverHttpBaseUrl,
                       happyHomeDir: configuration.happyHomeDir,
                     },
                     verifyMachineAdmissionCurrent: () =>
-                      requesterRuntime.isCurrent(),
+                      requesterSpawnCustody.isCurrent(),
                     ...(args[1]?.signal ? { signal: args[1].signal } : {}),
                   });
                   if (!prepared)
@@ -14611,15 +14695,13 @@ export async function startDaemonSessionControlRuntime(
           : resolvedSessionSpawnDirectTargetTransport;
       const projectWorkerAction = params.resolveProjectWorkerAction?.();
       const apiMachineForSessions = params.getApiMachineForSessions();
-      const usesProjectPreparation = actionId === 'projects.inspect' || actionId === 'projects.prepare'
-        || actionId === 'projects.script.run' || actionId === 'projects.compute.exec';
-      const resolveRequesterIngress = (context?: RpcActionExecutorContext): RpcHandlerContext | undefined => {
+      const resolveRequesterIngress = (context?: RpcActionExecutorContext, role: 'use' | 'manage' = 'use'): RpcHandlerContext | undefined => {
         // Replay restores the original private requester ports after constructing
         // this executor. Resolve them at the effect, not from approval.request.decide.
         const authorization = context?.externalActionExecutionAuthorization ?? requesterAccountContext?.authorization;
         const requester = readRequesterAccountActionContext(authorization) ?? requesterAccountContext;
         return requester && apiMachineForSessions ? {
-          ...requesterAccountOperationContext(apiMachineForSessions, requester, 'use', context?.signal),
+          ...requesterAccountOperationContext(apiMachineForSessions, requester, role, context?.signal),
           ...(context?.machineAdmission ? { machineAdmission: context.machineAdmission,
             verifyMachineAdmissionCurrent: context.verifyMachineAdmissionCurrent } : {}),
           signal: context?.signal ?? new AbortController().signal,
@@ -14630,10 +14712,9 @@ export async function startDaemonSessionControlRuntime(
           ...(context ? { localActionContext: context } : {}),
         } : undefined;
       };
-      const capturedProjectIngress = usesProjectPreparation ? resolveRequesterIngress(executionContext) : undefined;
       const fallbackProjectAction = params.resolveProjectAction?.();
       const fallbackRuntimeActionExecute = params.runtimeActionExecute;
-      const projectAction: ActionExecutorDeps['projectAction'] = (capturedProjectIngress || replay) && apiMachineForSessions
+      const projectAction: ActionExecutorDeps['projectAction'] = apiMachineForSessions
         ? async request => {
           const ingress = resolveRequesterIngress(request.context);
           if (!ingress) return fallbackProjectAction ? fallbackProjectAction(request)
@@ -14679,14 +14760,19 @@ export async function startDaemonSessionControlRuntime(
         typeof createCliActionExecutorFromCredentials
       > = createCliActionExecutorFromCredentials({
         credentials,
-        ...(actionId === 'machines.environment.apply' && apiMachineForSessions && input && typeof input === 'object'
-          && 'machineId' in input && input.machineId === params.machineId ? {
+        // The native dependency is also needed when approval replay is the
+        // enclosing invocation. Ordinary remote targets retain their transport.
+        ...(apiMachineForSessions && (actionId !== 'machines.environment.apply' || (input && typeof input === 'object'
+          && 'machineId' in input && input.machineId === params.machineId)) ? {
           machineEnvironmentApply: async request => {
             const origin = await params.resolveCurrentMachineExecutionOriginContext?.(request.signal ?? request.context.signal);
             if (!origin || !externalActionInstallationIdentity || origin.machineId !== params.machineId) return { ok: false as const, errorCode: 'target_unavailable', error: 'target_unavailable' };
+            const ingress = resolveRequesterIngress(request.context, 'manage');
             const { createMachineEnvironmentAction } = await import('@/workspaces/environment/machineEnvironmentAction');
             return createMachineEnvironmentAction({ apiMachine: apiMachineForSessions, machineId: params.machineId,
-              homeId: origin.serverIdentityId, installation: externalActionInstallationIdentity, ownerRemainder })(request);
+              homeId: origin.serverIdentityId, installation: externalActionInstallationIdentity, ownerRemainder })({ ...request,
+                context: { ...request.context, ...(ingress?.machineAdmission ? { machineAdmission: ingress.machineAdmission,
+                  verifyMachineAdmissionCurrent: ingress.verifyMachineAdmissionCurrent } : {}) } });
           },
         } : {}),
         ...(requesterAccountContext ? { savedSecretOperationContext: requesterAccountContext.savedSecretOperationContext } : {}),
@@ -14710,6 +14796,8 @@ export async function startDaemonSessionControlRuntime(
                 apiMachineForSessions.createFilesystemActionExecutor(
                   params.serverId,
                 ),
+              skillMachineActionExecute: apiMachineForSessions.createMachineSkillActionExecutor({ credentials,
+                ...(requesterAccountContext ? { operationContext: requesterAccountContext.savedSecretOperationContext } : {}) }),
             }
           : {}),
         ...(getCurrentTurnWorkDepth ? { getCurrentTurnWorkDepth } : {}),
@@ -15026,10 +15114,25 @@ export async function startDaemonSessionControlRuntime(
               },
               machineActionDirectTargetTransport: {
                 machineId: params.machineId,
-                invoke: async (method, request, options) =>
-                  await apiMachineForSessions
+                openProject: async (input, context) => {
+                  const ingress = resolveRequesterIngress(context);
+                  if (!ingress?.machineAdmission || !ingress.verifyMachineAdmissionCurrent) {
+                    return { kind: 'refused', code: 'machine_admission_required' };
+                  }
+                  return await apiMachineForSessions.callProjectOpen({ input, credentials,
+                    context: { ...context, machineAdmission: ingress.machineAdmission,
+                      verifyMachineAdmissionCurrent: ingress.verifyMachineAdmissionCurrent } });
+                },
+                invoke: async (method, request, options) => {
+                  const ingress = resolveRequesterIngress(options?.localActionContext ?? executionContext);
+                  return await apiMachineForSessions
                     .getPeerMediationMachineRpcHandlerManager()
-                    .invokeLocal(method, request, options),
+                    .invokeLocal(method, request, { ...options,
+                      ...(ingress ? { rpcContext: ingress } : {}),
+                      ...(options?.localActionContext ?? ingress?.localActionContext
+                        ? { localActionContext: options?.localActionContext ?? ingress?.localActionContext } : {}),
+                    });
+                },
               },
             }
           : {}),
@@ -15057,32 +15160,8 @@ export async function startDaemonSessionControlRuntime(
             : await execute();
         } finally { await release?.(); }
       };
-      // Managed native owners attach observation after approval; recording an
-      // Ask here would replay that receipt instead of the approved native effect.
-      if (
-        projectAction &&
-        (actionId === 'projects.prepare' ||
-          actionId === 'projects.script.run' ||
-          actionId === 'projects.compute.exec') &&
-        apiMachineForSessions &&
-        !executionContext?.operationAcceptance
-      ) {
-        return await apiMachineForSessions.observeActionExecution({
-          actionId,
-          input,
-          ...(requesterAccountContext ? { rpcContext: requesterAccountOperationContext(
-            apiMachineForSessions, requesterAccountContext, 'use', executionContext?.signal,
-          ) } : {}),
-          ...(executionContext?.actionRequestId
-            ? { actionRequestId: executionContext.actionRequestId }
-            : {}),
-          execute: async (operationContext) =>
-            await executeAccepted({
-              ...executionContext,
-              ...operationContext,
-            }),
-        });
-      }
+      // Native owners, including Project finite execution, attach observation
+      // after approval. Recording an Ask here caches its receipt as execution.
       return await executeAccepted(executionContext);
     };
     return {
@@ -15139,6 +15218,7 @@ export async function startDaemonSessionControlRuntime(
             const origin = await params.resolveCurrentMachineExecutionOriginContext?.(signal);
             if (!installation || !origin || origin.machineId !== params.machineId) return null;
             let executeManagedFiniteWake: ((request: ManagedMachinePolicyRequest) => Promise<ActionExecuteResult>) | undefined;
+            let requesterTargetResolver: ReturnType<typeof createDaemonExternalActionTargetResolver> | undefined;
             const prepared = await prepareRequesterAccountActionContext({ authorization, purpose: privatePurpose,
               machineId: params.machineId, installationId: installation.installationId, serverIdentityId: origin.serverIdentityId,
               installationPrivateKey: decodeBase64(installation.privateKey, 'base64url'),
@@ -15156,6 +15236,12 @@ export async function startDaemonSessionControlRuntime(
                   ...(privatePurpose.kind === 'managed_finite_wake' ? { managedFiniteWakeTarget: privatePurpose.target } : {}),
                   ...(signal ? { signal } : {}) });
               }, createExecutor: admitted => {
+                requesterTargetResolver = createDaemonExternalActionTargetResolver({
+                  credentials: admitted.credentials, serverApiUrl: admitted.serverHttpBaseUrl,
+                  ...(params.resolveServerFeaturesSnapshot ? { resolveServerFeaturesSnapshot: params.resolveServerFeaturesSnapshot } : {}),
+                  ...(params.currentMachineHost ? { currentMachineHost: params.currentMachineHost } : {}),
+                  ...(params.currentMachineHomeDir ? { currentMachineHomeDir: params.currentMachineHomeDir } : {}),
+                });
                 if (privatePurpose.kind === 'managed_finite_wake') {
                   const target = privatePurpose.target;
                   const native = createDaemonManagedMachineActionAdapter({ credentials: admitted.credentials,
@@ -15202,7 +15288,8 @@ export async function startDaemonSessionControlRuntime(
                   undefined, undefined, undefined, undefined, undefined, admitted);
               },
               ...(signal ? { signal } : {}) });
-            return prepared ? { ...prepared, ...(executeManagedFiniteWake ? { executeManagedFiniteWake } : {}) } : null;
+            return prepared ? { ...prepared, ...(requesterTargetResolver ? { resolveTarget: requesterTargetResolver } : {}),
+              ...(executeManagedFiniteWake ? { executeManagedFiniteWake } : {}) } : null;
           },
           resolveEncryption: async (signal) => {
             const credentialMaterial = params.credentials.encryption;
@@ -15769,6 +15856,8 @@ export async function startDaemonSessionControlRuntime(
   notifySessionLiveWorkChanged = () => sessionLiveWorkProducer.notifyChanged();
   const { port: controlPort, stop: stopControlServer } =
     await startDaemonControlServer({
+      skillStore: params.skillStore,
+      skillUsageRecorder: params.skillUsageRecorder,
       onSessionActivityChanged: () => sessionLiveWorkProducer.notifyChanged(),
       admissionDrain: params.admissionDrain,
       resolveRecoveredSpawnNonce: async (spawnNonce) =>
@@ -15790,9 +15879,11 @@ export async function startDaemonSessionControlRuntime(
             }),
         }),
       runtimeActionExecute: params.runtimeActionExecute,
+      pidToTrackedSession: params.pidToTrackedSession,
       getChildren: () => Array.from(params.pidToTrackedSession.values()),
       machineId: params.machineId,
       runtimeId: params.runtimeId ?? '',
+      readDoctorResourceVitals: params.readDoctorResourceVitals,
       ...(params.readPluginCatalogProjection ? { readPluginCatalogProjection: params.readPluginCatalogProjection } : {}),
       stopSession,
       spawnSession,
@@ -16525,9 +16616,12 @@ export async function startDaemonSessionControlRuntime(
                 };
               }
               if (operationRequest.kind === 'prompt') {
+                let optionalPromptAssetsUnavailable = false;
                 const promptAssetBlocks =
                   await lease.registry.resolvePromptAssetBlocks({
                     agentId: retainedAgent.agentId,
+                    onOptionalUnavailable: () => { optionalPromptAssetsUnavailable = true; },
+                    ...(context.signal ? { signal: context.signal } : {}),
                     sessionId,
                     ...(operationRequest.selectedAsset
                       ? {
@@ -16559,6 +16653,7 @@ export async function startDaemonSessionControlRuntime(
                       AgentRuntimeDaemonTurnContributionsResultV1Schema.parse({
                         kind: 'prompt' as const,
                         promptAssetBlocks,
+                        ...(optionalPromptAssetsUnavailable ? { optionalPromptAssetsUnavailable: true } : {}),
                         toolPromptContributions:
                           resolvePluginToolPromptContributionsThroughRuntimeRegistry(
                             lease.registry,
@@ -17810,6 +17905,9 @@ export async function startDaemonSessionControlRuntime(
               )
             ) {
               if (turnCustody.status === 'recorded') {
+                connectedServiceRuntimeAuthSwitchAttempts.recordTurnLifecycle({
+                  sessionId: input.sessionId, event: input.event, terminalStatus: input.terminalStatus,
+                });
                 await temporaryThrottleScheduler.recordTurnLifecycle({
                   sessionId: input.sessionId,
                   event: input.event,
@@ -18371,6 +18469,10 @@ export async function startDaemonSessionControlRuntime(
         executionRunConnectedServicesBridge.materialize,
       recoverConnectedServicesRejectedStartForExecutionRun:
         executionRunConnectedServicesBridge.recoverRejectedStart,
+      recoverConnectedServiceRuntimeFailureForExecutionRun:
+        executionRunConnectedServicesBridge.recoverRuntimeFailure,
+      completeConnectedServiceRuntimeTurnForExecutionRun:
+        executionRunConnectedServicesBridge.completeRuntimeTurn,
       refreshConnectedServiceRuntimeAuthForExecutionRun:
         executionRunConnectedServicesBridge.refreshRuntimeAuth,
       checkConnectedServicesGenerationForExecutionRun: async ({

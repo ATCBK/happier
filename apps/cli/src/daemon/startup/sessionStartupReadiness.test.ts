@@ -6,6 +6,7 @@ import { Server } from 'socket.io';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 
 import { configuration, reloadConfiguration } from '@/configuration';
+import { AGENT_RUNTIME_DAEMON_SERVICES_PATH, AgentRuntimeDaemonServiceResponseV1Schema } from '@/agent/runtime/session/process/agentRuntimeDaemonServiceProtocol';
 import { createAgentSessionRunnerFactoryBinding } from '@/plugins/runtime/runner/agentSessionRunnerFactoryBinding';
 import { SPAWN_SESSION_ERROR_CODES, type SpawnSessionResult } from '@/session/shared/spawnSessionContract';
 import { createSessionRecordFixture } from '@/testkit/backends/sessionFixtures';
@@ -19,6 +20,8 @@ import { readProcessIdentityByPid } from '../processIdentity';
 import { hashProcessCommand, listSessionMarkers, promoteSessionMarkerPid, readSessionMarkerForPid, writeSessionMarker } from '../sessionRegistry';
 import { createAgentRuntimeDaemonServiceAuthorityPath, readAgentRuntimeDaemonServiceAuthorityForVerifiedMarker } from '../agentRuntime/sessionBridgeAuthorization';
 import { refreshTrackedRunnerAgentRuntimeDaemonServiceAuthority } from '../agentRuntime/refreshTrackedRunnerAgentRuntimeDaemonServiceAuthority';
+import { promoteForegroundDaemonServiceAuthority } from '../agentRuntime/promoteForegroundDaemonServiceAuthority';
+import { reconcileAgentRuntimeRestartDisposition } from '../sessions/reconcileAgentRuntimeRestartDisposition';
 import { createOnHappySessionWebhook } from '../sessions/onHappySessionWebhook';
 import { probeSessionRunnerServiceability } from '../sessions/isSessionRunnerActive';
 import type { TrackedSession } from '../types';
@@ -31,7 +34,8 @@ import { createSessionStartupReadinessHandler } from './sessionStartupReadiness'
 afterEach(() => { vi.unstubAllEnvs(); reloadConfiguration(); });
 
 describe('session startup acknowledgement', () => {
-    it('settles fresh wrapper creation only after the captured child marker and runner authority are published', async () => {
+    it.each(['service ingress', 'restart reattachment', 'foreground promotion'] as const)(
+        'settles fresh wrapper creation only after the captured child marker and runner authority are published: %s', async (phase) => {
         const home = await mkdtemp(join(tmpdir(), 'happier-fresh-wrapper-readiness-'));
         vi.stubEnv('HAPPIER_HOME_DIR', home);
         reloadConfiguration();
@@ -52,6 +56,7 @@ describe('session startup acknowledgement', () => {
             normalizedModulePath: 'runtime.mjs', loadMode: 'immutable-js' });
         const tracked: TrackedSession = { pid: wrapperPid, startedBy: 'daemon', happySessionId: `PID-${wrapperPid}`,
             processStartTimeMs: 12_345, processCommandHash: hashProcessCommand('/runtime/scope-exit'),
+            runnerAgentInvocationContext: Object.freeze({ cwd: home, environment: Object.freeze({}), providerBindingActive: false }),
             agentRuntimeDaemonServiceAuthorityFilePath: authorityPath, acceptedSpawnMarkerGate: Promise.resolve(true),
             runnerAgentBootstrapIdentity: { agentId: 'fixture', backendId: 'fixture' },
             spawnOptions: { directory: home, backendTarget: { kind: 'builtInAgent', agentId: 'fixture' }, spawnNonce: 'fresh-wrapper' } };
@@ -95,6 +100,41 @@ describe('session startup acknowledgement', () => {
             expect(authority).toMatchObject({ sessionId, runner: { pid: runnerPid, processStartTimeMs: 23_456 }, retainedAgent: binding });
             expect(sessions.get(wrapperPid)).toBe(tracked);
             expect(tracked.processStartTimeMs).toBe(12_345);
+            if (!authority) throw new Error('missing published runner authority');
+            if (phase === 'restart reattachment') {
+                tracked.reattachedFromDiskMarker = true;
+                delete tracked.processStartTimeMs;
+                delete tracked.processCommandHash;
+                // An attached exact runner needs no new plugin-registry admission.
+                await expect(reconcileAgentRuntimeRestartDisposition({ trackedSessions: [tracked] })).resolves.toEqual([]);
+                expect(tracked.agentRuntimeRunnerRestartDisposition).toBeUndefined();
+            } else if (phase === 'foreground promotion') {
+                tracked.startedBy = 'terminal';
+                await expect(promoteForegroundDaemonServiceAuthority({ happyHomeDir: home,
+                    publicReleaseRing: configuration.publicReleaseRing, trackedSessions: sessions,
+                    canonicalSessionId: sessionId, foregroundPid: runnerPid, authorityFilePath: authorityPath,
+                    retainedAgent: binding, runner: authority.runner, capabilityDigest: tracked.agentRuntimeDaemonServiceCapabilityHash!,
+                    invocationContext: tracked.runnerAgentInvocationContext! })).resolves.toBe(true);
+                expect(tracked.processStartTimeMs).toBe(12_345);
+                expect(tracked.processCommandHash).toBe(hashProcessCommand('/runtime/scope-exit'));
+            } else {
+                const requestService = () => app.inject({ method: 'POST', url: AGENT_RUNTIME_DAEMON_SERVICES_PATH,
+                    headers: { 'x-happier-daemon-token': authority.capability },
+                    payload: { v: 1, context: { token: authority.capability, sessionId },
+                        operation: { kind: 'turn.admission.authorize', requestId: 'fresh-wrapper-first-turn',
+                            witness: { turnId: 'turn-1', inputId: 'input-1', userMessageSeq: 1, userMessageSeqs: [1] } } } });
+                // The real readiness producer's private document must pass service ingress.
+                // No dispatcher is supplied: 501 proves authorization reached that boundary.
+                const serviceResponse = await requestService();
+                expect(serviceResponse.statusCode, serviceResponse.body).toBe(501);
+                expect(AgentRuntimeDaemonServiceResponseV1Schema.parse(serviceResponse.json())).toMatchObject({
+                    ok: false, error: { code: 'agent_runtime_daemon_service_unavailable' } });
+                const runnerIdentity = tracked.runnerProcessIdentity;
+                delete tracked.runnerProcessIdentity;
+                expect((await requestService()).statusCode).toBe(403);
+                tracked.runnerProcessIdentity = runnerIdentity;
+                expect((await requestService()).statusCode).toBe(501);
+            }
             expect(awaiters.size).toBe(0);
             expect(resolvers.size).toBe(0);
             expect(timeouts.size).toBe(0);

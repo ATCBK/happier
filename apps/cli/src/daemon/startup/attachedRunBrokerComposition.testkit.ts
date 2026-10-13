@@ -12,7 +12,7 @@
  * plugin reload controller and shuts it down on cleanup, so one test file
  * composes exactly once.
  */
-import { mkdtemp, rm } from 'node:fs/promises';
+import { mkdtemp, readFile, rm, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 
@@ -25,7 +25,7 @@ import { MessageQueue2 } from '@/agent/runtime/modeMessageQueue';
 import { resolveHostSessionRuntimeFactoryResult } from '@/agent/runtime/session/loop/factoryResult';
 import { createExecutionRunBridgeRuntime } from '@/agent/runtime/bridges/executionRun/createExecutionRunBridgeRuntime';
 import type { ExecutionRunHostRuntime } from '@/agent/runtime/bridges/executionRun/executionRunHostRuntime';
-import { createNativeAgentRuntimeSessionPlan } from '@/agent/runtime/registry/engineRegistry/nativeAgentSession';
+import { createNativeAgentRuntimeSessionPlanFixture as createNativeAgentRuntimeSessionPlan } from '@/agent/runtime/registry/engineRegistry/nativeAgentSession.testkit';
 import { projectEngineRuntimeContributionFromAgent } from '@/agent/runtime/registry/engineRegistry/contributions';
 import type { NativeAgentSessionHostServiceOwners } from '@/agent/runtime/registry/engineRegistry/nativeAgentSessionHostServiceOwners';
 import type {
@@ -38,12 +38,14 @@ import {
     AgentRuntimeDaemonServiceRequestV1Schema,
 } from '@/agent/runtime/session/process/agentRuntimeDaemonServiceProtocol';
 import { registerSessionClientRuntimeHandlers } from '@/api/session/client/executionRuns/registerSessionClientRuntimeHandlers';
+import type { ApiSessionClient } from '@/api/session/sessionClient';
 import type { Metadata } from '@/api/types';
 import { createAgentRuntimeDaemonServiceAuthorityPath } from '@/daemon/agentRuntime/sessionBridgeAuthorization';
 import { refreshTrackedRunnerAgentRuntimeDaemonServiceAuthority } from '@/daemon/agentRuntime/refreshTrackedRunnerAgentRuntimeDaemonServiceAuthority';
 import {
+    commitPackedPublicHandoffFixture,
     createPublicHandoffArchiveChangeService,
-    packAndCommitPublicHandoffFixture,
+    packPublicHandoffFixture,
     PUBLIC_HANDOFF_AGENT_ID,
     PUBLIC_HANDOFF_AGENT_PLUGIN_ID,
     PUBLIC_HANDOFF_AGENT_PROVIDER_ENV_KEY,
@@ -177,6 +179,7 @@ export async function composeAttachedRunJourney(params: Readonly<{
     /** The calling test file's hoisted boundary state, which its module mocks read. */
     testState: AttachedRunCompositionTestState;
     envScope: ReturnType<typeof createEnvKeyScope>;
+    withOptionalPromptAsset?: boolean;
 }>) {
     const { cleanups, parentDeliveryMode, testState, envScope } = params;
     const happyHomeDir = await mkdtemp(join(tmpdir(), 'happier-attached-run-broker-'));
@@ -186,10 +189,37 @@ export async function composeAttachedRunJourney(params: Readonly<{
         await rm(happyHomeDir, options);
         await rm(agentPluginRoot, options);
     });
+    // --- The parent Session's Agent: a real managed plugin generation. ---
+    await writePublicHandoffAgentPluginFixture({ pluginRoot: agentPluginRoot, version: '1.0.0', generation: 'G' });
+    if (params.withOptionalPromptAsset) {
+        const entrypointPath = join(agentPluginRoot, 'index.ts');
+        const entrypoint = await readFile(entrypointPath, 'utf8');
+        const insertionPoint = '  systemTools: {';
+        if (!entrypoint.includes(insertionPoint)) throw new Error('Expected the fixture Agent declaration');
+        // The existing author fixture already packages this real text resource.
+        // AUTO selection must retain the available asset and omit its disabled peer.
+        await writeFile(entrypointPath, entrypoint.replace(insertionPoint, [
+            '  resources: {',
+            "    'startup-text': { kind: 'prompt', path: 'agentRuntime.ts', contentType: 'text/plain' },",
+            '  },',
+            '  promptAssets: {',
+            "    'available-startup': { kind: 'context', resource: 'startup-text',",
+            `      target: { kind: 'agent', agent: ${JSON.stringify(PUBLIC_HANDOFF_AGENT_ID)} } },`,
+            "    'optional-disabled-startup': { kind: 'guidelines', resource: 'startup-text',",
+            `      target: { kind: 'agent', agent: ${JSON.stringify(PUBLIC_HANDOFF_AGENT_ID)} },`,
+            "      availability: { disabledWhen: { fact: 'plugin.enabled', operator: 'equals', value: true }, disabledReason: 'Optional fixture is disabled' } },",
+            '  },',
+            insertionPoint,
+        ].join('\n')), 'utf8');
+    }
+    // Author packing uses the execution Home's managed tools, not Session state.
+    const packed = await packPublicHandoffFixture({
+        archivePath: join(happyHomeDir, 'agent-g.tgz'),
+        pluginId: PUBLIC_HANDOFF_AGENT_PLUGIN_ID,
+        pluginRoot: agentPluginRoot,
+    });
     envScope.patch({ HAPPIER_HOME_DIR: happyHomeDir });
     reloadConfiguration();
-
-    // --- The parent Session's Agent: a real managed plugin generation. ---
     const changeService = createPublicHandoffArchiveChangeService(
         happyHomeDir,
         createDaemonPluginRegistryRuntimeLifecycle({ happyHomeDir, reloadController: pluginReloadController }),
@@ -197,13 +227,7 @@ export async function composeAttachedRunJourney(params: Readonly<{
     cleanups.push(async () => {
         await pluginReloadController.shutdown({ timeoutMs: 5_000 });
     });
-    await writePublicHandoffAgentPluginFixture({ pluginRoot: agentPluginRoot, version: '1.0.0', generation: 'G' });
-    await packAndCommitPublicHandoffFixture({
-        archivePath: join(happyHomeDir, 'agent-g.tgz'),
-        changeService,
-        pluginId: PUBLIC_HANDOFF_AGENT_PLUGIN_ID,
-        pluginRoot: agentPluginRoot,
-    });
+    await commitPackedPublicHandoffFixture({ changeService, packed });
     const registryLease = await pluginReloadController.acquireRuntimeRegistry();
     cleanups.push(async () => await registryLease.release());
     const registry = registryLease.registry;
@@ -418,7 +442,17 @@ export async function composeAttachedRunJourney(params: Readonly<{
             },
         },
     } as Metadata;
-    const session = createMutableApiSessionClientFixture<Metadata>({ sessionId, metadata: parentMetadata });
+    // The offline Session transport retains the real Run manager, just as the
+    // live client does; worker reads delegate to that owner rather than a stub.
+    let workerUpdateSource: Parameters<ApiSessionClient['setExecutionRunWorkerUpdateSource']>[0] | undefined;
+    const session = createMutableApiSessionClientFixture<Metadata>({
+        sessionId,
+        metadata: parentMetadata,
+        overrides: {
+            setExecutionRunWorkerUpdateSource: (source) => { workerUpdateSource = source; },
+            takeExecutionRunWorkerUpdate: async (signal) => await workerUpdateSource?.takeWorkerUpdate(sessionId, signal) ?? null,
+        },
+    });
     const plan = await createNativeAgentRuntimeSessionPlan({
         createRuntime: source.createRuntime,
         identity: source.identity,
@@ -557,5 +591,7 @@ export async function composeAttachedRunJourney(params: Readonly<{
         runAgent,
         startRun,
         runOpenOperations,
+        promptBridge: source.daemonTurnContributionsBridge,
+        daemonRequests,
     };
 }
