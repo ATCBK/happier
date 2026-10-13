@@ -1,15 +1,11 @@
 import { vi } from "vitest";
 
-import {
-    snapshotStartServerEnv,
-    type EnvValues,
-} from "./startServerMocks";
-import { createEnvReset } from "./env";
+import { createEnvReset, snapshotEnv, type EnvValues } from "./env";
 
 export type StartServerFlavor = "full" | "light";
 
 export function createStartServerHarness(resetValues: EnvValues = {}) {
-    const envBackup = snapshotStartServerEnv();
+    const envBackup = snapshotEnv();
     const resetEnv = createEnvReset(envBackup);
 
     const restore = () => {

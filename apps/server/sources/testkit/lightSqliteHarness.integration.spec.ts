@@ -1,4 +1,4 @@
-import { mkdtemp, readdir, rm } from "node:fs/promises";
+import { access, mkdtemp, readdir, rm } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 
@@ -6,9 +6,11 @@ import { describe, expect, it } from "vitest";
 
 import { applyEnvValues, restoreEnvValues, snapshotEnvValues } from "@/testkit/env";
 import { createLightSqliteHarness } from "@/testkit/lightSqliteHarness";
+import { db } from "@/storage/db";
 
 describe("createLightSqliteHarness", () => {
-    it("resets env to the harness baseline before applying overrides", async () => {
+    it("migrates isolated storage, resets its env baseline, and removes its database on close", async () => {
+        const envBefore = snapshotEnvValues(["DATABASE_URL", "HAPPIER_LIGHT_HARNESS_SPEC_FLAG"]);
         const harness = await createLightSqliteHarness({
             tempDirPrefix: "happier-light-harness-env-",
             initAuth: false,
@@ -20,6 +22,10 @@ describe("createLightSqliteHarness", () => {
         });
 
         try {
+            await db.account.create({ data: { id: "harness-account", publicKey: "harness-key", seq: 7 } });
+            await expect(db.account.findUnique({ where: { id: "harness-account" }, select: { seq: true } }))
+                .resolves.toEqual({ seq: 7 });
+            await expect(access(harness.dbPath)).resolves.toBeUndefined();
             expect(process.env.HAPPIER_LIGHT_HARNESS_SPEC_FLAG).toBe("configured");
 
             process.env.HAPPIER_LIGHT_HARNESS_SPEC_FLAG = "mutated";
@@ -33,6 +39,9 @@ describe("createLightSqliteHarness", () => {
         } finally {
             await harness.close();
         }
+        expect(process.env.DATABASE_URL).toBe(envBefore.DATABASE_URL);
+        expect(process.env.HAPPIER_LIGHT_HARNESS_SPEC_FLAG).toBe(envBefore.HAPPIER_LIGHT_HARNESS_SPEC_FLAG);
+        await expect(access(harness.baseDir)).rejects.toMatchObject({ code: "ENOENT" });
     });
 
     it("restores env and removes temp dir when initialization fails", async () => {
@@ -48,26 +57,26 @@ describe("createLightSqliteHarness", () => {
                 .sort();
         };
 
-        const before = await listHarnessDirs();
-        applyEnvValues({ PATH: "" });
+        try {
+            const before = await listHarnessDirs();
+            applyEnvValues({ PATH: "" });
 
-        await expect(
-            createLightSqliteHarness({
-                tempDirPrefix: prefix,
-                tempDirBase: rootDir,
-                initAuth: false,
-                initEncrypt: false,
-                initFiles: false,
-            }),
-        ).rejects.toThrow(/migration deploy failed/i);
+            await expect(
+                createLightSqliteHarness({
+                    tempDirPrefix: prefix,
+                    tempDirBase: rootDir,
+                    initAuth: false,
+                    initEncrypt: false,
+                    initFiles: false,
+                }),
+            ).rejects.toThrow(/migration deploy failed/i);
 
-        restoreEnvValues(envSnapshot);
-        const after = await listHarnessDirs();
-
-        expect(after).toEqual(before);
-        expect(process.env.HAPPIER_DB_PROVIDER).toBe(envSnapshot.HAPPIER_DB_PROVIDER);
-        expect(process.env.HAPPIER_SERVER_LIGHT_DATA_DIR).toBe(envSnapshot.HAPPIER_SERVER_LIGHT_DATA_DIR);
-
-        await rm(rootDir, { recursive: true, force: true });
+            expect(await listHarnessDirs()).toEqual(before);
+            expect(process.env.HAPPIER_DB_PROVIDER).toBe(envSnapshot.HAPPIER_DB_PROVIDER);
+            expect(process.env.HAPPIER_SERVER_LIGHT_DATA_DIR).toBe(envSnapshot.HAPPIER_SERVER_LIGHT_DATA_DIR);
+        } finally {
+            restoreEnvValues(envSnapshot);
+            await rm(rootDir, { recursive: true, force: true });
+        }
     });
 });

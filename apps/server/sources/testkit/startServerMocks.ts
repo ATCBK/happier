@@ -1,5 +1,4 @@
 import { vi } from 'vitest'
-import { applyEnvValues, restoreEnvValues, snapshotEnvValues, type EnvValues } from './env'
 
 export { applyEnvValues, restoreEnvValues, snapshotEnvValues, type EnvValues } from './env'
 
@@ -10,40 +9,6 @@ export const startEnterpriseIdentitySyncWorkerMock = vi.fn(
 export const startPluginWebhookCredentialRetirementWorkerMock = vi.fn(
   (_params: unknown): Readonly<{ stop: () => void }> | null => null,
 )
-
-export const START_SERVER_ENV_KEYS = [
-  'SERVER_ROLE',
-  'PORT',
-  'REDIS_URL',
-  'DATABASE_URL',
-  'HAPPY_SERVER_FLAVOR',
-  'HAPPIER_SERVER_FLAVOR',
-  'HAPPIER_MANAGED_RELAY_PURPOSE',
-  'HAPPIER_PUBLIC_SERVER_URL',
-  'HAPPY_DB_PROVIDER',
-  'HAPPIER_DB_PROVIDER',
-  'HAPPY_FILES_BACKEND',
-  'HAPPIER_FILES_BACKEND',
-  'HAPPY_SOCKET_ADAPTER',
-  'HAPPIER_SOCKET_ADAPTER',
-  'HAPPY_SOCKET_REDIS_ADAPTER',
-  'HAPPIER_SOCKET_REDIS_ADAPTER',
-  'HAPPY_SERVER_LIGHT_DATA_DIR',
-  'HAPPIER_SERVER_LIGHT_DATA_DIR',
-  'HAPPIER_SERVER_DB_SIZE_WARN_BYTES',
-  'HAPPIER_SERVER_RETENTION__ENABLED',
-  'HAPPIER_VOICE_PROVIDER_IDENTITY_BACKFILL_ENABLED',
-  'HAPPIER_VOICE_PROVIDER_IDENTITY_BACKFILL_BATCH_SIZE',
-  'HAPPIER_VOICE_PROVIDER_IDENTITY_BACKFILL_TIME_BUDGET_MS',
-  'HAPPIER_VOICE_PROVIDER_IDENTITY_BACKFILL_BATCH_DELAY_MS',
-  'HAPPIER_VOICE_PROVIDER_IDENTITY_BACKFILL_INTERVAL_MS',
-  'METRICS_ENABLED',
-  'AUTH_ANONYMOUS_SIGNUP_ENABLED',
-] as const
-
-export function snapshotStartServerEnv(): EnvValues {
-  return snapshotEnvValues(START_SERVER_ENV_KEYS)
-}
 
 export function installStartServerCommonWiringMocks(): void {
   // startApi returns the listening Fastify instance; the managed Home Iroh

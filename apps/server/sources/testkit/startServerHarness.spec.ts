@@ -1,14 +1,9 @@
-import { afterEach, describe, expect, it, vi } from "vitest";
+import { afterEach, describe, expect, it } from "vitest";
 
 import { createStartServerHarness } from "./startServerHarness";
 
-const startServer = vi.fn(async () => {});
-
-vi.mock("@/startServer", () => ({
-    startServer,
-}));
-
 describe("startServerHarness", () => {
+    const pathBaseline = process.env.PATH;
     const harness = createStartServerHarness({
         SERVER_ROLE: undefined,
         REDIS_URL: undefined,
@@ -19,24 +14,30 @@ describe("startServerHarness", () => {
         harness.restore();
     });
 
-    it("restores the startServer env baseline and starts with the requested patch", async () => {
+    it("restores the startup env baseline before each import preparation and override", () => {
         harness.reset({
             SERVER_ROLE: "stale-role",
             REDIS_URL: "redis://stale",
         });
 
-        await harness.start("full", {
+        harness.prepareImport({
             SERVER_ROLE: "api",
             REDIS_URL: "redis://fresh",
         });
 
-        expect(startServer).toHaveBeenCalledWith("full");
         expect(process.env.SERVER_ROLE).toBe("api");
         expect(process.env.REDIS_URL).toBe("redis://fresh");
+        expect(process.env.PATH).toBe(pathBaseline);
+
+        harness.reset();
+        expect(process.env.SERVER_ROLE).toBeUndefined();
+        expect(process.env.REDIS_URL).toBeUndefined();
+        expect(process.env.PATH).toBe(pathBaseline);
 
         harness.restore();
 
         expect(process.env.SERVER_ROLE).toBeUndefined();
         expect(process.env.REDIS_URL).toBeUndefined();
+        expect(process.env.PATH).toBe(pathBaseline);
     });
 });

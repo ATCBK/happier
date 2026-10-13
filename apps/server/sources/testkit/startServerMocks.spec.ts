@@ -27,13 +27,13 @@ describe("startServerMocks", () => {
 
     it("installs the canonical startServer db module mock for subsequent dynamic imports", async () => {
         const dbMocks = createStartServerDbMocks();
+        const connectionFailure = new Error("database unavailable");
+        dbMocks.dbConnect.mockRejectedValueOnce(connectionFailure);
 
         installStartServerDbModuleMock(dbMocks);
 
         const storage = await import("@/storage/db");
-        await storage.db.$connect();
-
-        expect(dbMocks.dbConnect).toHaveBeenCalledTimes(1);
+        await expect(storage.db.$connect()).rejects.toBe(connectionFailure);
         expect(storage.getDbProviderFromEnv({}, "sqlite")).toBe("sqlite");
     });
 });
