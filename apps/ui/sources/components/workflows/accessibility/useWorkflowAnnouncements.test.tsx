@@ -15,9 +15,10 @@ import type { WorkflowAnnouncementState } from './workflowAnnouncementSelection'
 
 const announcements = vi.hoisted(() => ({ messages: [] as string[] }));
 
-vi.mock('@/components/ui/accessibility/announceAccessibilityMessage', () => ({
-    announceAccessibilityMessage: (message: string) => { announcements.messages.push(message); },
-}));
+vi.mock('react-native', async () => (await import('@/dev/testkit/mocks/reactNative')).createReactNativeNativeMock(
+    { platformOS: 'ios' },
+    { AccessibilityInfo: { announceForAccessibility: (message: string) => { announcements.messages.push(message); } } },
+));
 vi.mock('@/text', async () => {
     const { createTextModuleMock } = await import('@/dev/testkit/mocks/text');
     return createTextModuleMock({

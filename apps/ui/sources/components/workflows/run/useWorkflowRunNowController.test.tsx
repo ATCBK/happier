@@ -1,9 +1,10 @@
+import * as React from 'react';
 import { act } from 'react-test-renderer';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { WorkflowRunStartRequestV1Schema } from '@happier-dev/protocol/workflows/actionsV1';
 
 import { createDeferred } from '@/dev/testkit/hooks/createDeferred';
-import { renderHook } from '@/dev/testkit/hooks/renderHook';
+import { renderHook as renderHostHook } from '@/dev/testkit/hooks/renderHook';
 import { standardCleanup } from '@/dev/testkit/cleanup/standardCleanup';
 import { createHomeGovernanceHarness, installHomeGovernanceBoundaries } from '@/dev/testkit/harness/homeGovernanceHarness';
 import { installDisconnectedServerSocketBoundary } from '@/dev/testkit/harness/serverAccountConnectionHarness';
@@ -16,16 +17,15 @@ import type { WorkflowRunNowRequest } from './useWorkflowRunNowController';
 const executeMock = vi.hoisted(() => vi.fn<(
     request: Parameters<typeof import('@/sync/runtime/orchestration/serverScopedRpc/serverScopedMachineRpc').machineRpcWithServerScope>[0],
 ) => Promise<unknown>>());
-const modalAlertSpy = vi.hoisted(() => vi.fn(async () => {}));
 
 vi.mock('@/sync/runtime/orchestration/serverScopedRpc/serverScopedMachineRpc', async () => {
     const { createServerScopedMachineRpcBoundaryMock } = await import('@/dev/testkit/mocks/serverScopedRpc');
     return createServerScopedMachineRpcBoundaryMock(executeMock);
 });
-vi.mock('@/modal', async () => {
-    const { createModalModuleMock } = await import('@/dev/testkit/mocks/modal');
-    return createModalModuleMock({ spies: { alert: modalAlertSpy } }).module;
-});
+vi.mock('react-native', async () => (await import('@/dev/testkit/mocks/reactNative')).createReactNativeWebMock());
+vi.mock('react-native-unistyles', async () => (await import('@/dev/testkit/mocks/unistyles')).createUnistylesMock());
+// Keep admission-error presentation real below the Radix DOM boundary.
+vi.mock('@/utils/web/radixCjs', async () => (await import('@/dev/testkit/mocks/radixCjs')).createRadixCjsModuleMock());
 vi.mock('@/text', async () => {
     const { createTextModuleMock } = await import('@/dev/testkit/mocks/text');
     return createTextModuleMock({ translate: (key: string) => key });
@@ -34,6 +34,15 @@ vi.mock('@/text', async () => {
 const homes = createHomeGovernanceHarness();
 installHomeGovernanceBoundaries(homes);
 installDisconnectedServerSocketBoundary();
+const { ModalProvider, useModal } = await import('@/modal/ModalProvider');
+let modals: ReturnType<typeof useModal>['state']['modals'] = [];
+function ObserveModals() { modals = useModal().state.modals; return null; }
+function ModalHost({ children }: React.PropsWithChildren) {
+    return <ModalProvider><ObserveModals />{children}</ModalProvider>;
+}
+function renderHook<Value>(useValue: () => Value) {
+    return renderHostHook(useValue, { wrapper: ModalHost });
+}
 const { storage } = await import('@/sync/domains/state/storageStore');
 const { retireActiveServerAccountScopeLifetime } = await import('@/sync/domains/scope/activeServerAccountScope');
 const { publishAppliedActiveServerSnapshot } = await import('@/sync/runtime/orchestration/appliedActiveServerRuntime');
@@ -85,6 +94,7 @@ describe('useWorkflowRunNowController', () => {
         expect(executeMock.mock.calls[0]?.[0].payload).toMatchObject({ roleOverrides });
     });
     beforeEach(async () => {
+        modals = [];
         homeA = await homes.addHome({ name: 'A', serverUrl: 'https://workflow-a.test', accountId: 'account-a', currentAccount: true });
         homeB = await homes.addHome({ name: 'B', serverUrl: 'https://workflow-b.test', accountId: 'account-b', currentAccount: true, active: false });
         homes.answer(homeA, '/v1/features', { body: createRootLayoutFeaturesResponse({ features: { workflows: { enabled: true } } }) });
@@ -92,14 +102,13 @@ describe('useWorkflowRunNowController', () => {
         storage.setState({ workflowRunsById: {}, machines: { 'machine-1': createMachineFixture({ activeAt: 0 }) } });
     });
 
-    afterEach(() => {
+    afterEach(async () => {
         vi.useRealTimers();
         executeMock.mockReset();
-        modalAlertSpy.mockClear();
         setAccountScope(null);
         storage.setState({ workflowRunsById: {} });
-        homes.reset();
-        standardCleanup();
+        await standardCleanup();
+        await homes.reset();
     });
 
     it('returns the exact admitted handle and stores that Run by its own runId', async () => {
@@ -173,7 +182,7 @@ describe('useWorkflowRunNowController', () => {
         const { useWorkflowRunNowController } = await import('./useWorkflowRunNowController');
         const hook = await renderHook(() => useWorkflowRunNowController());
         await act(async () => { await hook.getCurrent().runNow({ source, refusal: 'inline' }); });
-        expect(modalAlertSpy).not.toHaveBeenCalled();
+        expect(modals.filter(entry => entry.type === 'alert')).toEqual([]);
         expect(hook.getCurrent().refusal?.message).toBe('workflows.problem.targetUnavailable');
         // A new press is a new attempt: the previous reason does not outlive it.
         executeMock.mockResolvedValue(admitted('created'));
@@ -261,7 +270,7 @@ describe('useWorkflowRunNowController', () => {
         publishHomeAccountChange(homeA, [`workflow-run:${runId}`]);
         expect(executeMock).toHaveBeenCalledTimes(1);
         expect(observations()).toHaveLength(1);
-        expect(modalAlertSpy).not.toHaveBeenCalled();
+        expect(modals.filter(entry => entry.type === 'alert')).toEqual([]);
         expect(storage.getState().workflowRunsById[runId]).toBeUndefined();
     });
 
@@ -311,7 +320,7 @@ describe('useWorkflowRunNowController', () => {
         // shown this Run, and no error is surfaced for a retired command.
         expect(outcome).toBeNull();
         expect(storage.getState().workflowRunsById[RUN_ID]).toBeUndefined();
-        expect(modalAlertSpy).not.toHaveBeenCalled();
+        expect(modals.filter(entry => entry.type === 'alert')).toEqual([]);
         await act(async () => {
             setAccountScope({ serverId: 'server-a', accountId: 'account-a' });
             hook.rerender();
@@ -335,7 +344,9 @@ describe('useWorkflowRunNowController', () => {
         expect(outcome).toBeNull();
         expect(storage.getState().workflowRunsById[RUN_ID]).toBeUndefined();
         expect(hook.getCurrent().stateFor(RUN_ID)).toBe('idle');
-        expect(modalAlertSpy).toHaveBeenCalledTimes(1);
+        expect(modals).toHaveLength(1);
+        expect(modals[0]).toMatchObject({ type: 'alert', visible: true });
+        expect(hook.tree.root.findAll(node => node.props.testID === 'web-modal-button-0')).not.toHaveLength(0);
     });
 
     it('sends declared inputs and the originating-session completion choice with the admission', async () => {

@@ -1,8 +1,23 @@
+// @vitest-environment jsdom
+
 import * as React from 'react';
 import { StyleSheet } from 'react-native';
-import { afterEach, describe, expect, it, vi } from 'vitest';
+import { afterAll, afterEach, describe, expect, it, vi } from 'vitest';
 
 import { renderScreen, standardCleanup } from '@/dev/testkit';
+import { WorkflowAddBlockMenu } from './WorkflowAddBlockMenu';
+
+// Hardware queries are the browser boundary. Install before the styles read
+// their touch floor at module load so the real pointer classifier runs.
+const originalMatchMedia = vi.hoisted(() => {
+    const previous = Object.getOwnPropertyDescriptor(window, 'matchMedia');
+    Object.defineProperty(window, 'matchMedia', { configurable: true, value: (query: string): MediaQueryList => ({
+        matches: query === '(pointer: coarse)' || query === '(hover: none)',
+        media: query, onchange: null, addListener: () => {}, removeListener: () => {},
+        addEventListener: () => {}, removeEventListener: () => {}, dispatchEvent: () => true,
+    }) });
+    return previous;
+});
 
 vi.mock('react-native', async () => {
     const { createReactNativeWebMock } = await import('@/dev/testkit/mocks/reactNative');
@@ -16,22 +31,16 @@ vi.mock('@/text', async () => {
     const { createTextModuleMock } = await import('@/dev/testkit/mocks/text');
     return createTextModuleMock();
 });
-// The pointer environment is a platform boundary: this suite is a phone browser (no hover).
-vi.mock('@/utils/platform/webMobileHeuristics', async (importOriginal) => ({
-    ...(await importOriginal<Record<string, unknown>>()),
-    isCoarsePrimaryPointerEnvironment: () => true,
-}));
-vi.mock('@/components/ui/icons/Icon', async (importOriginal) => ({
-    ...(await importOriginal<Record<string, unknown>>()),
-    Icon: (props: Record<string, unknown>) => React.createElement('Icon', props),
-}));
+afterAll(() => {
+    if (originalMatchMedia) Object.defineProperty(window, 'matchMedia', originalMatchMedia);
+    else Reflect.deleteProperty(window, 'matchMedia');
+});
 
 afterEach(async () => {
     await standardCleanup();
 });
 
 async function renderInserter(revealed: boolean) {
-    const { WorkflowAddBlockMenu } = await import('./WorkflowAddBlockMenu');
     return renderScreen(<WorkflowAddBlockMenu variant="inserter" revealed={revealed} onAdd={() => {}} scopeLabel="Steps" testID="gap" />);
 }
 

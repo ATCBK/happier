@@ -12,12 +12,14 @@ import { WorkflowsDestinationIndex } from './WorkflowsDestinationIndex';
 import { DestinationInstanceHost } from '@/components/appShell/workspace/DestinationInstanceHost';
 import { WorkspaceProvider } from '@/components/appShell/workspace/WorkspaceProvider';
 import { resolveCompactAppDestinations } from '@/components/appShell/destinations/compactAppDestinationCatalog';
-import { Modal } from '@/modal';
+import { ModalProvider, useModal } from '@/modal/ModalProvider';
 import { installWorkflowActionHttpBoundary } from '@/dev/testkit/fixtures/workflowActionHttpBoundary';
+import { installShippedNativeFrameScheduler } from '@/dev/testkit/legend/shippedNativeLegendRuntime';
 
 const execute = vi.hoisted(() => vi.fn());
 const routerPush = vi.hoisted(() => vi.fn());
 const machineRpcAck = vi.hoisted(() => vi.fn());
+const nativeAlert = vi.hoisted(() => vi.fn<typeof import('react-native')['Alert']['alert']>());
 // Physical Socket.IO ACKs only; the scoped RPC, daemon projection and Action owners remain real.
 vi.mock('socket.io-client', async (importOriginal) => {
     const actual = await importOriginal<typeof import('socket.io-client')>();
@@ -30,11 +32,12 @@ vi.mock('socket.io-client', async (importOriginal) => {
         return socket;
     } };
 });
-vi.mock('@/modal', async () => (await import('@/dev/testkit/mocks/modal')).createModalModuleMock({ confirmResult: true }).module);
+// Native Alert is the platform boundary. The real manager owns confirmation
+// settlement and the real provider retains any custom modal custody.
+vi.mock('react-native', async () => (await import('@/dev/testkit/mocks/reactNative'))
+    .createReactNativeNativeMock({ platformOS: 'ios' }, { Alert: { alert: nativeAlert } }));
 vi.mock('expo-router', async () => (await import('@/dev/testkit/mocks/router')).createExpoRouterMock({ pathname: '/workflows', router: { push: routerPush } }).module);
 vi.mock('react-native-unistyles', async () => (await import('@/dev/testkit/mocks/unistyles')).createUnistylesMock());
-vi.mock('@/components/ui/popover', async (importOriginal) =>
-    (await import('@/dev/testkit/mocks/popover')).createInlinePopoverModuleMock(importOriginal));
 vi.mock('@/text', async () => (await import('@/dev/testkit/mocks/text')).createTextModuleMock());
 // Native recycler is a system boundary; real Collection row rendering stays below it.
 vi.mock('@legendapp/list/react-native', async (original) => (await import('@/dev/testkit/mocks/legendList'))
@@ -43,13 +46,26 @@ let httpBoundary: Awaited<ReturnType<typeof installWorkflowActionHttpBoundary>> 
 let automationDefinitionResponse: ((url: URL, init?: RequestInit) => Promise<Response | undefined>) | null = null;
 let appliedSnapshot: typeof import('@/sync/domains/server/serverRuntime')['getActiveServerSnapshot'];
 const searchRuntime = { open: () => {}, buildCommands: () => [] };
+let modals: ReturnType<typeof useModal>['state']['modals'] = [];
+function ObserveModals() { modals = useModal().state.modals; return null; }
 function Wrapper({ children }: React.PropsWithChildren) {
-    return <InjectedAuthProvider credentials={null}><UniversalSearchRuntimeProvider value={searchRuntime}>{children}</UniversalSearchRuntimeProvider></InjectedAuthProvider>;
+    return <ModalProvider><ObserveModals /><InjectedAuthProvider credentials={null}>
+        <UniversalSearchRuntimeProvider value={searchRuntime}>{children}</UniversalSearchRuntimeProvider>
+    </InjectedAuthProvider></ModalProvider>;
+}
+async function confirmDeletion() {
+    const buttons = nativeAlert.mock.calls.at(-1)?.[2];
+    const confirm = buttons?.find(button => button.style === 'destructive');
+    expect(confirm?.onPress).toBeTypeOf('function');
+    await act(async () => { confirm?.onPress?.(); });
 }
 let previous = storage.getState();
 let previousAppliedSnapshot = getAppliedActiveServerSnapshot();
 let previousRuntimeAvailable = isAppliedActiveServerRuntimeAvailable();
 beforeEach(async () => {
+    installShippedNativeFrameScheduler();
+    nativeAlert.mockReset();
+    modals = [];
     previous = storage.getState();
     previousAppliedSnapshot = getAppliedActiveServerSnapshot();
     previousRuntimeAvailable = isAppliedActiveServerRuntimeAvailable();
@@ -66,7 +82,7 @@ beforeEach(async () => {
     httpBoundary.prime();
 });
 afterEach(async () => {
-    standardCleanup();
+    await standardCleanup();
     (await import('./workflowLibraryReads')).resetWorkflowLibraryReadsForTests();
     (await import('@/sync/domains/scope/activeServerAccountScope')).retireActiveServerAccountScopeLifetime();
     execute.mockReset();
@@ -277,6 +293,7 @@ describe('workflow library page anatomy', () => {
         let observedRetirement = false;
         const retirementObservation = admittedLifetime?.onRetire(() => { observedRetirement = true; });
         await act(async () => { row('10000000-0000-4000-8000-000000000001').findByType(ContextMenu).props.onSelect('delete'); await Promise.resolve(); });
+        await confirmDeletion();
         await deletionAdmitted;
         expect(row('10000000-0000-4000-8000-000000000001').props.busy).toBe(true);
         if (phase === 'receipt') {
@@ -343,6 +360,9 @@ describe('workflow library page anatomy', () => {
         const row = (id = ids[0]) => screen.findAll(node => node.props.testID === `workflows-home:row:${id}` && Array.isArray(node.props.secondaryActions))[0]!;
         const menu = row().findByType(ContextMenu);
         await act(async () => { menu.props.onSelect('delete'); await Promise.resolve(); });
+        expect(execute.mock.calls.filter(call => call[0] === 'workflow.definition.delete')).toEqual([]);
+        expect(modals).toEqual([]); // This ordinary iOS confirmation belongs to native Alert.
+        await confirmDeletion();
         await deletionAdmitted;
         expect(row().props.busy).toBe(true);
         expect(menu.props.items?.find((item: { id: string }) => item.id === 'delete')?.destructive).toBe(true);
@@ -361,6 +381,7 @@ describe('workflow library page anatomy', () => {
         // A prior completion must not masquerade as the next confirmed deletion's outcome.
         deletion = new Promise(resolve => { settleDelete = resolve; });
         await act(async () => { row(ids[1]).findByType(ContextMenu).props.onSelect('delete'); await Promise.resolve(); });
+        await confirmDeletion();
         expect(row(ids[1]).props.busy).toBe(true);
         expect(screen.findHostByTestId('workflows-home:deleted')).toBeNull();
         await act(async () => {
@@ -368,7 +389,7 @@ describe('workflow library page anatomy', () => {
             settleDelete({ ok: true, result: { definitionId: ids[1], deleted: true } });
         });
         expect(screen.findHostByTestId('workflows-home:deleted')).not.toBeNull();
-        expect(Modal.confirm).toHaveBeenCalled();
+        expect(nativeAlert.mock.calls.filter(call => call[2]?.some(button => button.style === 'destructive'))).toHaveLength(2);
     });
     it('shows one loading status rather than selectable placeholder workflows before the library is known', async () => {
         execute.mockImplementation(() => new Promise(() => {}));
@@ -451,7 +472,10 @@ describe('workflow library page anatomy', () => {
             if (actionId === 'workflow.run.list') return { ok: true, result: { runs: [], metadataByRunId: {} } };
             return { ok: false, errorCode: 'unexpected', error: 'unexpected' };
         });
-        const screen = await renderScreen(<WorkflowsDestinationIndex />, { wrapper: Wrapper });
+        const screen = await renderScreen(<WorkflowsDestinationIndex />, { wrapper: Wrapper,
+            // Native refs supply geometry; the real Popover owns placement and portal rendering.
+            createNodeMock: () => ({ measureInWindow: (receive: (x: number, y: number, width: number, height: number) => void) => receive(40, 40, 120, 40) }),
+        });
         await act(async () => { await Promise.resolve(); await Promise.resolve(); });
         expect(screen.findByTestId('workflows-home:firstVisit')).not.toBeNull();
         expect(screen.findByTestId('workflow-builtins:builtin:plan-with-a-panel')).not.toBeNull();

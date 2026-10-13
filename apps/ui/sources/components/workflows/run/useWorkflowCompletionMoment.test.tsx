@@ -1,23 +1,21 @@
 import { afterEach, describe, expect, it, vi } from 'vitest';
+import { act } from 'react-test-renderer';
 
 import { renderHook, standardCleanup } from '@/dev/testkit';
 
 import type { WorkflowRunStateV1 } from '@happier-dev/protocol';
+import { setReducedMotionPreferenceOverride } from '@/hooks/ui/useReducedMotionPreference';
 
-const haptics = vi.hoisted(() => ({ light: vi.fn() }));
-const motionPreference = vi.hoisted(() => ({ reduced: false }));
+const haptics = vi.hoisted(() => ({ light: vi.fn(async () => {}) }));
 
-vi.mock('@/components/ui/theme/haptics', () => ({
-    hapticsLight: haptics.light,
+vi.mock('expo-haptics', async (importOriginal) => ({
+    ...await importOriginal<typeof import('expo-haptics')>(),
+    impactAsync: haptics.light,
 }));
-vi.mock('@/hooks/ui/useReducedMotionPreference', () => ({
-    useReducedMotionPreference: () => motionPreference.reduced,
-}));
-
 afterEach(async () => {
     haptics.light.mockClear();
-    motionPreference.reduced = false;
     await standardCleanup();
+    setReducedMotionPreferenceOverride(null);
 });
 
 type Props = Readonly<{ state: WorkflowRunStateV1 | null; observing?: boolean; identity?: string }>;
@@ -108,12 +106,12 @@ describe('useWorkflowCompletionMoment', () => {
         const moment = await renderMoment({ state: 'running', identity: 'run-a' });
 
         expect(await moment.rerender({ state: 'succeeded', identity: 'run-a' })).toBe(true);
-        motionPreference.reduced = true;
+        await act(async () => { setReducedMotionPreferenceOverride(true); });
         expect(await moment.rerender({ state: 'succeeded', identity: 'run-a' })).toBe(false);
     });
 
     it('applies the final state with no emphasis travel under reduced motion', async () => {
-        motionPreference.reduced = true;
+        setReducedMotionPreferenceOverride(true);
         const moment = await renderMoment({ state: 'running' });
 
         expect(await moment.rerender({ state: 'succeeded' })).toBe(false);

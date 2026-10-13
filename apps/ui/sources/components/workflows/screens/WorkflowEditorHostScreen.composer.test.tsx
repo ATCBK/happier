@@ -1,11 +1,11 @@
 import * as React from 'react';
 import { act } from 'react-test-renderer';
-import { describe, expect, it, vi, beforeEach, afterEach } from 'vitest';
+import { describe, expect, it, vi, beforeAll, beforeEach, afterEach } from 'vitest';
 import { Alert, View } from 'react-native';
-import { invokeTestInstanceHandler, renderScreen } from '@/dev/testkit/render/renderScreen';
+import { invokeTestInstanceHandler, renderScreen as renderTestScreen } from '@/dev/testkit/render/renderScreen';
 import { standardCleanup } from '@/dev/testkit/cleanup/standardCleanup';
 import { createMachineFixture } from '@/dev/testkit/fixtures/machineFixtures';
-import { createWorkflowDefinitionFixture, createWorkflowRunSummaryFixture, createWorkflowInvocationIndexFixture } from '@/dev/testkit/fixtures/workflowRunFixtures';
+import { createWorkflowDefinitionFixture, createWorkflowRunSummaryFixture as createRunFixture, createWorkflowInvocationIndexFixture } from '@/dev/testkit/fixtures/workflowRunFixtures';
 import { buildWorkflowReviewedRunSeed, storeWorkflowReviewedRunSeed } from '@/sync/domains/workflows/workflowReviewedRunSeed';
 import { captureActiveServerAccountScopeLifetime } from '@/sync/domains/scope/activeServerAccountScope';
 import type { WorkspaceNavigationContextValue } from '@/components/appShell/workspace/WorkspaceNavigationContext';
@@ -13,15 +13,23 @@ import { createHomeGovernanceHarness, installHomeGovernanceBoundaries } from '@/
 import { teamSummaryFixture, teamCapabilitiesFixture } from '@/dev/testkit/fixtures/teamFixtures';
 import { resetTeamsSnapshotsForTests } from '@/sync/store/teams/teamsSnapshots';
 import { getAppliedActiveServerSnapshot, isAppliedActiveServerRuntimeAvailable, publishAppliedActiveServerSnapshot } from '@/sync/runtime/orchestration/appliedActiveServerRuntime';
+import { installDisconnectedServerSocketBoundary, restoreServerAccountForTest } from '@/dev/testkit/harness/serverAccountConnectionHarness';
+import { loadSyncSingletonForTests } from '@/dev/testkit/harness/syncSingletonLoader';
+import { getActionSpec, ActionIdSchema, StrictJsonValueSchema, WorkflowRunStartRequestV1Schema, WorkflowRunRecipientCensusResponseV1Schema,
+    sealWorkflowAcceptedSnapshotStoredEnvelopeV1, sealWorkflowProgressStoredEnvelopeV1,
+    serializeWorkflowStoredContentEnvelopeV1, WorkflowProgressEnvelopeV1Schema,
+    type WorkflowRunGetResultV1, type WorkflowInvocationDetailV1 } from '@happier-dev/protocol';
+import { materializeWorkflowAcceptedSnapshotV1 } from '@happier-dev/protocol/workflows/materializeWorkflowAcceptedSnapshotV1';
+import { zodSchemaToJsonSchemaObject } from '@happier-dev/protocol/actions/actionInputJsonSchema';
+import { createAuthoringMemoryHttpBoundary } from '@/dev/testkit/mocks/authoringMemoryHttp';
+import { TargetedActionRpcRequestV1Schema } from '@happier-dev/protocol/actions';
+import type { WorkflowActionTransport } from '@/sync/ops/actions/workflowActionTransport';
 
-const transport = vi.hoisted(() => vi.fn());
+const machineRpc = vi.hoisted(() => vi.fn<WorkflowActionTransport>());
 const viewport = vi.hoisted(() => ({ width: 1280 }));
 const appliedHome = vi.hoisted(() => ({ serverId: 'server-a', serverUrl: 'https://server-a.example', generation: 0 }));
 const routeBoundary = vi.hoisted(() => ({ params: {} as Record<string, string>, platform: 'ios', credentials: null as { token: string } | null }));
-vi.mock('@/sync/ops/actions/frontDoorRuntimeActionExecutor', async (importOriginal) => ({
-    ...(await importOriginal<typeof import('@/sync/ops/actions/frontDoorRuntimeActionExecutor')>()),
-    createFrontDoorActionExecute: () => transport,
-}));
+vi.mock('@/sync/runtime/orchestration/serverScopedRpc/serverScopedMachineRpc', () => ({ machineRpcWithServerScope: machineRpc }));
 vi.mock('react-native', async () => {
     const { createReactNativeNativeMock } = await import('@/dev/testkit/mocks/reactNative');
     return createReactNativeNativeMock({ platformOS: 'ios' }, {
@@ -33,12 +41,11 @@ vi.mock('react-native-unistyles', async () => {
     const { createUnistylesMock } = await import('@/dev/testkit/mocks/unistyles');
     return createUnistylesMock();
 });
-// Expo navigation and authentication are the platform/network boundaries; workspace state and guards stay real.
+// Expo navigation is a platform boundary; Account, auth, workspace state and guards stay real.
 vi.mock('expo-router', async () => {
     const { createExpoRouterMock } = await import('@/dev/testkit/mocks/router');
     return createExpoRouterMock({ pathname: '/workflows/new', params: () => routeBoundary.params }).module;
 });
-vi.mock('@/auth/context/AuthContext', () => ({ useOptionalAuth: () => routeBoundary.credentials ? { credentials: routeBoundary.credentials } : null, useAuth: () => ({ isAuthenticated: true }) }));
 vi.mock('expo-crypto', async () => ({ randomUUID: (await import('node:crypto')).randomUUID }));
 vi.mock('@/text', async () => {
     const { createTextModuleMock } = await import('@/dev/testkit/mocks/text');
@@ -47,6 +54,8 @@ vi.mock('@/text', async () => {
 
 const home = createHomeGovernanceHarness();
 installHomeGovernanceBoundaries(home);
+installDisconnectedServerSocketBoundary();
+beforeAll(loadSyncSingletonForTests);
 // Install genuine network leaves before these real owners bind their scoped transport.
 const { WorkflowEditorHostScreen } = await import('./WorkflowEditorHostScreen');
 const { WorkflowBuiltinEditorHostScreen } = await import('./WorkflowCatalogEditorHostScreen');
@@ -66,8 +75,104 @@ const { clearActiveUnsavedChangesGuard } = await import('@/utils/navigation/runG
 const { resetTeamsDirectoryEngineForTests } = await import('@/sync/engine/teams/teamsDirectoryEngine');
 const { getStorage } = await import('@/sync/domains/state/storageStore');
 const { ModalProvider } = await import('@/modal');
+const { AuthProvider } = await import('@/auth/context/AuthContext');
+const { getActiveServerSnapshot } = await import('@/sync/domains/server/serverRuntime');
+const { createWorkflowDefinition, updateWorkflowDefinition } = await import('@/sync/domains/workflows/workflowDefinitionActions');
+const { apiSocket } = await import('@/sync/api/session/apiSocket');
 let previousAppliedSnapshot = getAppliedActiveServerSnapshot();
 let previousRuntimeAvailable = isAppliedActiveServerRuntimeAvailable();
+const storageRoute = '/v3/automations/runs/workflow-storage';
+let accountConnection: Awaited<ReturnType<typeof restoreServerAccountForTest>> | null = null;
+
+function createWorkflowRunSummaryFixture(overrides: Parameters<typeof createRunFixture>[0] = {}) {
+    return createRunFixture({ ownerAccountId: 'account-a', ...overrides });
+}
+
+function runKeyCensus(runId: string) {
+    return WorkflowRunRecipientCensusResponseV1Schema.parse({ runId, ownerAccountId: 'account-a',
+        access: 'owner', encryptionMode: 'plain', dataEncryptionKey: null, callerDataEncryptionKey: null,
+        recipients: [], visibleTeamId: null, ownerAccountCurrentness: { mode: 'plain', version: 1, contentKeyFingerprint: null } });
+}
+
+function renderScreen(element: React.ReactElement, options: Parameters<typeof renderTestScreen>[1] = {}) {
+    const Wrapper = options.wrapper;
+    return renderTestScreen(element, { ...options, wrapper: ({ children }) => (
+        <AuthProvider initialCredentials={routeBoundary.credentials}>
+            {Wrapper ? <Wrapper>{children}</Wrapper> : children}
+        </AuthProvider>
+    ) });
+}
+
+function startRequests() {
+    return machineRpc.mock.calls.filter(([request]) => request.method === getActionSpec('workflow.run.start').bindings?.rpcMethod)
+        .map(([request]) => WorkflowRunStartRequestV1Schema.parse(TargetedActionRpcRequestV1Schema.parse(request.payload).input));
+}
+
+function definitionWrites() {
+    return home.requests.filter(request => request.path.startsWith('/v1/artifacts') && request.input !== null);
+}
+
+function automationWrites() {
+    return home.requests.filter(request => request.path.startsWith('/v3/automations') && request.path !== storageRoute && request.input !== null);
+}
+
+function expectNoWorkflowWrites() {
+    expect(definitionWrites()).toEqual([]);
+    expect(automationWrites()).toEqual([]);
+    expect(startRequests()).toEqual([]);
+}
+
+function savedAgentDefinition() {
+    return createWorkflowDefinitionFixture({ defaults: {
+        agentTarget: { kind: 'agent', identity: { pluginId: 'happier.agent.claude', localId: 'claude' } },
+    } });
+}
+
+async function seedSavedDefinition(definitionId: string, definition = savedAgentDefinition(),
+    title = 'Saved draft', access: 'owner' | 'view' | 'edit' | 'admin' = 'owner') {
+    let value = await createWorkflowDefinition({ definitionId, definition, metadata: { title } });
+    for (let revision = 1; revision < 3; revision++) {
+        value = await updateWorkflowDefinition({ definitionId, definition, metadata: { title }, expectedRevision: value.revision });
+    }
+    const row = home.artifacts(appliedHome.serverId).read(definitionId);
+    if (!row) throw new Error('Missing produced saved definition');
+    if (access !== 'owner') home.answer(appliedHome.serverId, `/v1/artifacts/${definitionId}`, { body: { ...row, access } });
+    home.requests.splice(0);
+    return row;
+}
+
+async function acceptedStorage(detail: WorkflowRunGetResultV1) {
+    if (!detail.definition || !detail.acceptedContext) throw new Error('Fixture requires accepted content');
+    const run = detail.run;
+    const accepted = await materializeWorkflowAcceptedSnapshotV1({ definition: detail.authoredDefinition ?? detail.definition,
+        admission: { kind: 'user' }, effects: { resolveTargetAvailability: async () => true,
+            readActionContract: async actionId => {
+                const spec = getActionSpec(ActionIdSchema.parse(actionId));
+                if (!spec.outputSchema) throw new Error('Accepted Action requires its canonical result contract');
+                return {
+                    inputSchema: StrictJsonValueSchema.parse(zodSchemaToJsonSchemaObject(spec.inputSchema, { target: 'draft-7' })),
+                    outputSchema: StrictJsonValueSchema.parse(zodSchemaToJsonSchemaObject(spec.outputSchema, { target: 'draft-7' })),
+                };
+            } },
+        ingressContext: { agentTarget: { kind: 'agent', identity: { pluginId: 'happier.agent.claude', localId: 'claude' } } },
+        roleSelection: { defaultEngine: { agentTargetKey: 'agent:happier.agent.claude/claude' } },
+        context: { ...detail.acceptedContext, authorization: { principal: { kind: 'host' } } } });
+    if (!accepted.ok) throw new Error(`Fixture materialization failed: ${JSON.stringify(accepted.error)}`);
+    const acceptedEnvelope = serializeWorkflowStoredContentEnvelopeV1(sealWorkflowAcceptedSnapshotStoredEnvelopeV1({ mode: 'plain',
+        binding: { v: 1, purpose: 'accepted_snapshot', accountId: run.ownerAccountId, runId: run.id }, acceptedSnapshot: accepted.snapshot }));
+    const keyCensus = WorkflowRunRecipientCensusResponseV1Schema.parse({ runId: run.id, ownerAccountId: run.ownerAccountId,
+        access: 'owner', encryptionMode: 'plain', dataEncryptionKey: null, callerDataEncryptionKey: null,
+        recipients: [], visibleTeamId: run.visibleTeamId, ownerAccountCurrentness: { mode: 'plain', version: 1, contentKeyFingerprint: null } });
+    return { run, acceptedEnvelope, checkpointEnvelope: null, resultEnvelope: null, keyCensus };
+}
+
+function storedProgress(detail: WorkflowInvocationDetailV1, accountId: string) {
+    const index = detail.index;
+    return serializeWorkflowStoredContentEnvelopeV1(sealWorkflowProgressStoredEnvelopeV1({ mode: 'plain',
+        binding: { v: 1, purpose: 'invocation_progress', accountId, runId: index.runId, recordId: index.id,
+            sequence: index.sequence, parentRecordId: index.parentRecordId, memberOrdinal: index.memberOrdinal, attempt: index.attempt },
+        progress: WorkflowProgressEnvelopeV1Schema.parse(detail.progress) }));
+}
 
 describe('editor workflow composer', () => {
     it.each([
@@ -268,7 +373,7 @@ describe('editor workflow composer', () => {
         const { buildWorkflowEditorDraftFromDefinition } = await import('@/sync/domains/workflows/workflowAuthoring');
         const { authoringComposerSeedFromSnapshot } = await import('@/components/sessions/authoring/authoringComposerCustody');
         const { WorkflowEditorBody } = await import('./WorkflowEditorBody');
-        const scope = { serverId: 'server-a', accountId: 'account-a' };
+        const scope = { serverId: appliedHome.serverId, accountId: 'account-a' };
         const address = { kind: 'newSession' as const, draftId: '00000000-0000-4000-8000-000000000292' };
         const records = new Map<string, import('@happier-dev/protocol').SessionDraftRecordV2>();
         const listStarted = createDeferred<void>();
@@ -362,26 +467,27 @@ describe('editor workflow composer', () => {
         publishAppliedActiveServerSnapshot({ ...appliedHome });
         let screen: Awaited<ReturnType<typeof renderScreen>> | null = null;
         try {
-            const pending = createDeferred<unknown>();
+            const pending = createDeferred<void>();
             let reads = 0;
             const definitionId = '00000000-0000-4000-8000-000000000001';
-            transport.mockImplementation((action: string) => {
-                if (action === 'workflow.definition.get') {
-                    if (reads++ === 0) return pending.promise;
-                    return Promise.resolve({ ok: true, result: { definitionId, definition: createWorkflowDefinitionFixture(),
-                        access: 'owner', revision: { headerVersion: 3, bodyVersion: 3 }, metadata: { title: 'Restored document' } } });
-                }
-                return Promise.resolve({ ok: true, result: { sets: [] } });
-            });
+            // The old credential-bound HTTP reply remains pending while the
+            // renewed lifetime reads the same producer-created saved revision.
+            const value = await updateWorkflowDefinition({ definitionId, definition: savedAgentDefinition(),
+                metadata: { title: 'Restored document' }, expectedRevision: { headerVersion: 3, bodyVersion: 3 } });
+            const row = home.artifacts(appliedHome.serverId).read(value.definitionId);
+            home.requests.splice(0);
+            home.answer(appliedHome.serverId, `/v1/artifacts/${definitionId}`, { select: () => ({ body: row,
+                ...(reads++ === 0 ? { respondAfter: pending.promise } : {}) }) });
             const { WorkflowEditorBody } = await import('./WorkflowEditorBody');
             screen = await renderScreen(<AppPaneProvider><WorkflowEditorHostScreen source={{ kind: 'saved', definitionId }} /></AppPaneProvider>);
             expect(screen.root.findAllByType(WorkflowEditorBody)).toHaveLength(0);
-            expect(transport.mock.calls.some(([action]) => action === 'workflow.definition.get')).toBe(true);
+            expect(home.requestsFor(`/v1/artifacts/${definitionId}`)).not.toHaveLength(0);
             await act(async () => retireActiveServerAccountScopeLifetime());
             const draft = screen.root.findByType(WorkflowEditorBody).props.draft;
             expect(draft.name).toBe('Restored document');
             await act(async () => retireActiveServerAccountScopeLifetime());
             expect(screen.root.findByType(WorkflowEditorBody).props.draft).toBe(draft);
+            pending.resolve();
         } finally {
             await screen?.unmount();
             publishAppliedActiveServerSnapshot(previousApplied, previousAvailable);
@@ -410,32 +516,54 @@ describe('editor workflow composer', () => {
         installHomeGovernanceBoundaries(home);
         resetTeamsDirectoryEngineForTests(); resetTeamsSnapshotsForTests();
         await home.reset();
-        appliedHome.serverId = 'server-a';
         appliedHome.serverUrl = 'https://server-a.example';
-        publishAppliedActiveServerSnapshot({ ...appliedHome });
+        appliedHome.serverId = await home.addHome({ name: 'Editor composer', serverUrl: appliedHome.serverUrl, accountId: 'account-a' });
+        publishAppliedActiveServerSnapshot(getActiveServerSnapshot());
+        const credentials = home.findByServerUrl(appliedHome.serverUrl)?.token;
+        if (!credentials) throw new Error('Missing synthetic Account credential');
+        routeBoundary.credentials = { token: credentials };
+        const memory = createAuthoringMemoryHttpBoundary();
+        const prepareRequest = apiSocket.createRequestForPreparedTarget.bind(apiSocket);
+        vi.spyOn(apiSocket, 'createRequestForPreparedTarget').mockImplementation(target => {
+            const request = prepareRequest(target);
+            return async (path, init) => await memory.handle(new URL(path, target.endpoint), init) ?? request(path, init);
+        });
+        // Restoration creates the real memory owner and captures its HTTP port.
+        // Install that port before restoration, just as the application does.
+        accountConnection = await restoreServerAccountForTest({ serverUrl: appliedHome.serverUrl,
+            accountId: 'account-a', credentials: routeBoundary.credentials, request: (url, init) => home.request(url, init) });
         viewport.width = 1280;
         const machine = createMachineFixture();
-        getStorage().setState({ profileScope: { serverId: 'server-a', accountId: 'account-a' }, isDataReady: true, isSessionDraftsReady: true,
+        getStorage().setState({ profileScope: { serverId: appliedHome.serverId, accountId: 'account-a' },
+            settingsScope: { serverId: appliedHome.serverId, accountId: 'account-a' }, isDataReady: true, isSessionDraftsReady: true,
             machines: { [machine.id]: machine }, machineListByServerId: {} });
-        transport.mockReset();
-        transport.mockImplementation(async (action: string, input: unknown) => {
-            if (action === 'artifact.access.grants.list') {
-                const { artifactId } = (await import('@happier-dev/protocol/artifacts/artifactAccessV1')).ArtifactAccessGrantsListInputV1Schema.parse(input);
-                return { ok: true, result: { artifactId, ownerAccountId: 'account-a', access: 'owner', grants: [] } };
-            }
-            if (action === 'workflow.definition.get') {
-                const { definitionId } = (await import('@happier-dev/protocol')).WorkflowDefinitionGetRequestV1Schema.parse(input);
-                return { ok: true, result: { definitionId, definition: createWorkflowDefinitionFixture(), access: 'owner',
-                    revision: { headerVersion: 3, bodyVersion: 3 }, metadata: { title: 'Saved draft' } } };
-            }
-            return action === 'workflow.trigger.list' ? { ok: true, result: { sets: [] } }
-                : { ok: false, errorCode: 'unsupported_action', error: 'unsupported_action' };
-        });
+        machineRpc.mockReset();
+        machineRpc.mockImplementation(async () => { throw new Error('Fixture Machine is offline'); });
+        home.answer(appliedHome.serverId, '/v3/automations', { body: { automations: [], nextCursor: null } });
+        home.answer(appliedHome.serverId, '/v1/account/encryption/currentness', { body: {
+            mode: 'plain', version: 1, signingKeyFingerprint: null, contentKeyFingerprint: null, updatedAt: 1,
+        } });
+        const kvRows = new Map<string, { key: string; value: string | null; version: number }>();
+        home.answer(appliedHome.serverId, 'GET /v1/kv/workspace%3Atabs%3Av1', { select: () => ({ body: kvRows.get('workspace:tabs:v1')
+            ?? { key: 'workspace:tabs:v1', value: null, version: 0 } }) });
+        home.answer(appliedHome.serverId, 'POST /v1/kv', { select: input => {
+            if (!input || typeof input !== 'object' || !('mutations' in input) || !Array.isArray(input.mutations)) throw new Error('Expected a KV mutation');
+            const results = input.mutations.map((row: unknown) => {
+                if (!row || typeof row !== 'object' || !('key' in row) || typeof row.key !== 'string'
+                    || !('value' in row) || (row.value !== null && typeof row.value !== 'string')) throw new Error('Expected a KV row');
+                const version = (kvRows.get(row.key)?.version ?? 0) + 1;
+                kvRows.set(row.key, { key: row.key, value: row.value, version });
+                return { key: row.key, version };
+            });
+            return { body: { success: true, results } };
+        } });
+        await seedSavedDefinition('00000000-0000-4000-8000-000000000001');
     });
     afterEach(async () => {
         (await import('@/components/onboarding/tour/state/journeySession')).endOnboardingJourneySession();
         clearActiveUnsavedChangesGuard();
         await standardCleanup();
+        await accountConnection?.dispose(); accountConnection = null;
         vi.unstubAllGlobals();
         publishAppliedActiveServerSnapshot(previousAppliedSnapshot, previousRuntimeAvailable);
         vi.restoreAllMocks();
@@ -453,9 +581,9 @@ describe('editor workflow composer', () => {
         const { WORKFLOW_STARTER_EXAMPLES_V1 } = await import('@happier-dev/protocol');
         const { storeWorkflowDefinitionDraftSeed } = await import('@/sync/domains/workflows/workflowDefinitionDraftSeed');
         const { createSessionFixture } = await import('@/dev/testkit/fixtures/sessionFixtures');
-        const session = createSessionFixture({ serverId: 'server-a' });
+        const session = createSessionFixture({ serverId: appliedHome.serverId });
         getStorage().setState({ sessions: { [session.id]: session },
-            machineListByServerId: { ...getStorage().getState().machineListByServerId, 'server-a': Object.values(getStorage().getState().machines) } });
+            machineListByServerId: { ...getStorage().getState().machineListByServerId, [appliedHome.serverId]: Object.values(getStorage().getState().machines) } });
         const example = WORKFLOW_STARTER_EXAMPLES_V1.find(entry => entry.key === 'notify-when-agent-waits')!;
         const definitionDraftSeedId = storeWorkflowDefinitionDraftSeed({ name: 'Notify me', definition: example.definition,
             trigger: { kind: 'sessionLifecycle', enabled: true, sourceSessionId: session.id,
@@ -471,15 +599,15 @@ describe('editor workflow composer', () => {
         expect(section.props.draft.adds).toMatchObject([{ trigger: { sourceSessionId: session.id, events: ['userActionRequired'] } }]);
         await act(async () => screen.update(<AppPaneProvider><WorkflowEditorHostScreen source={{ ...source }} /></AppPaneProvider>));
         expect(section.props.draft.adds).toHaveLength(1);
-        expect(transport.mock.calls.filter(([action]) => ['workflow.definition.create', 'workflow.trigger.add', 'workflow.run.start'].includes(action))).toHaveLength(0);
+        expectNoWorkflowWrites();
     });
 
     it('undoes and redoes an inline habit, its trigger and placement as one editor change', async () => {
         const { WORKFLOW_STARTER_EXAMPLES_V1 } = await import('@happier-dev/protocol');
         const { createSessionFixture } = await import('@/dev/testkit/fixtures/sessionFixtures');
-        const session = createSessionFixture({ serverId: 'server-a' });
+        const session = createSessionFixture({ serverId: appliedHome.serverId });
         getStorage().setState({ sessions: { [session.id]: session },
-            machineListByServerId: { ...getStorage().getState().machineListByServerId, 'server-a': Object.values(getStorage().getState().machines) } });
+            machineListByServerId: { ...getStorage().getState().machineListByServerId, [appliedHome.serverId]: Object.values(getStorage().getState().machines) } });
         const screen = await renderScreen(<AppPaneProvider><WorkflowEditorHostScreen source={{ kind: 'new' }} /></AppPaneProvider>);
         const { WorkflowEditorBody } = await import('./WorkflowEditorBody');
         const { WorkflowBlockListEditor } = await import('../editor/WorkflowBlockListEditor');
@@ -510,25 +638,25 @@ describe('editor workflow composer', () => {
         expect(body.props.draft.blocks).toMatchObject([{ kind: 'action', actionId: 'machines.command.run' }]);
         expect(body.props.projectTarget).toEqual({ machineId: 'machine-1', directory: '/Users/tester/project' });
         expect(section.props.draft.adds).toHaveLength(1);
-        expect(transport.mock.calls.filter(([action]) => ['workflow.definition.create', 'workflow.trigger.add', 'workflow.run.start'].includes(action))).toHaveLength(0);
+        expectNoWorkflowWrites();
     });
 
     it('tests the saved revision in place while preserving the unsaved editor document', async () => {
         const definitionId = '8fab3a81-5e64-4000-8000-000000000001';
         const definition = createWorkflowDefinitionFixture({ inputs: [], blocks: [{ kind: 'wait', id: 'review',
             document: { text: 'Saved contents', references: [], attachments: [] } }] });
-        const defaultTransport = transport.getMockImplementation();
-        transport.mockImplementation(async (action: string, input: unknown) => {
-            if (action === 'workflow.definition.get') return { ok: true, result: { definitionId, definition, access: 'owner',
-                revision: { headerVersion: 3, bodyVersion: 3 }, metadata: { title: 'Saved draft' } } };
-            if (action === 'workflow.trigger.list') return { ok: true, result: { sets: [] } };
-            if (action === 'workflow.run.start') {
-                const request = (await import('@happier-dev/protocol')).WorkflowRunStartRequestV1Schema.parse(input);
-                return { ok: true, result: { admission: 'created', run: createWorkflowRunSummaryFixture({ id: request.runId,
-                    sourceArtifactId: definitionId }) } };
-            }
-            if (action === 'workflow.run.invocations.list') {
-                const request = (await import('@happier-dev/protocol')).WorkflowInvocationListRequestV1Schema.parse(input);
+        await seedSavedDefinition(definitionId, definition);
+        machineRpc.mockImplementation(async ({ method, payload }) => {
+            if (method !== getActionSpec('workflow.run.start').bindings?.rpcMethod) throw new Error('Unexpected native Machine request');
+            const request = WorkflowRunStartRequestV1Schema.parse(TargetedActionRpcRequestV1Schema.parse(payload).input);
+            return { admission: 'created', run: createWorkflowRunSummaryFixture({ id: request.runId, sourceArtifactId: definitionId }) };
+        });
+        home.answer(appliedHome.serverId, storageRoute, { select: async input => {
+            if (!input || typeof input !== 'object' || !('operation' in input)) throw new Error('Expected a storage request');
+            const { operation, ...storageFields } = input;
+            const { progressEnvelopes: _progress, pageByteLimit: _budget, ...fields } = storageFields as Record<string, unknown>;
+            if (operation === 'invocations.list') {
+                const request = (await import('@happier-dev/protocol')).WorkflowInvocationListRequestV1Schema.parse(fields);
                 const root = createWorkflowInvocationIndexFixture({ id: 'root', runId: request.runId, lifecycle: 'completed', contentRevision: '1' });
                 const leaf = createWorkflowInvocationIndexFixture({ id: 'review', runId: request.runId, parentRecordId: root.id,
                     sequence: '1', lifecycle: 'completed', contentRevision: '1', updatedAt: '2026-09-08T10:00:02.000Z' });
@@ -537,11 +665,13 @@ describe('editor workflow composer', () => {
                     progress: { kind: 'happier.workflow-progress.v1', blockKind: request.cursor === undefined ? 'root' : 'wait',
                         invocationPath: { blockId: request.cursor === undefined ? '$root' : 'review', scope: [] }, attempt: '0',
                         logicalInvocationRecordId: index.id, ...(request.cursor === undefined ? {} : { result: 'Saved result' }) } });
-                return { ok: true, result: { invocations: [index], invocationDetails: [detail], parentRevision: 1,
+                return { body: { invocations: [index], parentRevision: 1, keyCensus: runKeyCensus(request.runId),
+                    progressEnvelopesByInvocationId: { [index.id]: storedProgress(detail, 'account-a') },
                     ...(request.cursor === undefined ? { nextCursor: 'second-page' } : {}) } };
             }
-            return defaultTransport?.(action, input);
-        });
+            if (operation === 'run-key.census' && 'runId' in fields && typeof fields.runId === 'string') return { body: runKeyCensus(fields.runId) };
+            throw new Error(`Unexpected test-run storage request: ${String(operation)}`);
+        } });
         const screen = await renderScreen(<AppPaneProvider><WorkflowEditorHostScreen source={{ kind: 'saved', definitionId }} /></AppPaneProvider>, {
             createNodeMock: () => ({ measureInWindow: (receive: (x: number, y: number, width: number, height: number) => void) => receive(600, 100, 160, 40) }),
         });
@@ -571,20 +701,22 @@ describe('editor workflow composer', () => {
         await act(async () => { testRun!.onSelect(); });
         await vi.waitFor(() => expect(screen.findByTestId('workflow-run-inputs-run')?.props.disabled).toBe(false));
         await screen.pressByTestIdAsync('workflow-run-inputs-run');
-        expect(transport.mock.calls.filter(([action]) => action === 'workflow.run.start')[0]?.[1]).toMatchObject({
+        expect(startRequests()[0]).toMatchObject({
             source: { kind: 'saved', definitionId, revision: { headerVersion: 3, bodyVersion: 3 } },
         });
         expect(readWait().document.text).toBe('Unsaved changes');
         expect(router.push).not.toHaveBeenCalled();
-        expect(transport.mock.calls.filter(([action]) => ['workflow.definition.update', 'workflow.definition.create'].includes(action))).toHaveLength(0);
+        expect(definitionWrites()).toHaveLength(0);
         await vi.waitFor(() => expect(screen.findByTestId('workflow-editor-test-review-status')).not.toBeNull());
         expect(screen.findByTestId('workflow-editor-test-review-duration')).not.toBeNull();
         expect(screen.findByTestId('workflow-editor-test-review-output-body')).not.toBeNull();
         expect(screen.getTextContent()).toContain('Saved result');
-        expect(transport.mock.calls.filter(([action]) => action === 'workflow.run.invocations.list').map(([, input]) => input)).toEqual([
-            expect.objectContaining({ includeContent: true }), expect.objectContaining({ includeContent: true, cursor: 'second-page' }),
+        expect(home.requestsFor(storageRoute).map(request => request.input).filter(input => input && typeof input === 'object'
+            && 'operation' in input && input.operation === 'invocations.list')).toEqual([
+            expect.objectContaining({ progressEnvelopes: true }), expect.objectContaining({ progressEnvelopes: true, cursor: 'second-page' }),
         ]);
-        expect(transport.mock.calls.filter(([action]) => action === 'workflow.run.invocations.get')).toHaveLength(0);
+        expect(home.requestsFor(storageRoute).filter(({ input }) => input && typeof input === 'object'
+            && 'operation' in input && input.operation === 'invocations.get')).toHaveLength(0);
     });
 
     it('runs the reviewed saved draft with its granted Team without saving or substituting saved contents', async () => {
@@ -592,24 +724,21 @@ describe('editor workflow composer', () => {
         appliedHome.serverId = await home.addHome({ name: 'Workflow Home', serverUrl: 'https://workflow.example', accountId: 'account-a' });
         publishAppliedActiveServerSnapshot({ ...appliedHome });
         getStorage().setState({ profileScope: { serverId: appliedHome.serverId, accountId: 'account-a' } });
+        home.answer(appliedHome.serverId, '/v3/automations', { body: { automations: [], nextCursor: null } });
         home.answer(appliedHome.serverId, '/v1/teams/get', { body: teamSummaryFixture({ id: 'team-a', name: 'Builders',
             viewerRole: 'member', capabilities: teamCapabilitiesFixture({}) }) });
         const definitionId = '8fab3a81-5e64-4000-8000-000000000001';
         const definition = createWorkflowDefinitionFixture({ inputs: [], blocks: [{ kind: 'wait', id: 'review',
             document: { text: 'Saved contents', references: [], attachments: [] } }] });
-        transport.mockImplementation(async (action: string, input: unknown) => {
-            if (action === 'workflow.definition.get') return { ok: true, result: { definitionId, definition, access: 'owner',
-                revision: { headerVersion: 3, bodyVersion: 3 }, metadata: { title: 'Shared draft' } } };
-            if (action === 'workflow.trigger.list') return { ok: true, result: { sets: [] } };
-            if (action === 'artifact.access.grants.list') return { ok: true, result: { artifactId: definitionId,
-                ownerAccountId: 'account-a', access: 'owner', grants: [{ principal: { kind: 'team', teamId: 'team-a' },
-                    accessLevel: 'edit', createdByAccountId: 'account-a', createdAt: 1, display: { name: 'Builders' } }] } };
-            if (action === 'workflow.run.start') {
-                const request = (await import('@happier-dev/protocol')).WorkflowRunStartRequestV1Schema.parse(input);
-                return { ok: true, result: { admission: 'created', run: createWorkflowRunSummaryFixture({ id: request.runId,
-                    sourceArtifactId: definitionId, visibleTeamId: 'team-a' }) } };
-            }
-            return { ok: false, errorCode: 'unsupported_action', error: 'unsupported_action' };
+        await seedSavedDefinition(definitionId, definition, 'Shared draft');
+        home.answer(appliedHome.serverId, `/v1/artifacts/${definitionId}/access/grants`, { body: { artifactId: definitionId,
+            ownerAccountId: 'account-a', access: 'owner', grants: [{ principal: { kind: 'team', teamId: 'team-a' },
+                accessLevel: 'edit', createdByAccountId: 'account-a', createdAt: 1, display: { name: 'Builders' } }] } });
+        machineRpc.mockImplementation(async ({ method, payload }) => {
+            if (method !== getActionSpec('workflow.run.start').bindings?.rpcMethod) throw new Error('Unexpected native Machine request');
+            const request = WorkflowRunStartRequestV1Schema.parse(TargetedActionRpcRequestV1Schema.parse(payload).input);
+            return { admission: 'created', run: createWorkflowRunSummaryFixture({ id: request.runId,
+                sourceArtifactId: definitionId, visibleTeamId: 'team-a' }) };
         });
         const screen = await renderScreen(<AppPaneProvider><WorkflowEditorHostScreen source={{ kind: 'saved', definitionId }} /></AppPaneProvider>, {
             createNodeMock: () => ({ measureInWindow: (receive: (x: number, y: number, width: number, height: number) => void) => receive(600, 100, 160, 40) }),
@@ -629,11 +758,11 @@ describe('editor workflow composer', () => {
         await screen.pressByTestIdAsync('workflow-editor-run-now');
         await vi.waitFor(() => expect(screen.findByTestId('workflow-run-inputs-run')?.props.disabled).toBe(false));
         await screen.pressByTestIdAsync('workflow-run-inputs-run');
-        expect(transport.mock.calls.filter(([action]) => action === 'workflow.run.start')[0]?.[1]).toMatchObject({
+        expect(startRequests()[0]).toMatchObject({
             source: { kind: 'inline', sourceArtifactId: definitionId, visibleTeamId: 'team-a',
                 definition: { blocks: [{ document: { text: 'Reviewed unsaved contents' } }] } },
         });
-        expect(transport.mock.calls.filter(([action]) => ['workflow.definition.update', 'workflow.definition.create'].includes(action))).toHaveLength(0);
+        expect(definitionWrites()).toHaveLength(0);
     });
 
     it('reads a builtin through the editor with settings, Run now and Duplicate instead of Save', async () => {
@@ -670,6 +799,7 @@ describe('editor workflow composer', () => {
         const { WorkflowRunComposer } = await import('../run/WorkflowRunComposer');
         const { publishHomeAccountChange } = await import('@/sync/runtime/orchestration/homeAccountChange');
         const builtin = getBuiltinWorkflowCatalogV1().find(entry => entry.requiresOriginSession !== true)!;
+        const inputs = { request: 'Plan the next release' };
         let startedId: string | null = null;
         let admitted = false;
         const detailFor = (runId: string) => WorkflowRunGetResultV1Schema.parse({
@@ -677,35 +807,40 @@ describe('editor workflow composer', () => {
             callerAccess: { canEdit: true },
             definition: builtin.definition, authoredDefinition: builtin.definition, checkpoint: null,
             acceptedContext: { startedBy: 'user', source: { kind: 'catalog', ref: builtin.id, version: builtin.version },
-                inputs: {}, machineId: 'machine-1', executionTarget: { kind: 'session' },
+                inputs, machineId: 'machine-1', executionTarget: { kind: 'session' },
                 materializedLeaves: [], frozenChildren: {},
                 workspaceTarget: { project: { machineId: 'machine-1', directory: '/repo', checkoutRootPath: '/repo' } }, origin: { kind: 'direct' } },
         });
-        transport.mockImplementation(async (action: string, input: unknown) => {
-            if (action === 'workflow.run.start') {
-                startedId = WorkflowRunStartRequestV1Schema.parse(input).runId;
-                return { ok: false, errorCode: 'workflow_outcome_unresolved', error: 'Lost reply' };
-            }
-            if (action === 'workflow.run.get' && admitted && startedId) return { ok: true, result: detailFor(startedId) };
-            return { ok: false, errorCode: 'run_not_found', error: 'Not yet admitted' };
+        machineRpc.mockImplementation(async ({ method, payload }) => {
+            if (method !== getActionSpec('workflow.run.start').bindings?.rpcMethod) throw new Error('Unexpected native Machine request');
+            startedId = WorkflowRunStartRequestV1Schema.parse(TargetedActionRpcRequestV1Schema.parse(payload).input).runId;
+            return { ok: false, errorCode: 'workflow_outcome_unresolved', error: 'Lost reply' };
         });
+        home.answer(appliedHome.serverId, storageRoute, { select: async input => {
+            if (!input || typeof input !== 'object' || !('operation' in input)) throw new Error('Expected a storage request');
+            if (input.operation === 'get' && admitted && startedId) return { body: await acceptedStorage(detailFor(startedId)) };
+            if (input.operation === 'invocations.list' && admitted) return { body: {
+                invocations: [], nextCursor: null, parentRevision: 1, progressEnvelopesByInvocationId: {},
+            } };
+            return { status: 404, body: { error: 'run_not_found' } };
+        } });
         const screen = await renderScreen(<AppPaneProvider><WorkflowBuiltinEditorHostScreen workflow={builtin.id} intent="run" /></AppPaneProvider>, {
             createNodeMock: () => ({ measureInWindow: (receive: (x: number, y: number, width: number, height: number) => void) => receive(600, 100, 160, 40) }),
         });
-        await act(async () => { screen.root.findByType(WorkflowRunComposer).props.onRun(undefined); });
+        await act(async () => { screen.root.findByType(WorkflowRunComposer).props.onRun(inputs); });
         expect(startedId).not.toBeNull();
         expect(screen.root.findByType(WorkflowRunComposer).props.reconciling).toBe(true);
         await act(async () => { screen.root.findByType(WorkflowRunComposer).props.onCancel(); });
         expect(screen.root.findAllByType(WorkflowRunComposer)).toHaveLength(0);
         await screen.pressByTestIdAsync('workflow-builtin-run-now');
         expect(screen.root.findByType(WorkflowRunComposer).props).toMatchObject({ pending: true, reconciling: true });
-        await act(async () => { screen.root.findByType(WorkflowRunComposer).props.onRun(undefined); });
-        expect(transport.mock.calls.filter(([action]) => action === 'workflow.run.start')).toHaveLength(1);
+        await act(async () => { screen.root.findByType(WorkflowRunComposer).props.onRun(inputs); });
+        expect(startRequests()).toHaveLength(1);
         // Validate the boundary fixture outside the recovery catch, so malformed
         // transport data fails here rather than masquerading as an unknown outcome.
-        detailFor(startedId!);
-        await act(async () => { admitted = true; publishHomeAccountChange('server-a', [`workflow-run:${startedId}`]); });
-        expect(screen.root.findAllByType(WorkflowRunComposer)).toHaveLength(0);
+        await acceptedStorage(detailFor(startedId!));
+        await act(async () => { admitted = true; publishHomeAccountChange(appliedHome.serverId, [`workflow-run:${startedId}`]); });
+        await vi.waitFor(() => expect(screen.root.findAllByType(WorkflowRunComposer)).toHaveLength(0));
         expect(getStorage().getState().workflowRunsById[startedId!]?.summary?.id).toBe(startedId);
         const { router } = await import('expo-router');
         const { createWorkflowRunRoute } = await import('@/sync/domains/workflows/workflowRunRoute');
@@ -714,14 +849,10 @@ describe('editor workflow composer', () => {
 
     it('opens the real native engine panel from the step composer and only edits authoring values', async () => {
         const definitionId = '8fab3a81-5e64-4000-8000-000000000001';
-        const definition = createWorkflowDefinitionFixture({ roles: [{ roleId: 'local-reviewer', name: 'Local reviewer',
+        const definition = createWorkflowDefinitionFixture({ defaults: savedAgentDefinition().defaults,
+            roles: [{ roleId: 'local-reviewer', name: 'Local reviewer',
             instructions: 'Review this workflow', runsAs: { kind: 'session' } }] });
-        transport.mockImplementation(async (action: string) => {
-            if (action === 'workflow.definition.get') return { ok: true, result: { definitionId, definition, access: 'owner',
-                revision: { headerVersion: 3, bodyVersion: 3 }, metadata: { title: 'Saved draft' } } };
-            return action === 'workflow.trigger.list' ? { ok: true, result: { sets: [] } }
-                : { ok: false, errorCode: 'unsupported_action', error: 'unsupported_action' };
-        });
+        await seedSavedDefinition(definitionId, definition);
         const screen = await renderScreen(<AppPaneProvider><WorkflowEditorHostScreen source={{ kind: 'saved', definitionId }} /></AppPaneProvider>, {
             createNodeMock: () => ({ getBoundingClientRect: () => ({ left: 600, top: 100, width: 160, height: 40 }),
                 addEventListener: () => {}, removeEventListener: () => {},
@@ -776,7 +907,8 @@ describe('editor workflow composer', () => {
         expect(readStep().execution?.agentTarget).toBeUndefined();
         expect(readStep().execution?.modelSelection).toBeUndefined();
         expect(validateWorkflowEditorDraft(body.props.draft).valid).toBe(true);
-        expect(transport.mock.calls.filter(([action]) => ['session.spawn', 'workflow.run.start', 'workflow.definition.update'].includes(action))).toHaveLength(0);
+        expectNoWorkflowWrites();
+        expect(machineRpc.mock.calls.filter(([request]) => request.method === getActionSpec('session.spawn_new').bindings?.rpcMethod)).toHaveLength(0);
         await screen.pressByTestIdAsync(`workflow-editor-step-${readStep().id}-customize`);
         const { WorkflowStepInspector } = await import('../editor/WorkflowStepInspector');
         const inspector = screen.root.findByType(WorkflowStepInspector);
@@ -788,12 +920,10 @@ describe('editor workflow composer', () => {
 
     it('makes a Can-use recipient’s personal triggers reachable and saves them through the real page without definition.update', async () => {
         const definitionId = '8fab3a81-5e64-4000-8000-000000000001';
-        transport.mockImplementation(async (action: string) => {
-            if (action === 'workflow.definition.get') return { ok: true, result: { definitionId, access: 'view',
-                definition: createWorkflowDefinitionFixture(), revision: { headerVersion: 3, bodyVersion: 3 }, metadata: { title: 'Shared workflow' } } };
-            if (action === 'workflow.trigger.list') return { ok: true, result: { sets: [] } };
-            return { ok: false, errorCode: 'target_unavailable', error: 'target_unavailable' };
-        });
+        await seedSavedDefinition(definitionId, savedAgentDefinition(), 'Shared workflow', 'view');
+        // Home refusal belongs to the real Automation writer; the page keeps
+        // the person's trigger draft and surfaces a failed save.
+        home.answer(appliedHome.serverId, 'POST /v3/automations', { status: 503, body: { error: 'target_unavailable' } });
         const screen = await renderScreen(<AppPaneProvider><WorkflowEditorHostScreen source={{ kind: 'saved', definitionId }} /></AppPaneProvider>);
         expect(screen.findByTestId('workflow-editor-settings-toggle')).not.toBeNull();
         await screen.pressByTestIdAsync('workflow-editor-settings-toggle');
@@ -808,8 +938,8 @@ describe('editor workflow composer', () => {
         if (!onChangeProjectTarget) throw new Error('Missing workflow Project target handler');
         await act(async () => onChangeProjectTarget({ machineId: 'machine-1', directory: '/repo' }));
         await screen.pressByTestIdAsync('workflow-editor-save');
-        expect(transport.mock.calls.filter(([action]) => action === 'workflow.trigger.add')).toHaveLength(1);
-        expect(transport.mock.calls.filter(([action]) => action === 'workflow.definition.update' || action === 'workflow.definition.create')).toHaveLength(0);
+        expect(automationWrites(), JSON.stringify(body.props.saveStatus)).toHaveLength(1);
+        expect(definitionWrites()).toHaveLength(0);
         expect(body.props.saveStatus).toMatchObject({ kind: 'failed' });
     });
 
@@ -823,13 +953,7 @@ describe('editor workflow composer', () => {
         const definition = createWorkflowDefinitionFixture({ inputs: [], blocks: [{
             kind: 'wait', id: 'review', document: { text: 'Read the complete shared prompt', references: [], attachments: [] },
         }] });
-        transport.mockImplementation(async (action: string) => {
-            if (action === 'workflow.definition.get') return { ok: true, result: {
-                definitionId, definition, access, revision: { headerVersion: 3, bodyVersion: 3 }, metadata: { title: 'Shared workflow' },
-            } };
-            if (action === 'workflow.trigger.list') return { ok: true, result: { sets: [] } };
-            return { ok: false, errorCode: 'unsupported_action', error: 'unsupported_action' };
-        });
+        await seedSavedDefinition(definitionId, definition, 'Shared workflow', access);
         const screen = await renderScreen(<AppPaneProvider><WorkflowEditorHostScreen source={{ kind: 'saved', definitionId,
             ...(agentSnapshot ? { agentRevision: { definitionId, definition, revision: { headerVersion: 2, bodyVersion: 2 },
                 metadata: { title: 'Reviewed agent snapshot' }, changedBlockIds: [] } } : {}),
@@ -873,9 +997,10 @@ describe('editor workflow composer', () => {
             await screen.pressByTestIdAsync('workflow-editor-run-now');
             expect(screen.findByTestId('workflow-run-inputs-preview')).not.toBeNull();
             expect(screen.findByTestId('workflow-start-where-chip')).not.toBeNull();
-            expect(transport.mock.calls.filter(([action]) => action === 'workflow.run.start')).toHaveLength(0);
+            expect(startRequests()).toHaveLength(0);
         }
-        expect(transport.mock.calls.filter(([action]) => ['workflow.definition.update', 'workflow.definition.create', 'workflow.trigger.add', 'workflow.trigger.update', 'workflow.trigger.remove'].includes(action))).toHaveLength(0);
+        expect(definitionWrites()).toHaveLength(0);
+        expect(automationWrites()).toHaveLength(0);
     });
 
     it.each(['new', 'saved'] as const)('reviews an unsaved %s draft without a departure guard, then admits its inline source', async (kind) => {
@@ -894,6 +1019,7 @@ describe('editor workflow composer', () => {
                 kind: 'wait', id: 'review', document: { text: 'Check status', references: [], attachments: [] },
             }] }), revision: { headerVersion: 3, bodyVersion: 3 }, metadata: { title: 'Saved draft' }, changedBlockIds: [],
         } };
+        if (source.kind === 'saved') await seedSavedDefinition(definitionId, source.agentRevision.definition, source.agentRevision.metadata.title);
         const alert = vi.spyOn(Alert, 'alert');
         const catalog = resolveCompactAppDestinations({ pages: [], builtins: { workflows: true, inbox: false, friends: false, externalSessions: false } });
         let workspace: WorkspaceNavigationContextValue | undefined;
@@ -930,20 +1056,20 @@ describe('editor workflow composer', () => {
         });
         await screen.pressByTestIdAsync('workflow-editor-run-now');
         expect(alert).not.toHaveBeenCalled();
-        expect(transport.mock.calls.filter(([action]) => action === 'workflow.run.start')).toHaveLength(0);
+        expect(startRequests()).toHaveLength(0);
         expect(screen.findByTestId('workflow-run-inputs-preview')).not.toBeNull();
         expect(screen.findByTestId('workflow-start-where-chip')).not.toBeNull();
         expect(screen.findByTestId('workflow-run-inputs-unsaved')).not.toBeNull();
-        transport.mockImplementation(async (action: string, input: unknown) => {
-            if (action !== 'workflow.run.start') return { ok: false, errorCode: 'unsupported_action', error: 'unsupported_action' };
-            const request = (await import('@happier-dev/protocol')).WorkflowRunStartRequestV1Schema.parse(input);
-            return { ok: true, result: { admission: 'created', run: createWorkflowRunSummaryFixture({ id: request.runId, origin: { kind: 'direct' } }) } };
+        machineRpc.mockImplementation(async ({ method, payload }) => {
+            if (method !== getActionSpec('workflow.run.start').bindings?.rpcMethod) throw new Error('Unexpected native Machine request');
+            const request = WorkflowRunStartRequestV1Schema.parse(TargetedActionRpcRequestV1Schema.parse(payload).input);
+            return { admission: 'created', run: createWorkflowRunSummaryFixture({ id: request.runId, origin: { kind: 'direct' } }) };
         });
         await screen.pressByTestIdAsync('workflow-run-inputs-run');
-        expect(transport.mock.calls.filter(([action]) => action === 'workflow.run.start')[0]?.[1]).toMatchObject({
+        expect(startRequests()[0]).toMatchObject({
             metadata: { title: 'Unsaved name' }, source: { kind: 'inline', definition: { blocks: [{ kind: 'wait', id: 'review' }] } },
         });
-        expect(transport.mock.calls.filter(([action]) => action === 'workflow.definition.create' || action === 'workflow.definition.update')).toHaveLength(0);
+        expect(definitionWrites()).toHaveLength(0);
         expect(alert).not.toHaveBeenCalled();
         expect(workspace?.state.tabs[workspace.state.groups[workspace.state.focusedGroupId].activeTabId].target.kind).toBe('workflowRun');
         expect(screen.findByTestId('admitted-run')).not.toBeNull();

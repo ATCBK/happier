@@ -1,32 +1,50 @@
 import * as React from 'react';
-import { beforeEach, describe, expect, it, vi } from 'vitest';
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { resolveRoleSelectionV1, type RoleOverrideV1 } from '@happier-dev/protocol';
-import { renderScreen } from '@/dev/testkit/render/renderScreen';
+import { PromptLibraryRowsListResponseV1Schema, sealPromptLibraryContentV1 } from '@happier-dev/protocol/prompts/library/promptLibraryRowsV1';
+import { renderScreen, standardCleanup } from '@/dev/testkit';
 import { createWorkflowDefinitionFixture } from '@/dev/testkit/fixtures/workflowRunFixtures';
-import { getStorage } from '@/sync/domains/state/storageStore';
-import { WorkflowAcceptedRunRoles, WorkflowRunRoles } from './WorkflowRunRoles';
+import { createPlainAccountEncryptionCurrentnessFixture } from '@/dev/testkit/fixtures/accountEncryptionCurrentness';
+import { createHomeGovernanceHarness, installHomeGovernanceBoundaries } from '@/dev/testkit/harness/homeGovernanceHarness';
+import { installRealActionExecutorModuleLoader } from '@/dev/testkit/harness/actionHomesHttpHarness';
 
-const execute = vi.hoisted(() => vi.fn());
-vi.mock('@/sync/ops/actions/frontDoorRuntimeActionExecutor', () => ({ createFrontDoorActionExecute: () => execute }));
-vi.mock('@/sync/runtime/orchestration/connectionManager', async (importOriginal) => {
-    const { createConnectionManagerModuleMock } = await import('@/dev/testkit/mocks/connectionManager');
-    return createConnectionManagerModuleMock(importOriginal, {
-        getSnapshot: () => ({ serverId: 'server-a', serverUrl: 'https://server-a.example', generation: 0 }),
-    });
-});
 vi.mock('react-native', async () => (await import('@/dev/testkit/mocks/reactNative')).createReactNativeWebMock());
 vi.mock('react-native-unistyles', async () => (await import('@/dev/testkit/mocks/unistyles')).createUnistylesMock());
 vi.mock('@/text', async () => (await import('@/dev/testkit/mocks/text')).createTextModuleMock({ translate: (key: string) => key }));
+
+const home = createHomeGovernanceHarness();
+installHomeGovernanceBoundaries(home);
+const { getStorage } = await import('@/sync/domains/state/storageStore');
+const { publishAppliedActiveServerSnapshot } = await import('@/sync/runtime/orchestration/appliedActiveServerRuntime');
+const { retireActiveServerAccountScopeLifetime } = await import('@/sync/domains/scope/activeServerAccountScope');
+const { WorkflowAcceptedRunRoles, WorkflowRunRoles } = await import('./WorkflowRunRoles');
+let disposeLoader: (() => void) | undefined;
 
 const definition = createWorkflowDefinitionFixture({ defaults: { engine: { role: 'portable_builder' } }, roles: [{
     roleId: 'portable_builder', name: 'Accepted builder', instructions: 'Build carefully', runsAs: { kind: 'session' },
 }] });
 
 describe('workflow run role controls', () => {
-    beforeEach(() => {
-        getStorage().setState({ profileScope: { serverId: 'server-a', accountId: 'account-a' } });
-        execute.mockReset();
-        execute.mockResolvedValue({ ok: true, result: { items: [] } });
+    beforeEach(async () => {
+        await home.reset();
+        disposeLoader = await installRealActionExecutorModuleLoader();
+        const serverUrl = `https://workflow-roles-${crypto.randomUUID()}.test`;
+        const serverId = await home.addHome({ name: 'Workflow roles', serverUrl, accountId: 'account-a' });
+        home.answer(serverId, '/v1/account/encryption/currentness', { body: createPlainAccountEncryptionCurrentnessFixture() });
+        home.answer(serverId, '/v1/account/entity-rows/prompt-library', { body: PromptLibraryRowsListResponseV1Schema.parse({
+            status: 'listed', rows: [{ key: 'role-overrides', revision: 1, content: sealPromptLibraryContentV1({
+                record: { key: 'role-overrides', value: { v: 1, overrides: {} } }, mode: 'plain', material: null,
+            }) }],
+        }) });
+        getStorage().setState({ profileScope: { serverId, accountId: 'account-a' }, settingsScope: { serverId, accountId: 'account-a' } });
+        publishAppliedActiveServerSnapshot({ serverId, serverUrl, generation: 1 });
+    });
+    afterEach(async () => {
+        await standardCleanup();
+        retireActiveServerAccountScopeLifetime();
+        await home.reset();
+        disposeLoader?.();
+        disposeLoader = undefined;
     });
 
     it('edits one run-layer field and Use your role removes only that role override', async () => {
@@ -40,6 +58,7 @@ describe('workflow run role controls', () => {
                 pending={false} prefix="run" onChange={(next) => { setOverrides(next); onChange(next); }} />;
         }
         const screen = await renderScreen(<Host />);
+        await vi.waitFor(() => expect(screen.findByTestId('run-role-portable_builder-target:background_run')).not.toBeNull());
         await screen.pressByTestIdAsync('run-role-portable_builder-target:background_run');
         expect(onChange).toHaveBeenLastCalledWith([other, {
             roleId: 'portable_builder', workspaceWrites: 'deny', runsAs: { kind: 'background_run', intent: 'task' },
@@ -55,7 +74,8 @@ describe('workflow run role controls', () => {
         const screen = await renderScreen(<WorkflowAcceptedRunRoles leaves={[{ sourceKey: '$root', blockId: 'analyze', kind: 'step',
             selection: {}, authoredWorkspace: { kind: 'inherit' }, executionTarget: { kind: 'session' }, role: acceptedRole.selection }]} />);
         expect(screen.getTextContent()).toContain('Accepted builder');
-        expect(execute).not.toHaveBeenCalled();
+        expect(home.requestsFor('/v1/artifacts')).toEqual([]);
+        expect(home.requestsFor('/v1/account/entity-rows/prompt-library')).toEqual([]);
         expect(screen.findByTestId('run-role-portable_builder-engine')).toBeNull();
     });
 });

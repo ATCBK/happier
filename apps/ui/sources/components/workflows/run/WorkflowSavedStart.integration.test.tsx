@@ -28,41 +28,38 @@ import { withPopoverWebGlobals } from '@/dev/testkit/harness/popoverHarness';
 import { installShippedNativeFrameScheduler } from '@/dev/testkit/legend/shippedNativeLegendRuntime';
 import { installDisconnectedServerSocketBoundary, restoreServerAccountForTest } from '@/dev/testkit/harness/serverAccountConnectionHarness';
 import { loadSyncSingletonForTests } from '@/dev/testkit/harness/syncSingletonLoader';
-import { captureLazyActionAccountContext } from '@/sync/ops/actions/actionAccountContext';
-import { callWorkflowAction } from '@/sync/domains/workflows/callWorkflowAction';
-import { storage } from '@/sync/domains/state/storageStore';
 import type { Artifact, ArtifactCreateRequest } from '@/sync/domains/artifacts/artifactTypes';
-import { Modal } from '@/modal';
 import { resolveAbsolutePath } from '@/utils/path/pathUtils';
-import { AppPaneProvider } from '@/components/appShell/panes/AppPaneProvider';
-import { WorkflowEditorHostScreen } from '../screens/WorkflowEditorHostScreen';
-import { WorkflowEditorBody } from '../screens/WorkflowEditorBody';
 
 // Only network, credentials and platform rendering/loading are replaced. The
 // saved Artifact writer/opener, front door, controller and admission stay real.
 installDisconnectedServerSocketBoundary();
+const { captureLazyActionAccountContext } = await import('@/sync/ops/actions/actionAccountContext');
+const { callWorkflowAction } = await import('@/sync/domains/workflows/callWorkflowAction');
+const { storage } = await import('@/sync/domains/state/storageStore');
+const { AppPaneProvider } = await import('@/components/appShell/panes/AppPaneProvider');
+const { ModalProvider, useModal } = await import('@/modal/ModalProvider');
+const { WorkflowEditorHostScreen } = await import('../screens/WorkflowEditorHostScreen');
+const { WorkflowEditorBody } = await import('../screens/WorkflowEditorBody');
 const machineRpc = vi.hoisted(() => vi.fn());
 vi.mock('@/sync/runtime/orchestration/serverScopedRpc/serverScopedMachineRpc', () => ({ machineRpcWithServerScope: machineRpc }));
 vi.mock('react-native', async () => (await import('@/dev/testkit/mocks/reactNative')).createReactNativeWebMock());
 vi.mock('react-native-unistyles', async () => (await import('@/dev/testkit/mocks/unistyles')).createUnistylesMock());
 vi.mock('@/text', async () => (await import('@/dev/testkit/mocks/text')).createTextModuleMock());
-vi.mock('@/modal', async () => (await import('@/dev/testkit/mocks/modal')).createModalModuleMock().module);
+// DOM painting is external; the host provider, registry and alert/composer custody stay real.
+vi.mock('@/utils/web/radixCjs', async () => {
+    const boundary = (await import('@/dev/testkit/mocks/radixCjs')).createRadixCjsModuleMock();
+    // The SDK's CJS modules retain component identity across every require.
+    const dialog = boundary.requireRadixDialog();
+    const layer = boundary.requireRadixDismissableLayer();
+    const focus = boundary.requireRadixFocusScope();
+    return { requireRadixDialog: () => dialog, requireRadixDismissableLayer: () => layer,
+        requireRadixFocusScope: () => focus };
+});
 const router = await vi.hoisted(async () => (await import('@/dev/testkit/mocks/router')).createExpoRouterMock());
 vi.mock('expo-router', () => router.module);
 vi.mock('expo-crypto', async () => ({ randomUUID: (await import('node:crypto')).randomUUID }));
 await vi.hoisted(async () => { vi.stubGlobal('React', await import('react')); });
-// Adapt Metro's synchronous require to Vitest without replacing execution.
-vi.mock('@/sync/ops/actions/frontDoorRuntimeActionExecutor', async (importOriginal) => {
-    const original = await importOriginal<typeof import('@/sync/ops/actions/frontDoorRuntimeActionExecutor')>();
-    return { ...original, createFrontDoorActionExecute: () => {
-        let execute: ReturnType<typeof original.createFrontDoorActionExecute> | undefined;
-        return async (...args: Parameters<ReturnType<typeof original.createFrontDoorActionExecute>>) => {
-            execute ??= original.createFrontDoorActionExecute((await import('@/sync/ops/actions/defaultActionExecutor')).createDefaultActionExecutor());
-            return execute(...args);
-        };
-    } };
-});
-
 const accountId = 'saved-start-account';
 const definitionId = '8fab3a81-5e64-4000-8000-000000000001';
 const savedWaitDefinition = createWorkflowDefinitionFixture({ inputs: [], defaults: {}, blocks: [{ kind: 'wait', id: 'wait',
@@ -72,7 +69,6 @@ afterEach(async () => {
     for (const dispose of disposals.splice(0).reverse()) await dispose();
     machineRpc.mockReset();
     router.spies.push.mockClear();
-    vi.mocked(Modal.alert).mockClear();
     vi.unstubAllGlobals();
 });
 
@@ -188,7 +184,11 @@ describe('saved editor Start through the real front door and Account admission',
         });
         const machine = createMachineFixture();
         storage.setState({ machines: { [machine.id]: machine }, machineListByServerId: {} });
-        const screen = await renderScreen(<AppPaneProvider><WorkflowEditorHostScreen source={{ kind: 'saved', definitionId }} /></AppPaneProvider>, {
+        let modals: ReturnType<typeof useModal>['state']['modals'] = [];
+        function ObserveModals() { modals = useModal().state.modals; return null; }
+        const screen = await renderScreen(<ModalProvider><ObserveModals /><AppPaneProvider>
+            <WorkflowEditorHostScreen source={{ kind: 'saved', definitionId }} />
+        </AppPaneProvider></ModalProvider>, {
             createNodeMock: () => ({ getBoundingClientRect: () => ({ left: 600, top: 100, width: 160, height: 40 }), contains: () => false, focus: () => {},
                 addEventListener: () => {}, removeEventListener: () => {},
                 measureInWindow: (receive: (x: number, y: number, width: number, height: number) => void) => receive(600, 100, 160, 40) }),
@@ -205,9 +205,9 @@ describe('saved editor Start through the real front door and Account admission',
         await screen.pressByTestIdAsync('workflow-editor-run-now');
         await vi.waitFor(() => expect(screen.findByTestId('workflow-run-inputs-run')?.props.disabled).toBe(false));
         await screen.pressByTestIdAsync('workflow-run-inputs-run');
-        await vi.waitFor(() => expect(router.spies.push.mock.calls.length + vi.mocked(Modal.alert).mock.calls.length).toBeGreaterThan(0));
+        await vi.waitFor(() => expect(router.spies.push.mock.calls.length + modals.filter(entry => entry.type === 'alert').length).toBeGreaterThan(0));
         expect(rpcFailure).toBeUndefined();
-        expect(Modal.alert).not.toHaveBeenCalled();
+        expect(modals.filter(entry => entry.type === 'alert')).toEqual([]);
         expect(router.spies.push).toHaveBeenCalled();
         expect(submitted?.source).toMatchObject({ kind: 'inline', sourceArtifactId: definitionId, definition: reviewedDefinition });
         const admits = operations.filter(operation => operation.operation === 'admit');

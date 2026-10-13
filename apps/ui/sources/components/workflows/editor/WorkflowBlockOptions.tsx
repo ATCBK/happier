@@ -43,7 +43,7 @@ import type {
 } from '@happier-dev/protocol/workflows/workflowV1';
 import type { WorkflowActionLeafV1 } from '@happier-dev/protocol/workflows/workflowLeafV1';
 import type { WorkflowCondition } from '@happier-dev/protocol/workflows/workflowReferenceV1';
-import { WORKFLOW_SESSION_AUTHORING_SELECTION_FIELD_IDS } from '@happier-dev/protocol/workflows/workflowV1';
+import { SESSION_AUTHORING_CONTROL_FIELD_IDS } from '@/components/sessions/authoring/controls/sessionAuthoringFieldControls';
 import { SessionAuthoringControls } from '@/components/sessions/authoring/controls/SessionAuthoringControls';
 
 import type { WorkflowRunAsTargetKind } from '../run/workflowRunAsTargets';
@@ -491,7 +491,7 @@ function StepMainPage(props: WorkflowInspectorProps & Readonly<{
                 conversation: effectiveExecution.conversation, workspace: effectiveExecution.workspace, existingSessions: props.existingSessions })}</Text>
         </SectionContentRow></ItemGroup>
         <ItemGroup title={t('workflows.page.sections.agentTitle')}>
-            <SessionAuthoringControls presentation="fields" disabled fields={WORKFLOW_SESSION_AUTHORING_SELECTION_FIELD_IDS}
+            <SessionAuthoringControls presentation="fields" disabled fields={SESSION_AUTHORING_CONTROL_FIELD_IDS}
                 values={effectiveExecution} engine={step.execution?.engine ?? draft.defaults.engine} workflowRoles={draft.roles}
                 onChangeField={() => {}} onChangeFields={() => {}} onChangeEngine={() => {}}
                 facts={props.authoringFacts} testIDPrefix={`${testIDPrefix}-control`} />

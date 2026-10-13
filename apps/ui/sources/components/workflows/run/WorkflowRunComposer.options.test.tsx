@@ -1,5 +1,5 @@
 import * as React from 'react';
-import NodeModule from 'node:module';
+import 'fake-indexeddb/auto';
 import { afterEach, beforeEach, describe, expect, it, onTestFinished, vi } from 'vitest';
 import { HappierInputField, type HappierInputPickerPort } from '@happier-dev/plugin-ui/presentation';
 import type { WorkflowInputDefinition } from '@happier-dev/protocol/workflows/workflowV1';
@@ -22,9 +22,16 @@ const nativeBoundary = vi.hoisted(() => ({ context: undefined as RenderContext |
 vi.mock('react-native', async () => (await import('@/dev/testkit/mocks/reactNative')).createReactNativeWebMock());
 vi.mock('react-native-unistyles', async () => (await import('@/dev/testkit/mocks/unistyles')).createUnistylesMock());
 vi.mock('expo-router', async () => (await import('@/dev/testkit/mocks/router')).createExpoRouterMock().module);
-vi.mock('@/modal', async () => (await import('@/dev/testkit/mocks/modal')).createModalModuleMock({ renderCustomModals: true }).module);
-vi.mock('@/sync/domains/state/browserRecordStorage', async () =>
-    (await import('@/dev/testkit/mocks/browserRecordStorage')).createBrowserRecordStorageModuleMock());
+// Radix supplies the DOM portal primitives; modal custody and native plugin mounting stay real.
+vi.mock('@/utils/web/radixCjs', async () => {
+    const boundary = (await import('@/dev/testkit/mocks/radixCjs')).createRadixCjsModuleMock();
+    // Match Node's stable SDK exports; a render must not manufacture a new
+    // Radix component type and remount the native picker's surrounding controls.
+    const dialog = boundary.requireRadixDialog();
+    const layers = boundary.requireRadixDismissableLayer();
+    const focus = boundary.requireRadixFocusScope();
+    return { requireRadixDialog: () => dialog, requireRadixDismissableLayer: () => layers, requireRadixFocusScope: () => focus };
+});
 // The platform executable-loader boundary supplies the real public author module.
 // Projection admission, the modal, native mount and Host API settlement remain real.
 vi.mock('@/components/plugins/reactNative/resolveDefaultReactNativeLoaderBackend', () => {
@@ -74,7 +81,6 @@ installDisconnectedServerSocketBoundary((socket) => {
 const { renderSurface: renderPublicPicker } = await import('../../../../../../packages/plugin-sdk/examples/public-authoring/ui/reviewPanel.native');
 const { PluginSurfaceHost } = await import('@/components/plugins/surfaces/PluginSurfaceHost');
 const { storage } = await import('@/sync/domains/state/storage');
-const defaultExecutorModule = await import('@/sync/ops/actions/defaultActionExecutor');
 const { WorkflowRunComposer } = await import('./WorkflowRunComposer');
 const { AgentInput } = await import('@/components/sessions/agentInput');
 const { useInputFieldOptions } = await import('@/components/sessions/actions/useInputFieldOptions');
@@ -113,13 +119,6 @@ async function choose(control: Parameters<typeof pressTestInstanceAsync>[0]): Pr
 }
 
 describe('Workflow inputs through real Action option resolution', () => {
-    // Metro's lazy require is a module-loader boundary. Return the real module from the Vitest graph
-    // so the bundled require cannot bypass this run's native/network boundaries. No Action logic is replaced.
-    const loader = NodeModule as unknown as {
-        _load(request: string, parent: { filename?: string } | undefined, isMain: boolean): unknown;
-    };
-    const load = loader._load;
-    let restoreLoader: (() => void) | undefined;
     beforeEach(async () => {
         await loadSyncSingletonForTests();
         await harness.reset(); rpc.machine.mockReset(); rpc.cancel.mockReset();
@@ -129,12 +128,8 @@ describe('Workflow inputs through real Action option resolution', () => {
         nativeBoundary.context = undefined;
         const { clearDaemonMergedProjectionCacheForTests } = await import('@/agents/backendCatalog/loadDaemonMergedProjectionInputs');
         clearDaemonMergedProjectionCacheForTests();
-        const spy = vi.spyOn(loader, '_load').mockImplementation((request, parent, isMain) =>
-            request === './defaultActionExecutor' && parent?.filename?.endsWith('/frontDoorRuntimeActionExecutor.ts')
-                ? defaultExecutorModule : load.call(loader, request, parent, isMain));
-        restoreLoader = () => spy.mockRestore();
     });
-    afterEach(() => { standardCleanup(); restoreLoader?.(); });
+    afterEach(async () => { await standardCleanup(); });
 
     async function connectHome() {
         const serverId = await harness.addHome({ name: 'Input Home', serverUrl: 'https://inputs.example', accountId: 'account-a' });
@@ -308,11 +303,12 @@ describe('Workflow inputs through real Action option resolution', () => {
         const machine = createMachineFixture({ id: 'input-relay', storageMode: 'plain', activeAt: Date.now() });
         publishMachine(serverId, machine);
         harness.answer(serverId, 'GET /v1/artifacts?limit=500&includeBody=true', { body: [] });
-        const { PluginAvailabilityActionHttpPathsV1 } = await import('@happier-dev/protocol/plugins/availability');
+        const { PluginAvailabilityActionHttpPathsV1, PluginAvailabilityIntentsListActionOutputV1Schema } = await import('@happier-dev/protocol/plugins/availability');
         harness.answer(serverId, `POST ${PluginAvailabilityActionHttpPathsV1['account.plugins.availability.materializations.read']}`,
             { body: { availabilityCursor: 1, snapshots: [] } });
         harness.answer(serverId, `POST ${PluginAvailabilityActionHttpPathsV1['account.plugins.availability.intents.list']}`,
-            { body: { availabilityCursor: 1, pluginIds: [] } });
+            { body: PluginAvailabilityIntentsListActionOutputV1Schema.parse({ availabilityCursor: 1,
+                pluginIds: [], intentReads: [], failedPluginIds: [] }) });
         // Load the Account projection through its real HTTP hydrator. The daemon's
         // admitted occurrence selects this local artifact, not a fabricated Account release.
         const { createActivePluginAccountAvailabilityProjectionHydrator } = await import('@/sync/api/plugins/availability/pluginAvailabilityProjection');
@@ -365,6 +361,14 @@ describe('Workflow inputs through real Action option resolution', () => {
         expect(nativeControl()?.props.disabled).not.toBe(true);
         expect(nativeBoundary.context?.signal.aborted).toBe(false);
         await choose(nativeControl());
+        // Assert the public picker outcome before waiting for its controlled
+        // value callback: selecting a value must not silently become Cancel.
+        await expect(pickerAttempt.mock.results[0]!.value).resolves.toEqual(pickerOnly
+            ? { status: 'cancelled' } : { status: 'selected', value: review });
+        // The real presenter retains the modal for its canonical exit animation.
+        // Flush that clock boundary inside act before observing actual retirement.
+        const { motionTokens } = await import('@/components/ui/motion/motionTokens');
+        await act(async () => { await new Promise(resolve => setTimeout(resolve, motionTokens.overlay.modal.exitMs)); });
         expect(productionPanel.findAllByType(PluginSurfaceHost)).toHaveLength(0);
         if (pickerOnly) expect(onChangeValues).not.toHaveBeenCalled();
         else await waitForHomeGovernance(() => expect(onChangeValues).toHaveBeenCalledWith({ repository: review }));

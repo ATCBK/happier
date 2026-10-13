@@ -10,28 +10,16 @@ import { createRootLayoutFeaturesResponse } from '@/dev/testkit/fixtures/feature
 import { createSessionFixture } from '@/dev/testkit/fixtures/sessionFixtures';
 import { createMachineFixture } from '@/dev/testkit/fixtures/machineFixtures';
 import { createWorkflowRunSummaryFixture } from '@/dev/testkit/fixtures/workflowRunFixtures';
-import { primeServerFeaturesSnapshot, resetServerFeaturesClientForTests } from '@/sync/api/capabilities/serverFeaturesClient';
-import { storage } from '@/sync/domains/state/storageStore';
-import { Modal } from '@/modal';
-import { WorkflowsLibraryHome } from '../library/WorkflowsLibraryHome';
-import { SavedWorkflowRoute } from '@/app/(app)/workflows/[id]/index';
-import { useSessionBuiltinWorkflowStart } from '@/components/sessions/agents/launch/useSessionBuiltinWorkflowStart';
-import { SessionAgentsLaunchMenu } from '@/components/sessions/agents/launch/SessionAgentsLaunchMenu';
-import { DropdownMenu } from '@/components/ui/forms/dropdown/DropdownMenu';
-import { WorkflowStartPicker } from './WorkflowStartPicker';
-import { WorkflowRunComposer } from './WorkflowRunComposer';
-import { resetWorkflowLibraryReadsForTests } from '../library/workflowLibraryReads';
-import { WorkflowsColumnActions } from '../column/WorkflowsColumnActions';
-import { AppPaneProvider } from '@/components/appShell/panes/AppPaneProvider';
+import { installShippedNativeFrameScheduler } from '@/dev/testkit/legend/shippedNativeLegendRuntime';
 import { installDisconnectedServerSocketBoundary, restoreServerAccountForTest } from '@/dev/testkit/harness/serverAccountConnectionHarness';
 import { serveActionHomes } from '@/dev/testkit/harness/actionHomesHttpHarness';
-import { clearDaemonMergedProjectionCacheForTests } from '@/agents/backendCatalog/loadDaemonMergedProjectionInputs';
 import type { Artifact, ArtifactCreateRequest } from '@/sync/domains/artifacts/artifactTypes';
-import { createWorkflowDefinition } from '@/sync/domains/workflows/workflowDefinitionActions';
-import { SelectionList } from '@/components/ui/selectionList';
-import { WorkflowExamplesSection } from '../library/WorkflowExamplesSection';
 
-const withPanes = ({ children }: React.PropsWithChildren) => <AppPaneProvider>{children}</AppPaneProvider>;
+let modals: ReturnType<typeof useModal>['state']['modals'] = [];
+function ObserveModals() { modals = useModal().state.modals; return null; }
+const withPanes = ({ children }: React.PropsWithChildren) => <ModalProvider><ObserveModals />
+    <AppPaneProvider>{children}</AppPaneProvider>
+</ModalProvider>;
 
 const machineRpc = vi.hoisted(() => vi.fn());
 const routing = vi.hoisted(() => ({ push: vi.fn(), replace: vi.fn() }));
@@ -40,12 +28,26 @@ vi.mock('expo-router', async () => {
     const { createExpoRouterMock } = await import('@/dev/testkit/mocks/router');
     return createExpoRouterMock({ params: routeParams, router: routing }).module;
 });
-vi.mock('@/modal', async () => {
-    const { createModalModuleMock } = await import('@/dev/testkit/mocks/modal');
-    return createModalModuleMock().module;
-});
 vi.mock('@/sync/runtime/orchestration/serverScopedRpc/serverScopedMachineRpc', () => ({ machineRpcWithServerScope: machineRpc }));
 installDisconnectedServerSocketBoundary();
+// Install transports before any screen, modal chrome or store-facing runtime consumer.
+const { primeServerFeaturesSnapshot, resetServerFeaturesClientForTests } = await import('@/sync/api/capabilities/serverFeaturesClient');
+const { storage } = await import('@/sync/domains/state/storageStore');
+const { ModalProvider, useModal } = await import('@/modal/ModalProvider');
+const { WorkflowsLibraryHome } = await import('../library/WorkflowsLibraryHome');
+const { SavedWorkflowRoute } = await import('@/app/(app)/workflows/[id]/index');
+const { useSessionBuiltinWorkflowStart } = await import('@/components/sessions/agents/launch/useSessionBuiltinWorkflowStart');
+const { SessionAgentsLaunchMenu } = await import('@/components/sessions/agents/launch/SessionAgentsLaunchMenu');
+const { DropdownMenu } = await import('@/components/ui/forms/dropdown/DropdownMenu');
+const { WorkflowStartPicker } = await import('./WorkflowStartPicker');
+const { WorkflowRunComposer } = await import('./WorkflowRunComposer');
+const { resetWorkflowLibraryReadsForTests } = await import('../library/workflowLibraryReads');
+const { WorkflowsColumnActions } = await import('../column/WorkflowsColumnActions');
+const { AppPaneProvider } = await import('@/components/appShell/panes/AppPaneProvider');
+const { clearDaemonMergedProjectionCacheForTests } = await import('@/agents/backendCatalog/loadDaemonMergedProjectionInputs');
+const { createWorkflowDefinition } = await import('@/sync/domains/workflows/workflowDefinitionActions');
+const { SelectionList } = await import('@/components/ui/selectionList');
+const { WorkflowExamplesSection } = await import('../library/WorkflowExamplesSection');
 vi.mock('react-native', async () => {
     const { createReactNativeNativeMock } = await import('@/dev/testkit/mocks/reactNative');
     return createReactNativeNativeMock({ platformOS: 'ios' });
@@ -128,6 +130,8 @@ async function seedUnavailableWorkflowDefinitions() {
     return ids;
 }
 beforeEach(async () => {
+    installShippedNativeFrameScheduler();
+    modals = [];
     routeParams.id = 'plugin:example.recipe/check';
     routeParams.intent = undefined;
     previousState = storage.getState();
@@ -168,17 +172,16 @@ beforeEach(async () => {
     primeServerFeaturesSnapshot({ serverId: server.id, snapshot: { status: 'ready', features: createRootLayoutFeaturesResponse() } });
 });
 afterEach(async () => {
-    standardCleanup();
+    await standardCleanup();
     resetWorkflowLibraryReadsForTests();
     (await import('@/sync/domains/scope/activeServerAccountScope')).retireActiveServerAccountScopeLifetime();
-    home.dispose();
+    await home.dispose();
     await connection.dispose();
     machineRpc.mockReset();
     clearDaemonMergedProjectionCacheForTests();
     resetServerFeaturesClientForTests();
     routing.push.mockClear();
     routing.replace.mockClear();
-    vi.mocked(Modal.show).mockClear();
     storage.setState(previousState);
 });
 
@@ -217,7 +220,7 @@ describe('WorkflowStartPicker plugin workflows', () => {
         expect(screen.findByTestId('workflow-builtin-run-now')).not.toBeNull();
         expect(screen.getTextContent()).toContain(t('workflows.examples.chooseSession'));
         expect(screen.findAllByType(WorkflowRunComposer)).toHaveLength(0);
-        expect(Modal.show).not.toHaveBeenCalled();
+        expect(modals).toEqual([]);
         expect(starts()).toEqual([]);
         await screen.pressByTestIdAsync('workflow-builtin-duplicate');
         const route = routing.push.mock.calls.at(-1)?.[0] as { pathname: string; params: { definitionDraftSeedId: string } };
@@ -320,10 +323,14 @@ describe('WorkflowStartPicker plugin workflows', () => {
         storage.setState({ machines: { 'machine-1': createMachineFixture({ id: 'machine-1' }) },
             authoringMemory: { ...storage.getState().authoringMemory, recentMachinePaths: [{ machineId: 'machine-1', path: '/project' }] } });
         installPluginProjection();
-        const screen = await renderScreen(<SavedWorkflowRoute />, { wrapper: withPanes });
+        const screen = await renderScreen(<SavedWorkflowRoute />, { wrapper: withPanes,
+            // Real native anchor geometry keeps this review on the anchored composer branch.
+            createNodeMock: () => ({ focus: () => {},
+                measureInWindow: (receive: (x: number, y: number, width: number, height: number) => void) => receive(600, 100, 160, 40) }),
+        });
         await screen.pressByTestIdAsync('workflow-builtin-run-now');
         expect(starts()).toEqual([]);
-        expect(Modal.show).not.toHaveBeenCalled();
+        expect(modals).toEqual([]);
         expect(screen.findAllByType(WorkflowRunComposer)).toHaveLength(1);
         await act(async () => { screen.findByType(WorkflowRunComposer).props.onRun(undefined); });
         expect(starts()[0]?.payload).toMatchObject({
@@ -384,19 +391,21 @@ describe('WorkflowStartPicker plugin workflows', () => {
         const machine = createMachineFixture();
         storage.setState({ sessions: { [session.id]: session }, machines: { [machine.id]: machine } });
         installPluginProjection();
-        const hook = await renderHook(() => useSessionBuiltinWorkflowStart({ sessionId: session.id }));
+        const hook = await renderHook(() => useSessionBuiltinWorkflowStart({ sessionId: session.id }), { wrapper: withPanes });
         await act(async () => {
             hook.getCurrent()(plugin);
         });
-        expect(Modal.show).toHaveBeenCalled();
-        const config = vi.mocked(Modal.show).mock.calls[0]![0];
-        const props = config.props as { onRun(inputs: Record<string, never>): void };
-        await act(async () => { props.onRun({}); await Promise.resolve(); });
+        expect(modals).toHaveLength(1);
+        expect(modals[0]).toMatchObject({ type: 'custom', visible: true });
+        const composer = hook.tree.root.findByType(WorkflowRunComposer);
+        await act(async () => { composer.props.onRun({}); await Promise.resolve(); });
         expect(starts()).toEqual([expect.objectContaining({ machineId: 'machine-1', payload: expect.objectContaining({
             input: expect.objectContaining({ source: { kind: 'catalog', workflow: plugin.workflow, pluginVersion: plugin.version } }),
             defaultSessionId: session.id,
             target: expect.objectContaining({ kind: 'machine', machineId: 'machine-1' }),
         }) })]);
+        expect(modals.filter(entry => 'visible' in entry && entry.visible === true)).toEqual([]);
+        expect(routing.push).toHaveBeenCalledWith({ pathname: '/workflows/runs/[runId]', params: { runId: starts()[0]?.payload.input.runId } });
     });
     it('offers the contribution in the Work launch submenu and selects that exact source', async () => {
         installPluginProjection();
@@ -460,7 +469,7 @@ describe('WorkflowStartPicker plugin workflows', () => {
         const next = createDeferred<Response>();
         delayedRead = next.promise;
         await act(async () => {
-            home.switchAccount('picker', 'next-account');
+            await home.switchAccount('picker', 'next-account');
             (await import('@/sync/domains/scope/activeServerAccountScope')).retireActiveServerAccountScopeLifetime();
             storage.setState({ profileScope: { serverId: storage.getState().profileScope!.serverId, accountId: 'next-account' } });
         });

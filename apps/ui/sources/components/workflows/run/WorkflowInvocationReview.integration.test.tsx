@@ -1,4 +1,5 @@
 import * as React from 'react';
+import 'fake-indexeddb/auto';
 import { act } from 'react-test-renderer';
 import { afterAll, afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import {
@@ -15,7 +16,7 @@ import {
 } from '@happier-dev/protocol';
 import { TargetedActionRpcRequestV1Schema } from '@happier-dev/protocol/actions';
 import { changeTextTestInstance, findAllHostTestInstances, invokeTestInstanceHandler, pressTestInstanceAsync, renderScreen } from '@/dev/testkit';
-import { Modal, ModalProvider } from '@/modal';
+import { ModalProvider, useModal } from '@/modal';
 import { ScopedAuthoringComposer } from '@/components/sessions/authoring/ScopedAuthoringComposer';
 import { createWorkflowRunSummaryFixture } from '@/dev/testkit/fixtures/workflowRunFixtures';
 import { createSessionAccessFixture, createSessionFixture } from '@/dev/testkit/fixtures/sessionFixtures';
@@ -37,6 +38,7 @@ import { createDeferred } from '@/dev/testkit/hooks/createDeferred';
 import { describeWorkflowOperationProblem } from '../presentation/workflowProblemPresentation';
 import { t } from '@/text';
 import { storeWorkflowReviewedRunSeed } from '@/sync/domains/workflows/workflowReviewedRunSeed';
+import { motionTokens } from '@/components/ui/motion/motionTokens';
 
 // Only HTTP, Machine transport, credentials and rendering/platform loaders are replaced.
 // Account scope, stores, feature/policy decisions, Action owners and codecs remain real.
@@ -69,29 +71,17 @@ await vi.hoisted(async () => {
     vi.stubGlobal('React', await import('react'));
 });
 beforeEach(() => { vi.stubGlobal('React', React); });
-vi.mock('@/modal', async () => {
-    const { createModalModuleMock } = await import('@/dev/testkit/mocks/modal');
-    return createModalModuleMock({ renderCustomModals: true }).module;
+// Radix supplies the DOM portal primitives; confirmation and custom modal custody stay real.
+vi.mock('@/utils/web/radixCjs', async () => {
+    const { createRadixCjsModuleMock } = await import('@/dev/testkit/mocks/radixCjs');
+    const boundary = createRadixCjsModuleMock();
+    // Node's SDK loader returns stable exports. Cache the canonical fixture's
+    // modules so an open Popover does not remount its contents on every render.
+    const dialog = boundary.requireRadixDialog();
+    const layers = boundary.requireRadixDismissableLayer();
+    const focus = boundary.requireRadixFocusScope();
+    return { requireRadixDialog: () => dialog, requireRadixDismissableLayer: () => layers, requireRadixFocusScope: () => focus };
 });
-// Metro's require is unavailable in Vitest: adapt module loading, never execution.
-vi.mock('@/sync/ops/actions/frontDoorRuntimeActionExecutor', async (importOriginal) => {
-    const original = await importOriginal<typeof import('@/sync/ops/actions/frontDoorRuntimeActionExecutor')>();
-    return { ...original, createFrontDoorActionExecute: (executor?: Parameters<typeof original.createFrontDoorActionExecute>[0]) => {
-        if (executor) return original.createFrontDoorActionExecute(executor);
-        let resolved: ReturnType<typeof original.createFrontDoorActionExecute> | null = null;
-        const execute = async (...args: Parameters<ReturnType<typeof original.createFrontDoorActionExecute>>) => {
-            resolved ??= original.createFrontDoorActionExecute((await import('@/sync/ops/actions/defaultActionExecutor')).createDefaultActionExecutor());
-            return resolved(...args);
-        };
-        return Object.assign(execute, {
-            prepare: async (...args: Parameters<ReturnType<typeof original.createFrontDoorActionExecute>['prepare']>) => {
-                resolved ??= original.createFrontDoorActionExecute((await import('@/sync/ops/actions/defaultActionExecutor')).createDefaultActionExecutor());
-                return resolved.prepare(...args);
-            },
-        });
-    } };
-});
-
 const accountId = 'review-integration-account';
 const runId = '11111111-1111-4111-8111-111111111111';
 const rootId = '22222222-2222-4222-8222-222222222222';
@@ -106,8 +96,6 @@ const json = (value: unknown, status = 200) => new Response(JSON.stringify(value
 type Row = { index: WorkflowRunInvocationIndexV1; contentEnvelope: string; parentRevision: number };
 const disposals: Array<() => Promise<void>> = [];
 afterEach(async () => {
-    vi.mocked(Modal.confirm).mockReset();
-    vi.mocked(Modal.confirm).mockResolvedValue(false);
     for (const dispose of disposals.splice(0).reverse()) await dispose();
     machineRpc.mockReset();
     machineRpc.mockImplementation(async () => { throw new Error('offline_machine'); });
@@ -118,7 +106,9 @@ afterAll(() => { vi.unstubAllGlobals(); });
 
 async function harness(options: Readonly<{ runScreen?: boolean; runReadError?: 'history_not_readable' | 'encryption_setup_required'; compact?: boolean; access?: 'owner' | 'edit' | 'view'; wait?: boolean; fieldlessWait?: boolean; exactRead?: 'pending' | 'failed'; confirmed?: boolean; plan?: boolean; admittedPlan?: boolean; planProposal?: boolean; planValidationUnavailable?: boolean; uncertainPriorEffects?: boolean; acknowledged?: boolean; ownedOrigin?: boolean }> = {}) {
     installShippedNativeFrameScheduler();
-    const restorePlatform = withPopoverWebGlobals();
+    // The real modal/composer schedules SDK frame work. Preserve the canonical
+    // timer-backed scheduler rather than running a frame recursively in place.
+    const restorePlatform = withPopoverWebGlobals({ frameScheduler: globalThis.requestAnimationFrame });
     disposals.push(async () => { restorePlatform(); });
     await loadSyncSingletonForTests();
     const actorAccountId = options.access && options.access !== 'owner' ? 'review-integration-teammate' : accountId;
@@ -253,6 +243,11 @@ async function harness(options: Readonly<{ runScreen?: boolean; runReadError?: '
     const current = () => true;
     const acknowledgeUncertainPriorEffects = options.acknowledged ? { recordId: heldId, contentRevision: '7' } : undefined;
     let observedOrigin: ReturnType<typeof useSession> = null;
+    let modals: ReturnType<typeof useModal>['state']['modals'] = [];
+    function ObserveModals() {
+        modals = useModal().state.modals;
+        return null;
+    }
     function Host() {
         // Observe the same public Session hook as Review, without replacing its
         // store, Account scope, access projection or subscription owner.
@@ -270,7 +265,8 @@ async function harness(options: Readonly<{ runScreen?: boolean; runReadError?: '
             }} onOpenRun={onOpenRun} onDiscuss={() => {}} machineReachable={false}
             {...{ acknowledgeUncertainPriorEffects }} />;
     }
-    const screen = await renderScreen(<ModalProvider><Host /></ModalProvider>, {
+    // The application shell registers its modal host before the review route mounts.
+    const screen = await renderScreen(<ModalProvider><ObserveModals /></ModalProvider>, {
         // Anchor/content geometry comes from the renderer's platform-node boundary;
         // the real chip, Popover measurement and positioning owners still execute.
         createNodeMock: () => Object.assign(new EventTarget(), {
@@ -282,7 +278,11 @@ async function harness(options: Readonly<{ runScreen?: boolean; runReadError?: '
             measureInWindow: (receive: (x: number, y: number, width: number, height: number) => void) => receive(40, 400, 320, 160),
         }),
     });
-    disposals.push(screen.unmount);
+    await screen.update(<ModalProvider><ObserveModals /><Host /></ModalProvider>);
+    disposals.push(async () => {
+        await screen.update(<ModalProvider><ObserveModals /></ModalProvider>);
+        await screen.unmount();
+    });
     let mount = 0;
     return { screen, detail, rows, run, readProgress, operations, events, proposal, boundary, onSettled, onOpenDraft, onOpenRun, planRunId,
         settleExactRead: () => exactRead.resolve(),
@@ -294,15 +294,27 @@ async function harness(options: Readonly<{ runScreen?: boolean; runReadError?: '
                 definition: checked.normalizedDefinition, authoredDefinition: checked.normalizedDefinition }));
         },
         readOrigin: () => observedOrigin,
+        readModals: () => modals,
         refreshAccess: async () => {
             callerAccess = (await workflowRunDetailActions.getRun(runId)).callerAccess;
-            await screen.update(<ModalProvider><Host /></ModalProvider>);
+            await screen.update(<ModalProvider><ObserveModals /><Host /></ModalProvider>);
         },
-        refresh: () => screen.update(<ModalProvider><Host /></ModalProvider>),
-        reopen: () => screen.update(<ModalProvider><Host key={++mount} /></ModalProvider>) };
+        refresh: () => screen.update(<ModalProvider><ObserveModals /><Host /></ModalProvider>),
+        reopen: () => screen.update(<ModalProvider><ObserveModals /><Host key={++mount} /></ModalProvider>) };
 }
 async function change(screen: Awaited<ReturnType<typeof renderScreen>>, id: string, value: string) {
     await act(async () => { screen.changeTextByTestId(id, value); });
+}
+async function settleRunComposerExitMotion() {
+    await act(async () => { await new Promise(resolve => setTimeout(resolve,
+        Math.max(motionTokens.overlay.modal.exitMs, motionTokens.overlay.popover.exitMs))); });
+}
+async function openPlanRunComposer(screen: Awaited<ReturnType<typeof renderScreen>>) {
+    await screen.pressByTestIdAsync('workflow-review-plan-run');
+    // The newly mounted editor first has no measured anchor, so its canonical
+    // modal can retire as the anchored presenter takes over. Never press that
+    // retained, invisible modal's deliberately inactive Start control.
+    await settleRunComposerExitMotion();
 }
 function editorPromptInput(screen: Awaited<ReturnType<typeof renderScreen>>) {
     // Editable text lives in the host field's value, not in text-node children.
@@ -358,6 +370,33 @@ describe('Review through the real Account Action owner and HTTP storage boundary
         await h.screen.pressByTestIdAsync('workflow-review-edit');
         expect(h.screen.findByTestId('workflow-review-field-summary')!.props.value).toBe('Newer agent publication');
         expect(h.operations.filter(operation => operation.operation === 'invocations.complete_review')).toEqual([]);
+    });
+    it('completes a hold with exactly the mounted Action draft after refusing a stale edit', async () => {
+        const h = await harness();
+        const { createDefaultActionExecutor } = await import('@/sync/ops/actions/defaultActionExecutor');
+        const { getActiveServerSnapshot } = await import('@/sync/domains/server/serverRuntime');
+        const scope = { serverId: getActiveServerSnapshot().serverId, accountId };
+        const executor = createDefaultActionExecutor();
+        const value = { ...originalValue, summary: 'Prepared through the draft Action' };
+        const input = { scope, draftId: heldId, runId, expectedContentRevision: '7', value };
+        const context = { surface: 'agent' as const, authority: 'account_automation' as const, serverId: scope.serverId };
+        await act(async () => {
+            expect(await executor.execute('workflow.run.review.draft.set', input, context))
+                .toEqual({ ok: true, result: { status: 'applied' } });
+            expect(await executor.execute('workflow.run.review.draft.set', { ...input, expectedContentRevision: '6',
+                value: { ...value, summary: 'Stale value must not win' } }, context))
+                .toMatchObject({ ok: true, result: { status: 'refused', reason: 'stale_content_revision' } });
+        });
+        expect(h.rows.get(heldId)?.index).toMatchObject({ lifecycle: 'waiting_for_review', contentRevision: '7' });
+        expect(h.screen.findByTestId('workflow-review-field-summary')!.props.value).toBe(value.summary);
+        await h.screen.pressByTestIdAsync('workflow-review-use');
+        await vi.waitFor(() => expect(h.rows.get(heldId)?.index.lifecycle).toBe('completed'));
+        const progress = h.readProgress();
+        expect(WorkflowProgressEnvelopeV1Schema.parse(progress)).toMatchObject({ result: value,
+            review: { resultSource: { kind: 'human', accountId }, decision: { kind: 'use_result', requestedFromContentRevision: '7' } } });
+        expect(WorkflowProgressEnvelopeV1Schema.safeParse({ ...progress, unknown: true }).success).toBe(false);
+        expect(h.onSettled).toHaveBeenCalledWith(expect.objectContaining({ state: 'queued' }));
+        expect(machineRpc).not.toHaveBeenCalled();
     });
     it.each(['history_not_readable', 'encryption_setup_required'] as const)('retains %s from the initial Run read and offers only its real recovery', async (runReadError) => {
         const h = await harness({ runScreen: true, runReadError });
@@ -449,7 +488,7 @@ describe('Review through the real Account Action owner and HTTP storage boundary
     it('refuses Plan admission after effective edit access is revoked while the seeded editor is open', async () => {
         const h = await harness({ plan: true, planProposal: true });
         await vi.waitFor(() => expect(h.screen.findHostByTestId('workflow-review-plan-run')).not.toBeNull());
-        await h.screen.pressByTestIdAsync('workflow-review-plan-run');
+        await openPlanRunComposer(h.screen);
         await vi.waitFor(() => expect(h.screen.findByTestId('workflow-run-inputs-run')).not.toBeNull());
         h.boundary.access = 'view';
         await h.screen.pressByTestIdAsync('workflow-run-inputs-run');
@@ -498,7 +537,7 @@ describe('Review through the real Account Action owner and HTTP storage boundary
     it('hands Run it to the same unsaved seeded editor without completing the source hold', async () => {
         const h = await harness({ plan: true, planProposal: true });
         await vi.waitFor(() => expect(h.screen.findHostByTestId('workflow-review-plan-run')).not.toBeNull());
-        await h.screen.pressByTestIdAsync('workflow-review-plan-run');
+        await openPlanRunComposer(h.screen);
         expect(h.onOpenDraft).toHaveBeenCalledWith(expect.objectContaining({ sourceRunId: runId, definition: h.proposal,
             planReview: expect.objectContaining({ invocationId: heldId, expectedContentRevision: '7' }) }));
         expect(h.rows.get(heldId)?.index.lifecycle).toBe('waiting_for_review');
@@ -523,21 +562,22 @@ describe('Review through the real Account Action owner and HTTP storage boundary
     ])('routes Cancel, edit, Run through explicit Edit first (accepted: $acceptEdit, refused: $refuseReview) before any admission', async ({ acceptEdit, refuseReview }) => {
         const h = await harness({ plan: true, planProposal: true });
         h.boundary.refuse = refuseReview;
-        vi.mocked(Modal.confirm).mockResolvedValue(acceptEdit);
         machineRpc.mockImplementation(async request => {
             const input = WorkflowRunStartRequestV1Schema.parse(TargetedActionRpcRequestV1Schema.parse(request.payload).input);
             h.admitPlan(input);
             return WorkflowRunStartResultV1Schema.parse({ run: { ...h.run, id: input.runId, state: 'queued' }, admission: 'created' });
         });
         await vi.waitFor(() => expect(h.screen.findHostByTestId('workflow-review-plan-run')).not.toBeNull());
-        await h.screen.pressByTestIdAsync('workflow-review-plan-run');
+        await openPlanRunComposer(h.screen);
         await vi.waitFor(() => expect(h.screen.findByTestId('workflow-run-inputs-run')).not.toBeNull());
         await dismissRunComposer(h.screen);
         await act(async () => changeTextTestInstance(editorPromptInput(h.screen), 'Implement my edited proposal', 'Workflow prompt input'));
         await h.screen.pressByTestIdAsync('workflow-editor-run-now');
         await h.screen.pressByTestIdAsync('workflow-run-inputs-run');
         expect(admissions()).toHaveLength(0);
-        await vi.waitFor(() => expect(Modal.confirm).toHaveBeenCalled());
+        await vi.waitFor(() => expect(h.readModals().filter(modal => modal.type === 'confirm')).toHaveLength(1));
+        await h.screen.pressByTestIdAsync(acceptEdit ? 'web-modal-confirm' : 'web-modal-cancel');
+        await vi.waitFor(() => expect(h.readModals().filter(modal => modal.type === 'confirm')).toEqual([]));
         if (!acceptEdit || refuseReview) {
             expect(h.rows.get(heldId)?.index.lifecycle).toBe('waiting_for_review');
             expect(h.readProgress().review?.decision).toBeUndefined();
@@ -686,7 +726,7 @@ describe('Review through the real Account Action owner and HTTP storage boundary
             return WorkflowRunStartResultV1Schema.parse({ run: { ...h.run, id: h.planRunId, state: 'queued' }, admission: 'created' });
         });
         await vi.waitFor(() => expect(h.screen.findHostByTestId('workflow-review-plan-run'), h.screen.getTextContent()).not.toBeNull());
-        await h.screen.pressByTestIdAsync('workflow-review-plan-run');
+        await openPlanRunComposer(h.screen);
         await vi.waitFor(() => expect(h.screen.findHostByTestId('workflow-run-inputs-run')).not.toBeNull());
         await h.screen.pressByTestIdAsync('workflow-run-inputs-run');
         await vi.waitFor(() => expect(h.rows.get(heldId)?.index.lifecycle).toBe('completed'));
@@ -706,7 +746,7 @@ describe('Review through the real Account Action owner and HTTP storage boundary
             throw new Error('admission_response_lost_after_commit');
         });
         await vi.waitFor(() => expect(h.screen.findHostByTestId('workflow-review-plan-run'), h.screen.getTextContent()).not.toBeNull());
-        await h.screen.pressByTestIdAsync('workflow-review-plan-run');
+        await openPlanRunComposer(h.screen);
         await vi.waitFor(() => expect(h.screen.findHostByTestId('workflow-run-inputs-run')).not.toBeNull());
         await h.screen.pressByTestIdAsync('workflow-run-inputs-run');
         await vi.waitFor(() => expect(admissions()).toHaveLength(1));
@@ -730,7 +770,7 @@ describe('Review through the real Account Action owner and HTTP storage boundary
             throw new Error('admission_response_lost_after_commit');
         });
         await vi.waitFor(() => expect(h.screen.findHostByTestId('workflow-review-plan-run')).not.toBeNull());
-        await h.screen.pressByTestIdAsync('workflow-review-plan-run');
+        await openPlanRunComposer(h.screen);
         await vi.waitFor(() => expect(h.screen.findHostByTestId('workflow-run-inputs-run')).not.toBeNull());
         await h.screen.pressByTestIdAsync('workflow-run-inputs-run');
         await vi.waitFor(() => expect(admissions()).toHaveLength(1));
@@ -759,7 +799,7 @@ describe('Review through the real Account Action owner and HTTP storage boundary
                 if (choice === 'run-loss') throw new Error('new_proposal_admission_response_lost_after_commit');
                 return WorkflowRunStartResultV1Schema.parse({ run: { ...h.run, id: newRunId, state: 'queued' }, admission: 'created' });
             });
-            await h.screen.pressByTestIdAsync('workflow-review-plan-run');
+            await openPlanRunComposer(h.screen);
             await vi.waitFor(() => expect(h.screen.findHostByTestId('workflow-run-inputs-run')).not.toBeNull());
             await h.screen.pressByTestIdAsync('workflow-run-inputs-run');
             await vi.waitFor(() => expect(h.rows.get(heldId)?.index.lifecycle).toBe('completed'));
@@ -782,7 +822,7 @@ describe('Review through the real Account Action owner and HTTP storage boundary
             });
         });
         await vi.waitFor(() => expect(h.screen.findHostByTestId('workflow-review-plan-run'), h.screen.getTextContent()).not.toBeNull());
-        await h.screen.pressByTestIdAsync('workflow-review-plan-run');
+        await openPlanRunComposer(h.screen);
         expect(h.readOrigin()?.id).toBe(originSessionId);
         expect(isSessionAccessOwner(h.readOrigin()?.access, h.readOrigin()?.accessLevel)).toBe(true);
         // The owned-origin question must be reachable in the actual composer.
@@ -843,4 +883,6 @@ async function dismissRunComposer(screen: Readonly<{ findAll: (predicate: (node:
     const presenter = screen.findAll((node) => typeof node.props.onRequestClose === 'function'
         && node.findAll((child) => child.props.testID === 'workflow-run-inputs').length > 0).at(-1);
     await act(async () => { invokeTestInstanceHandler(presenter, 'onRequestClose', undefined, 'Run composer presenter'); });
+    // Both real presenters retain their content for their owned exit motion.
+    await settleRunComposerExitMotion();
 }

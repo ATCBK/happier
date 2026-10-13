@@ -9,7 +9,6 @@ import { t } from '@/text';
 import { StyleSheet, useUnistyles } from 'react-native-unistyles';
 
 import {
-    WORKFLOW_SESSION_AUTHORING_SELECTION_FIELD_IDS,
     type WorkflowStep,
     type WorkflowStepExecutionSelection,
     type WorkflowEngineSelectionV1,
@@ -18,9 +17,11 @@ import {
 import type { WorkflowRoleV1 } from '@happier-dev/protocol';
 
 import {
+    SESSION_AUTHORING_CONTROL_FIELD_IDS,
     findSessionAuthoringAgentTargetOption,
     resolveSessionAuthoringFieldTitle,
     type SessionAuthoringControlFacts,
+    type SessionAuthoringFieldId,
 } from '@/components/sessions/authoring/controls/sessionAuthoringFieldControls';
 import {
     resolveEffectiveWorkflowStepExecution,
@@ -111,7 +112,7 @@ export function WorkflowStepTimeoutField(props: Readonly<{
     );
 }
 
-export type WorkflowStepInspectorFieldId = (typeof WORKFLOW_SESSION_AUTHORING_SELECTION_FIELD_IDS)[number];
+export type WorkflowStepInspectorFieldId = SessionAuthoringFieldId;
 
 export function WorkflowStepInspector(props: Readonly<{
     draft: WorkflowEditorDraft;
@@ -156,7 +157,7 @@ export function WorkflowStepInspector(props: Readonly<{
 }>): React.ReactElement {
     const { theme } = useUnistyles();
     const testIDPrefix = props.testIDPrefix ?? 'workflow-inspector';
-    const fields = props.fields ?? WORKFLOW_SESSION_AUTHORING_SELECTION_FIELD_IDS;
+    const fields = props.fields ?? SESSION_AUTHORING_CONTROL_FIELD_IDS;
     const engineField = props.onChangeFields === undefined ? undefined
         : fields.find(field => field === 'agentTarget' || field === 'modelSelection');
     const engineOverridden = props.step.execution?.engine !== undefined

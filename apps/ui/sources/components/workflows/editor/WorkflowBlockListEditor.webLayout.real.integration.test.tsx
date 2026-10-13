@@ -4,9 +4,11 @@ import * as React from 'react';
 import { act } from 'react';
 import { createRoot, type Root } from 'react-dom/client';
 import { View } from 'react-native';
-import { afterEach, describe, expect, it, vi } from 'vitest';
+import { afterAll, afterEach, beforeAll, describe, expect, it, vi } from 'vitest';
 
 import { installWebLayoutBridge, measureWebLayout } from '@/dev/testkit/render/measureWebLayout';
+import { createHomeGovernanceHarness, installHomeGovernanceBoundaries } from '@/dev/testkit/harness/homeGovernanceHarness';
+import { installBrowserStorageLockBoundary } from '@/dev/testkit/harness/browserStorageLockBoundary';
 
 /**
  * The document's geometry as a browser lays it out: real react-native-web output measured in
@@ -15,13 +17,20 @@ import { installWebLayoutBridge, measureWebLayout } from '@/dev/testkit/render/m
  */
 
 vi.mock('react-native', async () => vi.importActual('react-native-web'));
+vi.mock('expo-crypto', async () => ({ randomUUID: (await import('node:crypto')).randomUUID }));
 // A phone browser: the primary pointer is a finger (no hover). This is the platform boundary the
 // touch floor reads once at module load.
 const pointer = vi.hoisted(() => ({ coarse: true }));
-vi.mock('@/utils/platform/webMobileHeuristics', async (importOriginal) => ({
-    ...(await importOriginal<Record<string, unknown>>()),
-    isCoarsePrimaryPointerEnvironment: () => pointer.coarse,
-}));
+const originalMatchMedia = Object.getOwnPropertyDescriptor(window, 'matchMedia');
+const fallbackMatchMedia = typeof window.matchMedia === 'function' ? window.matchMedia.bind(window) : null;
+// Hardware media queries are the browser boundary. Pointer classification and
+// the shared interactive-target policy execute for real beneath it.
+Object.defineProperty(window, 'matchMedia', { configurable: true, value: (query: string): MediaQueryList => ({
+    matches: query === '(pointer: coarse)' || query === '(hover: none)' ? pointer.coarse
+        : query === '(pointer: fine)' || query === '(hover: hover)' ? !pointer.coarse : fallbackMatchMedia?.(query).matches ?? false,
+    media: query, onchange: null, addListener: () => {}, removeListener: () => {},
+    addEventListener: () => {}, removeEventListener: () => {}, dispatchEvent: () => true,
+}) });
 vi.mock('react-native-unistyles', async () => {
     const { createUnistylesMock } = await import('@/dev/testkit/mocks/unistyles');
     return createUnistylesMock();
@@ -30,31 +39,20 @@ vi.mock('expo-router', async () => {
     const { createExpoRouterMock } = await import('@/dev/testkit/mocks/router');
     return createExpoRouterMock().module;
 });
-vi.mock('react-native-enriched-markdown/lib/module/web/streamingReveal.js', () => ({
-    splitStreamingRevealTextParts: () => [],
-}));
-// The composer host is the boundary: a card of a fixed height stands in for it, so the rhythm
-// around it is the editor's own.
-vi.mock('@/components/sessions/agentInput', async () => {
-    const { View: WebView } = await import('react-native-web');
-    return {
-        AgentInput: (props: Readonly<{ composerRef?: { blockId?: string } }>) => React.createElement(WebView, {
-            testID: `composer:${props.composerRef?.blockId ?? 'unknown'}`,
-            style: { height: 120, borderWidth: 1, borderColor: 'black', borderRadius: 12 },
-        }),
-    };
+const home = createHomeGovernanceHarness();
+installHomeGovernanceBoundaries(home);
+const restoreBrowserStorageLock = installBrowserStorageLockBoundary();
+let serverId: string;
+beforeAll(async () => {
+    serverId = await home.addHome({ name: 'Layout Home', serverUrl: 'https://blocklist-layout.test', accountId: 'account-a' });
+    MACHINE_SCOPE.serverId = serverId;
 });
-vi.mock('@/agents/backendCatalog/useDaemonMergedProjectionInputs', () => ({
-    useDaemonMergedProjectionInputs: () => ({ phase: 'idle', inputs: null }),
-}));
-vi.mock('@/components/plugins/surfaces/PluginContextualResourceStoreProvider', () => ({
-    PluginContextualResourceStoreProvider: (props: Readonly<{ children?: React.ReactNode }>) =>
-        React.createElement(React.Fragment, null, props.children),
-}));
-vi.mock('@/sync/domains/workflows/workflowDefinitionActions', async (importOriginal) => ({
-    ...(await importOriginal<Record<string, unknown>>()),
-    listWorkflowDefinitions: async () => ({ definitions: [] }),
-}));
+afterAll(async () => {
+    await home.reset();
+    restoreBrowserStorageLock();
+    if (originalMatchMedia) Object.defineProperty(window, 'matchMedia', originalMatchMedia);
+    else Reflect.deleteProperty(window, 'matchMedia');
+});
 
 // Owners that size themselves from `onLayout` read the browser's boxes (names sized to their words).
 installWebLayoutBridge();
@@ -62,12 +60,15 @@ const settle = (replay: () => Promise<void>) => act(replay);
 
 let root: Root | null = null;
 let host: HTMLElement | null = null;
+let restoreAppliedHome: (() => void) | undefined;
 
 afterEach(async () => {
     await act(async () => root?.unmount());
     root = null;
     host?.remove();
     host = null;
+    restoreAppliedHome?.();
+    restoreAppliedHome = undefined;
 });
 
 const AGENT_TARGET = { kind: 'agent' as const, identity: { pluginId: 'happier.agent.claude', localId: 'claude' } };
@@ -77,7 +78,19 @@ function step(id: string, name: string, text: string) {
     return { kind: 'step' as const, id, name, document: { text, references: [], attachments: [] }, input: [], result: { kind: 'text' as const } };
 }
 
+async function applyHomeFixture() {
+    const { storage } = await import('@/sync/domains/state/storage');
+    storage.setState({ profileScope: { serverId, accountId: 'account-a' }, settingsScope: { serverId, accountId: 'account-a' } });
+    const applied = await import('@/sync/runtime/orchestration/appliedActiveServerRuntime');
+    const previous = applied.getAppliedActiveServerSnapshot();
+    const wasAvailable = applied.isAppliedActiveServerRuntimeAvailable();
+    restoreAppliedHome ??= () => applied.publishAppliedActiveServerSnapshot(previous, wasAvailable);
+    const { getActiveServerSnapshot } = await import('@/sync/domains/server/serverRuntime');
+    applied.publishAppliedActiveServerSnapshot(getActiveServerSnapshot());
+}
+
 async function renderDocument(blocks: readonly unknown[], width: number, selectedBlockId: string | null = null) {
+    await applyHomeFixture();
     const editor = await import('./WorkflowBlockListEditor');
     const drafts = await import('@/sync/domains/workflows/workflowEditorDraft');
     const edits = await import('@happier-dev/protocol/workflows/workflowDefinitionEditV1');
@@ -93,7 +106,7 @@ async function renderDocument(blocks: readonly unknown[], width: number, selecte
     await act(async () => {
         root!.render(React.createElement(View, { style: { width } }, React.createElement(editor.WorkflowBlockListEditor, {
             draft, list: { kind: 'root' }, blocks: draft.blocks, depth: 0,
-            composerScope: MACHINE_SCOPE,
+            composerScope: { ...MACHINE_SCOPE, serverId },
             composerCustody: custody.createWorkflowAuthoringComposerCustody(draft.draftId),
             selectedBlockId,
             validation: authoring.validateWorkflowEditorDraft(draft),
@@ -127,8 +140,8 @@ function expectDocumentRhythm(layout: Awaited<ReturnType<typeof measureWebLayout
     expect(layout.textRects('If it succeeds')).toHaveLength(0);
     const [caption] = layout.textRects('Either way');
     for (const [card, next, edgeCaption] of [
-        ['composer:gather', 'workflow-editor-step-write-label', caption],
-        ['composer:write', 'workflow-editor-if-gate-label', undefined],
+        ['workflow-editor-step-gather-prompt', 'workflow-editor-step-write-label', caption],
+        ['workflow-editor-step-write-prompt', 'workflow-editor-if-gate-label', undefined],
     ] as const) {
         const cardBottom = layout.rect(card).bottom;
         const mark = headingMark(layout, next);
@@ -188,7 +201,7 @@ describe('the document grid, as a browser lays it out', () => {
                     repetition: { kind: 'items', items: { kind: 'input', name: 'issues' }, execution: 'sequential', failurePolicy: 'fail_stop' } },
             ], 900);
             const layout = await measureWebLayout(container, { viewport: { width: 900, height: 1400 }, settle });
-            const nameEdge = layout.rect('composer:gather').left;
+            const nameEdge = layout.rect('workflow-editor-step-gather-prompt').left;
             for (const id of ['workflow-editor-step-gather-label', 'workflow-editor-step-gather-returns',
                 'workflow-editor-action-notify-label', 'workflow-editor-action-notify-card', 'workflow-editor-action-notify-only-when',
                 'workflow-editor-loop-each-label']) {
@@ -333,7 +346,7 @@ describe('a step with issue lines, as a browser lays it out', () => {
                 host = null;
                 return caption.top - above.bottom;
             };
-            const fromCard = await clearance('Gather the changes since the last tag.', 'composer:gather');
+            const fromCard = await clearance('Gather the changes since the last tag.', 'workflow-editor-step-gather-prompt');
             // An unwritten prompt is an issue: its line is the last thing the step shows.
             const fromIssue = await clearance('', 'workflow-editor-step-gather-issue');
             // A text line has no edge: its group ends with the block's own room (margins.xs), so the
@@ -348,6 +361,7 @@ describe('a step with issue lines, as a browser lays it out', () => {
 
 describe('setting a card value in a browser', () => {
     it('moves focus into the value it just opened, which says what goes in it (DESIGN-9 N5)', async () => {
+        await applyHomeFixture();
         const editor = await import('./WorkflowBlockListEditor');
         const drafts = await import('@/sync/domains/workflows/workflowEditorDraft');
         const edits = await import('@happier-dev/protocol/workflows/workflowDefinitionEditV1');

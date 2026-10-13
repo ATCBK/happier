@@ -3,7 +3,7 @@ import { describe, expect, it, vi } from 'vitest';
 
 import { renderScreen } from '@/dev/testkit';
 
-(globalThis as any).IS_REACT_ACT_ENVIRONMENT = true;
+(globalThis as { IS_REACT_ACT_ENVIRONMENT?: boolean }).IS_REACT_ACT_ENVIRONMENT = true;
 
 vi.mock('react-native', async () => {
     const { createReactNativeWebMock } = await import('@/dev/testkit/mocks/reactNative');
@@ -12,16 +12,19 @@ vi.mock('react-native', async () => {
 vi.mock('react-native-unistyles', async () => (await import('@/dev/testkit/mocks/unistyles')).createUnistylesMock());
 vi.mock('@/text', async () => (await import('@/dev/testkit/mocks/text')).createTextModuleMock());
 // The Popover's measuring and portal are the platform boundary; the picker's own props are what is read.
-vi.mock('@/components/ui/popover', () => ({
-    Popover: (props: any) => React.createElement('Popover', props),
+vi.mock('@/components/ui/popover', async () => ({
+    // This owner-level check observes the native portal's measured-frame inputs.
+    Popover: (props: React.ComponentProps<typeof import('@/components/ui/popover')['Popover']>) => {
+        const { children: _children, ...frameProps } = props;
+        return React.createElement('Popover', { ...frameProps, testID: 'workflow-examples-popover-boundary' });
+    },
 }));
-vi.mock('./WorkflowExamplesSection', () => ({ WorkflowExamplesSection: () => null }));
 
 describe('WorkflowExamplesPopover', () => {
     it('lets a picker whose window-high cap fits on neither side open below a trigger near the top', async () => {
         const { WorkflowExamplesPopover } = await import('./WorkflowExamplesPopover');
         const screen = await renderScreen(<WorkflowExamplesPopover anchorRef={{ current: null }} onRequestClose={() => {}} />);
-        const popover = screen.findByType('Popover' as any);
+        const popover = screen.findHostByTestId('workflow-examples-popover-boundary');
         // The cap is the whole window; the room a side must offer to be chosen is a menu's, not the window's.
         expect(popover?.props.maxHeightCap).toBe(900);
         expect(popover?.props.placementMinSpace).toBeLessThan(900);

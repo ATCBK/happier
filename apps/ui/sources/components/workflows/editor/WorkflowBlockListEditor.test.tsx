@@ -1,16 +1,19 @@
 import * as React from 'react';
 import { StyleSheet as NativeStyleSheet } from 'react-native';
-import { afterEach, beforeAll, describe, expect, it, vi } from 'vitest';
+import { afterAll, afterEach, beforeAll, describe, expect, it, vi } from 'vitest';
 import { act } from 'react-test-renderer';
 
 import { renderScreen, standardCleanup } from '@/dev/testkit';
 import type { SelectionListStep } from '@/components/ui/selectionList';
+import type { ResolveSessionActionFieldOptions } from '@/components/sessions/actions/sessionActionFieldOptions';
+import { createHomeGovernanceHarness, installHomeGovernanceBoundaries } from '@/dev/testkit/harness/homeGovernanceHarness';
 
 vi.mock('react-native', async () => {
     const { createReactNativeWebMock } = await import('@/dev/testkit/mocks/reactNative');
     return createReactNativeWebMock();
 });
 vi.mock('@expo/vector-icons', () => ({ Ionicons: 'Ionicons' }));
+vi.mock('expo-crypto', async () => ({ randomUUID: (await import('node:crypto')).randomUUID }));
 // Navigation is a platform boundary: Open › on a Run a workflow card pushes the child's route.
 const routerMock = vi.hoisted(() => ({ spies: null as unknown as { push: ReturnType<typeof vi.fn> } }));
 vi.mock('expo-router', async () => {
@@ -19,11 +22,6 @@ vi.mock('expo-router', async () => {
     routerMock.spies = mock.spies;
     return mock.module;
 });
-// Native Markdown SDK boundary, imported by the host but unused by these
-// document/insertion cases (the composer itself is supplied by its harness).
-vi.mock('react-native-enriched-markdown/lib/module/web/streamingReveal.js', () => ({
-    splitStreamingRevealTextParts: () => [],
-}));
 vi.mock('react-native-unistyles', async () => {
     const { createUnistylesMock } = await import('@/dev/testkit/mocks/unistyles');
     return createUnistylesMock();
@@ -39,10 +37,6 @@ vi.mock('@/text', async () => {
     const { createTextModuleMock } = await import('@/dev/testkit/mocks/text');
     return createTextModuleMock({ translate: (key, params) => (params ? `${key}:${JSON.stringify(params)}` : key) });
 });
-vi.mock('@/components/ui/icons/Icon', async (importOriginal) => ({
-    ...(await importOriginal<Record<string, unknown>>()),
-    Icon: (props: Record<string, unknown>) => React.createElement('Icon', props),
-}));
 // The popover portal is a platform boundary; the menu content itself is the
 // behaviour under test, so it renders inline here.
 const MACHINE_COMPOSER_SCOPE = {
@@ -53,43 +47,46 @@ const MACHINE_COMPOSER_SCOPE = {
     machineHomeDir: '/Users/me',
 };
 
-// The composer host is the boundary; the scoped authoring composer and its
-// document owner stay real beneath it.
-vi.mock('@/components/sessions/agentInput', async () => {
-    const { createAgentInputModuleMock } = await import('@/dev/testkit');
-    return createAgentInputModuleMock({
-        renderExtraActionChips: true,
-        resolveTestID: (props) => {
-            const composerRef = props.composerRef as { blockId?: string } | undefined;
-            return composerRef?.blockId === undefined ? undefined : `composer:${composerRef.blockId}`;
-        },
-    });
-});
-vi.mock('@/agents/backendCatalog/useDaemonMergedProjectionInputs', () => ({
-    useDaemonMergedProjectionInputs: () => ({ phase: 'idle', inputs: null }),
-}));
-vi.mock('@/components/plugins/surfaces/PluginContextualResourceStoreProvider', () => ({
-    PluginContextualResourceStoreProvider: (props: Readonly<{ children?: React.ReactNode }>) =>
-        React.createElement(React.Fragment, null, props.children),
-}));
-// The saved-workflow list is a network read; the library owner above it stays real.
-vi.mock('@/sync/domains/workflows/workflowDefinitionActions', async (importOriginal) => ({
-    ...(await importOriginal<Record<string, unknown>>()),
-    listWorkflowDefinitions: async () => ({ definitions: [] }),
-}));
 vi.mock('@/components/ui/popover', async (importOriginal) => {
     const { createInlinePopoverModuleMock } = await import('@/dev/testkit/mocks/popover');
     return createInlinePopoverModuleMock(importOriginal, { maxHeight: 480, maxWidth: 420, placement: 'bottom' });
 });
 
-// Module transform is paid once, outside any single case's time budget.
+const home = createHomeGovernanceHarness();
+installHomeGovernanceBoundaries(home);
+let restoreExecutorLoader: (() => void) | undefined;
+let restoreAppliedHome: (() => void) | undefined;
+
+// HTTP, credential storage and Socket.IO are boundaries; the Action executor,
+// saved-workflow reader, scoped composer and plugin resource owner run for real.
 beforeAll(async () => {
-    await loadHarness();
+    const applied = await import('@/sync/runtime/orchestration/appliedActiveServerRuntime');
+    const previous = applied.getAppliedActiveServerSnapshot();
+    const wasAvailable = applied.isAppliedActiveServerRuntimeAvailable();
+    restoreAppliedHome = () => applied.publishAppliedActiveServerSnapshot(previous, wasAvailable);
+    const serverId = await home.addHome({ name: 'Editor Home', serverUrl: 'https://blocklist-editor.test', accountId: 'account-a' });
+    MACHINE_COMPOSER_SCOPE.serverId = serverId;
+    const { storage } = await import('@/sync/domains/state/storage');
+    storage.setState({ profileScope: { serverId, accountId: 'account-a' }, settingsScope: { serverId, accountId: 'account-a' } });
+    const { getActiveServerSnapshot } = await import('@/sync/domains/server/serverRuntime');
+    applied.publishAppliedActiveServerSnapshot(getActiveServerSnapshot());
 }, 300_000);
+
+afterAll(async () => {
+    restoreExecutorLoader?.();
+    restoreAppliedHome?.();
+    await home.reset();
+});
 
 afterEach(async () => {
     await standardCleanup();
 });
+
+// Compile the real owner graph once at collection, before any case's lifecycle
+// budget starts. The native/HTTP adapters above are already installed.
+const { installRealActionExecutorModuleLoader } = await import('@/dev/testkit/harness/actionHomesHttpHarness');
+restoreExecutorLoader = await installRealActionExecutorModuleLoader();
+await loadHarness();
 
 const AGENT_TARGET = { kind: 'agent' as const, identity: { pluginId: 'happier.agent.claude', localId: 'claude' } };
 
@@ -102,10 +99,18 @@ async function loadHarness() {
     const loop = await import('./WorkflowLoopEditor');
     const group = await import('./WorkflowGroupEditor');
     const heading = await import('./WorkflowBlockHeading');
-    return { ...editor, ...draftModule, ...edits, ...authoring, ...custody, ...loop, ...group, ...heading };
+    const composer = await import('@/components/sessions/agentInput');
+    const actionFieldOptions = await import('@/components/sessions/actions/sessionActionFieldOptions');
+    return { ...editor, ...draftModule, ...edits, ...authoring, ...custody, ...loop, ...group, ...heading, ...composer, ...actionFieldOptions };
 }
 
 type Harness = Awaited<ReturnType<typeof loadHarness>>;
+
+function findComposer(screen: Awaited<ReturnType<typeof renderScreen>>, harness: Harness, blockId: string) {
+    const composer = screen.findAllByType(harness.AgentInput).find(node => node.props.composerRef?.blockId === blockId);
+    if (!composer) throw new Error(`Missing real composer for ${blockId}`);
+    return composer;
+}
 
 function buildDraft(harness: Harness, blocks?: Parameters<Harness['createWorkflowEditorDraft']>[0]['blocks']) {
     return harness.setWorkflowDefaultField(
@@ -185,11 +190,11 @@ async function renderList(harness: Harness, options: Readonly<{
     selectedBlockId?: string | null;
     highlightedBlockIds?: readonly string[];
     presentation?: Record<string, unknown>;
-    resolveActionFieldOptions?: (field: { optionsSourceId?: string; options?: unknown }) => ReadonlyArray<{ value: string; label: string }>;
+    resolveActionFieldOptions?: ResolveSessionActionFieldOptions;
 }>) {
     const element = React.createElement(harness.WorkflowBlockListEditor, {
         ...(options.presentation === undefined ? {} : { presentation: options.presentation as never }),
-        ...(options.resolveActionFieldOptions === undefined ? {} : { resolveActionFieldOptions: options.resolveActionFieldOptions as never }),
+        ...(options.resolveActionFieldOptions === undefined ? {} : { resolveActionFieldOptions: options.resolveActionFieldOptions }),
         draft: options.draft,
         list: { kind: 'root' },
         blocks: options.draft.blocks,
@@ -448,8 +453,7 @@ it('reads a step role by its display name and keeps a read-only step input on it
         ]),
         presentation: { editable: false },
     });
-    const composer = screen.root.findAll((node) => (node.type as unknown) === 'AgentInput')
-        .find((node) => node.props.value === 'Check');
+    const composer = findComposer(screen, harness, 'check');
     // The built-in role's own name, never its id.
     expect(composer?.props.agentLabel).toBe('Second opinion');
     expect(composer?.props.engineLabel).toBe('Second opinion');
@@ -546,7 +550,7 @@ it('puts Step options in the step composer as one chip that names only what diff
     });
     const screen = await renderScreen(element);
 
-    const composer = screen.findByTestId('composer:engine');
+    const composer = findComposer(screen, harness, 'engine');
     const chip = composer?.findAll((node) => node.props?.testID === 'workflow-editor-step-engine-customize')[0];
     expect(chip, 'the Step options chip sits in the composer chip row').toBeDefined();
     // The native AgentInput engine chip owns that picker; there is no parallel extra chip.
@@ -608,7 +612,7 @@ describe('workflow block list editor', () => {
 
         expect(screen.findByTestId('workflow-editor-step-analyze')).not.toBeNull();
         expect(screen.findByTestId('workflow-editor-step-implement')).not.toBeNull();
-        expect(screen.findByProps({ testID: 'composer:implement' }).props.value).toBe('Implement');
+        expect(findComposer(screen, harness, 'implement').props.value).toBe('Implement');
     });
 
     /**
@@ -635,7 +639,7 @@ describe('workflow block list editor', () => {
         ]);
 
         const implementContext = `workflows.a11y.stepContext:${JSON.stringify({ block: 'workflows.editor.addStep', position: 2, total: 2 })}`;
-        expect(screen.findByProps({ testID: 'composer:implement' }).props.inputAccessibilityLabel)
+        expect(findComposer(screen, harness, 'implement').props.inputAccessibilityLabel)
             .toBe(implementContext);
 
         const heading = screen.findByTestId('workflow-editor-step-implement-label');
@@ -667,7 +671,7 @@ describe('workflow block list editor', () => {
         const screen = await renderList(harness, { draft, onChange: (next) => changes.push(next as ReturnType<typeof buildDraft>) });
 
         await act(async () => {
-            screen.findByProps({ testID: 'composer:analyze' }).props.onChangeText(
+            findComposer(screen, harness, 'analyze').props.onChangeText(
                 'Review @src/b.ts',
             );
         });
@@ -775,7 +779,7 @@ describe('workflow block list editor', () => {
         expect(screen.findAll((node) => typeof node.props?.testID === 'string'
             && node.props.testID.startsWith('workflow-editor-workflow-review-input-')).length).toBeGreaterThan(0);
         // A Wait for you is the same authoring composer, not a second editor.
-        expect(screen.findByProps({ testID: 'composer:check' }).props.value).toBe('Check the notes');
+        expect(findComposer(screen, harness, 'check').props.value).toBe('Check the notes');
 
         // Setting an unbound field binds it as a literal on that Action alone.
         await screen.pressByTestIdAsync('workflow-editor-action-notify-field-title-set');
@@ -797,14 +801,15 @@ describe('workflow block list editor', () => {
         ] as never);
         const asked: Array<string | undefined> = [];
         const changes: Array<ReturnType<typeof buildDraft>> = [];
+        const inventoryOptions = harness.buildSessionActionFieldOptionsResolver({
+            'review.engines.available': [{ value: 'claude', label: 'Claude Code' }, { value: 'acme-reviewer', label: 'Acme reviewer' }],
+        });
         const screen = await renderList(harness, {
             draft,
             onChange: (next) => changes.push(next as ReturnType<typeof buildDraft>),
             resolveActionFieldOptions: (field) => {
                 asked.push(field.optionsSourceId);
-                return field.optionsSourceId === 'review.engines.available'
-                    ? [{ value: 'claude', label: 'Claude Code' }, { value: 'acme-reviewer', label: 'Acme reviewer' }]
-                    : [];
+                return inventoryOptions(field);
             },
         });
 
@@ -813,12 +818,15 @@ describe('workflow block list editor', () => {
         await screen.unmount();
 
         // The bound field is edited on its selected step (DESIGN-6 N5: values read as values at rest).
+        const remainingInventoryOptions = harness.buildSessionActionFieldOptionsResolver({
+            'review.engines.available': [{ value: 'acme-reviewer', label: 'Acme reviewer' }],
+        });
         const bound = await renderList(harness, {
             draft: changes.at(-1)!,
             selectedBlockId: 'review',
             resolveActionFieldOptions: (field) => {
                 asked.push(field.optionsSourceId);
-                return field.optionsSourceId === 'review.engines.available' ? [{ value: 'acme-reviewer', label: 'Acme reviewer' }] : [];
+                return remainingInventoryOptions(field);
             },
         });
         expect(asked).toContain('review.engines.available');
@@ -967,7 +975,7 @@ describe('workflow block list editor', () => {
         const changes: unknown[] = [];
         const screen = await renderList(harness, { draft, onChange: (next) => changes.push(next) });
 
-        await screen.changeTextByTestId('composer:a', 'Analyze the repository');
+        await act(async () => { findComposer(screen, harness, 'a').props.onChangeText('Analyze the repository'); });
         const next = changes[0] as ReturnType<typeof buildDraft>;
         expect((next.blocks[0] as { document: { text: string } }).document.text).toBe('Analyze the repository');
     });
@@ -1470,7 +1478,7 @@ describe('document anatomy (DESIGN-4)', () => {
         const harness = await loadHarness();
         const draft = buildDraft(harness, [{ kind: 'wait', id: 'check', name: 'Check the notes', document: { text: '', references: [], attachments: [] }, result: { kind: 'text' } }] as never);
         const screen = await renderList(harness, { draft });
-        expect(screen.findByProps({ testID: 'composer:check' }).props.voiceAffordance).toBe('dictation');
+        expect(findComposer(screen, harness, 'check').props.voiceAffordance).toBe('dictation');
         // A Wait for you is a question to the person, so its empty prompt says so (DESIGN-5 P3).
         expect(screen.findByTestId('workflow-editor-wait-check-issue')?.props.children).toBe('workflows.issue.emptyWaitPrompt');
     });

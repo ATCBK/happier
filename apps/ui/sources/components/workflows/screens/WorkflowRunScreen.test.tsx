@@ -1,11 +1,23 @@
 import * as React from 'react';
+import 'fake-indexeddb/auto';
 import { act } from 'react-test-renderer';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { RPC_METHODS } from '@happier-dev/protocol/rpc';
-import { WorkflowRunStartRequestV1Schema, WorkflowMaterializedLeafV1Schema, type WorkflowRunStartResultV1 } from '@happier-dev/protocol';
+import { WorkflowRunStartRequestV1Schema, WorkflowMaterializedLeafV1Schema, type WorkflowRunStartResultV1,
+    WorkflowAcceptedSnapshotV1Schema, WorkflowProgressEnvelopeV1Schema, WorkflowInvocationDetailV1Schema, WorkflowFinalResultV1Schema,
+    sealWorkflowAcceptedSnapshotStoredEnvelopeV1, sealWorkflowProgressStoredEnvelopeV1,
+    sealWorkflowFinalResultStoredEnvelopeV1, serializeWorkflowStoredContentEnvelopeV1,
+    getActionSpec, TargetedActionRpcRequestV1Schema, SOCKET_RPC_EVENTS,
+} from '@happier-dev/protocol';
+import { materializeWorkflowAcceptedSnapshotV1 } from '@happier-dev/protocol/workflows/materializeWorkflowAcceptedSnapshotV1';
+import { createWorkflowActionHttpTransport } from '@/dev/testkit/fixtures/workflowActionHttpTransport';
+import { installDisconnectedServerSocketBoundary, restoreServerAccountForTest } from '@/dev/testkit/harness/serverAccountConnectionHarness';
+import { loadSyncSingletonForTests } from '@/dev/testkit/harness/syncSingletonLoader';
+import { createArtifactStoreBoundary } from '@/dev/testkit/harness/artifactStoreBoundary';
+import { parseToken } from '@/utils/auth/parseToken';
 import { createWorkflowAccountRunActionOwner } from '@happier-dev/protocol/actions';
 import { WorkflowRunGetResultV1Schema, WorkflowRunRecipientCensusResponseV1Schema, type RoleArtifactV1, type WorkflowInvocationGetResultV1 } from '@happier-dev/protocol';
-import { Modal, ModalProvider } from '@/modal';
+import { ModalProvider } from '@/modal';
 import { getStorage } from '@/sync/domains/state/storageStore';
 import { workflowRunRowFromSummary } from '@/sync/store/domains/workflowRuns';
 import { retireActiveServerAccountScopeLifetime } from '@/sync/domains/scope/activeServerAccountScope';
@@ -16,7 +28,7 @@ import { DestinationInstanceHost } from '@/components/appShell/workspace/Destina
 import { WorkflowActionError } from '@/sync/domains/workflows/workflowActionError';
 
 import { createDeferred } from '@/dev/testkit/hooks/createDeferred';
-import { renderScreen, invokeTestInstanceHandler } from '@/dev/testkit/render/renderScreen';
+import { renderScreen as renderTestScreen, invokeTestInstanceHandler } from '@/dev/testkit/render/renderScreen';
 import { standardCleanup } from '@/dev/testkit/cleanup/standardCleanup';
 import { withPopoverWebGlobals } from '@/dev/testkit/harness/popoverHarness';
 import { installShippedNativeFrameScheduler } from '@/dev/testkit/legend/shippedNativeLegendRuntime';
@@ -34,6 +46,7 @@ import { WorkflowRunScreen } from './WorkflowRunScreen';
 import { WorkflowEditorHostScreen, type WorkflowEditorSource } from './WorkflowEditorHostScreen';
 import { WorkflowEditorBody } from './WorkflowEditorBody';
 import { AppPaneProvider } from '@/components/appShell/panes/AppPaneProvider';
+import { WorkflowRunContent } from '../run/WorkflowRunContent';
 
 // These Run fixtures do not stream Markdown; keep its external web adapter at the boundary.
 vi.mock('react-native-enriched-markdown/lib/module/web/streamingReveal.js', () => ({
@@ -53,13 +66,27 @@ type WorkflowRunContentProps = React.ComponentProps<
  * cannot decide whether the host can ever produce it.
  */
 
-let latestContentProps: WorkflowRunContentProps | null = null;
+let observedRunScreen: Awaited<ReturnType<typeof renderTestScreen>> | null = null;
+function readContentProps(): WorkflowRunContentProps | null {
+    const content = observedRunScreen?.findAllByType(WorkflowRunContent)[0];
+    // React's external test renderer exposes untyped props; component identity
+    // fixes this boundary to the actual production component's public contract.
+    return content ? content.props as WorkflowRunContentProps : null;
+}
+async function renderScreen(...args: Parameters<typeof renderTestScreen>) {
+    const screen = await renderTestScreen(...args);
+    observedRunScreen = screen;
+    return { ...screen, unmount: async () => {
+        if (observedRunScreen === screen) observedRunScreen = null;
+        await screen.unmount();
+    } };
+}
 let restoreRunPopoverGlobals: (() => void) | undefined;
 
 // The screen validates route identities through Protocol. Fixture defaults
 // and opaque-storage replies must address those same valid identities.
 function createWorkflowRunSummaryFixture(overrides: Parameters<typeof createRunFixture>[0] = {}) {
-    return createRunFixture({ id: '11111111-1111-4111-8111-111111111111', ...overrides });
+    return createRunFixture({ id: '11111111-1111-4111-8111-111111111111', ownerAccountId: 'account-a', ...overrides });
 }
 
 function createWorkflowInvocationIndexFixture(overrides: Parameters<typeof createInvocationFixture>[0] = {}) {
@@ -79,7 +106,7 @@ function requireDefined<T>(value: T | undefined, message: string): T {
 function respondToRequest(
     response: Parameters<NonNullable<WorkflowRunContentProps['onRespondToRequest']>>[0],
 ): Promise<void> | undefined {
-    const answer = latestContentProps?.onRespondToRequest?.(response);
+    const answer = readContentProps()?.onRespondToRequest?.(response);
     answer?.catch(() => {});
     return answer;
 }
@@ -108,9 +135,9 @@ const storeState = {
     get state() { return getStorage().getState(); },
     reset(): void {
         const base = createMachineFixture();
-        const machine = createMachineFixture({ metadata: { ...base.metadata!, homeDir: '/Users/me' } });
+        const machine = createMachineFixture({ storageMode: 'plain', activeAt: Date.now(), metadata: { ...base.metadata!, homeDir: '/Users/me' } });
         getStorage().setState({
-            profileScope: { serverId: 'server-a', accountId: 'account-a' },
+            profileScope: { serverId: appliedRuntime.serverId, accountId: 'account-a' },
             // The real editor waits for the repository's first draft hydration.
             isSessionDraftsReady: true,
             machines: { [machine.id]: machine }, machineListByServerId: {},
@@ -119,18 +146,22 @@ const storeState = {
         });
     },
 };
-type MachineRpcCall = Readonly<{
-    onIssued?: () => void;
-    signal?: AbortSignal;
-    [key: string]: unknown;
-}>;
+type MachineRpcCall = Readonly<{ machineId: string; method: string; payload: unknown; requestId?: string;
+    serverUrl?: string; accountId?: string }>;
 const machineRpcSpy = vi.hoisted(() => vi.fn<(params: MachineRpcCall) => Promise<unknown>>());
-const appliedRuntime = vi.hoisted(() => ({ serverId: 'server-a', serverUrl: 'https://server-a.example', generation: 0 }));
+const socketCancellations: string[] = [];
+let machinePreparationFailure: Error | undefined;
+let accountConnection: Awaited<ReturnType<typeof restoreServerAccountForTest>> | null = null;
+const storedRunDetails = new Map<string, Record<string, unknown>>();
+const approvalArtifacts = createArtifactStoreBoundary({ ownerAccountId: () => 'account-a', encryptionMode: 'plain' });
+let approvalRequired = false;
+const appliedRuntime = vi.hoisted(() => ({ serverId: 'server-a', serverUrl: 'https://server-a', generation: 0 }));
+let servedHomeId = 'server-a';
 const accountScopeHarness = {
     switchTo(scope: Readonly<{ serverId: string; accountId: string }>): void {
         retireActiveServerAccountScopeLifetime();
-        appliedRuntime.serverId = scope.serverId;
-        getStorage().setState({ profileScope: scope });
+        appliedRuntime.serverId = scope.serverId === 'server-a' ? servedHomeId : scope.serverId;
+        getStorage().setState({ profileScope: { ...scope, serverId: appliedRuntime.serverId } });
         publishAppliedActiveServerSnapshot(appliedRuntime);
     },
     reset(): void {
@@ -154,49 +185,18 @@ vi.mock('@/text', async () => {
     const { createTextModuleMock } = await import('@/dev/testkit/mocks/text');
     return createTextModuleMock({ translate: (key) => key });
 });
-vi.mock('@/modal', async () => {
-    const { createModalModuleMock } = await import('@/dev/testkit/mocks/modal');
-    // Run again really does repeat effects, so it is confirmed. These cases are
-    // about what the confirmed repeat carries, not about the gate itself.
-    return createModalModuleMock({ confirmResult: true, renderCustomModals: true }).module;
-});
+// DOM layer/focus SDK adapters stay outside the real Modal custody owner.
+vi.mock('@/utils/web/radixCjs', async () =>
+    (await import('@/dev/testkit/mocks/radixCjs')).createRadixCjsModuleMock());
 vi.mock('expo-router', async () => {
     const { createExpoRouterMock } = await import('@/dev/testkit/mocks/router');
     return createExpoRouterMock({ router: routerSpy, params: () => ({ ...routeState }) }).module;
 });
 vi.mock('expo-crypto', async () => ({ randomUUID: (await import('node:crypto')).randomUUID }));
-vi.mock('@/sync/ops/actions/frontDoorRuntimeActionExecutor', async (importOriginal) => ({
-    ...await importOriginal<typeof import('@/sync/ops/actions/frontDoorRuntimeActionExecutor')>(),
-    createFrontDoorActionExecute: () => actionTransport,
-}));
-// Recipient-envelope HTTP services are outside this Run's Action transport.
-// These tests never open Collaboration or prepare recipient keys.
-vi.mock('@/sync/api/session/sessionDataKeyEnvelopesApi', () => ({
-    createSessionDataKeyEnvelopeClient: vi.fn(),
-    readSessionDataKeyEnvelopeCollectionPage: vi.fn(),
-    prepareSessionDataKeyEnvelopesForScope: vi.fn(),
-    prepareSessionDataKeyEnvelopesDetached: vi.fn(),
-}));
-vi.mock('@/sync/api/teams/membershipSessionDataKeyEnvelopesApi', () => ({
-    createMembershipSessionDataKeyEnvelopeClient: vi.fn(),
-    prepareMembershipHistoryEnvelopesForScope: vi.fn(),
-    membershipHistoryPreparationScopeKey: vi.fn(),
-    prepareMembershipHistoryEnvelopesDetached: vi.fn(),
-}));
 vi.mock('@/utils/ui/clipboard', () => ({ setClipboardStringSafe: async () => true }));
-// The machine transport is a real system boundary; everything below it — the
-// screen's own in-flight bookkeeping and staleness guards — stays real.
-vi.mock('@/sync/runtime/orchestration/serverScopedRpc/serverScopedMachineRpc', () => ({
-    machineRpcWithServerScope: machineRpcSpy,
-}));
-vi.mock('../run/WorkflowRunContent', async (importOriginal) => {
-    const actual = await importOriginal<typeof import('../run/WorkflowRunContent')>();
-    return { ...actual, WorkflowRunContent: (props: WorkflowRunContentProps) => {
-        // Observe the host projection without replacing any child behavior.
-        latestContentProps = props;
-        return React.createElement(actual.WorkflowRunContent, props);
-    } };
-});
+vi.mock('socket.io-client', async (importOriginal) =>
+    (await import('@/dev/testkit/harness/serverAccountConnectionHarness')).createSocketIoClientBoundary(importOriginal));
+installDisconnectedServerSocketBoundary();
 
 const DEFINITION = createWorkflowDefinitionFixture({
     blocks: [
@@ -285,7 +285,7 @@ function permissionInvocationResponse(params: Readonly<{
     requestIds: readonly string[];
     executionRunId?: string;
     parentRevision?: number;
-}>) {
+}>): WorkflowInvocationGetResultV1 {
     return {
         invocation: {
             index: params.index,
@@ -337,7 +337,7 @@ async function renderSelectedPermissionRequests(contentRevision = '0') {
         }),
         invocations,
     });
-    await act(async () => latestContentProps?.onSelectInvocation('44444444-4444-4444-8444-444444444444'));
+    await act(async () => readContentProps()?.onSelectInvocation('44444444-4444-4444-8444-444444444444'));
     await act(async () => {});
     return screen;
 }
@@ -400,16 +400,129 @@ async function renderRunScreen(overrides: Readonly<{
     return screen;
 }
 
-beforeEach(() => {
+function fixtureRecord(value: unknown): Record<string, unknown> {
+    if (!value || typeof value !== 'object' || Array.isArray(value)) throw new Error('Expected a transport fixture object');
+    return value as Record<string, unknown>;
+}
+
+function runKeyCensus(runId: string, canEdit = true, ownerAccountId = 'account-a') {
+    return WorkflowRunRecipientCensusResponseV1Schema.parse({ runId, ownerAccountId,
+        access: canEdit ? 'owner' : 'view', encryptionMode: 'plain', visibleTeamId: null,
+        dataEncryptionKey: null, callerDataEncryptionKey: null, recipients: [],
+        ownerAccountCurrentness: { mode: 'plain', version: 1, contentKeyFingerprint: null } });
+}
+
+async function acceptedStorage(value: unknown) {
+    const detail = WorkflowRunGetResultV1Schema.parse(value);
+    const run = detail.run;
+    storedRunDetails.set(run.id, fixtureRecord(detail));
+    const context = detail.acceptedContext;
+    const frozen = context.materializedLeaves.length > 0 ? WorkflowAcceptedSnapshotV1Schema.parse({
+        ...context, definition: detail.definition, authoredDefinition: detail.authoredDefinition,
+        workDepth: 0, authorization: { principal: { kind: 'host' }, admittedPermissionCeiling: 'default' },
+    }) : undefined;
+    const materialized = await materializeWorkflowAcceptedSnapshotV1({
+        definition: detail.authoredDefinition ?? detail.definition, admission: { kind: 'user' },
+        ...(frozen ? { replay: { snapshot: frozen } } : {}),
+        ingressContext: { agentTarget: { kind: 'agent', identity: { pluginId: 'happier.agent.test', localId: 'test' } } },
+        effects: { resolveTargetAvailability: async () => true },
+        context: { ...context, authorization: { principal: { kind: 'host' } } },
+    });
+    if (!materialized.ok) throw new Error(`Run fixture materialization failed: ${JSON.stringify(materialized.error)}`);
+    const snapshot = WorkflowAcceptedSnapshotV1Schema.parse({ ...materialized.snapshot,
+        ...context, definition: detail.definition, authoredDefinition: detail.authoredDefinition ?? detail.definition,
+        authorization: materialized.snapshot.authorization });
+    return { run, acceptedEnvelope: serializeWorkflowStoredContentEnvelopeV1(sealWorkflowAcceptedSnapshotStoredEnvelopeV1({ mode: 'plain',
+        binding: { v: 1, purpose: 'accepted_snapshot', accountId: run.ownerAccountId, runId: run.id }, acceptedSnapshot: snapshot })),
+        checkpointEnvelope: null, resultEnvelope: detail.result === undefined ? null : serializeWorkflowStoredContentEnvelopeV1(
+            sealWorkflowFinalResultStoredEnvelopeV1({ mode: 'plain', binding: { v: 1, purpose: 'final_result', accountId: run.ownerAccountId, runId: run.id },
+                finalResult: WorkflowFinalResultV1Schema.parse({ kind: 'happier.workflow-final-result.v1', result: { kind: typeof detail.result === 'string' ? 'text' : 'json', value: detail.result },
+                    producerInvocation: { recordId: detail.finalOutputInvocationId } }) })),
+        keyCensus: runKeyCensus(run.id, detail.callerAccess.canEdit, run.ownerAccountId),
+    };
+}
+
+function storedInvocation(value: unknown) {
+    const detail = WorkflowInvocationDetailV1Schema.parse(value);
+    const index = detail.index;
+    const ownerAccountId = String(storedRunDetails.get(index.runId)?.run
+        ? fixtureRecord(storedRunDetails.get(index.runId)!.run).ownerAccountId : 'account-a');
+    return { index, parentRevision: detail.parentRevision, contentEnvelope: serializeWorkflowStoredContentEnvelopeV1(
+        sealWorkflowProgressStoredEnvelopeV1({ mode: 'plain', binding: { v: 1, purpose: 'invocation_progress', accountId: ownerAccountId,
+            runId: index.runId, recordId: index.id, sequence: index.sequence, parentRecordId: index.parentRecordId,
+            memberOrdinal: index.memberOrdinal, attempt: index.attempt }, progress: WorkflowProgressEnvelopeV1Schema.parse(detail.progress) })) };
+}
+
+async function workflowStorageResponse(operation: Record<string, unknown>, signal?: AbortSignal | null) {
+    const { operation: kind, progressEnvelopes, pageByteLimit: _budget, ...fields } = operation;
+    const input = { ...fields, ...(progressEnvelopes ? { includeContent: true } : {}) };
+    switch (kind) {
+        case 'get': return acceptedStorage(await detailActions.getRun(fields.runId, signal));
+        case 'list': {
+            const page = fixtureRecord(await detailActions.listRuns(fixtureRecord(operation.request), signal));
+            const rows = await Promise.all((page.runs as unknown[]).map(async run => {
+                const detail = await detailActions.getRun.getMockImplementation()?.(fixtureRecord(run).id, signal);
+                return detail ? acceptedStorage({ ...fixtureRecord(detail), run }) : null;
+            }));
+            return { runs: page.runs, ...(page.nextCursor ? { nextCursor: page.nextCursor } : {}),
+                acceptedEnvelopesByRunId: Object.fromEntries(rows.filter(row => row !== null).map(row => [row.run.id, row.acceptedEnvelope])),
+                keyCensusByRunId: Object.fromEntries((page.runs as unknown[]).map(run => [fixtureRecord(run).id,
+                    runKeyCensus(String(fixtureRecord(run).id), true, String(fixtureRecord(run).ownerAccountId))])) };
+        }
+        case 'invocations.list': {
+            // The storage owner's unbounded-by-row-count usage projection asks
+            // for its byte-bounded inventory without the screen's page limit.
+            if (progressEnvelopes && fields.limit === undefined && fields.lifecycles === undefined) {
+                const detail = storedRunDetails.get(String(fields.runId));
+                if (!detail?.usage) return { invocations: [], progressEnvelopesByInvocationId: {} };
+                const index = createWorkflowInvocationIndexFixture({ runId: String(fields.runId),
+                    id: '88888888-8888-4888-8888-888888888888', lifecycle: 'completed' });
+                const stored = storedInvocation({ index, parentRevision: fixtureRecord(detail.run).revision,
+                    progress: { kind: 'happier.workflow-progress.v1', blockKind: 'step', attempt: '0', logicalInvocationRecordId: index.id,
+                        invocationPath: { blockId: 'analyze', scope: [] }, usage: detail.usage,
+                        execution: { kind: 'detached_run', runId: 'usage-execution', localInputId: 'usage-input', runtimeSelection: {} } } });
+                return { invocations: [index], progressEnvelopesByInvocationId: { [index.id]: stored.contentEnvelope } };
+            }
+            const page = fixtureRecord(await detailActions.listInvocations(input, signal));
+            const details = (page.invocationDetails ?? []) as unknown[];
+            return { ...page, invocationDetails: undefined, ...(progressEnvelopes ? {
+                keyCensus: runKeyCensus(String(fields.runId), true, String(fixtureRecord(storedRunDetails.get(String(fields.runId))?.run ?? { ownerAccountId: 'account-a' }).ownerAccountId)),
+                progressEnvelopesByInvocationId: Object.fromEntries((page.invocations as unknown[]).map(raw => {
+                    const index = createWorkflowInvocationIndexFixture(fixtureRecord(raw));
+                    const detail = details.find(value => fixtureRecord(fixtureRecord(value).index).id === index.id) ?? {
+                        index, parentRevision: page.parentRevision ?? 1, progress: {
+                            kind: 'happier.workflow-progress.v1', blockKind: index.parentRecordId === null ? 'root' : 'step',
+                            invocationPath: { blockId: index.parentRecordId === null ? '$root' : 'analyze', scope: [] },
+                            attempt: index.attempt, logicalInvocationRecordId: index.id,
+                        },
+                    };
+                    const stored = storedInvocation(detail); return [stored.index.id, stored.contentEnvelope];
+                })),
+            } : {}) };
+        }
+        case 'invocations.get': {
+            const result = fixtureRecord(await detailActions.getInvocation(fields, signal));
+            return { invocation: result.invocation ? storedInvocation(result.invocation) : null };
+        }
+        case 'run-key.census': return runKeyCensus(String(fields.runId), true,
+            String(fixtureRecord(storedRunDetails.get(String(fields.runId))?.run ?? { ownerAccountId: 'account-a' }).ownerAccountId));
+        case 'pause': return detailActions.pauseRun(fields, signal);
+        case 'cancel': return detailActions.cancelRun(fields, signal);
+        case 'delete': return detailActions.deleteRun(fields, signal);
+        case 'resume': return detailActions.resumeRun(fields, signal);
+        default: throw new Error(`Unexpected Run storage operation: ${String(kind)}`);
+    }
+}
+
+beforeEach(async () => {
     installShippedNativeFrameScheduler();
-    latestContentProps = null;
+    observedRunScreen = null;
     routeState.runId = '11111111-1111-4111-8111-111111111111';
     routeState.invocationId = undefined;
     Object.assign(platformViewport, { width: 800, height: 600 });
     accountScopeHarness.reset();
     storeState.reset();
     publishAppliedActiveServerSnapshot(appliedRuntime);
-    Modal.hideAll();
     actionTransport.mockReset();
     startResponse.mockReset();
     sourceAccessResponse.mockReset();
@@ -422,53 +535,94 @@ beforeEach(() => {
             id: request.runId, state: 'queued', origin: { kind: 'direct' },
         }) };
     });
-    actionTransport.mockImplementation(async (action: string, input: Record<string, unknown>, context: {
-        signal?: AbortSignal; externalActionTarget?: { machineId: string };
-        serverId?: string; expectedAccountId?: string;
-        executionRunTargetMachineId?: string; onTransportIssued?: () => void;
-    }) => {
-        let result: unknown;
-        switch (action) {
-            case 'artifact.access.grants.list': return sourceAccessResponse(input, context);
-            case 'workflow.definition.list': result = await catalogResponse(input, context); break;
-            case 'execution.run.permission.respond': {
-                const response = await machineRpcSpy({
-                    machineId: context.executionRunTargetMachineId,
-                    serverId: context.serverId,
-                    accountId: context.expectedAccountId,
-                    method: RPC_METHODS.DAEMON_EXECUTION_RUN_PERMISSION_RESPOND,
-                    payload: input,
-                    signal: context.signal,
-                    onIssued: context.onTransportIssued,
-                });
-                return response && typeof response === 'object' && 'ok' in response && response.ok === false
-                    ? response : { ok: true, result: response };
-            }
-            case 'workflow.run.start': result = await startResponse(input); break;
-            case 'workflow.run.get': result = await detailActions.getRun(input.runId, context.signal); break;
-            case 'workflow.run.list': result = await detailActions.listRuns(input, context.signal); break;
-            case 'workflow.run.invocations.list': result = await detailActions.listInvocations(input, context.signal); break;
-            case 'workflow.run.invocations.get': result = await detailActions.getInvocation(input, context.signal); break;
-            case 'workflow.run.pause': result = await detailActions.pauseRun(input, context.signal); break;
-            case 'workflow.run.cancel': result = await detailActions.cancelRun(input, context.signal); break;
-            case 'workflow.run.invocations.retry': result = await detailActions.retryInvocation(input, context.signal); break;
-            case 'workflow.run.delete': result = await detailActions.deleteRun(input, context.signal); break;
-            case 'workflow.run.resume': result = context.externalActionTarget
-                ? await detailActions.restoreWorkspace(input, context.externalActionTarget.machineId, context.signal)
-                : await detailActions.resumeRun(input, context.signal); break;
-            default: return { ok: false, errorCode: 'unsupported_action', error: 'unsupported_action' };
-        }
-        return { ok: true, result };
-    });
     routerSpy.push.mockClear();
     routerSpy.back.mockClear();
     machineRpcSpy.mockReset();
     machineRpcSpy.mockResolvedValue({ ok: true });
+    socketCancellations.splice(0);
+    storedRunDetails.clear();
+    approvalArtifacts.clear();
+    approvalRequired = false;
+    machinePreparationFailure = undefined;
     for (const action of Object.values(detailActions)) action.mockReset();
+    (await import('@/sync/runtime/orchestration/serverScopedRpc/serverScopedRpcPool')).resetScopedMachineTransportCacheForTests();
+    await loadSyncSingletonForTests();
+    const baseline = createWorkflowActionHttpTransport({ accountId: () => 'account-a', fixtureResponse: async (actionId, input) => ({
+        ok: true, result: actionId === 'workflow.definition.list' ? await catalogResponse(input) : undefined,
+    }) });
+    accountConnection = await restoreServerAccountForTest({ serverUrl: 'https://server-a', accountId: 'account-a',
+        configureSocket: (socket, serverUrl) => {
+            socket.connected = true;
+            socket.timeout = () => socket;
+            socket.emit = vi.fn<typeof socket.emit>((event, payload) => {
+                if (event === SOCKET_RPC_EVENTS.CANCEL) socketCancellations.push(fixtureRecord(payload).requestId as string);
+                return socket;
+            });
+            socket.emitWithAck = vi.fn<typeof socket.emitWithAck>(async (event, raw) => {
+                if (event !== SOCKET_RPC_EVENTS.CALL) return {};
+                const request = fixtureRecord(raw);
+                const [machineId, ...parts] = String(request.method).split(':');
+                const method = parts.join(':');
+                const payload = request.params;
+                if (method === getActionSpec('workflow.run.start').bindings?.rpcMethod) {
+                    const input = TargetedActionRpcRequestV1Schema.safeParse(payload);
+                    const fields = input.success ? input.data.input : payload;
+                    actionTransport('workflow.run.start', fields);
+                    return { ok: true, result: await startResponse(fields) };
+                }
+                if (method === getActionSpec('workflow.run.invocations.retry').bindings?.rpcMethod) return { ok: true,
+                    result: await detailActions.retryInvocation(TargetedActionRpcRequestV1Schema.safeParse(payload).success
+                        ? TargetedActionRpcRequestV1Schema.parse(payload).input : payload) };
+                if (method === getActionSpec('workflow.run.resume').bindings?.rpcMethod) {
+                    const targeted = TargetedActionRpcRequestV1Schema.parse(payload);
+                    return { ok: true, result: await detailActions.restoreWorkspace(targeted.input, machineId, undefined) };
+                }
+                const auth = fixtureRecord(socket.auth);
+                return { ok: true, result: await machineRpcSpy({ machineId, method, payload, serverUrl,
+                    accountId: parseToken(String(auth.token)),
+                    ...(typeof request.requestId === 'string' ? { requestId: request.requestId } : {}) }) };
+            });
+        }, request: async (url, init) => {
+            const target = new URL(String(url));
+            if (init?.method === 'POST' && target.pathname === '/v1/artifacts') actionTransport('workflow.definition.create', JSON.parse(String(init.body)));
+            if (init?.method && init.method !== 'GET' && target.pathname.startsWith('/v3/automations')
+                && target.pathname !== '/v3/automations/runs/workflow-storage') actionTransport('workflow.trigger.update', JSON.parse(String(init.body)));
+            if (approvalRequired && target.pathname === '/v2/account/settings') return Response.json({ content: { t: 'plain', v: {
+                actionsSettingsV1: { v: 1, actions: { 'execution.run.permission.respond': { approvalRequiredSurfaces: ['ui'] } } },
+            } }, version: 2 });
+            if (approvalRequired && target.pathname.startsWith('/v1/artifacts')) {
+                const answer = approvalArtifacts.handle(target.pathname + target.search, init);
+                if (answer) return answer;
+            }
+            if (target.pathname.startsWith('/v1/machines/') && machinePreparationFailure) {
+                const failure = machinePreparationFailure; machinePreparationFailure = undefined; throw failure;
+            }
+            if (target.pathname === '/v3/automations/runs/workflow-storage') {
+                try { return Response.json(await workflowStorageResponse(fixtureRecord(JSON.parse(String(init?.body))), init?.signal)); }
+                catch (error) {
+                    if (error instanceof WorkflowActionError) return Response.json({ error: error.rawCode }, { status: 409 });
+                    throw error;
+                }
+            }
+            const grants = /^\/v1\/artifacts\/([^/]+)\/access\/grants$/.exec(target.pathname);
+            if (grants) {
+                const bearer = new Headers(init?.headers).get('Authorization')?.slice('Bearer '.length);
+                const response = fixtureRecord(await sourceAccessResponse({ artifactId: decodeURIComponent(grants[1]!) },
+                    { serverId: servedHomeId, accountId: bearer ? parseToken(bearer) : null }));
+                return response.ok === true ? Response.json(response.result) : Response.json({ error: response.errorCode }, { status: response.errorCode === 'artifact_not_found' ? 404 : 503 });
+            }
+            return baseline.fetch(url, init);
+        } });
+    servedHomeId = accountConnection.home.id;
+    Object.assign(appliedRuntime, (await import('@/sync/domains/server/serverRuntime')).getActiveServerSnapshot());
+    storeState.reset();
+    publishAppliedActiveServerSnapshot(appliedRuntime);
 });
 
 afterEach(async () => {
     await standardCleanup();
+    await accountConnection?.dispose();
+    accountConnection = null;
     restoreRunPopoverGlobals?.();
     restoreRunPopoverGlobals = undefined;
 });
@@ -484,7 +638,7 @@ describe('WorkflowRunScreen', () => {
             timing: { startedAt: '2026-10-11T10:00:00.000Z', finishedAt: '2026-10-11T10:02:00.000Z' },
         };
         await renderRunScreen({ invocations: [root, index], invocationDetails: [{ index, progress, parentRevision: 1 }] });
-        expect(latestContentProps?.invocationProgressById?.get(index.id)?.timing).toEqual(progress.timing);
+        expect(readContentProps()?.invocationProgressById?.get(index.id)?.timing).toEqual(progress.timing);
         expect(storeState.state.workflowRunInvocationsByRunId[index.runId]?.factsById[index.id]?.opened?.progress.timing).toEqual(progress.timing);
         expect(detailActions.getInvocation).not.toHaveBeenCalled();
     });
@@ -508,7 +662,7 @@ describe('WorkflowRunScreen', () => {
         });
         await screen.pressByTestIdAsync('workflow-run-selected-header.close');
         expect(replace).toHaveBeenCalledWith('/workflows/runs/11111111-1111-4111-8111-111111111111');
-        expect(latestContentProps?.view).toBe('flow');
+        expect(readContentProps()?.view).toBe('flow');
     });
 
     it('uses the exact Run as the phone step header close fallback', async () => {
@@ -623,10 +777,10 @@ describe('WorkflowRunScreen', () => {
         });
         const screen = await renderRunScreen({ run: createWorkflowRunSummaryFixture({ state: 'failed', workflowCustodyState: 'settled' }),
             invocations: [root, step], acceptedContext: { ...ACCEPTED_CONTEXT, materializedLeaves: [acceptedLeaf] } });
-        await act(async () => latestContentProps?.onSelectInvocation('44444444-4444-4444-8444-444444444444'));
+        await act(async () => readContentProps()?.onSelectInvocation('44444444-4444-4444-8444-444444444444'));
         await act(async () => {});
-        expect(latestContentProps?.selectedInvocationProgress).toMatchObject({ blockKind: 'step', reason: { code: 'target_unavailable' } });
-        expect(latestContentProps?.onRunWithAnotherAgent).toEqual(expect.any(Function));
+        expect(readContentProps()?.selectedInvocationProgress).toMatchObject({ blockKind: 'step', reason: { code: 'target_unavailable' } });
+        expect(readContentProps()?.onRunWithAnotherAgent).toEqual(expect.any(Function));
         await screen.pressByTestIdAsync('workflow-run-run-another-agent');
         expect(runStartCalls()).toHaveLength(0);
         expect(screen.findByTestId('workflow-run-inputs-run')?.props.disabled).toBe(true);
@@ -673,27 +827,27 @@ describe('WorkflowRunScreen', () => {
             run: createWorkflowRunSummaryFixture({ sourceArtifactId }),
             canEdit: false,
         });
-        expect(latestContentProps?.hasSource).toBe(true);
-        expect(latestContentProps?.sourceAction?.kind).toBe('edit');
-        act(() => latestContentProps?.sourceAction?.onPress());
+        expect(readContentProps()?.hasSource).toBe(true);
+        expect(readContentProps()?.sourceAction?.kind).toBe('edit');
+        act(() => readContentProps()?.sourceAction?.onPress());
         expect(routerSpy.push).toHaveBeenCalledWith(`/workflows/${sourceArtifactId}`);
         expect(sourceAccessResponse).toHaveBeenCalledWith({ artifactId: sourceArtifactId }, expect.objectContaining({
-            surface: 'ui', serverId: 'server-a', expectedAccountId: 'account-a',
+            serverId: 'server-a', accountId: 'account-a',
         }));
     });
 
     it('opens a view-only source even when the Run itself can be controlled', async () => {
         sourceAccessResponse.mockResolvedValue(sourceGrantReply('view'));
         await renderRunScreen({ run: createWorkflowRunSummaryFixture({ sourceArtifactId }) });
-        expect(latestContentProps?.sourceAction?.kind).toBe('open');
-        act(() => latestContentProps?.sourceAction?.onPress());
+        expect(readContentProps()?.sourceAction?.kind).toBe('open');
+        act(() => readContentProps()?.sourceAction?.onPress());
         expect(routerSpy.push).toHaveBeenCalledWith(`/workflows/${sourceArtifactId}`);
     });
 
     it('keeps a deleted source distinct from a sourceless Run', async () => {
         await renderRunScreen({ run: createWorkflowRunSummaryFixture({ sourceArtifactId }) });
-        expect(latestContentProps?.hasSource).toBe(true);
-        expect(latestContentProps?.sourceAction).toBeNull();
+        expect(readContentProps()?.hasSource).toBe(true);
+        expect(readContentProps()?.sourceAction).toBeNull();
     });
 
     it.each(['saved', 'automation'] as const)('retains the frozen %s source identity when its summary no longer has an Artifact', async (kind) => {
@@ -701,16 +855,16 @@ describe('WorkflowRunScreen', () => {
             kind, definitionId: sourceArtifactId, revision: { headerVersion: 1, bodyVersion: 1 }, savedBy: null,
             ...(kind === 'automation' ? { automationId: 'automation-1' } : {}),
         } } });
-        expect(latestContentProps?.hasSource).toBe(true);
-        expect(latestContentProps?.sourceAction).toBeNull();
+        expect(readContentProps()?.hasSource).toBe(true);
+        expect(readContentProps()?.sourceAction).toBeNull();
         expect(sourceAccessResponse).toHaveBeenCalledWith({ artifactId: sourceArtifactId }, expect.anything());
     });
 
     it('offers Save as workflow only as the sourceless Run action and seeds an unsaved draft', async () => {
         await renderRunScreen();
-        expect(latestContentProps?.hasSource).toBe(false);
-        expect(latestContentProps?.sourceAction).toBeNull();
-        await act(async () => latestContentProps?.onSaveAsWorkflow?.());
+        expect(readContentProps()?.hasSource).toBe(false);
+        expect(readContentProps()?.sourceAction).toBeNull();
+        await act(async () => readContentProps()?.onSaveAsWorkflow?.());
         expect(routerSpy.push).toHaveBeenCalledWith(expect.objectContaining({ pathname: '/workflows/new' }));
         expect(sourceAccessResponse).not.toHaveBeenCalled();
         expect(actionTransport.mock.calls.some(([action]) => action === 'workflow.definition.create')).toBe(false);
@@ -724,9 +878,9 @@ describe('WorkflowRunScreen', () => {
         await renderRunScreen({ acceptedContext: {
             ...ACCEPTED_CONTEXT, source: { kind: 'catalog', ref, version: 1 },
         } });
-        expect(latestContentProps?.hasSource).toBe(true);
-        expect(latestContentProps?.sourceAction?.kind).toBe('open');
-        act(() => latestContentProps?.sourceAction?.onPress());
+        expect(readContentProps()?.hasSource).toBe(true);
+        expect(readContentProps()?.sourceAction?.kind).toBe('open');
+        act(() => readContentProps()?.sourceAction?.onPress());
         expect(routerSpy.push).toHaveBeenCalledWith(`/workflows/${encodeURIComponent(ref)}`);
         expect(sourceAccessResponse).not.toHaveBeenCalled();
     });
@@ -735,55 +889,55 @@ describe('WorkflowRunScreen', () => {
         await renderRunScreen({ acceptedContext: {
             ...ACCEPTED_CONTEXT, source: { kind: 'catalog', ref, version: 1 },
         } });
-        expect(latestContentProps?.hasSource).toBe(true);
-        expect(latestContentProps?.sourceAction).toBeNull();
+        expect(readContentProps()?.hasSource).toBe(true);
+        expect(readContentProps()?.sourceAction).toBeNull();
     });
 
     it('keeps the saved source action through an ordinary refresh with a pending access read', async () => {
         sourceAccessResponse.mockResolvedValue(sourceGrantReply('owner'));
         await renderRunScreen({ run: createWorkflowRunSummaryFixture({ sourceArtifactId }), invocationListFailure: new Error('offline') });
-        expect(latestContentProps?.sourceAction?.kind).toBe('edit');
+        expect(readContentProps()?.sourceAction?.kind).toBe('edit');
         const refresh = createDeferred<ReturnType<typeof sourceGrantReply>>();
         sourceAccessResponse.mockReturnValue(refresh.promise);
-        await act(async () => latestContentProps?.onReload?.());
-        expect(latestContentProps?.sourceAction?.kind).toBe('edit');
-        act(() => latestContentProps?.sourceAction?.onPress());
+        await act(async () => readContentProps()?.onReload?.());
+        expect(readContentProps()?.sourceAction?.kind).toBe('edit');
+        act(() => readContentProps()?.sourceAction?.onPress());
         expect(routerSpy.push).toHaveBeenCalledWith(`/workflows/${sourceArtifactId}`);
         await act(async () => refresh.resolve(sourceGrantReply('view')));
-        expect(latestContentProps?.sourceAction?.kind).toBe('open');
+        expect(readContentProps()?.sourceAction?.kind).toBe('open');
     });
     it('keeps confirmed source access while the same source revision gains its opened body', async () => {
         const artifact = sourceArtifact();
         getStorage().getState().updateArtifact(artifact);
         sourceAccessResponse.mockResolvedValue(sourceGrantReply('owner'));
         await renderRunScreen({ run: createWorkflowRunSummaryFixture({ sourceArtifactId }) });
-        const edit = latestContentProps?.sourceAction;
+        const edit = readContentProps()?.sourceAction;
         expect(edit?.kind).toBe('edit');
         const refresh = createDeferred<ReturnType<typeof sourceGrantReply>>();
         sourceAccessResponse.mockReturnValue(refresh.promise);
         // Opening/hydrating already-current content does not change the source or its grant.
         await act(async () => getStorage().getState().updateArtifact({ ...artifact, body: 'Opened source body' }));
-        expect(latestContentProps?.sourceAction?.kind).toBe('edit');
+        expect(readContentProps()?.sourceAction?.kind).toBe('edit');
         act(() => edit?.onPress());
         expect(routerSpy.push).toHaveBeenCalledWith(`/workflows/${sourceArtifactId}`);
         await act(async () => refresh.resolve(sourceGrantReply('view')));
-        expect(latestContentProps?.sourceAction?.kind).toBe('open');
+        expect(readContentProps()?.sourceAction?.kind).toBe('open');
     });
     it('retains confirmed source access through Artifact revisions until a definitive grant answer', async () => {
         const artifact = sourceArtifact();
         getStorage().getState().updateArtifact(artifact);
         sourceAccessResponse.mockResolvedValue(sourceGrantReply('owner'));
         await renderRunScreen({ run: createWorkflowRunSummaryFixture({ sourceArtifactId }) });
-        const edit = latestContentProps?.sourceAction;
+        const edit = readContentProps()?.sourceAction;
         const refresh = createDeferred<ReturnType<typeof sourceGrantReply>>();
         sourceAccessResponse.mockReturnValue(refresh.promise);
         await act(async () => getStorage().getState().updateArtifact({ ...artifact, updatedAt: 2, seq: 2 }));
-        expect(latestContentProps?.sourceAction).toBe(edit);
+        expect(readContentProps()?.sourceAction).toBe(edit);
         act(() => edit?.onPress());
         expect(routerSpy.push).toHaveBeenCalledWith(`/workflows/${sourceArtifactId}`);
         routerSpy.push.mockClear();
         await act(async () => refresh.resolve(sourceGrantReply('view')));
-        expect(latestContentProps?.sourceAction?.kind).toBe('open');
+        expect(readContentProps()?.sourceAction?.kind).toBe('open');
         act(() => edit?.onPress());
         expect(routerSpy.push).not.toHaveBeenCalled();
     });
@@ -792,13 +946,13 @@ describe('WorkflowRunScreen', () => {
         getStorage().getState().updateArtifact(artifact);
         sourceAccessResponse.mockResolvedValue(sourceGrantReply('owner'));
         await renderRunScreen({ run: createWorkflowRunSummaryFixture({ sourceArtifactId }) });
-        const edit = latestContentProps?.sourceAction;
+        const edit = readContentProps()?.sourceAction;
         sourceAccessResponse.mockResolvedValue({ ok: false, errorCode: 'network_error', error: 'Offline' });
         await act(async () => getStorage().getState().updateArtifact({ ...artifact, updatedAt: 2, seq: 2 }));
-        expect(latestContentProps?.sourceAction).toBe(edit);
+        expect(readContentProps()?.sourceAction).toBe(edit);
         sourceAccessResponse.mockResolvedValue({ ok: false, errorCode: 'artifact_not_found', error: 'Missing' });
         await act(async () => getStorage().getState().deleteArtifact(sourceArtifactId));
-        expect(latestContentProps?.sourceAction).toBeNull();
+        expect(readContentProps()?.sourceAction).toBeNull();
         act(() => edit?.onPress());
         expect(routerSpy.push).not.toHaveBeenCalled();
     });
@@ -807,7 +961,7 @@ describe('WorkflowRunScreen', () => {
         getStorage().setState({ artifacts: { [sourceArtifactId]: artifact } });
         sourceAccessResponse.mockResolvedValue(sourceGrantReply('edit'));
         await renderRunScreen({ run: createWorkflowRunSummaryFixture({ sourceArtifactId }) });
-        const edit = latestContentProps?.sourceAction;
+        const edit = readContentProps()?.sourceAction;
         expect(edit?.kind).toBe('edit');
         sourceAccessResponse.mockResolvedValue(sourceGrantReply('view'));
         await act(async () => getStorage().setState({ artifacts: {
@@ -815,20 +969,20 @@ describe('WorkflowRunScreen', () => {
         } }));
         act(() => edit?.onPress());
         expect(routerSpy.push).not.toHaveBeenCalled();
-        expect(latestContentProps?.sourceAction?.kind).toBe('open');
-        const open = latestContentProps?.sourceAction;
+        expect(readContentProps()?.sourceAction?.kind).toBe('open');
+        const open = readContentProps()?.sourceAction;
         sourceAccessResponse.mockResolvedValue({ ok: false, errorCode: 'artifact_not_found', error: 'artifact_not_found' });
         await act(async () => getStorage().setState({ artifacts: {} }));
         act(() => open?.onPress());
-        expect(latestContentProps?.sourceAction).toBeNull();
-        expect(latestContentProps?.hasSource).toBe(true);
+        expect(readContentProps()?.sourceAction).toBeNull();
+        expect(readContentProps()?.hasSource).toBe(true);
         expect(routerSpy.push).not.toHaveBeenCalled();
     });
 
     it('fails source actions closed on a mismatched Artifact reply', async () => {
         sourceAccessResponse.mockResolvedValue(sourceGrantReply('owner', 'another-artifact'));
         await renderRunScreen({ run: createWorkflowRunSummaryFixture({ sourceArtifactId }) });
-        expect(latestContentProps?.sourceAction).toBeNull();
+        expect(readContentProps()?.sourceAction).toBeNull();
     });
 
     it('ignores older source access responses after a source update confirms view access', async () => {
@@ -837,13 +991,13 @@ describe('WorkflowRunScreen', () => {
         getStorage().setState({ artifacts: { [sourceArtifactId]: artifact } });
         sourceAccessResponse.mockReturnValueOnce(older.promise).mockResolvedValue(sourceGrantReply('view'));
         await renderRunScreen({ run: createWorkflowRunSummaryFixture({ sourceArtifactId }) });
-        expect(latestContentProps?.sourceAction).toBeNull();
+        expect(readContentProps()?.sourceAction).toBeNull();
         await act(async () => getStorage().setState({ artifacts: {
             [sourceArtifactId]: { ...artifact, updatedAt: 2, seq: 2 },
         } }));
-        expect(latestContentProps?.sourceAction?.kind).toBe('open');
+        expect(readContentProps()?.sourceAction?.kind).toBe('open');
         await act(async () => older.resolve(sourceGrantReply('owner')));
-        expect(latestContentProps?.sourceAction?.kind).toBe('open');
+        expect(readContentProps()?.sourceAction?.kind).toBe('open');
     });
 
     it('rejects late source access after account retirement', async () => {
@@ -851,14 +1005,14 @@ describe('WorkflowRunScreen', () => {
         sourceAccessResponse.mockReturnValue(access.promise);
         const screen = await renderRunScreen({ run: createWorkflowRunSummaryFixture({ sourceArtifactId }) });
         expect(sourceAccessResponse).toHaveBeenCalled();
-        expect(latestContentProps?.sourceAction).toBeNull();
+        expect(readContentProps()?.sourceAction).toBeNull();
         // Install the replacement Account's pending read before the scope
         // notification starts it, so it cannot acknowledge Account A's fixture.
         detailActions.getRun.mockReturnValue(new Promise(() => {}));
         act(() => accountScopeHarness.switchTo({ serverId: 'server-b', accountId: 'account-b' }));
         await screen.update(createRunScreenElement());
         await act(async () => access.resolve(sourceGrantReply('owner')));
-        expect(latestContentProps?.sourceAction ?? null).toBeNull();
+        expect(readContentProps()?.sourceAction ?? null).toBeNull();
         expect(screen.findAllHostsByTestId('workflow-run-edit-workflow')).toHaveLength(0);
         expect(routerSpy.push).not.toHaveBeenCalled();
     });
@@ -866,13 +1020,13 @@ describe('WorkflowRunScreen', () => {
     it('rejects a retained source callback immediately when its Account lifetime retires', async () => {
         sourceAccessResponse.mockResolvedValue(sourceGrantReply('owner'));
         await renderRunScreen({ run: createWorkflowRunSummaryFixture({ sourceArtifactId }) });
-        const edit = latestContentProps?.sourceAction;
+        const edit = readContentProps()?.sourceAction;
         expect(edit?.kind).toBe('edit');
         await act(async () => retireActiveServerAccountScopeLifetime());
         act(() => edit?.onPress());
         expect(routerSpy.push).not.toHaveBeenCalled();
-        expect(latestContentProps?.sourceAction?.kind).toBe('edit');
-        act(() => latestContentProps?.sourceAction?.onPress());
+        expect(readContentProps()?.sourceAction?.kind).toBe('edit');
+        act(() => readContentProps()?.sourceAction?.onPress());
         expect(routerSpy.push).toHaveBeenCalledOnce();
     });
 
@@ -905,10 +1059,10 @@ describe('WorkflowRunScreen', () => {
             { runId: '11111111-1111-4111-8111-111111111111', lifecycles: ['failed'], limit: 1 },
             expect.any(AbortSignal),
         );
-        expect(latestContentProps?.invocationHistoryComplete).toBe(false);
-        expect(latestContentProps?.finalOutputInvocationId).toBe('final-off-page');
-        expect(latestContentProps?.firstFailedInvocationId).toBe('99999999-9999-4999-8999-999999999999');
-        expect(latestContentProps?.resultLabel).toBe('x'.repeat(2_100));
+        expect(readContentProps()?.invocationHistoryComplete).toBe(false);
+        expect(readContentProps()?.finalOutputInvocationId).toBe('final-off-page');
+        expect(readContentProps()?.firstFailedInvocationId).toBe('99999999-9999-4999-8999-999999999999');
+        expect(readContentProps()?.resultLabel).toBe('x'.repeat(2_100));
     });
 
     it('keeps failure discovery unresolved through loading and error without discarding the result preview', async () => {
@@ -934,14 +1088,14 @@ describe('WorkflowRunScreen', () => {
         await renderScreen(createRunScreenElement());
         await act(async () => {});
 
-        expect(latestContentProps?.firstFailedInvocationResolution).toBe('loading');
-        expect(latestContentProps?.resultLabel).toBe('Authoritative result preview');
+        expect(readContentProps()?.firstFailedInvocationResolution).toBe('loading');
+        expect(readContentProps()?.resultLabel).toBe('Authoritative result preview');
 
         failedPage.reject(new Error('offline'));
         await act(async () => {});
 
-        expect(latestContentProps?.firstFailedInvocationResolution).toBe('error');
-        expect(latestContentProps?.resultLabel).toBe('Authoritative result preview');
+        expect(readContentProps()?.firstFailedInvocationResolution).toBe('error');
+        expect(readContentProps()?.resultLabel).toBe('Authoritative result preview');
     });
 
     it('keeps an authoritative JSON null result distinct from no result', async () => {
@@ -951,8 +1105,8 @@ describe('WorkflowRunScreen', () => {
             finalOutputInvocationId: 'final-null',
         });
 
-        expect(latestContentProps?.resultLabel).toBe('null');
-        expect(latestContentProps?.finalOutputInvocationId).toBe('final-null');
+        expect(readContentProps()?.resultLabel).toBe('null');
+        expect(readContentProps()?.finalOutputInvocationId).toBe('final-null');
     });
 
     /**
@@ -962,12 +1116,12 @@ describe('WorkflowRunScreen', () => {
      */
     it('names an opened untitled Run as a workflow run rather than as unavailable private content', async () => {
         await renderRunScreen({ acceptedContext: ACCEPTED_CONTEXT });
-        expect(latestContentProps?.title).toBe('workflows.run.untitled');
+        expect(readContentProps()?.title).toBe('workflows.run.untitled');
 
         await renderRunScreen({
             acceptedContext: { ...ACCEPTED_CONTEXT, metadata: { title: 'Review 500 files' } },
         });
-        expect(latestContentProps?.title).toBe('Review 500 files');
+        expect(readContentProps()?.title).toBe('Review 500 files');
     });
 
     it('presents aggregate usage through locale-aware token and currency owners', async () => {
@@ -975,12 +1129,12 @@ describe('WorkflowRunScreen', () => {
             usage: { inputTokens: 120, outputTokens: 30, costUsd: 0.04 },
         });
 
-        expect(latestContentProps?.usageLabel).toContain('150');
-        expect(latestContentProps?.usageLabel).toContain(new Intl.NumberFormat(undefined, {
+        expect(readContentProps()?.usageLabel).toContain('150');
+        expect(readContentProps()?.usageLabel).toContain(new Intl.NumberFormat(undefined, {
             style: 'currency', currency: 'USD', minimumFractionDigits: 2, maximumFractionDigits: 4,
         }).format(0.04));
-        expect(latestContentProps?.usageLabel).not.toContain(' in');
-        expect(latestContentProps?.usageLabel).not.toContain(' out');
+        expect(readContentProps()?.usageLabel).not.toContain(' in');
+        expect(readContentProps()?.usageLabel).not.toContain(' out');
     });
 
     it('keeps a loaded summary visible and exposes the same loader retry when invocation discovery fails', async () => {
@@ -989,10 +1143,10 @@ describe('WorkflowRunScreen', () => {
             invocationListFailure: new Error('offline'),
         });
 
-        expect(latestContentProps?.run.id).toBe('11111111-1111-4111-8111-111111111111');
-        expect(latestContentProps?.errorLabel).toBeTruthy();
-        expect(latestContentProps?.errorSemantics).toBe('alert');
-        const reload = latestContentProps?.onReload;
+        expect(readContentProps()?.run.id).toBe('11111111-1111-4111-8111-111111111111');
+        expect(readContentProps()?.errorLabel).toBeTruthy();
+        expect(readContentProps()?.errorSemantics).toBe('alert');
+        const reload = readContentProps()?.onReload;
         expect(reload).toBeTypeOf('function');
         const callsBeforeRetry = detailActions.listInvocations.mock.calls.length;
 
@@ -1001,9 +1155,9 @@ describe('WorkflowRunScreen', () => {
         await act(async () => {});
 
         expect(detailActions.listInvocations).toHaveBeenCalledTimes(callsBeforeRetry + 2);
-        expect(latestContentProps?.onReload).toBeUndefined();
-        expect(latestContentProps?.errorLabel).toBeNull();
-        expect(latestContentProps?.invocationsLoaded).toBe(true);
+        expect(readContentProps()?.onReload).toBeUndefined();
+        expect(readContentProps()?.errorLabel).toBeNull();
+        expect(readContentProps()?.invocationsLoaded).toBe(true);
     });
 
     it('submits the accepted Run identity for a confirmed repeat rather than only its flattened definition', async () => {
@@ -1037,7 +1191,7 @@ describe('WorkflowRunScreen', () => {
         detailActions.listInvocations.mockResolvedValue(invocationPage([]));
         await screen.update(createRunScreenElement());
         await act(async () => {});
-        expect(latestContentProps?.run.id).toBe('22222222-2222-4222-8222-222222222222');
+        expect(readContentProps()?.run.id).toBe('22222222-2222-4222-8222-222222222222');
 
         admission.resolve({ admission: 'created', run: createWorkflowRunSummaryFixture({ id: '55555555-5555-4555-8555-555555555555' }) });
         await act(async () => {});
@@ -1048,7 +1202,7 @@ describe('WorkflowRunScreen', () => {
     it.each([1440, 390])('opens Save as workflow in the real editor under StrictMode at %i without writing', async (width) => {
         platformViewport.width = width;
         const screen = await renderRunScreen({ acceptedContext: { ...ACCEPTED_CONTEXT, metadata: { title: 'Release review', description: 'Accepted description' } } });
-        const saveAsWorkflow = latestContentProps?.onSaveAsWorkflow;
+        const saveAsWorkflow = readContentProps()?.onSaveAsWorkflow;
 
         act(() => { saveAsWorkflow?.(); });
         await act(async () => {});
@@ -1058,7 +1212,7 @@ describe('WorkflowRunScreen', () => {
         expect(route).toEqual({ pathname: '/workflows/new', params: { reviewedRunSeedId: expect.any(String) } });
         if (route === undefined) throw new Error('Expected the unsaved review route');
         expect(machineRpcSpy).not.toHaveBeenCalled();
-        expect(latestContentProps?.saveAsWorkflowPending).toBe(false);
+        expect(readContentProps()?.saveAsWorkflowPending).toBe(false);
         await openEditorAfterRouteHydration(screen, { kind: 'new', reviewedRunSeedId: route.params.reviewedRunSeedId });
         expect(screen.findByTestId('workflow-editor-reviewed-run-missing') === null).toBe(true);
         expect(screen.findByType(WorkflowEditorBody).props).toMatchObject({
@@ -1202,11 +1356,12 @@ describe('WorkflowRunScreen', () => {
                 availability: { cancel: false, pause: false },
             }),
         });
-        const onDelete = latestContentProps?.onDelete;
+        const onDelete = readContentProps()?.onDelete;
         expect(onDelete).toBeTypeOf('function');
 
         act(() => { onDelete?.(); });
         await act(async () => {});
+        await screen.pressByTestIdAsync('web-modal-confirm');
         expect(detailActions.deleteRun).toHaveBeenCalledTimes(1);
 
         await screen.unmount();
@@ -1220,7 +1375,7 @@ describe('WorkflowRunScreen', () => {
 
     it('repeats a Run under exactly the execution target its accepted context froze', async () => {
         const screen = await renderRunScreen();
-        expect(latestContentProps?.onRunAgain).toBeTypeOf('function');
+        expect(readContentProps()?.onRunAgain).toBeTypeOf('function');
         await reviewRunAgain(screen);
         await screen.pressByTestIdAsync('workflow-run-inputs-run');
         expect(runStartCalls()).toHaveLength(1);
@@ -1244,7 +1399,7 @@ describe('WorkflowRunScreen', () => {
             ],
         });
 
-        expect(latestContentProps?.invocationStructure?.get('44444444-4444-4444-8444-444444444444')).toMatchObject({
+        expect(readContentProps()?.invocationStructure?.get('44444444-4444-4444-8444-444444444444')).toMatchObject({
             nodeId: 'analyze',
             blockId: 'analyze',
         });
@@ -1289,15 +1444,15 @@ describe('WorkflowRunScreen', () => {
             }),
             invocations,
         });
-        await act(async () => latestContentProps?.onSelectInvocation('44444444-4444-4444-8444-444444444444'));
+        await act(async () => readContentProps()?.onSelectInvocation('44444444-4444-4444-8444-444444444444'));
         await act(async () => {});
 
-        expect(latestContentProps?.onStartReviewedNewRun).toBeTypeOf('function');
+        expect(readContentProps()?.onStartReviewedNewRun).toBeTypeOf('function');
         // Exactly one D4 arm: no restoration producer exists here, so the screen
         // hands down no restore handler either.
-        expect(latestContentProps?.onRestoreWorkspace).toBeUndefined();
+        expect(readContentProps()?.onRestoreWorkspace).toBeUndefined();
         await act(async () => requireDefined(
-            latestContentProps?.onStartReviewedNewRun,
+            readContentProps()?.onStartReviewedNewRun,
             'Expected a reviewed-new-Run handler',
         )());
         await act(async () => {});
@@ -1368,14 +1523,14 @@ describe('WorkflowRunScreen', () => {
         });
         detailActions.restoreWorkspace.mockResolvedValue({ run: { ...run, state: 'running', revision: 2 }, intent: 'resumed' });
         await renderRunScreen({ run, invocations });
-        await act(async () => latestContentProps?.onSelectInvocation('44444444-4444-4444-8444-444444444444'));
+        await act(async () => readContentProps()?.onSelectInvocation('44444444-4444-4444-8444-444444444444'));
         await act(async () => {});
 
-        expect(latestContentProps?.onRestoreWorkspace).toBeTypeOf('function');
+        expect(readContentProps()?.onRestoreWorkspace).toBeTypeOf('function');
         // Restoration resumes this Run, so the arm that would repeat its
         // completed work is not offered beside it.
-        expect(latestContentProps?.onStartReviewedNewRun).toBeUndefined();
-        await act(async () => latestContentProps?.onRestoreWorkspace?.());
+        expect(readContentProps()?.onStartReviewedNewRun).toBeUndefined();
+        await act(async () => readContentProps()?.onRestoreWorkspace?.());
         await act(async () => {});
 
         expect(detailActions.restoreWorkspace).toHaveBeenCalledWith({
@@ -1414,6 +1569,7 @@ describe('WorkflowRunScreen', () => {
                     attempt: '0',
                     logicalInvocationRecordId: '44444444-4444-4444-8444-444444444444',
                     uncertainPriorEffects: { activity: 'stopped' },
+                    execution: { kind: 'detached_run', runId: 'retained-retry-execution', localInputId: 'retained-retry-input', runtimeSelection: {} },
                 },
                 recoveryAvailability: {
                     reattach: { kind: 'unavailable', reason: 'invocation_not_recoverable' },
@@ -1435,7 +1591,7 @@ describe('WorkflowRunScreen', () => {
             }),
             invocations,
         });
-        await act(async () => latestContentProps?.onSelectInvocation('44444444-4444-4444-8444-444444444444'));
+        await act(async () => readContentProps()?.onSelectInvocation('44444444-4444-4444-8444-444444444444'));
         await act(async () => {});
 
         const replacement = {
@@ -1444,18 +1600,18 @@ describe('WorkflowRunScreen', () => {
             input: ['reviewed context'],
         };
         await act(async () => requireDefined(
-            latestContentProps?.onRetryWithReplacement,
+            readContentProps()?.onRetryWithReplacement,
             'Expected a same-conversation replacement retry handler',
         )(replacement));
         await act(async () => {});
         expect(detailActions.retryInvocation).not.toHaveBeenCalled();
 
         await act(async () => requireDefined(
-            latestContentProps?.onAcknowledgeUncertainPriorEffects,
+            readContentProps()?.onAcknowledgeUncertainPriorEffects,
             'Expected an uncertain-effects acknowledgement handler',
         )());
         await act(async () => requireDefined(
-            latestContentProps?.onRetryWithReplacement,
+            readContentProps()?.onRetryWithReplacement,
             'Expected a same-conversation replacement retry handler',
         )(replacement));
         await act(async () => {});
@@ -1491,6 +1647,7 @@ describe('WorkflowRunScreen', () => {
                     blockKind: 'step',
                     attempt: '0',
                     logicalInvocationRecordId: '44444444-4444-4444-8444-444444444444',
+                    execution: { kind: 'detached_run', runId: 'retained-prepared-execution', localInputId: 'retained-prepared-input', runtimeSelection: {} },
                     recovery: {
                         conversation: 'same_conversation',
                         input: {
@@ -1526,12 +1683,12 @@ describe('WorkflowRunScreen', () => {
             }),
             invocations,
         });
-        await act(async () => latestContentProps?.onSelectInvocation('44444444-4444-4444-8444-444444444444'));
+        await act(async () => readContentProps()?.onSelectInvocation('44444444-4444-4444-8444-444444444444'));
         await act(async () => {});
 
-        expect(latestContentProps?.preparedRecovery).toMatchObject({ conversation: 'same_conversation' });
+        expect(readContentProps()?.preparedRecovery).toMatchObject({ conversation: 'same_conversation' });
         await act(async () => requireDefined(
-            latestContentProps?.onContinuePrepared,
+            readContentProps()?.onContinuePrepared,
             'Expected a prepared-continuation handler',
         )({
             conversation: 'same_conversation',
@@ -1572,22 +1729,22 @@ describe('WorkflowRunScreen', () => {
         detailActions.cancelRun.mockResolvedValue({ run: { ...run, revision: 5 }, intent: 'cancel_requested' });
         detailActions.cancelRun.mockRejectedValueOnce(new WorkflowActionError({ message: 'Moved', rawCode: 'currentness_conflict' }));
         if (again) detailActions.cancelRun.mockRejectedValueOnce(new WorkflowActionError({ message: 'Moved again', rawCode: 'currentness_conflict' }));
-        await act(async () => latestContentProps?.onCancel?.());
+        await act(async () => readContentProps()?.onCancel?.());
         await vi.waitFor(() => expect(detailActions.cancelRun.mock.calls.map(([input]) => input.expectedRevision)).toEqual([3, 4]));
         await act(async () => {});
-        expect(latestContentProps?.pendingControl).toBeNull();
-        expect(again ? latestContentProps?.errorLabel : latestContentProps?.cancelRequested).toBeTruthy();
+        expect(readContentProps()?.pendingControl).toBeNull();
+        expect(again ? readContentProps()?.errorLabel : readContentProps()?.cancelRequested).toBeTruthy();
     });
     it('withholds settled Run actions while accepted Stop custody is pending', async () => {
         const run = createWorkflowRunSummaryFixture({ state: 'cancelled', workflowCustodyState: 'pending',
             availability: { cancel: false, pause: false } });
         await renderRunScreen({ run });
-        expect(latestContentProps?.onRunAgain).toBeUndefined();
-        expect(latestContentProps?.onDelete).toBeUndefined();
+        expect(readContentProps()?.onRunAgain).toBeUndefined();
+        expect(readContentProps()?.onDelete).toBeUndefined();
         await act(async () => getStorage().getState().upsertWorkflowRuns([workflowRunRowFromSummary({ ...run,
             revision: run.revision + 1, workflowCustodyState: 'settled' })]));
-        expect(latestContentProps?.onRunAgain).toBeDefined();
-        expect(latestContentProps?.onDelete).toBeDefined();
+        expect(readContentProps()?.onRunAgain).toBeDefined();
+        expect(readContentProps()?.onDelete).toBeDefined();
     });
     it('does not retry Stop when the Account retires during its conflict reread', async () => {
         const run = createWorkflowRunSummaryFixture({ id: routeState.runId, state: 'running', revision: 3 });
@@ -1597,7 +1754,7 @@ describe('WorkflowRunScreen', () => {
         detailActions.getRun.mockImplementationOnce(() => reread.promise);
         detailActions.cancelRun.mockRejectedValueOnce(new WorkflowActionError({ message: 'Moved', rawCode: 'currentness_conflict' }));
         let stopping: void | undefined;
-        await act(async () => { stopping = latestContentProps?.onCancel?.(); });
+        await act(async () => { stopping = readContentProps()?.onCancel?.(); });
         await vi.waitFor(() => expect(detailActions.getRun).toHaveBeenCalledTimes(2));
         await act(async () => retireActiveServerAccountScopeLifetime());
         await act(async () => { reread.resolve({ ...reply, run: { ...run, revision: 4 } }); await stopping; });
@@ -1629,20 +1786,20 @@ describe('WorkflowRunScreen', () => {
         detailActions.cancelRun.mockResolvedValue({ run: { ...run, state: 'cancelled', revision: 3 }, intent: 'cancelled' });
         detailActions.retryInvocation.mockResolvedValue({ run: { ...run, revision: 3 }, invocation: invocations[1], disposition: 'accepted' });
         await renderRunScreen({ run, invocations });
-        await act(async () => latestContentProps?.onSelectInvocation('44444444-4444-4444-8444-444444444444'));
+        await act(async () => readContentProps()?.onSelectInvocation('44444444-4444-4444-8444-444444444444'));
         await act(async () => {});
 
-        act(() => { latestContentProps?.onPause?.(); });
+        act(() => { readContentProps()?.onPause?.(); });
         expect(detailActions.pauseRun).toHaveBeenCalledTimes(1);
-        expect(latestContentProps?.pendingControl).toBe('pause');
+        expect(readContentProps()?.pendingControl).toBe('pause');
 
         // While Pause is unsettled, Cancel and Retry are conflicting durable
         // operations against the same revision: none may issue.
         act(() => {
-            latestContentProps?.onCancel?.();
-            latestContentProps?.onCancel?.();
-            latestContentProps?.onRetrySameConversation?.();
-            latestContentProps?.onRetrySameConversation?.();
+            readContentProps()?.onCancel?.();
+            readContentProps()?.onCancel?.();
+            readContentProps()?.onRetrySameConversation?.();
+            readContentProps()?.onRetrySameConversation?.();
         });
         await act(async () => {});
         expect(detailActions.cancelRun).not.toHaveBeenCalled();
@@ -1650,18 +1807,18 @@ describe('WorkflowRunScreen', () => {
 
         pause.resolve({ run: { ...run, state: 'pause_requested', revision: 2 }, intent: 'pause_requested' });
         await act(async () => {});
-        expect(latestContentProps?.pendingControl).toBeNull();
-        expect(latestContentProps?.run.revision).toBe(2);
+        expect(readContentProps()?.pendingControl).toBeNull();
+        expect(readContentProps()?.run.revision).toBe(2);
 
         // Two presses in one frame: the ref, not the rendered state, is the gate.
         act(() => {
-            latestContentProps?.onCancel?.();
-            latestContentProps?.onCancel?.();
+            readContentProps()?.onCancel?.();
+            readContentProps()?.onCancel?.();
         });
         await act(async () => {});
         expect(detailActions.cancelRun).toHaveBeenCalledTimes(1);
         expect(detailActions.cancelRun.mock.calls[0]?.[0]).toMatchObject({ expectedRevision: 2 });
-        expect(latestContentProps?.run.revision).toBe(3);
+        expect(readContentProps()?.run.revision).toBe(3);
     });
 
     it('lets a durable operation that outlives a Run change neither settle this screen nor overwrite the new Run', async () => {
@@ -1671,8 +1828,8 @@ describe('WorkflowRunScreen', () => {
         const cancel = createDeferred<Readonly<{ run: typeof runA; intent: 'cancelled' }>>();
         detailActions.cancelRun.mockImplementationOnce(() => cancel.promise);
         const screen = await renderRunScreen({ run: runA });
-        act(() => { latestContentProps?.onCancel?.(); });
-        expect(latestContentProps?.pendingControl).toBe('cancel');
+        act(() => { readContentProps()?.onCancel?.(); });
+        expect(readContentProps()?.pendingControl).toBe('cancel');
 
         routeState.runId = '22222222-2222-4222-8222-222222222222';
         const runB = createWorkflowRunSummaryFixture({
@@ -1686,9 +1843,9 @@ describe('WorkflowRunScreen', () => {
         detailActions.listInvocations.mockResolvedValue(invocationPage([]));
         await screen.update(createRunScreenElement());
         await act(async () => {});
-        expect(latestContentProps?.run.id).toBe('22222222-2222-4222-8222-222222222222');
+        expect(readContentProps()?.run.id).toBe('22222222-2222-4222-8222-222222222222');
         // The new Run starts with no operation in flight; A's cancel is not its business.
-        expect(latestContentProps?.pendingControl).toBeNull();
+        expect(readContentProps()?.pendingControl).toBeNull();
 
         const cancelledB = { ...runB, state: 'cancelled' as const, revision: 6 };
         detailActions.listRuns.mockResolvedValue({ runs: [cancelledB], metadataByRunId: {} });
@@ -1697,28 +1854,27 @@ describe('WorkflowRunScreen', () => {
             checkpoint: null, callerAccess: { canEdit: true },
         });
         detailActions.cancelRun.mockResolvedValueOnce({ run: cancelledB, intent: 'cancelled' });
-        act(() => { latestContentProps?.onCancel?.(); });
+        act(() => { readContentProps()?.onCancel?.(); });
         await act(async () => {});
         expect(detailActions.cancelRun).toHaveBeenCalledTimes(2);
-        expect(latestContentProps?.run.revision).toBe(6);
+        expect(readContentProps()?.run.revision).toBe(6);
 
         cancel.resolve({ run: { ...runA, state: 'cancelled', revision: 2 }, intent: 'cancelled' });
         await act(async () => {});
-        expect(latestContentProps?.run.id).toBe('22222222-2222-4222-8222-222222222222');
-        expect(latestContentProps?.run.revision).toBe(6);
+        expect(readContentProps()?.run.id).toBe('22222222-2222-4222-8222-222222222222');
+        expect(readContentProps()?.run.revision).toBe(6);
         expect(storeState.state.workflowRunsById['11111111-1111-4111-8111-111111111111']).toMatchObject({ revision: 1 });
     });
 
     it('keeps both permission controls withdrawn until the exact canonical reread removes the request', async () => {
         const decision = createDeferred<Readonly<{ ok: boolean }>>();
         const reconciliation = createDeferred<ReturnType<typeof permissionInvocationResponse>>();
-        machineRpcSpy.mockImplementationOnce(async (params) => {
-            params.onIssued?.();
+        machineRpcSpy.mockImplementationOnce(async () => {
             return decision.promise;
         });
         await renderSelectedPermissionRequests();
 
-        expect(latestContentProps?.onRespondToRequest).toBeTypeOf('function');
+        expect(readContentProps()?.onRespondToRequest).toBeTypeOf('function');
         const exactReadsBeforeDecision = detailActions.getInvocation.mock.calls.length;
         detailActions.getInvocation.mockImplementationOnce(async () => reconciliation.promise);
         act(() => { void respondToRequest({ requestId: 'permission-1', approved: true }); });
@@ -1730,7 +1886,7 @@ describe('WorkflowRunScreen', () => {
             payload: { runId: 'exec-1', requestId: 'permission-1', approved: true },
         });
         // Only the answered request is withdrawn; the other stays decidable.
-        expect([...(latestContentProps?.pendingRequestIds ?? [])]).toEqual(['permission-1']);
+        expect([...(readContentProps()?.pendingRequestIds ?? [])]).toEqual(['permission-1']);
 
         // The opposite press must not race a competing response for the same request.
         act(() => { void respondToRequest({ requestId: 'permission-1', approved: false }); });
@@ -1743,7 +1899,7 @@ describe('WorkflowRunScreen', () => {
         expect(detailActions.getInvocation).toHaveBeenCalledTimes(exactReadsBeforeDecision + 1);
         // An acknowledgement is not settlement. The request stays withdrawn
         // while the exact canonical content read is unresolved.
-        expect([...(latestContentProps?.pendingRequestIds ?? [])]).toEqual(['permission-1']);
+        expect([...(readContentProps()?.pendingRequestIds ?? [])]).toEqual(['permission-1']);
         act(() => { void respondToRequest({ requestId: 'permission-1', approved: false }); });
         await act(async () => {});
         expect(machineRpcSpy).toHaveBeenCalledTimes(1);
@@ -1756,13 +1912,12 @@ describe('WorkflowRunScreen', () => {
         }));
         await act(async () => {});
 
-        expect([...(latestContentProps?.pendingRequestIds ?? [])]).toEqual([]);
+        expect([...(readContentProps()?.pendingRequestIds ?? [])]).toEqual([]);
     });
 
     it('keeps an issued permission decision pending when reconciliation returns an older row token', async () => {
         await renderSelectedPermissionRequests('2');
-        machineRpcSpy.mockImplementationOnce(async (params) => {
-            params.onIssued?.();
+        machineRpcSpy.mockImplementationOnce(async () => {
             return { ok: true };
         });
         detailActions.getInvocation.mockResolvedValueOnce(permissionInvocationResponse({
@@ -1775,30 +1930,23 @@ describe('WorkflowRunScreen', () => {
 
         await act(async () => { await respondToRequest({ requestId: 'permission-1', approved: true }); });
 
-        expect([...(latestContentProps?.pendingRequestIds ?? [])]).toEqual(['permission-1']);
+        expect([...(readContentProps()?.pendingRequestIds ?? [])]).toEqual(['permission-1']);
         expect(storeState.state.workflowRunInvocationsByRunId['11111111-1111-4111-8111-111111111111']?.factsById['44444444-4444-4444-8444-444444444444']?.contentRevision).toBe('2');
     });
 
     it('sends structured question answers through the discoverable Action and exact detached-run request writer', async () => {
         await renderSelectedPermissionRequests();
 
-        expect(latestContentProps?.onRespondToRequest).toBeTypeOf('function');
+        expect(readContentProps()?.onRespondToRequest).toBeTypeOf('function');
         await act(async () => { await respondToRequest({
             requestId: 'permission-1',
             answers: { branch: ['dev'] },
         })?.catch(() => {}); });
 
-        expect(actionTransport).toHaveBeenCalledWith('execution.run.permission.respond', {
-            runId: 'exec-1', requestId: 'permission-1', answers: { branch: ['dev'] },
-        }, expect.objectContaining({
-            surface: 'ui', serverId: 'server-a', expectedAccountId: 'account-a',
-            executionRunTargetMachineId: 'machine-1', signal: expect.any(AbortSignal),
-            onTransportIssued: expect.any(Function),
-        }));
-
         expect(machineRpcSpy).toHaveBeenCalledWith(expect.objectContaining({
             machineId: 'machine-1',
             method: RPC_METHODS.DAEMON_EXECUTION_RUN_PERMISSION_RESPOND,
+            serverUrl: 'https://server-a', accountId: 'account-a', requestId: expect.any(String),
             payload: {
                 runId: 'exec-1',
                 requestId: 'permission-1',
@@ -1809,20 +1957,21 @@ describe('WorkflowRunScreen', () => {
 
     it('leaves a queued Action approval request answerable when no detached response was issued', async () => {
         await renderSelectedPermissionRequests();
-        const transport = actionTransport.getMockImplementation()!;
-        actionTransport.mockImplementation(async (action, input, context) => action === 'execution.run.permission.respond'
-            ? { ok: true, result: { kind: 'approval_request_created', artifactId: 'approval-1', actionId: action } }
-            : transport(action, input, context));
+        approvalRequired = true;
+        const state = getStorage().getState();
+        state.applySettingsForScope({ serverId: servedHomeId, accountId: 'account-a' }, { ...state.settings,
+            actionsSettingsV1: { v: 1, actions: { 'execution.run.permission.respond': { approvalRequiredSurfaces: ['ui'] } } },
+        }, 2);
 
         await act(async () => { await respondToRequest({ requestId: 'permission-1', approved: true })?.catch(() => {}); });
 
         expect(machineRpcSpy).not.toHaveBeenCalled();
-        expect([...(latestContentProps?.pendingRequestIds ?? [])]).toEqual([]);
+        expect(approvalArtifacts.list()).toHaveLength(1);
+        expect([...(readContentProps()?.pendingRequestIds ?? [])]).toEqual([]);
     });
 
     it('reconciles a not-found response and suppresses the opposite answer while canonical content still has the request', async () => {
-        machineRpcSpy.mockImplementationOnce(async (params) => {
-            params.onIssued?.();
+        machineRpcSpy.mockImplementationOnce(async () => {
             return { ok: false, errorCode: 'permission_request_not_found' };
         });
         await renderSelectedPermissionRequests();
@@ -1835,16 +1984,15 @@ describe('WorkflowRunScreen', () => {
         expect(detailActions.getInvocation).toHaveBeenCalledTimes(exactReadsBeforeDecision + 1);
         // The failure is the answering card's to show, once — not a second screen error.
         await expect(answer).rejects.toThrow();
-        expect(latestContentProps?.errorLabel ?? null).toBeNull();
-        expect([...(latestContentProps?.pendingRequestIds ?? [])]).toEqual(['permission-1']);
+        expect(readContentProps()?.errorLabel ?? null).toBeNull();
+        expect([...(readContentProps()?.pendingRequestIds ?? [])]).toEqual(['permission-1']);
         act(() => { void respondToRequest({ requestId: 'permission-1', approved: false }); });
         await act(async () => {});
         expect(machineRpcSpy).toHaveBeenCalledTimes(1);
     });
 
     it('reconciles an issued timeout without making the request retryable from an unknown outcome', async () => {
-        machineRpcSpy.mockImplementationOnce(async (params) => {
-            params.onIssued?.();
+        machineRpcSpy.mockImplementationOnce(async () => {
             throw new Error('machine timed out');
         });
         await renderSelectedPermissionRequests();
@@ -1857,8 +2005,8 @@ describe('WorkflowRunScreen', () => {
         expect(detailActions.getInvocation).toHaveBeenCalledTimes(exactReadsBeforeDecision + 1);
         // The failure is the answering card's to show, once — not a second screen error.
         await expect(answer).rejects.toThrow();
-        expect(latestContentProps?.errorLabel ?? null).toBeNull();
-        expect([...(latestContentProps?.pendingRequestIds ?? [])]).toEqual(['permission-1']);
+        expect(readContentProps()?.errorLabel ?? null).toBeNull();
+        expect([...(readContentProps()?.pendingRequestIds ?? [])]).toEqual(['permission-1']);
         act(() => { void respondToRequest({ requestId: 'permission-1', approved: false }); });
         await act(async () => {});
         expect(machineRpcSpy).toHaveBeenCalledTimes(1);
@@ -1866,14 +2014,14 @@ describe('WorkflowRunScreen', () => {
 
     it('permits retry after an exact reread confirms a failure happened before transport issuance', async () => {
         const reconciliation = createDeferred<ReturnType<typeof permissionInvocationResponse>>();
-        machineRpcSpy.mockRejectedValueOnce(new Error('scope unavailable before emission'));
+        machinePreparationFailure = new Error('scope unavailable before emission');
         await renderSelectedPermissionRequests();
         detailActions.getInvocation.mockImplementationOnce(async () => reconciliation.promise);
 
         act(() => { void respondToRequest({ requestId: 'permission-1', approved: true }); });
         await act(async () => {});
 
-        expect([...(latestContentProps?.pendingRequestIds ?? [])]).toEqual(['permission-1']);
+        expect([...(readContentProps()?.pendingRequestIds ?? [])]).toEqual(['permission-1']);
         reconciliation.resolve(permissionInvocationResponse({
             index: createWorkflowInvocationIndexFixture({
                 id: '44444444-4444-4444-8444-444444444444', parentRecordId: '33333333-3333-4333-8333-333333333333', memberOrdinal: '0', sequence: '1', lifecycle: 'waiting_for_approval',
@@ -1882,14 +2030,13 @@ describe('WorkflowRunScreen', () => {
         }));
         await act(async () => {});
 
-        expect([...(latestContentProps?.pendingRequestIds ?? [])]).toEqual([]);
+        expect([...(readContentProps()?.pendingRequestIds ?? [])]).toEqual([]);
         await act(async () => { await respondToRequest({ requestId: 'permission-1', approved: false })?.catch(() => {}); });
-        expect(machineRpcSpy).toHaveBeenCalledTimes(2);
+        expect(machineRpcSpy).toHaveBeenCalledTimes(1);
     });
 
     it('keeps an unchanged invalid response withdrawn after canonical content confirms the request is still open', async () => {
-        machineRpcSpy.mockImplementationOnce(async (params) => {
-            params.onIssued?.();
+        machineRpcSpy.mockImplementationOnce(async () => {
             return { ok: false, errorCode: 'execution_run_invalid_action_input' };
         });
         await renderSelectedPermissionRequests();
@@ -1897,7 +2044,7 @@ describe('WorkflowRunScreen', () => {
         await act(async () => { await respondToRequest({ requestId: 'permission-1', approved: true })?.catch(() => {}); });
         await act(async () => {});
 
-        expect([...(latestContentProps?.pendingRequestIds ?? [])]).toEqual(['permission-1']);
+        expect([...(readContentProps()?.pendingRequestIds ?? [])]).toEqual(['permission-1']);
         act(() => { void respondToRequest({ requestId: 'permission-1', approved: false }); });
         await act(async () => {});
         expect(machineRpcSpy).toHaveBeenCalledTimes(1);
@@ -1907,20 +2054,19 @@ describe('WorkflowRunScreen', () => {
         const decision = createDeferred<Readonly<{ ok: boolean }>>();
         const replacementDecision = createDeferred<Readonly<{ ok: boolean }>>();
         machineRpcSpy
-            .mockImplementationOnce(async (params) => {
-                params.onIssued?.();
+            .mockImplementationOnce(async () => {
                 return decision.promise;
             })
-            .mockImplementationOnce(async (params) => {
-                params.onIssued?.();
+            .mockImplementationOnce(async () => {
                 return replacementDecision.promise;
             });
         const screen = await renderSelectedPermissionRequests();
         act(() => { void respondToRequest({ requestId: 'permission-1', approved: true }); });
         await act(async () => {});
         expect(machineRpcSpy).toHaveBeenCalledTimes(1);
-        const firstSignal = machineRpcSpy.mock.calls[0]?.[0].signal;
-        expect(firstSignal?.aborted).toBe(false);
+        const firstRequestId = machineRpcSpy.mock.calls[0]?.[0].requestId;
+        expect(firstRequestId).toBeTypeOf('string');
+        expect(socketCancellations).not.toContain(firstRequestId);
 
         act(() => accountScopeHarness.switchTo({ serverId: 'server-b', accountId: 'account-b' }));
         const runB = createWorkflowRunSummaryFixture({ id: '11111111-1111-4111-8111-111111111111', state: 'running', machineId: 'machine-1' });
@@ -1935,23 +2081,23 @@ describe('WorkflowRunScreen', () => {
         detailActions.listInvocations.mockResolvedValue(invocationPage([]));
         await screen.update(createRunScreenElement());
         await act(async () => {});
-        expect(firstSignal?.aborted).toBe(true);
+        expect(socketCancellations).toContain(firstRequestId);
 
         act(() => accountScopeHarness.switchTo({ serverId: 'server-a', accountId: 'account-a' }));
         await screen.update(createRunScreenElement());
         await act(async () => {});
-        await act(async () => latestContentProps?.onSelectInvocation('44444444-4444-4444-8444-444444444444'));
+        await act(async () => readContentProps()?.onSelectInvocation('44444444-4444-4444-8444-444444444444'));
         await act(async () => {});
         act(() => { void respondToRequest({ requestId: 'permission-1', approved: false }); });
         await act(async () => {});
         expect(machineRpcSpy).toHaveBeenCalledTimes(2);
-        expect([...(latestContentProps?.pendingRequestIds ?? [])]).toEqual(['permission-1']);
+        expect([...(readContentProps()?.pendingRequestIds ?? [])]).toEqual(['permission-1']);
 
         decision.reject(new Error('machine unreachable'));
         await act(async () => {});
 
-        expect(latestContentProps?.errorLabel ?? null).toBeNull();
-        expect([...(latestContentProps?.pendingRequestIds ?? [])]).toEqual(['permission-1']);
+        expect(readContentProps()?.errorLabel ?? null).toBeNull();
+        expect([...(readContentProps()?.pendingRequestIds ?? [])]).toEqual(['permission-1']);
 
         replacementDecision.reject(new Error('replacement machine unreachable'));
         await act(async () => {});
@@ -1995,33 +2141,33 @@ describe('WorkflowRunScreen', () => {
         const first = createWorkflowInvocationIndexFixture({ id: 'bbbbbbbb-bbbb-4bbb-8bbb-bbbbbbbbbbbb', memberOrdinal: '0', sequence: '0' });
         const second = createWorkflowInvocationIndexFixture({ id: 'cccccccc-cccc-4ccc-8ccc-cccccccccccc', memberOrdinal: '1', sequence: '1' });
         await renderPagedRunScreen({ history: [first], historyNextCursor: 'history-2' });
-        expect(latestContentProps?.invocations.map((entry) => entry.id)).toEqual(['bbbbbbbb-bbbb-4bbb-8bbb-bbbbbbbbbbbb']);
+        expect(readContentProps()?.invocations.map((entry) => entry.id)).toEqual(['bbbbbbbb-bbbb-4bbb-8bbb-bbbbbbbbbbbb']);
 
         detailActions.listInvocations.mockRejectedValueOnce(new Error('offline'));
-        await act(async () => { latestContentProps?.onLoadMoreInvocations?.(); });
+        await act(async () => { readContentProps()?.onLoadMoreInvocations?.(); });
         await act(async () => {});
 
         // A page that did not arrive is not a durable Run operation failure, so
         // it must not claim the outcome region's error voice.
-        expect(latestContentProps?.errorLabel ?? null).toBeNull();
-        expect(latestContentProps?.loadMoreInvocationsFailed).toBe(true);
+        expect(readContentProps()?.errorLabel ?? null).toBeNull();
+        expect(readContentProps()?.loadMoreInvocationsFailed).toBe(true);
         // The rows already read and the cursor Retry needs both survive.
-        expect(latestContentProps?.invocations.map((entry) => entry.id)).toEqual(['bbbbbbbb-bbbb-4bbb-8bbb-bbbbbbbbbbbb']);
-        expect(latestContentProps?.onLoadMoreInvocations).toBeTypeOf('function');
+        expect(readContentProps()?.invocations.map((entry) => entry.id)).toEqual(['bbbbbbbb-bbbb-4bbb-8bbb-bbbbbbbbbbbb']);
+        expect(readContentProps()?.onLoadMoreInvocations).toBeTypeOf('function');
 
         detailActions.listInvocations.mockRejectedValueOnce(new Error('offline again'));
-        await act(async () => { latestContentProps?.onLoadMoreInvocations?.(); });
+        await act(async () => { readContentProps()?.onLoadMoreInvocations?.(); });
         await act(async () => {});
-        expect(latestContentProps?.loadMoreInvocationsFailed).toBe(true);
+        expect(readContentProps()?.loadMoreInvocationsFailed).toBe(true);
 
         detailActions.listInvocations.mockImplementationOnce(async () => invocationPage([second]));
-        await act(async () => { latestContentProps?.onLoadMoreInvocations?.(); });
+        await act(async () => { readContentProps()?.onLoadMoreInvocations?.(); });
         await act(async () => {});
 
-        expect(latestContentProps?.loadMoreInvocationsFailed).toBe(false);
-        expect(latestContentProps?.invocations.map((entry) => entry.id)).toEqual(['bbbbbbbb-bbbb-4bbb-8bbb-bbbbbbbbbbbb', 'cccccccc-cccc-4ccc-8ccc-cccccccccccc']);
-        expect(latestContentProps?.onLoadMoreInvocations).toBeUndefined();
-        expect(latestContentProps?.errorLabel ?? null).toBeNull();
+        expect(readContentProps()?.loadMoreInvocationsFailed).toBe(false);
+        expect(readContentProps()?.invocations.map((entry) => entry.id)).toEqual(['bbbbbbbb-bbbb-4bbb-8bbb-bbbbbbbbbbbb', 'cccccccc-cccc-4ccc-8ccc-cccccccccccc']);
+        expect(readContentProps()?.onLoadMoreInvocations).toBeUndefined();
+        expect(readContentProps()?.errorLabel ?? null).toBeNull();
     });
 
     it('issues one attention continuation for two presses in the same frame and releases the guard when it settles', async () => {
@@ -2029,14 +2175,14 @@ describe('WorkflowRunScreen', () => {
             id: 'dddddddd-dddd-4ddd-8ddd-dddddddddddd', memberOrdinal: '0', sequence: '0', lifecycle: 'waiting_for_approval',
         });
         await renderPagedRunScreen({ attention: [attentionRow], attentionNextCursor: 'attention-2' });
-        expect(latestContentProps?.onLoadMoreAttention).toBeTypeOf('function');
+        expect(readContentProps()?.onLoadMoreAttention).toBeTypeOf('function');
         const callsBefore = detailActions.listInvocations.mock.calls.length;
 
         const page = createDeferred<unknown>();
         detailActions.listInvocations.mockImplementationOnce(async () => page.promise);
         act(() => {
-            latestContentProps?.onLoadMoreAttention?.();
-            latestContentProps?.onLoadMoreAttention?.();
+            readContentProps()?.onLoadMoreAttention?.();
+            readContentProps()?.onLoadMoreAttention?.();
         });
         await act(async () => {});
 
@@ -2044,7 +2190,7 @@ describe('WorkflowRunScreen', () => {
 
         page.resolve({ ...invocationPage([]), nextCursor: 'attention-3' });
         await act(async () => {});
-        await act(async () => { latestContentProps?.onLoadMoreAttention?.(); });
+        await act(async () => { readContentProps()?.onLoadMoreAttention?.(); });
         await act(async () => {});
 
         // The guard withdraws only the duplicate, never the next honest ask.
@@ -2056,13 +2202,13 @@ describe('WorkflowRunScreen', () => {
         const screen = await renderPagedRunScreen({ history: [first], historyNextCursor: 'history-2' });
 
         detailActions.listInvocations.mockRejectedValueOnce(new Error('offline'));
-        await act(async () => { latestContentProps?.onLoadMoreInvocations?.(); });
+        await act(async () => { readContentProps()?.onLoadMoreInvocations?.(); });
         await act(async () => {});
-        expect(latestContentProps?.loadMoreInvocationsFailed).toBe(true);
+        expect(readContentProps()?.loadMoreInvocationsFailed).toBe(true);
 
         const stale = createDeferred<unknown>();
         detailActions.listInvocations.mockImplementationOnce(async () => stale.promise);
-        act(() => { latestContentProps?.onLoadMoreInvocations?.(); });
+        act(() => { readContentProps()?.onLoadMoreInvocations?.(); });
         await act(async () => {});
 
         routeState.runId = '22222222-2222-4222-8222-222222222222';
@@ -2078,15 +2224,15 @@ describe('WorkflowRunScreen', () => {
         detailActions.listInvocations.mockImplementation(async () => invocationPage([]));
         await screen.update(createRunScreenElement());
         await act(async () => {});
-        expect(latestContentProps?.run.id).toBe('22222222-2222-4222-8222-222222222222');
-        expect(latestContentProps?.loadMoreInvocationsFailed).toBe(false);
+        expect(readContentProps()?.run.id).toBe('22222222-2222-4222-8222-222222222222');
+        expect(readContentProps()?.loadMoreInvocationsFailed).toBe(false);
 
         stale.reject(new Error('offline'));
         await act(async () => {});
 
         // Run A's lost page belongs to nobody on screen once Run B is mounted.
-        expect(latestContentProps?.loadMoreInvocationsFailed).toBe(false);
-        expect(latestContentProps?.errorLabel ?? null).toBeNull();
+        expect(readContentProps()?.loadMoreInvocationsFailed).toBe(false);
+        expect(readContentProps()?.errorLabel ?? null).toBeNull();
     });
 
     /**
@@ -2103,7 +2249,7 @@ describe('WorkflowRunScreen', () => {
             const definition = createWorkflowDefinitionFixture({ defaults: {}, blocks: [{ kind: 'wait', id: 'confirm',
                 document: { text: 'Enter READY, then continue.', references: [], attachments: [] }, result: { kind: 'text' } }] });
             await renderRunScreen({ run: queued, definition });
-            expect(latestContentProps?.run.state).toBe('queued');
+            expect(readContentProps()?.run.state).toBe('queued');
             const waiting = { ...queued, state: 'waiting_for_review' as const, revision: 12 };
             const root = createWorkflowInvocationIndexFixture({ id: '33333333-3333-4333-8333-333333333333', parentRecordId: null });
             const held = createWorkflowInvocationIndexFixture({ id: '44444444-4444-4444-8444-444444444444',
@@ -2119,14 +2265,14 @@ describe('WorkflowRunScreen', () => {
             await act(async () => {});
 
             expect(storeState.state.workflowRunsById[queued.id]?.detail?.run.revision).toBe(0);
-            expect(latestContentProps?.run.state).toBe('waiting_for_review');
-            expect(latestContentProps?.run.revision).toBe(12);
-            expect(latestContentProps?.invocationProgressById?.get(held.id)?.resultContract).toEqual({ kind: 'text' });
+            expect(readContentProps()?.run.state).toBe('waiting_for_review');
+            expect(readContentProps()?.run.revision).toBe(12);
+            expect(readContentProps()?.invocationProgressById?.get(held.id)?.resultContract).toEqual({ kind: 'text' });
         });
         it('opens current detail when an interrupted Run is later stopped', async () => {
             const interrupted = createWorkflowRunSummaryFixture({ state: 'interrupted', revision: 17, workflowCustodyState: 'pending', origin: { kind: 'direct' } });
             await renderRunScreen({ run: interrupted });
-            await vi.waitFor(() => expect(latestContentProps?.run.state).toBe('interrupted'));
+            await vi.waitFor(() => expect(readContentProps()?.run.state).toBe('interrupted'));
             const earlierDetail = await detailActions.getRun.mock.results[0]!.value;
             const stopped = { ...interrupted, state: 'cancelled' as const, revision: 19,
                 workflowCustodyState: 'settled' as const };
@@ -2136,25 +2282,25 @@ describe('WorkflowRunScreen', () => {
             await act(async () => publishHomeAccountChange('server-a', [`workflow-run:${interrupted.id}`]));
             await act(async () => {});
 
-            expect(latestContentProps?.run.state).toBe('cancelled');
+            expect(readContentProps()?.run.state).toBe('cancelled');
             expect(storeState.state.workflowRunsById[interrupted.id]?.detail?.run.revision).toBe(19);
             expect(storeState.state.workflowRunsById[interrupted.id]?.detail?.run.workflowCustodyState).toBe('settled');
         });
         it('renews exact detail and its wake subscription on same-Account restore', async () => {
             const run = createWorkflowRunSummaryFixture({ state: 'claimed', revision: 1 });
             await renderRunScreen({ run });
-            expect(latestContentProps?.run.state).toBe('claimed');
+            expect(readContentProps()?.run.state).toBe('claimed');
             const reply = await detailActions.getRun.mock.results[0]!.value;
             const restored = { ...run, state: 'succeeded' as const, revision: 2 };
             detailActions.getRun.mockResolvedValue({ ...reply, run: restored });
             detailActions.listRuns.mockResolvedValue({ runs: [restored], metadataByRunId: {} });
             await act(async () => { retireActiveServerAccountScopeLifetime(); });
-            expect(latestContentProps?.run.state).toBe('succeeded');
+            expect(readContentProps()?.run.state).toBe('succeeded');
             const changed = { ...restored, state: 'interrupted' as const, revision: 3 };
             detailActions.getRun.mockResolvedValue({ ...reply, run: changed });
             detailActions.listRuns.mockResolvedValue({ runs: [changed], metadataByRunId: {} });
             await act(async () => { publishHomeAccountChange('server-a', [`workflow-run:${run.id}`]); });
-            expect(latestContentProps?.run.state).toBe('interrupted');
+            expect(readContentProps()?.run.state).toBe('interrupted');
         });
         it.each(['waiting_for_review', 'succeeded', 'claimed'] as const)('refreshes a claimed Run to authoritative %s without waiting for Account catch-up', async (state) => {
             const runId = '11111111-1111-4111-8111-111111111111';
@@ -2162,7 +2308,7 @@ describe('WorkflowRunScreen', () => {
             routeState.runId = runId;
             const claimed = createWorkflowRunSummaryFixture({ id: runId, state: 'claimed', revision: 1, origin: { kind: 'direct' } });
             await renderRunScreen({ run: claimed });
-            expect(latestContentProps?.run.state).toBe('claimed');
+            expect(readContentProps()?.run.state).toBe('claimed');
 
             const current = { ...claimed, state, revision: 2 };
             detailActions.listRuns.mockResolvedValue({ runs: [current], metadataByRunId: {} });
@@ -2182,12 +2328,12 @@ describe('WorkflowRunScreen', () => {
             await act(async () => publishHomeAccountChange('server-a', [`workflow-run:${runId}`]));
             await act(async () => {});
 
-            expect(latestContentProps?.run.state).toBe(state);
+            expect(readContentProps()?.run.state).toBe(state);
             expect(storeState.state.workflowRunsById[runId]?.summary?.revision).toBe(2);
-            expect(latestContentProps?.invocations.some(row => row.id === invocation.id)).toBe(true);
+            expect(readContentProps()?.invocations.some(row => row.id === invocation.id)).toBe(true);
             if (state === 'succeeded') {
-                expect(latestContentProps?.resultLabel).toBe('Release notes are ready');
-                expect(latestContentProps?.finalOutputInvocationId).toBe(invocationId);
+                expect(readContentProps()?.resultLabel).toBe('Release notes are ready');
+                expect(readContentProps()?.finalOutputInvocationId).toBe(invocationId);
             }
         });
     });
@@ -2216,15 +2362,15 @@ describe('WorkflowRunScreen', () => {
                 invocations,
                 invocationDetails: [response.invocation],
             });
-            await act(async () => latestContentProps?.onSelectInvocation(invocations[1]!.id));
-            expect(latestContentProps?.selectedInvocationProgress).toEqual(response.invocation.progress);
+            await act(async () => readContentProps()?.onSelectInvocation(invocations[1]!.id));
+            expect(readContentProps()?.selectedInvocationProgress).toEqual(response.invocation.progress);
             expect(screen.findByTestId('workflow-run-read-pending')).toBeNull();
             // A read in flight is not stale evidence: no warning beside a hold that just opened (DESIGN-15 R7).
             expect(screen.findByTestId('workflow-run-read-freshness')).toBeNull();
-            expect(latestContentProps?.onRespondToRequest).toBeUndefined();
+            expect(readContentProps()?.onRespondToRequest).toBeUndefined();
             exactRead.resolve(response);
             await act(async () => {});
-            expect(latestContentProps?.selectedContentUnavailable).toBe(false);
+            expect(readContentProps()?.selectedContentUnavailable).toBe(false);
             expect(screen.findByTestId('workflow-run-read-freshness')).toBeNull();
         });
 
@@ -2236,11 +2382,11 @@ describe('WorkflowRunScreen', () => {
                 run: createWorkflowRunSummaryFixture({ id: '11111111-1111-4111-8111-111111111111', state: 'running', revision: 1 }),
                 invocations,
             });
-            await act(async () => latestContentProps?.onSelectInvocation('44444444-4444-4444-8444-444444444444'));
+            await act(async () => readContentProps()?.onSelectInvocation('44444444-4444-4444-8444-444444444444'));
             await act(async () => {});
-            expect(latestContentProps?.selectedContentUnavailable).toBe(true);
-            expect(latestContentProps?.selectedInvocationProgress).toBeNull();
-            expect(latestContentProps?.onRespondToRequest).toBeUndefined();
+            expect(readContentProps()?.selectedContentUnavailable).toBe(true);
+            expect(readContentProps()?.selectedInvocationProgress).toBeNull();
+            expect(readContentProps()?.onRespondToRequest).toBeUndefined();
         });
 
         it('refreshes selected evidence on a row token change without a timestamp or parent change', async () => {
@@ -2254,19 +2400,19 @@ describe('WorkflowRunScreen', () => {
                 run: createWorkflowRunSummaryFixture({ id: '11111111-1111-4111-8111-111111111111', state: 'running', revision: 1 }),
                 invocations,
             });
-            await act(async () => latestContentProps?.onSelectInvocation('44444444-4444-4444-8444-444444444444'));
-            expect(latestContentProps?.selectedContentUnavailable).toBe(false);
+            await act(async () => readContentProps()?.onSelectInvocation('44444444-4444-4444-8444-444444444444'));
+            expect(readContentProps()?.selectedContentUnavailable).toBe(false);
             act(() => getStorage().getState().upsertWorkflowRunInvocation({
                 runId: '11111111-1111-4111-8111-111111111111', invocation: newer, parentRevision: 1,
             }));
             await act(async () => {});
             expect(detailActions.getInvocation).toHaveBeenCalledTimes(2);
-            expect(latestContentProps?.selectedContentUnavailable).toBe(true);
-            expect(latestContentProps?.onRespondToRequest).toBeUndefined();
+            expect(readContentProps()?.selectedContentUnavailable).toBe(true);
+            expect(readContentProps()?.onRespondToRequest).toBeUndefined();
             refreshedRead.resolve(openRequestResponse(newer, 1));
             await act(async () => {});
-            expect(latestContentProps?.selectedContentUnavailable).toBe(false);
-            expect(latestContentProps?.onRespondToRequest).toBeTypeOf('function');
+            expect(readContentProps()?.selectedContentUnavailable).toBe(false);
+            expect(readContentProps()?.onRespondToRequest).toBeTypeOf('function');
         });
 
         it('refreshes row-only attention and the exact selection while visible, and reads current facts on reopening', async () => {
@@ -2287,8 +2433,8 @@ describe('WorkflowRunScreen', () => {
                 invocations,
                 wrap,
             });
-            await act(async () => latestContentProps?.onSelectInvocation('44444444-4444-4444-8444-444444444444'));
-            expect(latestContentProps?.selectedContentUnavailable).toBe(false);
+            await act(async () => readContentProps()?.onSelectInvocation('44444444-4444-4444-8444-444444444444'));
+            expect(readContentProps()?.selectedContentUnavailable).toBe(false);
 
             const refreshedRead = createDeferred<unknown>();
             detailActions.getInvocation.mockReturnValueOnce(refreshedRead.promise);
@@ -2299,13 +2445,13 @@ describe('WorkflowRunScreen', () => {
                 invocationPage(input.lifecycles === undefined ? invocations : [offPageApproval])
             ));
             await act(async () => publishHomeAccountChange('server-a', ['workflow-run:11111111-1111-4111-8111-111111111111']));
-            expect(latestContentProps?.invocations.some((row) => row.id === offPageApproval.id)).toBe(true);
-            expect(latestContentProps?.selectedContentUnavailable).toBe(true);
-            expect(latestContentProps?.selectedInvocationProgress).not.toBeNull();
-            expect(latestContentProps?.run.revision).toBe(1);
+            expect(readContentProps()?.invocations.some((row) => row.id === offPageApproval.id)).toBe(true);
+            expect(readContentProps()?.selectedContentUnavailable).toBe(true);
+            expect(readContentProps()?.selectedInvocationProgress).not.toBeNull();
+            expect(readContentProps()?.run.revision).toBe(1);
             refreshedRead.resolve(openRequestResponse(invocations[1]!, 1));
             await act(async () => {});
-            expect(latestContentProps?.selectedContentUnavailable).toBe(false);
+            expect(readContentProps()?.selectedContentUnavailable).toBe(false);
 
             // A retained workspace tab is hidden even while the host remains visible.
             destinationVisible = false;
@@ -2338,15 +2484,15 @@ describe('WorkflowRunScreen', () => {
                 }),
                 invocations,
             });
-            await act(async () => latestContentProps?.onSelectInvocation('44444444-4444-4444-8444-444444444444'));
+            await act(async () => readContentProps()?.onSelectInvocation('44444444-4444-4444-8444-444444444444'));
             await act(async () => {});
             expect(detailActions.getInvocation).toHaveBeenCalledTimes(1);
 
             firstRead.resolve(openRequestResponse(invocations[1]!, 1));
             await act(async () => {});
             // The matching first read confirms the evidence its callbacks act on.
-            expect(latestContentProps?.selectedContentUnavailable).toBe(false);
-            expect(latestContentProps?.onRespondToRequest).toBeTypeOf('function');
+            expect(readContentProps()?.selectedContentUnavailable).toBe(false);
+            expect(readContentProps()?.onRespondToRequest).toBeTypeOf('function');
 
             // A newer index row for the same selection re-asks for it. The
             // evidence is unconfirmed before that request answers, while
@@ -2363,10 +2509,10 @@ describe('WorkflowRunScreen', () => {
             });
             await act(async () => {});
             expect(detailActions.getInvocation).toHaveBeenCalledTimes(2);
-            expect(latestContentProps?.selectedContentUnavailable).toBe(true);
-            expect(latestContentProps?.onRespondToRequest).toBeUndefined();
-            expect(latestContentProps?.run.id).toBe('11111111-1111-4111-8111-111111111111');
-            expect(latestContentProps?.selectedInvocationProgress).toMatchObject({
+            expect(readContentProps()?.selectedContentUnavailable).toBe(true);
+            expect(readContentProps()?.onRespondToRequest).toBeUndefined();
+            expect(readContentProps()?.run.id).toBe('11111111-1111-4111-8111-111111111111');
+            expect(readContentProps()?.selectedInvocationProgress).toMatchObject({
                 execution: { kind: 'detached_run', runId: 'exec-1' },
             });
             expect(screen.findByTestId('workflow-run-read-pending')).toBeNull();
@@ -2374,8 +2520,8 @@ describe('WorkflowRunScreen', () => {
 
             secondRead.resolve(openRequestResponse(newerIndex, 1));
             await act(async () => {});
-            expect(latestContentProps?.selectedContentUnavailable).toBe(false);
-            expect(latestContentProps?.onRespondToRequest).toBeTypeOf('function');
+            expect(readContentProps()?.selectedContentUnavailable).toBe(false);
+            expect(readContentProps()?.onRespondToRequest).toBeTypeOf('function');
         });
 
         it('ignores an exact response for another record instead of publishing it under the selection', async () => {
@@ -2398,14 +2544,14 @@ describe('WorkflowRunScreen', () => {
                 }),
                 invocations,
             });
-            await act(async () => latestContentProps?.onSelectInvocation('44444444-4444-4444-8444-444444444444'));
+            await act(async () => readContentProps()?.onSelectInvocation('44444444-4444-4444-8444-444444444444'));
             await act(async () => {});
 
             // Another record's answer is nobody's evidence here: nothing is
             // published under the selection and no callback is armed by it.
-            expect(latestContentProps?.selectedContentUnavailable).toBe(true);
-            expect(latestContentProps?.selectedInvocationProgress).toBeNull();
-            expect(latestContentProps?.onRespondToRequest).toBeUndefined();
+            expect(readContentProps()?.selectedContentUnavailable).toBe(true);
+            expect(readContentProps()?.selectedInvocationProgress).toBeNull();
+            expect(readContentProps()?.onRespondToRequest).toBeUndefined();
         });
 
         it('confirms only on a response at least as fresh as the issued revision', async () => {
@@ -2423,30 +2569,30 @@ describe('WorkflowRunScreen', () => {
                 }),
                 invocations,
             });
-            await act(async () => latestContentProps?.onSelectInvocation('44444444-4444-4444-8444-444444444444'));
+            await act(async () => readContentProps()?.onSelectInvocation('44444444-4444-4444-8444-444444444444'));
             await act(async () => {});
 
             staleRead.resolve(openRequestResponse(invocations[1]!, 1));
             await act(async () => {});
             // Issued at revision 2, answered from revision 1: superseded.
-            expect(latestContentProps?.selectedContentUnavailable).toBe(true);
-            expect(latestContentProps?.onRespondToRequest).toBeUndefined();
+            expect(readContentProps()?.selectedContentUnavailable).toBe(true);
+            expect(readContentProps()?.onRespondToRequest).toBeUndefined();
 
             // Re-asking re-arms the flight; the answer from revision 2 matches.
             await act(async () => requireDefined(
-                latestContentProps?.onDeselectInvocation,
+                readContentProps()?.onDeselectInvocation,
                 'Expected an invocation deselection handler',
             )());
-            await act(async () => latestContentProps?.onSelectInvocation('44444444-4444-4444-8444-444444444444'));
+            await act(async () => readContentProps()?.onSelectInvocation('44444444-4444-4444-8444-444444444444'));
             await act(async () => {});
             expect(detailActions.getInvocation).toHaveBeenCalledTimes(2);
-            expect(latestContentProps?.selectedContentUnavailable).toBe(true);
-            expect(latestContentProps?.onRespondToRequest).toBeUndefined();
+            expect(readContentProps()?.selectedContentUnavailable).toBe(true);
+            expect(readContentProps()?.onRespondToRequest).toBeUndefined();
 
             freshRead.resolve(openRequestResponse(invocations[1]!, 2));
             await act(async () => {});
-            expect(latestContentProps?.selectedContentUnavailable).toBe(false);
-            expect(latestContentProps?.onRespondToRequest).toBeTypeOf('function');
+            expect(readContentProps()?.selectedContentUnavailable).toBe(false);
+            expect(readContentProps()?.onRespondToRequest).toBeTypeOf('function');
         });
 
         it('re-arms selected callbacks once a matching read succeeds after a failure', async () => {
@@ -2463,29 +2609,29 @@ describe('WorkflowRunScreen', () => {
                 }),
                 invocations,
             });
-            await act(async () => latestContentProps?.onSelectInvocation('44444444-4444-4444-8444-444444444444'));
+            await act(async () => readContentProps()?.onSelectInvocation('44444444-4444-4444-8444-444444444444'));
             await act(async () => {});
-            expect(latestContentProps?.selectedContentUnavailable).toBe(true);
-            expect(latestContentProps?.onRespondToRequest).toBeUndefined();
+            expect(readContentProps()?.selectedContentUnavailable).toBe(true);
+            expect(readContentProps()?.onRespondToRequest).toBeUndefined();
 
             // Leaving and returning to the row re-asks for it. The evidence
             // stays unconfirmed through that flight — every effect run marks
             // it so before requesting — and only the matching answer re-arms
             // the callbacks the failure withdrew.
             await act(async () => requireDefined(
-                latestContentProps?.onDeselectInvocation,
+                readContentProps()?.onDeselectInvocation,
                 'Expected an invocation deselection handler',
             )());
-            await act(async () => latestContentProps?.onSelectInvocation('44444444-4444-4444-8444-444444444444'));
+            await act(async () => readContentProps()?.onSelectInvocation('44444444-4444-4444-8444-444444444444'));
             await act(async () => {});
             expect(detailActions.getInvocation).toHaveBeenCalledTimes(2);
-            expect(latestContentProps?.selectedContentUnavailable).toBe(true);
-            expect(latestContentProps?.onRespondToRequest).toBeUndefined();
+            expect(readContentProps()?.selectedContentUnavailable).toBe(true);
+            expect(readContentProps()?.onRespondToRequest).toBeUndefined();
 
             retryRead.resolve(openRequestResponse(invocations[1]!, 1));
             await act(async () => {});
-            expect(latestContentProps?.selectedContentUnavailable).toBe(false);
-            expect(latestContentProps?.onRespondToRequest).toBeTypeOf('function');
+            expect(readContentProps()?.selectedContentUnavailable).toBe(false);
+            expect(readContentProps()?.onRespondToRequest).toBeTypeOf('function');
         });
     });
 });

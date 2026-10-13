@@ -1,566 +1,472 @@
-import * as React from 'react';
 import { act } from 'react-test-renderer';
-import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
+import { afterEach, beforeAll, beforeEach, describe, expect, it, vi } from 'vitest';
+import { createDeferred, renderHook, standardCleanup } from '@/dev/testkit';
+import { createHomeGovernanceHarness, installHomeGovernanceBoundaries, waitForHomeGovernance } from '@/dev/testkit/harness/homeGovernanceHarness';
+import { installDisconnectedServerSocketBoundary } from '@/dev/testkit/harness/serverAccountConnectionHarness';
+import { loadSyncSingletonForTests } from '@/dev/testkit/harness/syncSingletonLoader';
+import { createPlainAccountEncryptionCurrentnessFixture } from '@/dev/testkit/fixtures/accountEncryptionCurrentness';
+import { createAutomationRunFixture, createWorkflowDefinitionFixture, createWorkflowRunSummaryFixture } from '@/dev/testkit/fixtures/workflowRunFixtures';
+import { createMachineFixture } from '@/dev/testkit/fixtures/machineFixtures';
+import { materializeWorkflowAcceptedSnapshotV1 } from '@happier-dev/protocol/workflows/materializeWorkflowAcceptedSnapshotV1';
+import { sealWorkflowAcceptedSnapshotStoredEnvelopeV1, serializeWorkflowStoredContentEnvelopeV1 } from '@happier-dev/protocol/workflows/workflowStoredContentV1';
+import { WorkflowRunRecipientCensusResponseV1Schema } from '@happier-dev/protocol/workflows/workflowRunKeyV1';
+import { PluginProjectionV2Schema } from '@happier-dev/protocol';
+import { EXTERNAL_ACTION_RESPONSE_MAX_SERIALIZED_BYTES } from '@happier-dev/protocol/actions/externalActionLimits';
 
-import { createDeferred } from '@/dev/testkit/hooks/createDeferred';
-import { renderHook } from '@/dev/testkit/hooks/renderHook';
-import { renderScreen } from '@/dev/testkit/render/renderScreen';
-import { standardCleanup } from '@/dev/testkit/cleanup/standardCleanup';
-import { createAutomationRunFixture, createWorkflowRunSummaryFixture } from '@/dev/testkit/fixtures/workflowRunFixtures';
-import { storage } from '@/sync/domains/state/storageStore';
-import { retireActiveServerAccountScopeLifetime } from '@/sync/domains/scope/activeServerAccountScope';
-import { workflowRunRowFromSummary } from '@/sync/store/domains/workflowRuns';
-import { publishHomeAccountChange } from '@/sync/runtime/orchestration/homeAccountChange';
-import { getAppliedActiveServerSnapshot, isAppliedActiveServerRuntimeAvailable, publishAppliedActiveServerSnapshot } from '@/sync/runtime/orchestration/appliedActiveServerRuntime';
-import { useWorkflowRunWindow } from './workflowLibraryReads';
-
-const executeMock = vi.hoisted(() => vi.fn());
-const account = vi.hoisted(() => ({ id: 'account-a' }));
-const automationRequest = vi.hoisted(() => vi.fn());
-
-// HTTP is the Automation system boundary; the list adapter and shared Run/window owner stay real.
-vi.mock('@/sync/http/client', () => ({ serverFetch: automationRequest }));
-
-// The Action front door is the transport boundary; the definition client and its parser stay real.
-vi.mock('@/sync/ops/actions/frontDoorRuntimeActionExecutor', () => ({
-    createFrontDoorActionExecute: () => executeMock,
-}));
-
-let appliedSnapshot: typeof import('@/sync/domains/server/serverRuntime')['getActiveServerSnapshot'];
+// Only Home HTTP/credentials and the native Machine RPC leave the real path.
+const machineRpc = vi.hoisted(() => vi.fn());
+vi.mock('@/sync/runtime/orchestration/serverScopedRpc/serverScopedMachineRpc', () => ({ machineRpcWithServerScope: machineRpc }));
+const home = createHomeGovernanceHarness();
+installHomeGovernanceBoundaries(home);
+installDisconnectedServerSocketBoundary();
+beforeAll(loadSyncSingletonForTests);
+const { storage } = await import('@/sync/domains/state/storageStore');
+const { getActiveServerSnapshot } = await import('@/sync/domains/server/serverRuntime');
+const { getAppliedActiveServerSnapshot, isAppliedActiveServerRuntimeAvailable, publishAppliedActiveServerSnapshot } = await import('@/sync/runtime/orchestration/appliedActiveServerRuntime');
+const { retireActiveServerAccountScopeLifetime } = await import('@/sync/domains/scope/activeServerAccountScope');
+const { publishHomeAccountChange } = await import('@/sync/runtime/orchestration/homeAccountChange');
+const { workflowRunRowFromSummary } = await import('@/sync/store/domains/workflowRuns');
+const { createWorkflowDefinition } = await import('@/sync/domains/workflows/workflowDefinitionActions');
+const { useWorkflowDefinitionLibrary, useWorkflowRunWindow, resetWorkflowLibraryReadsForTests } = await import('./workflowLibraryReads');
+const { clearDaemonMergedProjectionCacheForTests } = await import('@/agents/backendCatalog/loadDaemonMergedProjectionInputs');
+const route = '/v3/automations/runs/workflow-storage';
+const definitionId = '00000000-0000-4000-8000-000000000001';
+const secondId = '00000000-0000-4000-8000-000000000002';
+const content = createWorkflowDefinitionFixture({ blocks: [{ kind: 'wait', id: 'wait', document: { text: 'Continue', references: [], attachments: [] } }] });
+let accountId = 'account-a';
 let serverId: string;
-let previousAppliedSnapshot = getAppliedActiveServerSnapshot();
-let previousRuntimeAvailable = isAppliedActiveServerRuntimeAvailable();
+let previous = storage.getState();
+let applied = getAppliedActiveServerSnapshot();
+let available = isAppliedActiveServerRuntimeAvailable();
 
-function definition(definitionId: string) {
-    return { kind: 'workflow-definition.v1', definitionId, revision: { headerVersion: 1, bodyVersion: 1 }, metadata: { title: `Workflow ${definitionId}` }, contentStatus: 'available', stepCount: 1, triggers: [], nextRunAt: null };
-}
-
-let probes: Record<string, ReturnType<typeof import('./workflowLibraryReads')['useWorkflowDefinitionLibrary']>> = {};
-
-function Probe(props: Readonly<{ name: string; useLibrary: typeof import('./workflowLibraryReads')['useWorkflowDefinitionLibrary'] }>) {
-    probes[props.name] = props.useLibrary();
-    return null;
-}
-
-let previousStorageState = storage.getState();
 beforeEach(async () => {
-    previousStorageState = storage.getState();
-    previousAppliedSnapshot = getAppliedActiveServerSnapshot();
-    previousRuntimeAvailable = isAppliedActiveServerRuntimeAvailable();
-    const runtime = await import('@/sync/domains/server/serverRuntime');
-    appliedSnapshot = runtime.getActiveServerSnapshot;
-    const profile = await runtime.upsertAndActivateServer({ serverUrl: 'http://workflow-window.test', name: 'Workflow Home' });
-    serverId = profile.id;
-    publishAppliedActiveServerSnapshot(appliedSnapshot());
-    storage.setState({ profileScope: { serverId, accountId: account.id } });
+    previous = storage.getState(); applied = getAppliedActiveServerSnapshot(); available = isAppliedActiveServerRuntimeAvailable();
+    await home.reset(); accountId = 'account-a';
+    serverId = await home.addHome({ name: 'Library Home', serverUrl: 'https://workflow-library.test', accountId });
+    publishAppliedActiveServerSnapshot(getActiveServerSnapshot());
+    storage.setState({ profileScope: { serverId, accountId }, workflowRunsById: {}, workflowRunListWindows: {}, workflowRunInvocationsByRunId: {}, machines: {}, machineListByServerId: {} });
+    home.answer(serverId, '/v3/automations', { body: { automations: [], nextCursor: null } });
+    home.answer(serverId, '/v1/account/encryption/currentness', { body: createPlainAccountEncryptionCurrentnessFixture() });
+    machineRpc.mockReset();
 });
-
 afterEach(async () => {
-    standardCleanup();
-    const { resetWorkflowLibraryReadsForTests } = await import('./workflowLibraryReads');
-    resetWorkflowLibraryReadsForTests();
-    (await import('@/sync/domains/scope/activeServerAccountScope')).retireActiveServerAccountScopeLifetime();
-    executeMock.mockReset();
-    automationRequest.mockReset();
-    probes = {};
-    account.id = 'account-a';
-    storage.setState(previousStorageState);
-    publishAppliedActiveServerSnapshot(previousAppliedSnapshot, previousRuntimeAvailable);
+    await standardCleanup(); resetWorkflowLibraryReadsForTests(); retireActiveServerAccountScopeLifetime();
+    clearDaemonMergedProjectionCacheForTests(); await home.reset();
+    storage.setState(previous); publishAppliedActiveServerSnapshot(applied, available);
 });
 
-describe('useWorkflowDefinitionLibrary', () => {
-    it('settles an unavailable Account destination read rather than claiming a pending request', async () => {
+async function saved(id = definitionId, title = 'Saved', description?: string) {
+    return await createWorkflowDefinition({ definitionId: id, definition: content, metadata: { title, ...(description ? { description } : {}) } });
+}
+
+async function runPage(runs: readonly ReturnType<typeof createWorkflowRunSummaryFixture>[], nextCursor?: string, destination?: string) {
+    const acceptedEnvelopesByRunId: Record<string, string> = {};
+    const keyCensusByRunId: Record<string, ReturnType<typeof WorkflowRunRecipientCensusResponseV1Schema.parse>> = {};
+    for (const run of runs) {
+        const definition = destination ? createWorkflowDefinitionFixture({ defaults: {
+            agentTarget: { kind: 'agent', identity: { pluginId: 'happier.agent.claude', localId: 'claude' } },
+            conversation: { kind: 'existing_session', sessionId: destination, machineId: run.machineId },
+        } }) : content;
+        const materialized = await materializeWorkflowAcceptedSnapshotV1({ definition, admission: { kind: 'user' },
+            effects: { resolveTargetAvailability: async () => true }, context: { source: run.origin.kind === 'automation'
+                ? { kind: 'automation', automationId: run.origin.automationId } : { kind: 'inline' }, inputs: {}, machineId: run.machineId,
+                executionTarget: { kind: 'session' }, workspaceTarget: { project: { machineId: run.machineId, directory: '/repo', checkoutRootPath: '/repo' } },
+                ...(run.origin.kind === 'direct' ? { origin: run.origin } : { actionCaller: {
+                    kind: 'automationRun' as const, runId: run.id, automationId: run.origin.automationId, cause: { kind: 'manual' as const, invokedAt: 1 },
+                } }), authorization: { principal: { kind: 'host' } } } });
+        if (!materialized.ok) throw new Error(`fixture_materialization_failed:${materialized.error.code}`);
+        acceptedEnvelopesByRunId[run.id] = serializeWorkflowStoredContentEnvelopeV1(sealWorkflowAcceptedSnapshotStoredEnvelopeV1({ mode: 'plain',
+            binding: { v: 1, purpose: 'accepted_snapshot', accountId: run.ownerAccountId, runId: run.id }, acceptedSnapshot: materialized.snapshot }));
+        keyCensusByRunId[run.id] = WorkflowRunRecipientCensusResponseV1Schema.parse({ runId: run.id, ownerAccountId: run.ownerAccountId,
+            access: 'owner', encryptionMode: 'plain', dataEncryptionKey: null, callerDataEncryptionKey: null, recipients: [], visibleTeamId: null,
+            ownerAccountCurrentness: { mode: 'plain', version: 1, contentKeyFingerprint: null } });
+    }
+    return { runs, acceptedEnvelopesByRunId, keyCensusByRunId, ...(nextCursor ? { nextCursor } : {}) };
+}
+
+const run = (id: string, state: 'running' | 'failed' | 'succeeded' = 'running') => createWorkflowRunSummaryFixture({ id, state, ownerAccountId: accountId });
+const waitLoaded = (hook: { getCurrent(): { status: string } }) => waitForHomeGovernance(() => expect(hook.getCurrent().status).toBe('loaded'));
+
+describe('Workflow library reads through real Account Actions and HTTP', () => {
+    it('settles a missing Account destination instead of inventing a pending read', async () => {
         storage.setState({ profileScope: null });
         const hook = await renderHook(() => useWorkflowRunWindow('destination:stopped-session'));
         expect(hook.getCurrent().status).toBe('failed');
         expect(hook.getCurrent().runIds).toEqual([]);
-        expect(executeMock).not.toHaveBeenCalled();
-    });
-    it('keeps Writes here destination membership separate from origins in the canonical Run window', async () => {
-        const projected = createWorkflowRunSummaryFixture({ id: 'writes-here', origin: { kind: 'direct', originSessionId: 'another-session' } });
-        const pending = createDeferred<unknown>();
-        executeMock.mockReturnValue(pending.promise);
-        let renders = 0;
-        const first = await renderHook(() => { renders++; return useWorkflowRunWindow('destination:bot-session'); });
-        const second = await renderHook(() => useWorkflowRunWindow('destination:bot-session'));
-        expect(executeMock).toHaveBeenCalledTimes(1);
-        expect(executeMock.mock.calls[0]?.[1]).toEqual({ targetSessionId: 'bot-session',
-            states: ['queued', 'claimed', 'running', 'pause_requested', 'paused', 'interrupted'] });
-        await act(async () => { pending.resolve({ ok: true, result: { runs: [projected], metadataByRunId: {} } }); await pending.promise; });
-        expect(first.getCurrent().runIds).toEqual(['writes-here']);
-        expect(second.getCurrent().runIds).toBe(first.getCurrent().runIds);
-        expect(storage.getState().workflowRunsById['writes-here']?.summary?.origin).toEqual(projected.origin);
-        const before = first.getCurrent();
-        const beforeRenders = renders;
-        await act(async () => { storage.getState().upsertWorkflowRuns([workflowRunRowFromSummary(createWorkflowRunSummaryFixture({ id: 'unrelated' }))]); });
-        expect(first.getCurrent().runIds).toBe(before.runIds);
-        expect(renders).toBe(beforeRenders);
-    });
-    it('pages Automation history through the shared window and retains the exact filter on continuation', async () => {
-        const { useWorkflowRunWindow } = await import('./workflowLibraryReads');
-        executeMock.mockImplementation(async (_actionId: string, input: { cursor?: string }) => ({ ok: true,
-            result: { runs: [createWorkflowRunSummaryFixture({ id: input.cursor ? 'older' : 'newest' })], metadataByRunId: {},
-                ...(input.cursor ? {} : { nextCursor: 'next' }) } }));
-        const first = await renderHook(() => useWorkflowRunWindow('automation:habit'));
-        const second = await renderHook(() => useWorkflowRunWindow('automation:habit'));
-        await act(async () => { first.getCurrent().loadMore(); });
-        expect(second.getCurrent().runIds).toEqual(['newest', 'older']);
-        expect(executeMock.mock.calls.at(-1)?.[1]).toEqual({ automationId: 'habit', cursor: 'next' });
-    });
-    it('refreshes a mounted library after a successful definition create through the canonical client', async () => {
-        const { useWorkflowDefinitionLibrary } = await import('./workflowLibraryReads');
-        const { createWorkflowDefinition } = await import('@/sync/domains/workflows/workflowDefinitionActions');
-        const { createWorkflowDefinitionFixture } = await import('@/dev/testkit/fixtures/workflowRunFixtures');
-        const definitionId = '43e5c1c7-73cd-4f79-90c3-dc73262c3651';
-        const content = createWorkflowDefinitionFixture();
-        let created = false;
-        executeMock.mockImplementation(async (actionId: string) => {
-            if (actionId === 'workflow.definition.create') {
-                created = true;
-                return { ok: true, result: { definitionId, definition: content, access: 'owner',
-                    revision: { headerVersion: 1, bodyVersion: 1 }, metadata: { title: 'Saved here' } } };
-            }
-            return { ok: true, result: { definitions: created ? [definition(definitionId)] : [] } };
-        });
-        const hook = await renderHook(() => useWorkflowDefinitionLibrary());
-        expect(hook.getCurrent().definitions).toEqual([]);
-        await act(async () => { await createWorkflowDefinition({ definitionId, definition: content, metadata: { title: 'Saved here' } }); });
-        expect(hook.getCurrent().definitions.map((row) => row.definitionId)).toEqual([definitionId]);
+        expect(home.requestsFor(route)).toEqual([]);
     });
 
-    it('retains known rows while the Home change wake refreshes the current mounted library', async () => {
-        const { useWorkflowDefinitionLibrary } = await import('./workflowLibraryReads');
-        executeMock.mockResolvedValueOnce({ ok: true, result: { definitions: [definition('wf-before')] } });
+    it('shares visible library demand and preserves row identity and renders on an equal refresh', async () => {
+        await saved();
+        const pending = createDeferred<void>();
+        home.answer(serverId, 'GET /v1/artifacts', { body: home.artifacts(serverId).list(), respondAfter: pending.promise });
+        let renders = 0;
+        const first = await renderHook(() => { renders++; return useWorkflowDefinitionLibrary(); });
+        const second = await renderHook(() => useWorkflowDefinitionLibrary());
+        await waitForHomeGovernance(() => expect(home.requestsFor('/v1/artifacts?limit=500&includeBody=true')).toHaveLength(1));
+        await act(async () => pending.resolve());
+        await waitLoaded(first); await waitForHomeGovernance(() => expect(first.getCurrent().loadingMore).toBe(false));
+        expect(first.getCurrent().definitions.map(row => row.definitionId)).toEqual([definitionId]);
+        expect(second.getCurrent().definitions).toBe(first.getCurrent().definitions);
+        const before = first.getCurrent().definitions;
+        const settledRenders = renders;
+        await act(async () => first.getCurrent().retry());
+        await waitForHomeGovernance(() => expect(first.getCurrent().loadingMore).toBe(false));
+        expect(first.getCurrent().definitions).toBe(before);
+        expect(second.getCurrent().definitions).toBe(before);
+        expect(renders).toBe(settledRenders);
+    });
+
+    it('reads nothing without demand and serves the current Account after enable', async () => {
+        await saved();
+        const before = home.requests.length;
+        const hook = await renderHook((props: { enabled: boolean }) => useWorkflowDefinitionLibrary(props), { initialProps: { enabled: false } });
+        expect(hook.getCurrent().definitions).toEqual([]);
+        expect(home.requests.length).toBe(before);
+        await hook.rerender({ enabled: true }); await waitLoaded(hook);
+        expect(hook.getCurrent().definitions.map(row => row.definitionId)).toEqual([definitionId]);
+    });
+
+    it('refreshes mounted readers after a definition is created through the real writer', async () => {
+        const hook = await renderHook(() => useWorkflowDefinitionLibrary()); await waitLoaded(hook);
+        expect(hook.getCurrent().definitions).toEqual([]);
+        await act(async () => { await saved(); });
+        await waitForHomeGovernance(() => expect(hook.getCurrent().definitions.map(row => row.definitionId)).toEqual([definitionId]));
+    });
+
+    it('retains known rows while refreshing and rechecks a wake received during the first page', async () => {
+        await saved();
+        const firstPage = createDeferred<void>();
+        const oldRows = home.artifacts(serverId).list();
+        let reads = 0;
+        home.answer(serverId, 'GET /v1/artifacts', { select: () => ++reads === 1
+            ? { body: oldRows, respondAfter: firstPage.promise } : { body: home.artifacts(serverId).list() } });
         const hook = await renderHook(() => useWorkflowDefinitionLibrary());
+        await waitForHomeGovernance(() => expect(reads).toBe(1));
+        await act(async () => { await saved(secondId, 'Created during read'); });
+        await act(async () => firstPage.resolve());
+        await waitForHomeGovernance(() => expect(hook.getCurrent().definitions).toHaveLength(2));
+        expect(reads).toBe(2);
         const before = hook.getCurrent().definitions;
-        const refresh = createDeferred<unknown>();
-        executeMock.mockReturnValueOnce(refresh.promise);
-        await act(async () => { publishHomeAccountChange(serverId, ['artifact-changed']); });
+        const refresh = createDeferred<void>();
+        home.answer(serverId, 'GET /v1/artifacts', { body: home.artifacts(serverId).list(), respondAfter: refresh.promise });
+        await act(async () => publishHomeAccountChange(serverId));
         expect(hook.getCurrent().definitions).toBe(before);
-        await act(async () => { refresh.resolve({ ok: true, result: { definitions: [definition('wf-after')] } }); await refresh.promise; });
-        expect(hook.getCurrent().definitions.map((row) => row.definitionId)).toEqual(['wf-after']);
+        await act(async () => refresh.resolve());
+        await waitForHomeGovernance(() => expect(hook.getCurrent().loadingMore).toBe(false));
+        expect(hook.getCurrent().definitions).toBe(before);
     });
-    it('rechecks a wake that arrives while the first library page is still in flight', async () => {
-        const { useWorkflowDefinitionLibrary } = await import('./workflowLibraryReads');
-        const firstPage = createDeferred<unknown>();
-        executeMock.mockReturnValueOnce(firstPage.promise)
-            .mockResolvedValue({ ok: true, result: { definitions: [definition('wf-created')] } });
+
+    it('replaces retired same-Account reads without waiting for their old response', async () => {
+        await saved();
+        const retired = createDeferred<void>();
+        let reads = 0;
+        home.answer(serverId, 'GET /v1/artifacts', { select: () => ++reads === 1
+            ? { body: [], respondAfter: retired.promise } : { body: home.artifacts(serverId).list() } });
         const hook = await renderHook(() => useWorkflowDefinitionLibrary());
-        await act(async () => { publishHomeAccountChange(serverId); });
-        await act(async () => { firstPage.resolve({ ok: true, result: { definitions: [] } }); await firstPage.promise; });
-        expect(hook.getCurrent().definitions.map((row) => row.definitionId)).toEqual(['wf-created']);
-    });
-    it('starts a fresh read when the same Account retires and reactivates while its first page is pending', async () => {
-        const { useWorkflowDefinitionLibrary } = await import('./workflowLibraryReads');
-        const retiredPage = createDeferred<unknown>();
-        executeMock.mockReturnValueOnce(retiredPage.promise)
-            .mockResolvedValueOnce({ ok: true, result: { definitions: [definition('wf-current')] } });
-        const hook = await renderHook(() => useWorkflowDefinitionLibrary());
+        await waitForHomeGovernance(() => expect(reads).toBe(1));
         await act(async () => { storage.setState({ profileScope: null }); });
-        await act(async () => { storage.setState({ profileScope: { serverId, accountId: account.id } }); });
-        expect(hook.getCurrent().status).toBe('loaded');
-        expect(hook.getCurrent().definitions.map((row) => row.definitionId)).toEqual(['wf-current']);
-        await act(async () => {
-            retiredPage.resolve({ ok: true, result: { definitions: [definition('wf-retired')] } });
-            await retiredPage.promise;
-        });
-        expect(hook.getCurrent().definitions.map((row) => row.definitionId)).toEqual(['wf-current']);
+        await act(async () => { storage.setState({ profileScope: { serverId, accountId } }); });
+        await waitLoaded(hook);
+        expect(hook.getCurrent().definitions.map(row => row.definitionId)).toEqual([definitionId]);
+        await act(async () => retired.resolve());
+        expect(hook.getCurrent().definitions.map(row => row.definitionId)).toEqual([definitionId]);
     });
-    it('reissues a current wake during a retired continuation and keeps its queued refresh on the fresh read', async () => {
-        const { useWorkflowDefinitionLibrary } = await import('./workflowLibraryReads');
-        const retiredTail = createDeferred<unknown>();
-        const freshPage = createDeferred<unknown>();
-        executeMock.mockResolvedValueOnce({ ok: true, result: { definitions: [definition('wf-old')], nextCursor: 'old-tail' } })
-            .mockReturnValueOnce(retiredTail.promise)
-            .mockReturnValueOnce(freshPage.promise)
-            .mockResolvedValueOnce({ ok: true, result: { definitions: [definition('wf-newest')] } });
+
+    it('retires pending reads during sign-in restore and never discloses another Account\'s rows', async () => {
+        await saved();
+        const retired = createDeferred<void>();
+        let reads = 0;
+        const oldRows = home.artifacts(serverId).list();
+        home.answer(serverId, 'GET /v1/artifacts', { select: () => ++reads === 1
+            ? { body: oldRows, respondAfter: retired.promise }
+            : { body: home.artifacts(serverId).list().filter(row => row.ownerAccountId === accountId) } });
         const hook = await renderHook(() => useWorkflowDefinitionLibrary());
-        await act(async () => { hook.getCurrent().loadMore(); });
+        await waitForHomeGovernance(() => expect(reads).toBe(1));
+        await act(async () => retireActiveServerAccountScopeLifetime());
+        await waitLoaded(hook);
+        expect(hook.getCurrent().definitions.map(row => row.definitionId)).toEqual([definitionId]);
+        const accountB = createDeferred<void>();
+        home.answer(serverId, 'GET /v1/artifacts', { body: [], respondAfter: accountB.promise });
+        await act(async () => { accountId = 'account-b'; await home.switchAccount(serverId, accountId); storage.setState({ profileScope: { serverId, accountId } }); });
+        expect(hook.getCurrent().status).toBe('loading');
+        expect(hook.getCurrent().definitions).toEqual([]);
+        await act(async () => accountB.resolve());
+        await waitLoaded(hook);
+        expect(hook.getCurrent().definitions).toEqual([]);
+        await act(async () => retired.resolve());
+        expect(hook.getCurrent().definitions).toEqual([]);
+    });
+
+    it('retains the complete demanded saved span during remount refresh, then removes authoritative deletions', async () => {
+        // Real pagination is defined by the public Action envelope's byte budget.
+        // Two individually valid headers exceed that combined budget.
+        const description = 'x'.repeat(EXTERNAL_ACTION_RESPONSE_MAX_SERIALIZED_BYTES / 2);
+        await saved(definitionId, 'First', description); await saved(secondId, 'Second', description);
+        const first = await renderHook(() => useWorkflowDefinitionLibrary()); await waitLoaded(first);
+        expect(first.getCurrent().definitions).toHaveLength(1);
+        await act(async () => first.getCurrent().loadMore());
+        await waitForHomeGovernance(() => { expect(first.getCurrent().definitions).toHaveLength(2); expect(first.getCurrent().loadingMore).toBe(false); });
+        const before = first.getCurrent().definitions;
+        const refresh = createDeferred<void>();
+        const rows = home.artifacts(serverId).list();
+        const response = await home.artifacts(serverId).handle('/v1/artifacts?limit=500&includeBody=true');
+        if (!response) throw new Error('Expected the canonical Artifact list boundary');
+        home.answer(serverId, 'GET /v1/artifacts?limit=500&includeBody=true', { body: await response.json(), respondAfter: refresh.promise });
+        const second = await renderHook(() => useWorkflowDefinitionLibrary());
+        expect(first.getCurrent().definitions).toBe(before);
+        await act(async () => refresh.resolve());
+        await waitForHomeGovernance(() => expect(first.getCurrent().loadingMore).toBe(false));
+        expect(first.getCurrent().definitions).toBe(before); expect(second.getCurrent().definitions).toBe(before);
+        // Return an authoritative smaller collection at the actual network leaf.
+        home.answer(serverId, 'GET /v1/artifacts?limit=500&includeBody=true', { body: rows.filter(row => row.id === definitionId) });
+        await act(async () => first.getCurrent().retry());
+        await waitForHomeGovernance(() => expect(first.getCurrent().definitions.map(row => row.definitionId)).toEqual([definitionId]));
+        expect(first.getCurrent().hasMore).toBe(false);
+    });
+
+    it('clears retired pagination busy state after a failed replacement and allows retry', async () => {
+        const description = 'x'.repeat(EXTERNAL_ACTION_RESPONSE_MAX_SERIALIZED_BYTES / 2);
+        await saved(definitionId, 'First', description); await saved(secondId, 'Second', description);
+        const hook = await renderHook(() => useWorkflowDefinitionLibrary()); await waitLoaded(hook);
+        const retired = createDeferred<void>();
+        home.answer(serverId, 'GET /v1/artifacts', { body: home.artifacts(serverId).list().filter(row => row.id === definitionId), respondAfter: retired.promise });
+        await act(async () => hook.getCurrent().loadMore());
+        expect(hook.getCurrent().loadingMore).toBe(true);
+        home.answer(serverId, 'GET /v1/artifacts', { status: 503, body: { error: 'storage_unavailable' } });
+        await act(async () => retireActiveServerAccountScopeLifetime());
+        await waitForHomeGovernance(() => expect(hook.getCurrent().status).toBe('failed'));
+        expect(hook.getCurrent().loadingMore).toBe(false);
+        home.answer(serverId, 'GET /v1/artifacts', { body: home.artifacts(serverId).list().filter(row => row.id === definitionId) });
+        await act(async () => hook.getCurrent().retry()); await waitLoaded(hook);
+        await act(async () => retired.resolve());
+        expect(hook.getCurrent().definitions.map(row => row.definitionId)).toEqual([definitionId]);
+    });
+
+    it('reissues a wake during retired pagination and preserves the queued refresh on the fresh read', async () => {
+        const description = 'x'.repeat(EXTERNAL_ACTION_RESPONSE_MAX_SERIALIZED_BYTES / 2);
+        await saved(definitionId, 'First', description); await saved(secondId, 'Second', description);
+        const hook = await renderHook(() => useWorkflowDefinitionLibrary()); await waitLoaded(hook);
+        const before = hook.getCurrent().definitions;
+        const retired = createDeferred<void>();
+        home.answer(serverId, 'GET /v1/artifacts', { body: home.artifacts(serverId).list().filter(row => row.id === definitionId), respondAfter: retired.promise });
+        await act(async () => hook.getCurrent().loadMore());
+        await waitForHomeGovernance(() => expect(home.requests.filter(request => request.path.startsWith('/v1/artifacts?'))).toHaveLength(2));
+        const fresh = createDeferred<void>();
+        const response = await home.artifacts(serverId).handle('/v1/artifacts?limit=500&includeBody=true');
+        if (!response) throw new Error('Expected the canonical Artifact list boundary');
+        home.answer(serverId, 'GET /v1/artifacts', { body: await response.json(), respondAfter: fresh.promise });
         await act(async () => {
             storage.setState({ profileScope: null });
             retireActiveServerAccountScopeLifetime();
-            storage.setState({ profileScope: { serverId, accountId: account.id } });
+            storage.setState({ profileScope: { serverId, accountId } });
             publishHomeAccountChange(serverId);
         });
-        await act(async () => { publishHomeAccountChange(serverId); });
-        await act(async () => {
-            retiredTail.resolve({ ok: true, result: { definitions: [definition('wf-retired')] } });
-            await retiredTail.promise;
+        await waitForHomeGovernance(() => expect(home.requests.filter(request => request.path.startsWith('/v1/artifacts?'))).toHaveLength(3));
+        await act(async () => publishHomeAccountChange(serverId));
+        home.answer(serverId, 'GET /v1/artifacts', { body: home.artifacts(serverId).list().filter(row => row.id === definitionId) });
+        await act(async () => retired.resolve());
+        expect(hook.getCurrent().definitions).toBe(before);
+        await act(async () => fresh.resolve());
+        await waitForHomeGovernance(() => {
+            expect(hook.getCurrent().status).toBe('loaded'); expect(hook.getCurrent().loadingMore).toBe(false);
+            expect(hook.getCurrent().definitions.map(row => row.definitionId)).toEqual([definitionId]);
         });
-        await act(async () => {
-            freshPage.resolve({ ok: true, result: { definitions: [definition('wf-fresh')] } });
-            await freshPage.promise;
-        });
-        expect(hook.getCurrent().status).toBe('loaded');
-        expect(hook.getCurrent().loadingMore).toBe(false);
-        expect(hook.getCurrent().definitions.map((row) => row.definitionId)).toEqual(['wf-newest']);
     });
-    it('refreshes the demanded pages on a later consumer mount, retaining rows until authoritative replacement', async () => {
-        const { useWorkflowDefinitionLibrary } = await import('./workflowLibraryReads');
-        executeMock.mockResolvedValueOnce({ ok: true, result: { definitions: [definition('wf-1')], nextCursor: 'next' } })
-            .mockResolvedValueOnce({ ok: true, result: { definitions: [definition('wf-2')], nextCursor: 'tail' } });
-        const first = await renderHook(() => useWorkflowDefinitionLibrary());
-        await act(async () => { first.getCurrent().loadMore(); });
-        const before = first.getCurrent().definitions;
-        const refreshTail = createDeferred<unknown>();
-        executeMock.mockResolvedValueOnce({ ok: true, result: { definitions: [definition('wf-1')], nextCursor: 'new-next' } })
-            .mockReturnValueOnce(refreshTail.promise);
+
+    it('keeps saved rows usable while plugin discovery is pending and retains equal plugin descriptors', async () => {
+        await saved();
+        const machine = createMachineFixture({ id: 'library-machine', activeAt: Date.now(), daemonState: { status: 'running', pid: 17, contributionRegistryProjectionRevision: 0 } });
+        storage.getState().applyMachines([machine], true, { sourceServerId: serverId });
+        const pending = createDeferred<unknown>(); machineRpc.mockReturnValue(pending.promise);
+        const hook = await renderHook(() => useWorkflowDefinitionLibrary()); await waitLoaded(hook);
+        await waitForHomeGovernance(() => expect(machineRpc).toHaveBeenCalled());
+        expect(hook.getCurrent().definitions.map(row => row.definitionId)).toEqual([definitionId]);
+        const savedRows = hook.getCurrent().definitions;
+        const projection = { protocolVersion: 1, projection: PluginProjectionV2Schema.parse({ v: 2, generation: 1,
+            installedPackagesById: { 'example.recipe': { id: 'example.recipe', displayName: 'Example recipe', version: '1.2.3', enabled: true, source: { kind: 'path', locator: '/plugins/example.recipe' } } },
+            familiesById: { workflows: { family: 'workflows', entriesById: { 'example.recipe/review': { id: 'example.recipe/review', pluginId: 'example.recipe', pluginVersion: '1.2.3',
+                definition: { id: 'review', title: 'Plugin review', definition: content } } } } },
+        }) };
+        await act(async () => pending.resolve(projection));
+        await waitForHomeGovernance(() => expect(hook.getCurrent().pluginWorkflows).toHaveLength(1));
+        expect(hook.getCurrent().definitions).toBe(savedRows);
+        const pluginRows = hook.getCurrent().pluginWorkflows;
         const second = await renderHook(() => useWorkflowDefinitionLibrary());
-        expect(first.getCurrent().definitions).toBe(before);
-        await act(async () => { refreshTail.resolve({ ok: true, result: { definitions: [definition('wf-2')], nextCursor: 'new-tail' } }); await refreshTail.promise; });
-        expect(first.getCurrent().definitions).toBe(before);
-        expect(second.getCurrent().definitions).toBe(before);
-        expect(executeMock.mock.calls.map(([, input]) => input)).toEqual([{}, { cursor: 'next' }, {}, { cursor: 'new-next' }]);
-        executeMock.mockResolvedValueOnce({ ok: true, result: { definitions: [definition('wf-1')] } });
-        await act(async () => { first.getCurrent().retry(); });
-        expect(first.getCurrent().definitions.map((row) => row.definitionId)).toEqual(['wf-1']);
-        expect(first.getCurrent().hasMore).toBe(false);
+        await waitForHomeGovernance(() => expect(second.getCurrent().loadingMore).toBe(false));
+        expect(second.getCurrent().pluginWorkflows).toBe(pluginRows);
+        expect(second.getCurrent().definitions).toBe(savedRows);
     });
-    it('keeps rows and subscribers stable when a refresh returns the same definitions and plugin sources', async () => {
-        const { useWorkflowDefinitionLibrary } = await import('./workflowLibraryReads');
-        const { BUILTIN_WORKFLOW_CATALOG_V1 } = await import('@happier-dev/protocol');
-        const page = { definitions: [definition('wf-1')], pluginWorkflows: [{ workflow: 'plugin:example.recipe/check',
-            pluginId: 'example.recipe', version: '1.2.3', title: 'Check changes', definition: BUILTIN_WORKFLOW_CATALOG_V1[0]!.definition }] };
-        executeMock.mockImplementation(async () => ({ ok: true, result: structuredClone(page) }));
-        let renders = 0;
-        const hook = await renderHook(() => { renders += 1; return useWorkflowDefinitionLibrary(); });
-        const before = hook.getCurrent();
-        expect(before.definitions.map((row) => row.definitionId)).toEqual(['wf-1']);
-        expect(before.pluginWorkflows).toHaveLength(1);
-        const settledRenders = renders;
-        await act(async () => { hook.getCurrent().retry(); });
-        expect(hook.getCurrent().definitions).toBe(before.definitions);
-        expect(hook.getCurrent().pluginWorkflows).toBe(before.pluginWorkflows);
-        expect(renders).toBe(settledRenders);
-    });
-    it('reads nothing without visible demand, then serves the current Account on enable', async () => {
-        const { useWorkflowDefinitionLibrary } = await import('./workflowLibraryReads');
-        executeMock.mockResolvedValue({ ok: true, result: { definitions: [definition('wf-demand')] } });
-        const hook = await renderHook((props: { enabled: boolean }) => useWorkflowDefinitionLibrary(props), { initialProps: { enabled: false } });
-        expect(executeMock).not.toHaveBeenCalled();
-        expect(hook.getCurrent().definitions).toEqual([]);
-        await hook.rerender({ enabled: true });
-        expect(hook.getCurrent().definitions.map((entry) => entry.definitionId)).toEqual(['wf-demand']);
-    });
-    it('accumulates paged plugin sources by qualified identity without replacing previous rows', async () => {
-        const { useWorkflowDefinitionLibrary } = await import('./workflowLibraryReads');
-        const { BUILTIN_WORKFLOW_CATALOG_V1 } = await import('@happier-dev/protocol');
-        const first = { workflow: 'plugin:example.recipe/check', pluginId: 'example.recipe', version: '1.2.3',
-            title: 'Check changes', definition: BUILTIN_WORKFLOW_CATALOG_V1[0]!.definition };
-        const second = { ...first, workflow: 'plugin:example.recipe/review', title: 'Review changes' };
-        executeMock.mockResolvedValueOnce({ ok: true, result: { definitions: [], pluginWorkflows: [first], nextCursor: 'plugins-next' } });
+
+    it('accumulates real byte-paged plugin sources by qualified identity without discarding saved rows', async () => {
+        await saved();
+        const machine = createMachineFixture({ id: 'paged-plugin-machine', activeAt: Date.now(), daemonState: { status: 'running', pid: 17, contributionRegistryProjectionRevision: 0 } });
+        storage.getState().applyMachines([machine], true, { sourceServerId: serverId });
+        const text = 'x'.repeat(EXTERNAL_ACTION_RESPONSE_MAX_SERIALIZED_BYTES / 2);
+        const definition = createWorkflowDefinitionFixture({ blocks: [{ kind: 'wait', id: 'wait', document: { text, references: [], attachments: [] } }] });
+        machineRpc.mockResolvedValue({ protocolVersion: 1, projection: PluginProjectionV2Schema.parse({ v: 2, generation: 1,
+            installedPackagesById: { 'example.recipe': { id: 'example.recipe', displayName: 'Example recipe', version: '1.2.3', enabled: true, source: { kind: 'path', locator: '/plugins/example.recipe' } } },
+            familiesById: { workflows: { family: 'workflows', entriesById: Object.fromEntries(['check', 'review'].map(id => [`example.recipe/${id}`, {
+                id: `example.recipe/${id}`, pluginId: 'example.recipe', pluginVersion: '1.2.3', definition: { id, title: id, definition },
+            }])) } },
+        }) });
         const hook = await renderHook(() => useWorkflowDefinitionLibrary());
-        await act(async () => { await Promise.resolve(); });
-        executeMock.mockResolvedValueOnce({ ok: true, result: { definitions: [], pluginWorkflows: [first, second], nextCursor: 'plugins-empty' } });
-        await act(async () => { hook.getCurrent().loadMore(); await Promise.resolve(); });
-        expect(hook.getCurrent().pluginWorkflows).toEqual([first, second]);
-        const accumulated = hook.getCurrent().pluginWorkflows;
-        executeMock.mockResolvedValueOnce({ ok: true, result: { definitions: [], pluginWorkflows: [second] } });
-        await act(async () => { hook.getCurrent().loadMore(); await Promise.resolve(); });
-        expect(hook.getCurrent().pluginWorkflows).toBe(accumulated);
-        expect(hook.getCurrent().hasMore).toBe(false);
-    });
-    it('shares plugin catalog descriptors and retains them while paging saved workflows', async () => {
-        const { useWorkflowDefinitionLibrary } = await import('./workflowLibraryReads');
-        const { BUILTIN_WORKFLOW_CATALOG_V1 } = await import('@happier-dev/protocol');
-        const plugin = {
-            workflow: 'plugin:example.recipe/check', pluginId: 'example.recipe', version: '1.2.3',
-            title: 'Check changes', definition: BUILTIN_WORKFLOW_CATALOG_V1[0]!.definition,
-        };
-        executeMock.mockResolvedValueOnce({ ok: true, result: { definitions: [definition('wf-1')], pluginWorkflows: [plugin], nextCursor: 'next' } });
-        await renderScreen(<>
-            <Probe name="column" useLibrary={useWorkflowDefinitionLibrary} />
-            <Probe name="home" useLibrary={useWorkflowDefinitionLibrary} />
-        </>);
-        await act(async () => { await Promise.resolve(); });
-        expect(probes.column!.pluginWorkflows).toEqual([plugin]);
-        expect(probes.home!.pluginWorkflows).toBe(probes.column!.pluginWorkflows);
-        const pluginsBeforePage = probes.column!.pluginWorkflows;
-
-        executeMock.mockResolvedValueOnce({ ok: true, result: { definitions: [definition('wf-2')] } });
-        await act(async () => { probes.column!.loadMore(); await Promise.resolve(); });
-        expect(probes.column!.definitions.map((entry) => entry.definitionId)).toEqual(['wf-1', 'wf-2']);
-        expect(probes.column!.pluginWorkflows).toBe(pluginsBeforePage);
-    });
-
-    it('serves the column and the library home from one read when they mount together', async () => {
-        const { useWorkflowDefinitionLibrary } = await import('./workflowLibraryReads');
-        const page = createDeferred<unknown>();
-        executeMock.mockReturnValueOnce(page.promise);
-
-        await renderScreen(<>
-            <Probe name="column" useLibrary={useWorkflowDefinitionLibrary} />
-            <Probe name="home" useLibrary={useWorkflowDefinitionLibrary} />
-        </>);
-        await act(async () => {
-            page.resolve({ ok: true, result: { definitions: [definition('wf-1')] } });
-            await page.promise;
-        });
-
-        expect(executeMock.mock.calls.filter(([actionId]) => actionId === 'workflow.definition.list')).toHaveLength(1);
-        expect(probes.column!.definitions.map((entry) => entry.definitionId)).toEqual(['wf-1']);
-        expect(probes.home!.definitions).toBe(probes.column!.definitions);
-    });
-
-    it('never shows one Account’s workflows to the next Account while its own list loads', async () => {
-        const { useWorkflowDefinitionLibrary } = await import('./workflowLibraryReads');
-        executeMock.mockResolvedValueOnce({ ok: true, result: { definitions: [definition('wf-a')] } });
-        const screen = await renderScreen(<Probe name="column" useLibrary={useWorkflowDefinitionLibrary} />);
-        await act(async () => { await Promise.resolve(); });
-        expect(probes.column!.definitions.map((entry) => entry.definitionId)).toEqual(['wf-a']);
-
-        const accountB = createDeferred<unknown>();
-        executeMock.mockReturnValueOnce(accountB.promise);
-        account.id = 'account-b';
-        await act(async () => {
-            storage.setState({ profileScope: { serverId, accountId: account.id } });
-            screen.tree.update(<Probe name="column" useLibrary={useWorkflowDefinitionLibrary} />);
-        });
-
-        expect(probes.column!.status).toBe('loading');
-        expect(probes.column!.definitions).toEqual([]);
-
-        await act(async () => {
-            accountB.resolve({ ok: true, result: { definitions: [definition('wf-b')] } });
-            await accountB.promise;
-        });
-        expect(probes.column!.definitions.map((entry) => entry.definitionId)).toEqual(['wf-b']);
+        await waitForHomeGovernance(() => { expect(hook.getCurrent().pluginWorkflows).toHaveLength(1); expect(hook.getCurrent().loadingMore).toBe(false); });
+        const savedRows = hook.getCurrent().definitions;
+        await act(async () => hook.getCurrent().loadMore());
+        await waitForHomeGovernance(() => expect(hook.getCurrent().pluginWorkflows.map(row => row.workflow)).toEqual(['plugin:example.recipe/check', 'plugin:example.recipe/review']));
+        expect(hook.getCurrent().definitions).toBe(savedRows); expect(hook.getCurrent().hasMore).toBe(false);
     });
 });
 
-
-describe('useWorkflowRunWindow demand', () => {
-    it.each(['all', 'active', 'attention', 'automationAttention'] as const)('renews %s demand and subsequent wakes on same-Account restore', async (windowId) => {
-        let version = 0;
-        executeMock.mockImplementation(async () => ({ ok: true, result: {
-            runs: [createWorkflowRunSummaryFixture({ id: `run-${version}` })], metadataByRunId: {},
-        } }));
-        automationRequest.mockImplementation(async () => Response.json({
-            runs: [createAutomationRunFixture({ id: `run-${version}`, state: 'failed' })], nextCursor: null,
-        }));
-        const hook = await renderHook(() => useWorkflowRunWindow(windowId));
-        expect(hook.getCurrent().runIds).toContain('run-0');
-        await act(async () => { version = 1; retireActiveServerAccountScopeLifetime(); });
-        expect(hook.getCurrent().runIds).toContain('run-1');
-        await act(async () => { version = 2; publishHomeAccountChange(serverId,
-            [windowId === 'automationAttention' ? 'automation:automation-1' : 'workflow-run:run-2']); });
-        expect(hook.getCurrent().runIds).toContain('run-2');
-    });
-
-    it('renews pending definition demand without waiting for the retired response', async () => {
-        const { useWorkflowDefinitionLibrary } = await import('./workflowLibraryReads');
-        const retired = createDeferred<unknown>();
-        executeMock.mockReturnValueOnce(retired.promise).mockResolvedValue({ ok: true,
-            result: { definitions: [definition('current-definition')] } });
-        const hook = await renderHook(() => useWorkflowDefinitionLibrary());
-        await act(async () => { retireActiveServerAccountScopeLifetime(); });
-        expect(hook.getCurrent().definitions.map(row => row.definitionId)).toEqual(['current-definition']);
-        await act(async () => { retired.resolve({ ok: true, result: { definitions: [definition('retired-definition')] } }); await retired.promise; });
-        expect(hook.getCurrent().definitions.map(row => row.definitionId)).toEqual(['current-definition']);
-    });
-
-    it('releases retired definition pagination busy state even when the replacement refresh fails', async () => {
-        const { useWorkflowDefinitionLibrary } = await import('./workflowLibraryReads');
-        const retired = createDeferred<unknown>();
-        executeMock.mockResolvedValueOnce({ ok: true, result: { definitions: [definition('known')], nextCursor: 'tail' } })
-            .mockReturnValueOnce(retired.promise).mockRejectedValueOnce(new Error('replacement offline'));
-        const hook = await renderHook(() => useWorkflowDefinitionLibrary());
-        await act(async () => { hook.getCurrent().loadMore(); });
-        expect(hook.getCurrent().loadingMore).toBe(true);
-        await act(async () => { retireActiveServerAccountScopeLifetime(); });
-        expect(hook.getCurrent().status).toBe('failed');
-        expect(hook.getCurrent().loadingMore).toBe(false);
-        executeMock.mockResolvedValueOnce({ ok: true, result: { definitions: [definition('current')] } });
-        await act(async () => { hook.getCurrent().retry(); });
-        expect(hook.getCurrent().definitions.map(row => row.definitionId)).toEqual(['current']);
-        await act(async () => { retired.resolve({ ok: true, result: { definitions: [definition('retired-tail')] } }); await retired.promise; });
-        expect(hook.getCurrent().definitions.map(row => row.definitionId)).toEqual(['current']);
-    });
-
-    it('does not restart disabled or unmounted Run windows after retirement', async () => {
-        executeMock.mockResolvedValue({ ok: true, result: { runs: [], metadataByRunId: {} } });
-        await renderHook(() => useWorkflowRunWindow('attention', { enabled: false }));
-        const hook = await renderHook(() => useWorkflowRunWindow('active'));
-        await hook.unmount();
-        executeMock.mockClear();
-        await act(async () => { retireActiveServerAccountScopeLifetime(); publishHomeAccountChange(serverId, ['workflow-run:changed']); });
-        expect(executeMock).not.toHaveBeenCalled();
-    });
-    it('starts a fresh window read after same-Account reactivation and rejects the retired response', async () => {
-        const retiredPage = createDeferred<unknown>();
-        executeMock.mockReturnValueOnce(retiredPage.promise).mockResolvedValueOnce({ ok: true,
-            result: { runs: [createWorkflowRunSummaryFixture({ id: 'current-run' })], metadataByRunId: {} } });
-        const hook = await renderHook(() => useWorkflowRunWindow('all'));
-        await act(async () => { storage.setState({ profileScope: null }); });
-        await act(async () => { storage.setState({ profileScope: { serverId, accountId: account.id } }); });
-        expect(hook.getCurrent().status).toBe('loaded');
-        expect(hook.getCurrent().runIds).toEqual(['current-run']);
-        await act(async () => {
-            retiredPage.resolve({ ok: true, result: { runs: [createWorkflowRunSummaryFixture({ id: 'retired-run' })], metadataByRunId: {} } });
-            await retiredPage.promise;
-        });
-        expect(hook.getCurrent().runIds).toEqual(['current-run']);
-        expect(storage.getState().workflowRunsById['retired-run']).toBeUndefined();
-    });
-    it('reads the window again when its Account lifetime is retired mid-read without the scope changing (sign-in restore)', async () => {
-        // Restoring an Account re-binds its credentials: the lifetime retires and the pending read is
-        // aborted, but the scope the mounted reader sees is the same, so nothing else asks again.
-        const retiredPage = createDeferred<unknown>();
-        executeMock.mockReturnValueOnce(retiredPage.promise).mockResolvedValueOnce({ ok: true,
-            result: { runs: [createWorkflowRunSummaryFixture({ id: 'current-run' })], metadataByRunId: {} } });
-        const hook = await renderHook(() => useWorkflowRunWindow('attention'));
-        await act(async () => { retireActiveServerAccountScopeLifetime(); });
-        await act(async () => {
-            retiredPage.reject(new Error('signal is aborted without reason'));
-            await retiredPage.promise.catch(() => {});
-        });
-        expect(hook.getCurrent().status).toBe('loaded');
-        expect(hook.getCurrent().runIds).toEqual(['current-run']);
-    });
-
-    it('does not rerender one window when another window loads or completes its read', async () => {
-        executeMock.mockResolvedValueOnce({ ok: true, result: { runs: [], metadataByRunId: {} } });
+describe('Workflow Run windows through real Account storage', () => {
+    it('shares destination demand, keeps destinations distinct from origins, and avoids unrelated renders', async () => {
+        const summary = createWorkflowRunSummaryFixture({ id: 'writes-here', ownerAccountId: accountId, origin: { kind: 'direct', originSessionId: 'another-session' } });
+        const pending = createDeferred<void>();
+        home.answer(serverId, route, { body: await runPage([summary], undefined, 'bot-session'), respondAfter: pending.promise });
         let renders = 0;
-        const all = await renderHook(() => { renders += 1; return useWorkflowRunWindow('all'); });
-        expect(all.getCurrent().status).toBe('loaded');
-        const settledRenders = renders;
-        const next = createDeferred<unknown>();
-        executeMock.mockReturnValueOnce(next.promise);
-        await renderHook(() => useWorkflowRunWindow('active'));
-        expect(renders).toBe(settledRenders);
-        await act(async () => { next.resolve({ ok: true, result: { runs: [], metadataByRunId: {} } }); await next.promise; });
-        expect(renders).toBe(settledRenders);
-    });
-    it('rechecks attention when its Account wake arrives during the first request', async () => {
-        const pending = createDeferred<Response>();
-        const failed = createAutomationRunFixture({ id: 'cleared-during-read', state: 'failed' });
-        automationRequest.mockReturnValueOnce(pending.promise)
-            .mockResolvedValueOnce(new Response(JSON.stringify({ runs: [], nextCursor: null }), { status: 200 }));
-        const hook = await renderHook(() => useWorkflowRunWindow('automationAttention'));
-        await act(async () => {
-            publishHomeAccountChange(appliedSnapshot().serverId, ['automation:automation-1']);
-            pending.resolve(new Response(JSON.stringify({ runs: [failed], nextCursor: null }), { status: 200 }));
-            await pending.promise;
-        });
-        expect(hook.getCurrent().runIds).toEqual([]);
-        expect(automationRequest).toHaveBeenCalledTimes(2);
+        const first = await renderHook(() => { renders++; return useWorkflowRunWindow('destination:bot-session'); });
+        const second = await renderHook(() => useWorkflowRunWindow('destination:bot-session'));
+        await waitForHomeGovernance(() => expect(home.requestsFor(route)).toHaveLength(1));
+        expect(home.requestsFor(route)[0]?.input).toMatchObject({ request: { targetSessionId: 'bot-session', states: ['queued', 'claimed', 'running', 'pause_requested', 'paused', 'interrupted'] } });
+        await act(async () => pending.resolve()); await waitLoaded(first);
+        expect(first.getCurrent().runIds).toEqual(['writes-here']); expect(second.getCurrent().runIds).toBe(first.getCurrent().runIds);
+        expect(storage.getState().workflowRunsById['writes-here']?.summary?.origin).toEqual(summary.origin);
+        const ids = first.getCurrent().runIds; const before = renders;
+        await act(async () => storage.getState().upsertWorkflowRuns([workflowRunRowFromSummary(run('unrelated'))]));
+        expect(first.getCurrent().runIds).toBe(ids); expect(renders).toBe(before);
     });
 
-    it('rechecks attention after an in-flight continuation so a delayed page cannot restore a cleared item', async () => {
-        const pending = createDeferred<Response>();
-        const failed = createAutomationRunFixture({ id: 'cleared-tail', state: 'failed' });
-        automationRequest.mockResolvedValueOnce(new Response(JSON.stringify({ runs: [], nextCursor: 'tail' }), { status: 200 }))
-            .mockReturnValueOnce(pending.promise)
-            .mockResolvedValueOnce(new Response(JSON.stringify({ runs: [], nextCursor: null }), { status: 200 }));
+    it('pages exact Automation history and retains its filter on continuation', async () => {
+        home.answer(serverId, route, { body: await runPage([run('newest')], 'next') });
+        const first = await renderHook(() => useWorkflowRunWindow('automation:habit')); await waitLoaded(first);
+        const second = await renderHook(() => useWorkflowRunWindow('automation:habit'));
+        home.answer(serverId, route, { body: await runPage([run('older')]) });
+        await act(async () => first.getCurrent().loadMore());
+        await waitForHomeGovernance(() => expect(second.getCurrent().runIds).toEqual(['newest', 'older']));
+        expect(home.requestsFor(route).at(-1)?.input).toMatchObject({ request: { automationId: 'habit', cursor: 'next' } });
+    });
+
+    it.each(['all', 'active', 'attention', 'automationAttention'] as const)('renews %s demand and subsequent Home wakes after retirement', async windowId => {
+        home.answer(serverId, route, { body: await runPage([run('run-0')]) });
+        home.answer(serverId, '/v3/automations/runs', { body: { runs: [createAutomationRunFixture({ id: 'run-0', state: 'failed' })], nextCursor: null } });
+        const hook = await renderHook(() => useWorkflowRunWindow(windowId)); await waitLoaded(hook);
+        expect(hook.getCurrent().runIds).toContain('run-0');
+        home.answer(serverId, route, { body: await runPage([run('run-1')]) });
+        home.answer(serverId, '/v3/automations/runs', { body: { runs: [createAutomationRunFixture({ id: 'run-1', state: 'failed' })], nextCursor: null } });
+        await act(async () => retireActiveServerAccountScopeLifetime());
+        await waitForHomeGovernance(() => expect(hook.getCurrent().runIds).toContain('run-1'));
+        home.answer(serverId, route, { body: await runPage([run('run-2')]) });
+        home.answer(serverId, '/v3/automations/runs', { body: { runs: [createAutomationRunFixture({ id: 'run-2', state: 'failed' })], nextCursor: null } });
+        await act(async () => publishHomeAccountChange(serverId, [windowId === 'automationAttention' ? 'automation:automation-1' : 'workflow-run:run-2']));
+        await waitForHomeGovernance(() => expect(hook.getCurrent().runIds).toContain('run-2'));
+    });
+
+    it('does not restart disabled or unmounted Run windows on retirement and wakes', async () => {
+        home.answer(serverId, route, { body: await runPage([]) });
+        await renderHook(() => useWorkflowRunWindow('attention', { enabled: false }));
+        const active = await renderHook(() => useWorkflowRunWindow('active')); await waitLoaded(active); await active.unmount();
+        const before = home.requestsFor(route).length;
+        await act(async () => { retireActiveServerAccountScopeLifetime(); publishHomeAccountChange(serverId, ['workflow-run:changed']); });
+        expect(home.requestsFor(route)).toHaveLength(before);
+    });
+
+    it.each(['reactivation', 'restore'] as const)('replaces a pending %s read and refuses its late rows', async kind => {
+        const retired = createDeferred<void>();
+        home.answer(serverId, route, { body: await runPage([run('retired-run')]), respondAfter: retired.promise });
+        const hook = await renderHook(() => useWorkflowRunWindow('all'));
+        await waitForHomeGovernance(() => expect(home.requestsFor(route)).toHaveLength(1));
+        home.answer(serverId, route, { body: await runPage([run('current-run')]) });
+        if (kind === 'restore') await act(async () => retireActiveServerAccountScopeLifetime());
+        else {
+            await act(async () => storage.setState({ profileScope: null }));
+            await act(async () => storage.setState({ profileScope: { serverId, accountId } }));
+        }
+        await waitLoaded(hook); expect(hook.getCurrent().runIds).toEqual(['current-run']);
+        await act(async () => retired.resolve());
+        expect(hook.getCurrent().runIds).toEqual(['current-run']); expect(storage.getState().workflowRunsById['retired-run']).toBeUndefined();
+    });
+
+    it('keeps one window\'s render scope local while another loads and while disabled', async () => {
+        home.answer(serverId, route, { body: await runPage([run('window-run')]) });
+        let renders = 0;
+        const all = await renderHook((props: { enabled: boolean }) => { renders++; return useWorkflowRunWindow('all', props); }, { initialProps: { enabled: true } });
+        await waitLoaded(all); const before = renders;
+        const pending = createDeferred<void>();
+        home.answer(serverId, route, { body: await runPage([]), respondAfter: pending.promise });
+        await renderHook(() => useWorkflowRunWindow('active'));
+        await act(async () => pending.resolve()); expect(renders).toBe(before);
+        await all.rerender({ enabled: false }); const disabled = renders;
+        await act(async () => storage.getState().upsertWorkflowRuns([workflowRunRowFromSummary(createWorkflowRunSummaryFixture({ ...run('window-run', 'succeeded'), revision: 2 }))]));
+        expect(renders).toBe(disabled);
+        home.answer(serverId, route, { body: await runPage([createWorkflowRunSummaryFixture({ ...run('window-run', 'succeeded'), revision: 2 })]) });
+        await all.rerender({ enabled: true }); await waitLoaded(all);
+        expect(all.getCurrent().rows[0]?.summary?.state).toBe('succeeded');
+    });
+});
+
+describe('Automation attention through real HTTP and the shared Run store', () => {
+    it.each([false, true])('rechecks a Home wake during the first read or continuation (%s)', async continuation => {
+        const pending = createDeferred<void>();
+        const failed = createAutomationRunFixture({ id: 'cleared', state: 'failed' });
+        home.answer(serverId, '/v3/automations/runs', { body: { runs: continuation ? [] : [failed], nextCursor: continuation ? 'tail' : null }, ...(continuation ? {} : { respondAfter: pending.promise }) });
         const hook = await renderHook(() => useWorkflowRunWindow('automationAttention'));
-        await act(async () => { hook.getCurrent().loadMore(); });
-        await act(async () => {
-            publishHomeAccountChange(appliedSnapshot().serverId, ['automation:automation-1']);
-            await Promise.resolve();
-        });
-        await act(async () => {
-            pending.resolve(new Response(JSON.stringify({ runs: [failed], nextCursor: null }), { status: 200 }));
-            await pending.promise;
-        });
-        expect(hook.getCurrent().runIds).toEqual([]);
+        if (continuation) {
+            await waitLoaded(hook);
+            home.answer(serverId, '/v3/automations/runs', { body: { runs: [failed], nextCursor: null }, respondAfter: pending.promise });
+            await act(async () => hook.getCurrent().loadMore());
+        }
+        await waitForHomeGovernance(() => expect(home.requests.filter(request => request.path.startsWith('/v3/automations/runs?'))).toHaveLength(continuation ? 2 : 1));
+        home.answer(serverId, '/v3/automations/runs', { body: { runs: [], nextCursor: null } });
+        await act(async () => publishHomeAccountChange(serverId, ['automation:automation-1']));
+        await act(async () => pending.resolve());
+        await waitForHomeGovernance(() => { expect(hook.getCurrent().status).toBe('loaded'); expect(hook.getCurrent().runIds).toEqual([]); });
         expect(hook.getCurrent().hasMore).toBe(false);
     });
 
-    it('refreshes the complete loaded attention span so an off-page cleared failure disappears without losing the older selection', async () => {
-        const run = (createdAt: number) => createAutomationRunFixture({ id: `run-${createdAt}`, createdAt, state: 'failed' });
-        const page = (runs: readonly ReturnType<typeof run>[], nextCursor: string | null) => new Response(JSON.stringify({ runs, nextCursor }), { status: 200 });
-        automationRequest.mockResolvedValueOnce(page([run(40), run(30)], 'next'))
-            .mockResolvedValueOnce(page([run(20), run(10)], 'tail'))
-            .mockResolvedValueOnce(page([run(60), run(50)], 'current-2'))
-            .mockResolvedValueOnce(page([run(40), run(30)], 'current-3'))
-            .mockResolvedValueOnce(page([run(10), run(5)], 'current-4'));
-        const hook = await renderHook(() => useWorkflowRunWindow('automationAttention'));
-        await act(async () => { hook.getCurrent().loadMore(); });
-        expect(hook.getCurrent().runIds).toEqual(['run-40', 'run-30', 'run-20', 'run-10']);
-        await act(async () => { hook.getCurrent().retry(); });
-        expect(hook.getCurrent().runIds).toEqual(['run-60', 'run-50', 'run-40', 'run-30', 'run-10', 'run-5']);
+    it('refreshes every loaded attention page, removing cleared failures while retaining older selection', async () => {
+        const failed = (createdAt: number) => createAutomationRunFixture({ id: `run-${createdAt}`, createdAt, state: 'failed' });
+        home.answer(serverId, '/v3/automations/runs', { body: { runs: [failed(40), failed(30)], nextCursor: 'next' } });
+        const hook = await renderHook(() => useWorkflowRunWindow('automationAttention')); await waitLoaded(hook);
+        home.answer(serverId, '/v3/automations/runs', { body: { runs: [failed(20), failed(10)], nextCursor: 'tail' } });
+        await act(async () => hook.getCurrent().loadMore());
+        await waitForHomeGovernance(() => expect(hook.getCurrent().runIds).toEqual(['run-40', 'run-30', 'run-20', 'run-10']));
+        const pages = [{ runs: [failed(60), failed(50)], nextCursor: 'current-2' }, { runs: [failed(40), failed(30)], nextCursor: 'current-3' }, { runs: [failed(10), failed(5)], nextCursor: 'current-4' }];
+        home.answer(serverId, '/v3/automations/runs', { select: () => ({ body: pages.shift() }) });
+        await act(async () => hook.getCurrent().retry());
+        await waitForHomeGovernance(() => expect(hook.getCurrent().runIds).toEqual(['run-60', 'run-50', 'run-40', 'run-30', 'run-10', 'run-5']));
         expect(storage.getState().workflowRunListWindows.automationAttention?.nextCursor).toBe('current-4');
-        expect(automationRequest.mock.calls.map(([path]) => path)).toEqual([
-            '/v3/automations/runs?limit=20&attention=required',
-            '/v3/automations/runs?limit=20&cursor=next&attention=required',
-            '/v3/automations/runs?limit=20&attention=required',
-            '/v3/automations/runs?limit=20&cursor=current-2&attention=required',
+        expect(home.requests.filter(request => request.path.startsWith('/v3/automations/runs?')).map(request => request.path)).toEqual([
+            '/v3/automations/runs?limit=20&attention=required', '/v3/automations/runs?limit=20&cursor=next&attention=required',
+            '/v3/automations/runs?limit=20&attention=required', '/v3/automations/runs?limit=20&cursor=current-2&attention=required',
             '/v3/automations/runs?limit=20&cursor=current-3&attention=required',
         ]);
     });
-    it('shares Account Automation attention, preserves known rows on failure, and removes cleared items on refresh', async () => {
+
+    it('shares attention, retains known rows on failure, and removes cleared rows on retry', async () => {
         const failed = createAutomationRunFixture({ id: 'pre-session', state: 'failed', errorCode: 'machine_unavailable' });
-        const response = (runs: readonly typeof failed[]) => new Response(JSON.stringify({ runs, nextCursor: null }), { status: 200 });
-        const page = createDeferred<Response>();
-        automationRequest.mockReturnValueOnce(page.promise);
+        const pending = createDeferred<void>();
+        home.answer(serverId, '/v3/automations/runs', { body: { runs: [failed], nextCursor: null }, respondAfter: pending.promise });
         const first = await renderHook(() => useWorkflowRunWindow('automationAttention'));
         const second = await renderHook(() => useWorkflowRunWindow('automationAttention'));
-        await act(async () => { page.resolve(response([failed])); await page.promise; });
-        expect(first.getCurrent().rows.map((row) => row.automation?.id)).toEqual(['pre-session']);
-        expect(second.getCurrent().rows[0]).toBe(first.getCurrent().rows[0]);
+        await act(async () => pending.resolve()); await waitLoaded(first);
+        expect(first.getCurrent().rows[0]?.automation).toEqual(failed); expect(second.getCurrent().rows[0]).toBe(first.getCurrent().rows[0]);
         expect(second.getCurrent().runIds).toBe(first.getCurrent().runIds);
-        expect(automationRequest).toHaveBeenCalledTimes(1);
-        expect(automationRequest.mock.calls[0]?.[0]).toBe('/v3/automations/runs?limit=20&attention=required');
-
-        automationRequest.mockRejectedValueOnce(new Error('offline'));
-        await act(async () => { first.getCurrent().retry(); });
-        expect(first.getCurrent().status).toBe('failed');
-        expect(first.getCurrent().rows[0]?.automation).toEqual(failed);
-        automationRequest.mockResolvedValueOnce(response([]));
-        await act(async () => { second.getCurrent().retry(); });
-        expect(first.getCurrent().rows).toEqual([]);
-        expect(first.getCurrent().status).toBe('loaded');
+        home.answer(serverId, '/v3/automations/runs', { status: 503, body: { error: 'storage_unavailable' } });
+        await act(async () => first.getCurrent().retry());
+        await waitForHomeGovernance(() => expect(first.getCurrent().status).toBe('failed')); expect(first.getCurrent().rows[0]?.automation).toEqual(failed);
+        home.answer(serverId, '/v3/automations/runs', { body: { runs: [], nextCursor: null } });
+        await act(async () => second.getCurrent().retry()); await waitLoaded(first); expect(first.getCurrent().rows).toEqual([]);
     });
 
-    it('retires late Automation attention pages on an Account switch', async () => {
-        const late = createDeferred<Response>();
-        automationRequest.mockReturnValueOnce(late.promise);
+    it('discards an old Account\'s late attention page after a real credential switch', async () => {
+        const pending = createDeferred<void>();
+        home.answer(serverId, '/v3/automations/runs', { body: { runs: [createAutomationRunFixture({ id: 'foreign-late', state: 'failed' })], nextCursor: null }, respondAfter: pending.promise });
         const hook = await renderHook(() => useWorkflowRunWindow('automationAttention'));
-        automationRequest.mockResolvedValueOnce(new Response(JSON.stringify({ runs: [], nextCursor: null }), { status: 200 }));
-        await act(async () => { storage.setState({ profileScope: { serverId, accountId: 'account-b' } }); });
-        await act(async () => {
-            late.resolve(new Response(JSON.stringify({ runs: [createAutomationRunFixture({ id: 'foreign-late', state: 'failed' })], nextCursor: null }), { status: 200 }));
-            await late.promise;
-        });
-        expect(hook.getCurrent().rows).toEqual([]);
-        expect(storage.getState().workflowRunsById['foreign-late']).toBeUndefined();
-    });
-    it('detaches inactive window readers and resumes with the current shared Run facts', async () => {
-        const previousState = storage.getState();
-        const running = createWorkflowRunSummaryFixture({ id: 'window-run', revision: 1, state: 'running' });
-        executeMock.mockResolvedValue({ ok: true, result: { runs: [running], metadataByRunId: {} } });
-        try {
-            let renders = 0;
-            const hook = await renderHook((props: { enabled: boolean }) => {
-                renders += 1;
-                return useWorkflowRunWindow('all', props);
-            }, {
-                initialProps: { enabled: false },
-            });
-            expect(executeMock).not.toHaveBeenCalled();
-            const inactiveRenders = renders;
-            act(() => {
-                storage.getState().applyWorkflowRunListPage({
-                    windowId: 'all', runs: [running], metadataByRunId: {}, nextCursor: 'next', mode: 'replace',
-                });
-            });
-            expect(renders).toBe(inactiveRenders);
-
-            await hook.rerender({ enabled: true });
-            expect(hook.getCurrent().rows.map((row) => row.id)).toEqual(['window-run']);
-            await hook.rerender({ enabled: false });
-            const disabledRenders = renders;
-            act(() => {
-                storage.getState().upsertWorkflowRuns([workflowRunRowFromSummary(
-                    createWorkflowRunSummaryFixture({ id: 'window-run', revision: 2, state: 'succeeded' }),
-                )]);
-            });
-            expect(renders).toBe(disabledRenders);
-            await hook.rerender({ enabled: true });
-            expect(hook.getCurrent().rows[0]?.summary?.state).toBe('succeeded');
-            await hook.unmount();
-        } finally {
-            storage.setState(previousState);
-        }
+        await waitForHomeGovernance(() => expect(home.requests.filter(request => request.path.startsWith('/v3/automations/runs?'))).toHaveLength(1));
+        home.answer(serverId, '/v3/automations/runs', { body: { runs: [], nextCursor: null } });
+        await act(async () => { accountId = 'account-b'; await home.switchAccount(serverId, accountId); storage.setState({ profileScope: { serverId, accountId } }); });
+        await waitLoaded(hook); await act(async () => pending.resolve());
+        expect(hook.getCurrent().rows).toEqual([]); expect(storage.getState().workflowRunsById['foreign-late']).toBeUndefined();
     });
 });

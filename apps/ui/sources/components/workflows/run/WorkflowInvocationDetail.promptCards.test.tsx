@@ -1,31 +1,30 @@
 import * as React from 'react';
+import 'fake-indexeddb/auto';
 import { act } from 'react-test-renderer';
-import { afterEach, describe, expect, it, vi } from 'vitest';
+import { afterAll, afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
 import type { WorkflowProgressEnvelopeV1 } from '@happier-dev/protocol';
 
 import { renderScreen, standardCleanup } from '@/dev/testkit';
-import { AppPaneProvider } from '@/components/appShell/panes/AppPaneProvider';
+import { createPlainAccountEncryptionCurrentnessFixture } from '@/dev/testkit/fixtures/accountEncryptionCurrentness';
+import { createHomeGovernanceHarness, installHomeGovernanceBoundaries } from '@/dev/testkit/harness/homeGovernanceHarness';
+import { installSessionActionFixture, installSessionActionRpcBoundary } from '@/dev/testkit/harness/sessionActionRpcBoundary';
+import { restoreServerAccountForTest } from '@/dev/testkit/harness/serverAccountConnectionHarness';
+import { loadSyncSingletonForTests } from '@/dev/testkit/harness/syncSingletonLoader';
+import { installRealActionExecutorModuleLoader } from '@/dev/testkit/harness/actionHomesHttpHarness';
 
-import { WorkflowInvocationDetail, type WorkflowInvocationDetailProps } from './WorkflowInvocationDetail';
+import type { WorkflowInvocationDetailProps } from './WorkflowInvocationDetail';
 import type { WorkflowInvocationRecoveryPresentation } from './workflowRunDetailPresentation';
 
 /**
  * A detached Workflow invocation's requests are answered through the SAME
  * canonical permission and question cards a Session uses. These cases render
- * the real cards, footer and question view; only the Session transport, the
- * modal and platform boundaries are replaced, and the Session transport must
- * never be reached from an Execution Run origin.
+ * the real cards, footer and question view. Action and Session owners remain
+ * real through the HTTP, Socket.IO, credential and platform boundaries. The
+ * real Modal provider observes failed answers. A reachable
+ * Session with the same id surrounds each detached card, so borrowing that authority is visible
+ * at the Socket boundary rather than hidden behind an internal operation spy.
  */
-const sessionOps = vi.hoisted(() => ({
-    sessionAllow: vi.fn(),
-    sessionDeny: vi.fn(),
-    sessionAbort: vi.fn(),
-    sessionAllowWithPermissionUpdates: vi.fn(),
-    sessionAllowWithAnswers: vi.fn(),
-}));
-const modalSpies = vi.hoisted(() => ({ alert: vi.fn() }));
-
 vi.mock('react-native', async () => {
     const { createReactNativeWebMock } = await import('@/dev/testkit/mocks/reactNative');
     return createReactNativeWebMock();
@@ -42,12 +41,35 @@ vi.mock('expo-router', async () => {
     const { createExpoRouterMock } = await import('@/dev/testkit/mocks/router');
     return createExpoRouterMock().module;
 });
-vi.mock('@/modal', async () => {
-    const { createModalModuleMock } = await import('@/dev/testkit/mocks/modal');
-    return createModalModuleMock({ spies: modalSpies }).module;
+// Only Radix's DOM primitives are replaced; alerts go through the real modal owner.
+vi.mock('@/utils/web/radixCjs', async () => {
+    const { createRadixCjsModuleMock } = await import('@/dev/testkit/mocks/radixCjs');
+    return createRadixCjsModuleMock();
 });
-vi.mock('@/sync/ops', () => sessionOps);
 vi.mock('@expo/vector-icons', () => ({ Ionicons: 'Ionicons' }));
+
+const sessionRequests = installSessionActionRpcBoundary(() => undefined);
+const homes = createHomeGovernanceHarness();
+installHomeGovernanceBoundaries(homes);
+await loadSyncSingletonForTests();
+const restoreExecutorModuleLoader = await installRealActionExecutorModuleLoader();
+afterAll(restoreExecutorModuleLoader);
+const { storage } = await import('@/sync/domains/state/storage');
+const { getActiveServerSnapshot } = await import('@/sync/domains/server/serverRuntime');
+const { getAppliedActiveServerSnapshot, isAppliedActiveServerRuntimeAvailable, publishAppliedActiveServerSnapshot } =
+    await import('@/sync/runtime/orchestration/appliedActiveServerRuntime');
+const { TokenStorage } = await import('@/auth/storage/tokenStorage');
+const { createServerFetchAtEndpoint } = await import('@/sync/http/client');
+const { AppSessionTranscriptSourceProvider } = await import('@/components/sessions/transcript/source/appSessionTranscriptSource');
+const { AppPaneProvider } = await import('@/components/appShell/panes/AppPaneProvider');
+const { PermissionPromptCard } = await import('@/components/tools/shell/permissions/PermissionPromptCard');
+const { WorkflowInvocationDetail } = await import('./WorkflowInvocationDetail');
+const { ModalProvider, useModal } = await import('@/modal');
+const originalState = storage.getState();
+const originalAppliedSnapshot = getAppliedActiveServerSnapshot();
+const originalRuntimeAvailable = isAppliedActiveServerRuntimeAvailable();
+let serverId = '';
+let connection: Awaited<ReturnType<typeof restoreServerAccountForTest>> | undefined;
 
 const recovery: WorkflowInvocationRecoveryPresentation = {
     canInspectExecution: false,
@@ -102,6 +124,11 @@ const questionProgress = progressWith({
 });
 
 async function renderDetail(overrides: Partial<WorkflowInvocationDetailProps>) {
+    let modals: ReturnType<typeof useModal>['state']['modals'] = [];
+    function ObserveModals() {
+        modals = useModal().state.modals;
+        return null;
+    }
     const props: WorkflowInvocationDetailProps = {
         progress: permissionProgress,
         recovery,
@@ -114,7 +141,11 @@ async function renderDetail(overrides: Partial<WorkflowInvocationDetailProps>) {
         ...overrides,
     };
     const screen = await renderScreen(<WorkflowInvocationDetail {...props} />, {
-        wrapper: ({ children }) => <AppPaneProvider>{children}</AppPaneProvider>,
+        wrapper: ({ children }) => <ModalProvider><ObserveModals /><AppPaneProvider>
+            <AppSessionTranscriptSourceProvider sessionId="exec-1" serverId={serverId}>
+                {children}
+            </AppSessionTranscriptSourceProvider>
+        </AppPaneProvider></ModalProvider>,
     });
     /** A control the case requires; its absence fails the case rather than typing as nullable. */
     const get = (testID: string) => {
@@ -122,7 +153,7 @@ async function renderDetail(overrides: Partial<WorkflowInvocationDetailProps>) {
         if (node === null) throw new Error(`missing ${testID}`);
         return node;
     };
-    return { ...screen, get };
+    return { ...screen, get, readModals: () => modals };
 }
 
 function deferred() {
@@ -133,10 +164,50 @@ function deferred() {
 }
 
 function expectNoSessionTransport() {
-    for (const op of Object.values(sessionOps)) expect(op).not.toHaveBeenCalled();
+    expect(sessionRequests).toEqual([]);
 }
 
 describe('WorkflowInvocationDetail canonical request cards', () => {
+    beforeEach(async () => {
+        await homes.reset();
+        // The connection fixture restores its credential spy on disposal;
+        // reinstall the canonical Home boundary for each new Account lifetime.
+        installHomeGovernanceBoundaries(homes);
+        serverId = await homes.addHome({ name: 'Prompt cards', serverUrl: 'https://workflow-prompt-cards.test',
+            accountId: 'account-a', currentAccount: true });
+        const credentials = await TokenStorage.getCredentialsForServerUrl('https://workflow-prompt-cards.test');
+        if (!credentials) throw new Error('Prompt-card Home must be signed in');
+        connection = await restoreServerAccountForTest({ serverUrl: 'https://workflow-prompt-cards.test',
+            accountId: 'account-a', credentials, request: async (url, init) => {
+                const endpoint = new URL(String(url));
+                const token = new Headers(init?.headers).get('Authorization')?.replace(/^Bearer /, '');
+                return createServerFetchAtEndpoint({ endpointUrl: endpoint.origin,
+                    ...(token ? { credentials: { token } } : {}) })(`${endpoint.pathname}${endpoint.search}`, init);
+            } });
+        publishAppliedActiveServerSnapshot(getActiveServerSnapshot());
+        storage.setState({ profileScope: { serverId, accountId: 'account-a' } });
+        homes.answer(serverId, '/v1/account/encryption/currentness', {
+            body: createPlainAccountEncryptionCurrentnessFixture(),
+        });
+        const session = installSessionActionFixture({ homes, storage, serverId, session: { id: 'exec-1' } });
+        sessionRequests.length = 0;
+        // Positive control: the exact Session authority a misrouted card could
+        // borrow must reach the Socket boundary through the real card and Action.
+        const positive = await renderScreen(<PermissionPromptCard sessionId={session.id} serverId={serverId}
+            request={{ id: 'permission-1', kind: 'permission', tool: 'Read', arguments: { file_path: '/repo/file.txt' }, createdAt: 1 }}
+            location={null} metadata={session.metadata} canApprovePermissions />, {
+            wrapper: ({ children }) => <AppSessionTranscriptSourceProvider sessionId={session.id} serverId={serverId}>
+                {children}
+            </AppSessionTranscriptSourceProvider>,
+        });
+        await positive.pressByTestIdAsync('permission-footer.allow');
+        expect(sessionRequests).toEqual([expect.objectContaining({
+            method: expect.stringContaining('exec-1'),
+            params: expect.objectContaining({ id: 'permission-1', approved: true }),
+        })]);
+        await positive.unmount();
+        sessionRequests.length = 0;
+    });
     it.each(['cancelled', 'cancel_requested'] as const)('keeps a stopped attempt\'s partial result as one card, its status left to the header, for %s (DESIGN-16 D4)', async lifecycle => {
         const progress: WorkflowProgressEnvelopeV1 = { kind: 'happier.workflow-progress.v1', blockKind: 'action',
             invocationPath: { blockId: 'inspect', scope: [] }, attempt: '0', logicalInvocationRecordId: 'stopped',
@@ -151,10 +222,17 @@ describe('WorkflowInvocationDetail canonical request cards', () => {
         expect(unanswered.getTextContent()).toContain('Does #1482 fix the crash?');
         expect(unanswered.findByTestId('workflow-run-invocation-unanswered')).not.toBeNull();
     });
-    afterEach(() => {
+    afterEach(async () => {
         standardCleanup();
-        for (const op of Object.values(sessionOps)) op.mockReset();
-        modalSpies.alert.mockReset();
+        try {
+            expectNoSessionTransport();
+        } finally {
+            await connection?.dispose();
+            connection = undefined;
+            await homes.reset();
+            storage.setState(originalState, true);
+            publishAppliedActiveServerSnapshot(originalAppliedSnapshot, originalRuntimeAvailable);
+        }
     });
 
     it('opens an inputless Session through its recorded readiness without inventing a turn', async () => {
@@ -203,6 +281,7 @@ describe('WorkflowInvocationDetail canonical request cards', () => {
 
         const { SessionTranscriptSourceProvider } = await import('@/components/sessions/transcript/source/SessionTranscriptSourceContext');
         expect(screen.findAllByType(SessionTranscriptSourceProvider).map((root) => root.props.source)).toEqual([
+            expect.objectContaining({ kind: 'app', sessionId: 'exec-1', serverId, actions: expect.any(Object) }),
             expect.objectContaining({ kind: 'readOnly', sessionId: 'exec-1', actions: null }),
         ]);
         expect(screen.findByTestId('permission-prompt-card')).toBeTruthy();
@@ -285,7 +364,10 @@ describe('WorkflowInvocationDetail canonical request cards', () => {
         await act(async () => { screen.get('ask-user-question.option:0:0').props.onPress(); });
         await act(async () => { screen.get('ask-user-question.submit').props.onPress(); });
 
-        expect(modalSpies.alert).toHaveBeenCalledWith('common.error', 'machine unreachable');
+        expect(screen.readModals()).toMatchObject([{ type: 'alert', title: 'common.error', message: 'machine unreachable' }]);
+        expect(screen.getTextContent()).toContain('machine unreachable');
+        await screen.pressByTestIdAsync('web-modal-button-0');
+        expect(screen.readModals()).toEqual([]);
         expect(screen.get('ask-user-question.submit').props.accessibilityState)
             .toMatchObject({ disabled: false });
     });

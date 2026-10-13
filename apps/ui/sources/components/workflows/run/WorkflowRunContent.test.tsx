@@ -21,11 +21,15 @@ import { WorkflowRunContent } from './WorkflowRunContent';
 import { WorkflowReviewCard, type WorkflowReviewDraft } from './WorkflowReviewCard';
 import { AppPaneProvider } from '@/components/appShell/panes/AppPaneProvider';
 import { ToolbarButton } from '@/components/ui/buttons/ToolbarButton';
+import { Item } from '@/components/ui/lists/Item';
+import { ItemGroup } from '@/components/ui/lists/ItemGroup';
 import { resolveWorkflowFlowScopedNodeId } from '@/components/workflows/flow/workflowFlowProjection';
 import { getStorage } from '@/sync/domains/state/storageStore';
 import { WorkflowMaterializedLeafV1Schema, WorkflowProgressEnvelopeV1Schema } from '@happier-dev/protocol';
 import { BUNDLED_AGENT_CONTRIBUTION_IDENTITIES } from '@happier-dev/agents/agent-ids';
 import { createSessionFixture, createSessionAccessFixture } from '@/dev/testkit/fixtures/sessionFixtures';
+import { ModalProvider, useModal } from '@/modal';
+import { motionTokens } from '@/components/ui/motion/motionTokens';
 
 // These Run fixtures do not stream Markdown; keep its external web adapter at the boundary.
 vi.mock('react-native-enriched-markdown/lib/module/web/streamingReveal.js', () => ({
@@ -33,36 +37,20 @@ vi.mock('react-native-enriched-markdown/lib/module/web/streamingReveal.js', () =
 }));
 
 const virtualizedListState = vi.hoisted(() => ({
-    props: null as Record<string, any> | null,
+    boundary: null as import('@/dev/testkit/mocks/legendList').CapturingLegendListMockState | null,
+    get props() { return this.boundary?.props ?? null; },
     scrollToOffset: vi.fn(),
 }));
 const viewport = vi.hoisted(() => ({ window: { width: 1200, height: 800 } }));
-const modalSpies = vi.hoisted(() => ({
-    show: vi.fn<(config: unknown) => string>(() => 'workflow-detail-modal'),
-    update: vi.fn<(id: string, props: unknown) => void>(),
-    hide: vi.fn<(id: string) => void>(),
-}));
-const envelopeHttp = vi.hoisted(() => ({
-    createSessionDataKeyEnvelopeClient: vi.fn(),
-    readSessionDataKeyEnvelopeCollectionPage: vi.fn(),
-    prepareSessionDataKeyEnvelopesForScope: vi.fn(),
-    prepareSessionDataKeyEnvelopesDetached: vi.fn(),
-    createMembershipSessionDataKeyEnvelopeClient: vi.fn(),
-    prepareMembershipHistoryEnvelopesForScope: vi.fn(),
-    membershipHistoryPreparationScopeKey: vi.fn(),
-    prepareMembershipHistoryEnvelopesDetached: vi.fn(),
-}));
-// Recipient-envelope HTTP is unrelated to Run rendering: Collaboration is never opened.
-vi.mock('@/sync/api/session/sessionDataKeyEnvelopesApi', () => envelopeHttp);
-vi.mock('@/sync/api/teams/membershipSessionDataKeyEnvelopesApi', () => envelopeHttp);
-
+const retireContents: Array<() => Promise<void>> = [];
 vi.mock('react-native', async () => {
     const { createReactNativeWebMock } = await import('@/dev/testkit/mocks/reactNative');
     return createReactNativeWebMock({ useWindowDimensions: () => viewport.window });
 });
-vi.mock('@/modal', async () => {
-    const { createModalModuleMock } = await import('@/dev/testkit/mocks/modal');
-    return createModalModuleMock({ spies: modalSpies }).module;
+// Radix supplies the DOM portal primitives; modal custody and chrome stay real.
+vi.mock('@/utils/web/radixCjs', async () => {
+    const { createRadixCjsModuleMock } = await import('@/dev/testkit/mocks/radixCjs');
+    return createRadixCjsModuleMock();
 });
 vi.mock('@expo/vector-icons', () => ({ Ionicons: 'Ionicons' }));
 vi.mock('react-native-unistyles', async () => {
@@ -73,48 +61,27 @@ vi.mock('@/text', async () => {
     const { createTextModuleMock } = await import('@/dev/testkit/mocks/text');
     return createTextModuleMock({ translate: (key, params) => (params ? `${key}:${JSON.stringify(params)}` : key) });
 });
-vi.mock('@/components/ui/lists/virtualized', () => ({
-    VirtualizedList: React.forwardRef((props: Record<string, any>, ref) => {
-        virtualizedListState.props = props;
-        React.useImperativeHandle(ref, () => ({
-            scrollToIndex: vi.fn(),
-            scrollToOffset: virtualizedListState.scrollToOffset,
-        }));
-        const header = React.isValidElement(props.ListHeaderComponent)
-            ? props.ListHeaderComponent
-            : props.ListHeaderComponent ? React.createElement(props.ListHeaderComponent) : null;
-        const footer = React.isValidElement(props.ListFooterComponent)
-            ? props.ListFooterComponent
-            : props.ListFooterComponent ? React.createElement(props.ListFooterComponent) : null;
-        const rows = (props.data as readonly unknown[]).slice(0, 2).map((item, index) => React.createElement(
-            'VirtualizedListItem',
-            { key: props.keyExtractor(item, index) },
-            props.renderItem({ item, index }),
-        ));
-        // Same contract as the real list: the empty component stands in for rows only when there are none.
-        const empty = rows.length > 0 ? null : React.isValidElement(props.ListEmptyComponent)
-            ? props.ListEmptyComponent
-            : props.ListEmptyComponent ? React.createElement(props.ListEmptyComponent) : null;
-        return React.createElement('VirtualizedList', props, header, ...rows, empty, footer);
-    }),
-}));
+// Substitute only the native recycler; list selection, normalization and refs stay real.
+vi.mock('@legendapp/list/react-native', async (importOriginal) => {
+    const { createCapturingLegendListMock } = await import('@/dev/testkit/mocks/legendList');
+    const boundary = createCapturingLegendListMock({
+        original: await importOriginal<Record<string, unknown>>(),
+        renderItemLimit: 2,
+        refHandle: { scrollToOffset: virtualizedListState.scrollToOffset },
+    });
+    virtualizedListState.boundary = boundary.state;
+    return boundary.module;
+});
 
 afterEach(async () => {
-    for (const request of Object.values(envelopeHttp)) expect(request).not.toHaveBeenCalled();
+    for (const retire of retireContents.splice(0)) await retire();
     await standardCleanup();
-    virtualizedListState.props = null;
+    virtualizedListState.boundary?.reset();
     virtualizedListState.scrollToOffset.mockReset();
     viewport.window = { width: 1200, height: 800 };
-    modalSpies.show.mockClear();
-    modalSpies.update.mockClear();
-    modalSpies.hide.mockClear();
 });
 
 type ContentProps = React.ComponentProps<typeof WorkflowRunContent>;
-
-function WorkflowRunPaneProvider({ children }: React.PropsWithChildren) {
-    return <AppPaneProvider>{children}</AppPaneProvider>;
-}
 
 function flattenTestStyle(style: unknown): Record<string, unknown> {
     if (typeof style === 'function') return flattenTestStyle(style({}));
@@ -127,6 +94,14 @@ function flattenTestStyle(style: unknown): Record<string, unknown> {
 }
 
 async function renderContent(overrides: Partial<ContentProps> = {}) {
+    let modals: ReturnType<typeof useModal>['state']['modals'] = [];
+    function ObserveModals() {
+        modals = useModal().state.modals;
+        return null;
+    }
+    function WorkflowRunPaneProvider({ children }: React.PropsWithChildren) {
+        return <ModalProvider><ObserveModals /><AppPaneProvider>{children}</AppPaneProvider></ModalProvider>;
+    }
     const props: ContentProps = {
         // These controls do not need a live transcript; the real pane's inactive contract remains exercised.
         active: false,
@@ -143,7 +118,14 @@ async function renderContent(overrides: Partial<ContentProps> = {}) {
         onChangeView: vi.fn(),
         ...overrides,
     };
-    return renderScreen(React.createElement(WorkflowRunContent, props), { wrapper: WorkflowRunPaneProvider });
+    // The application shell registers its modal host before mounting route content.
+    const screen = await renderScreen(<></>, { wrapper: WorkflowRunPaneProvider });
+    await screen.update(React.createElement(WorkflowRunContent, props));
+    let mounted = true;
+    const retire = async () => { if (mounted) await screen.update(<></>); };
+    retireContents.push(retire);
+    return { ...screen, visibleModals: () => modals.filter((entry) => 'visible' in entry && entry.visible),
+        unmount: async () => { await retire(); mounted = false; await screen.unmount(); } };
 }
 
 it('renders For-each value names and stopped occurrence facts through the real Run body', async () => {
@@ -449,12 +431,12 @@ describe('WorkflowRunContent', () => {
             invocationProgressById: openedLeafProgress('inv-400'),
         });
 
-        expect(screen.findAllByType('VirtualizedList' as never)).toHaveLength(1);
+        expect(screen.findAllByType('LegendList' as never)).toHaveLength(1);
         // The rows have one scroll owner; the only other one is the neighbouring
         // inspector, which scrolls the selected detail on its own.
         const scrollViews = screen.findAllByType('ScrollView' as never);
         expect(scrollViews.map((node) => node.props.testID)).toEqual(['workflow-run-inspector']);
-        expect(screen.findAllByType('VirtualizedListItem' as never)).toHaveLength(2);
+        expect(screen.findAllByType('LegendListItem' as never)).toHaveLength(2);
         expect(virtualizedListState.props?.data).toHaveLength(512);
         expect(virtualizedListState.props?.keyExtractor(invocations[450], 450)).toBe('inv-450');
         expect(screen.findByTestId('workflow-run-needs-you-inv-400')).toBeTruthy();
@@ -467,7 +449,7 @@ describe('WorkflowRunContent', () => {
     it('gives Flow one plain scroll owner without mounting the Activity list', async () => {
         const screen = await renderContent({ view: 'flow' });
 
-        expect(screen.findAllByType('VirtualizedList' as never)).toHaveLength(0);
+        expect(screen.findAllByType('LegendList' as never)).toHaveLength(0);
         expect(screen.findAllByType('ScrollView' as never)).toHaveLength(1);
         expect(screen.findByTestId('workflow-run-flow')).toBeTruthy();
     });
@@ -499,9 +481,9 @@ describe('WorkflowRunContent', () => {
         expect(inspector?.findAllByProps({ testID: 'workflow-run-selected-detail' }).length).toBeGreaterThan(0);
         // Not appended after the rows: the list's footer carries no detail.
         expect(virtualizedListState.props?.ListFooterComponent === null
-            || screen.findAllByType('VirtualizedList' as never)[0]
+            || screen.findAllByType('LegendList' as never)[0]
                 ?.findAllByProps({ testID: 'workflow-run-selected-detail' }).length === 0).toBe(true);
-        expect(modalSpies.show).not.toHaveBeenCalled();
+        expect(screen.visibleModals()).toEqual([]);
 
         // Open the replacement editor without typing: only a still-mounted
         // instance can keep that disclosure open across the view switch.
@@ -526,7 +508,7 @@ describe('WorkflowRunContent', () => {
             onSelectInvocation,
             onDeselectInvocation,
         });
-        expect(modalSpies.show).not.toHaveBeenCalled();
+        expect(screen.visibleModals()).toEqual([]);
 
         // Selecting from a row records where focus returns when the sheet closes.
         const row = screen.findByTestId('workflow-run-invocations-row-inv-1');
@@ -542,13 +524,13 @@ describe('WorkflowRunContent', () => {
         }));
         expect(screen.findByTestId('workflow-run-inspector')).toBeNull();
         expect(screen.findByTestId('workflow-run-selected-detail')).toBeNull();
-        expect(modalSpies.show).not.toHaveBeenCalled();
+        expect(screen.visibleModals()).toEqual([]);
         await screen.update(React.createElement(WorkflowRunContent, {
             ...(screen.findByType(WorkflowRunContent as never)?.props as ContentProps),
             invocationPage: true,
         }));
         expect(screen.findByTestId('workflow-run-selected-detail')).toBeTruthy();
-        expect(screen.findAllByType('VirtualizedList' as never)).toHaveLength(0);
+        expect(screen.findAllByType('LegendList' as never)).toHaveLength(0);
 
         // Growing past compact moves the same selection into the inspector and
         // takes the sheet down; nothing is selected twice.
@@ -783,11 +765,22 @@ describe('WorkflowRunContent', () => {
             renderReviewCard: () => React.createElement('ReviewSlot'),
         });
         expect(screen.findByTestId('session-in-pane-inactive:step-session')).toBeTruthy();
-        expect(screen.findAllByType('ReviewSlot' as never)).toHaveLength(0);
-        expect(modalSpies.show).toHaveBeenCalledTimes(1);
-        expect(modalSpies.show.mock.calls[0]?.[0]).toMatchObject({
+        expect(screen.findAllByType('ReviewSlot' as never)).toHaveLength(1);
+        expect(screen.visibleModals()).toHaveLength(1);
+        expect(screen.visibleModals()[0]).toMatchObject({
             chrome: { testID: 'workflow-run-review-modal' }, props: { card: expect.anything() },
         });
+        const modalId = screen.visibleModals()[0].id;
+        await screen.update(React.createElement(WorkflowRunContent, {
+            ...(screen.findByType(WorkflowRunContent).props as ContentProps),
+            renderReviewCard: () => React.createElement('ReviewSlot', { publication: 'updated' }),
+        }));
+        expect(screen.visibleModals().map(modal => modal.id)).toEqual([modalId]);
+        expect(screen.findAllByType('ReviewSlot' as never)).toHaveLength(1);
+        expect(screen.findByType('ReviewSlot' as never).props.publication).toBe('updated');
+        // A route departure retires the owned sheet while the shell's provider remains mounted.
+        await screen.update(<></>);
+        expect(screen.visibleModals()).toEqual([]);
     });
 
     it('reopens the same phone hold with its external draft and resets dismissal for a new exact attempt', async () => {
@@ -809,36 +802,32 @@ describe('WorkflowRunContent', () => {
             selectedInvocationProgress: progress, renderReviewCard });
         expect(screen.findByTestId('workflow-run-view:flow')).toBeTruthy();
         expect(screen.findByTestId('workflow-run-selected-header')).toBeNull();
-        // Modal rendering/dismissal is a genuine UI boundary. Mount its real supplied component/card.
-        const readModal = (index: number) => modalSpies.show.mock.calls[index]?.[0] as Readonly<{
-            component: React.ComponentType<{ card: React.ReactNode; onClose: () => void }>;
-            props: { card: React.ReactNode };
-            onRequestClose: () => void;
-        }>;
-        const first = readModal(0);
-        const overlay = await renderScreen(React.createElement(first.component, { ...first.props, onClose: first.onRequestClose }));
-        await act(async () => { overlay.changeTextByTestId('workflow-review-editor', 'My retained answer'); });
-        await act(async () => { first.onRequestClose(); });
-        await overlay.unmount();
+        expect(screen.visibleModals()).toHaveLength(1);
+        const firstId = screen.visibleModals()[0].id;
+        await act(async () => { screen.changeTextByTestId('workflow-review-editor', 'My retained answer'); });
+        await screen.pressByTestIdAsync('modal-card-close');
+        expect(screen.visibleModals()).toEqual([]);
+        await act(async () => { await new Promise(resolve => setTimeout(resolve, motionTokens.overlay.modal.exitMs)); });
         expect(screen.findAllByType(WorkflowReviewCard)).toHaveLength(0);
         expect(screen.findByTestId('workflow-run-view:flow')).toBeTruthy();
         await screen.pressByTestIdAsync('workflow-run-open-review');
-        expect(modalSpies.show).toHaveBeenCalledTimes(2);
-        const reopened = readModal(1);
-        const reopenedOverlay = await renderScreen(React.createElement(reopened.component, { ...reopened.props, onClose: reopened.onRequestClose }));
-        expect(reopenedOverlay.findByTestId('workflow-review-editor')?.props.value).toBe('My retained answer');
-        await act(async () => { reopened.onRequestClose(); });
-        await reopenedOverlay.unmount();
+        expect(screen.visibleModals()).toHaveLength(1);
+        const reopenedId = screen.visibleModals()[0].id;
+        expect(reopenedId).not.toBe(firstId);
+        expect(screen.findByTestId('workflow-review-editor')?.props.value).toBe('My retained answer');
+        await screen.pressByTestIdAsync('modal-card-close');
+        expect(screen.visibleModals()).toEqual([]);
+        await act(async () => { await new Promise(resolve => setTimeout(resolve, motionTokens.overlay.modal.exitMs)); });
+        expect(screen.findAllByType(WorkflowReviewCard)).toHaveLength(0);
         exactId = 'held-2';
         currentProgress = { ...progress, attempt: '1', previousAttemptRecordId: 'held-1' };
         await screen.update(React.createElement(WorkflowRunContent, {
             ...(screen.findByType(WorkflowRunContent as never)?.props as ContentProps), selectedInvocationId: exactId,
             selectedInvocationProgress: currentProgress,
         }));
-        expect(modalSpies.show).toHaveBeenCalledTimes(3);
-        const fresh = readModal(2);
-        const freshOverlay = await renderScreen(React.createElement(fresh.component, { ...fresh.props, onClose: fresh.onRequestClose }));
-        expect(freshOverlay.findByTestId('workflow-review-editor')?.props.value).toBe('');
+        expect(screen.visibleModals()).toHaveLength(1);
+        expect(screen.visibleModals()[0].id).not.toBe(reopenedId);
+        expect(screen.findByTestId('workflow-review-editor')?.props.value).toBe('');
         expect(drafts.get('held-1')?.text).toBe('My retained answer');
     });
 
@@ -1059,7 +1048,7 @@ describe('WorkflowRunContent', () => {
         expect(screen.getTextContent()).toContain('workflows.run.stopping');
     });
 
-    it.each(['map', 'steps', 'activity'] as const)('uses offline Stop facts for the header and physical step in %s', async (view) => {
+    it.each(['flow', 'steps', 'activity'] as const)('uses offline Stop facts for the header and physical step in %s', async (view) => {
         const invocation = createWorkflowInvocationIndexFixture({ id: 'stopping', parentRecordId: 'root', lifecycle: 'cancel_requested' });
         const screen = await renderContent({ view,
             run: createWorkflowRunSummaryFixture({ state: 'cancelled', workflowCustodyState: 'pending' }),
@@ -1378,7 +1367,19 @@ describe('WorkflowRunContent', () => {
             },
         });
 
-        expect(screen.findByTestId('workflow-run-recovery-card')).not.toBeNull();
+        const card = screen.findByTestId('workflow-run-recovery-card');
+        expect(card).not.toBeNull();
+        // One card headed by its cause, inside the sheet (lab run-A_interrupted), and quiet: with nothing
+        // to choose yet, nothing needs you, so it carries no needs-you tint (DESIGN-18 R1b).
+        // The canonical screen query resolves React's collapsed memo fibers;
+        // raw instance.findAllByType misses the real memoized ItemGroup/Item.
+        const sheet = screen.findAllByType(ItemGroup).find((group) =>
+            card!.findAll((node) => node === group).length > 0);
+        expect(sheet).toBeDefined();
+        expect(sheet!.props.title).toBeUndefined();
+        expect(sheet!.props.containerStyle ?? null).toBeNull();
+        const cause = screen.findAllByType(Item).find((item) => item.props.testID === 'workflow-run-recovery-cause');
+        expect(cause?.props.title).toContain('workflows.recovery.lostContact');
         const text = screen.getTextContent();
         expect(text).toContain('workflows.recovery.lostContact');
         expect(text).toContain('workflows.recovery.choicesOnReconnect');
@@ -1757,7 +1758,9 @@ describe('WorkflowRunContent', () => {
     });
 
     it('gives every actionable Run row a real press target and leaves header buttons at their own size', async () => {
+        const onSelectInvocation = vi.fn();
         const screen = await renderContent({
+            onSelectInvocation,
             invocationProgressById: openedLeafProgress('inv-1'),
             run: createWorkflowRunSummaryFixture({
                 id: 'run-1',
@@ -1778,8 +1781,12 @@ describe('WorkflowRunContent', () => {
         ]) {
             const node = screen.findByTestId(testID);
             expect(node, testID).toBeTruthy();
-            expect(flattenTestStyle(node?.props.style).minHeight, testID).toBe(44);
+            // This web SDK fixture has a precise pointer. The shared target owner
+            // requires 24 CSS px here; 44 is the finger floor (48 on Android).
+            expect(flattenTestStyle(node?.props.style).minHeight, testID).toBe(24);
             expect(node?.props.hitSlop, testID).toBeUndefined();
+            await screen.pressByTestIdAsync(testID);
+            expect(onSelectInvocation).toHaveBeenCalledWith('inv-1');
         }
         // The header's buttons own their target in the shared button (the touch floor
         // where the pointer is a finger); the Run never stretches their visible box to

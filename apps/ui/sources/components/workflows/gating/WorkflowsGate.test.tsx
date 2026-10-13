@@ -1,36 +1,16 @@
 import React from 'react';
-import { afterEach, describe, expect, it, vi } from 'vitest';
+import { act } from 'react-test-renderer';
+import { afterEach, beforeAll, beforeEach, describe, expect, it, vi } from 'vitest';
 
-import { renderScreen } from '@/dev/testkit';
+import { createDeferred, createRootLayoutFeaturesResponse, renderScreen, standardCleanup } from '@/dev/testkit';
+import {
+    createHomeGovernanceHarness,
+    installHomeGovernanceBoundaries,
+} from '@/dev/testkit/harness/homeGovernanceHarness';
+import { installDisconnectedServerSocketBoundary } from '@/dev/testkit/harness/serverAccountConnectionHarness';
+import { loadSyncSingletonForTests } from '@/dev/testkit/harness/syncSingletonLoader';
 
-type Decision = Readonly<{ state: string; blockedBy: string | null; blockingDependencyId?: string }> | null;
-const decisions = vi.hoisted(() => ({ workflows: null as Decision, automations: null as Decision }));
 const routerPush = vi.hoisted(() => vi.fn());
-
-// Decisions keep their identity across renders, as the real owner's do.
-const decisionCache = vi.hoisted(() => new Map<unknown, unknown>());
-vi.mock('@/hooks/server/useFeatureDecision', () => ({
-    useFeatureDecision: (featureId: 'workflows' | 'automations') => {
-        const decision = decisions[featureId];
-        if (decision === null) return null;
-        if (!decisionCache.has(decision)) {
-            decisionCache.set(decision, {
-                featureId,
-                blockerCode: decision.state === 'enabled' ? 'none' : 'feature_disabled',
-                diagnostics: [],
-                evaluatedAt: 0,
-                scope: { scopeKind: 'runtime' },
-                ...decision,
-            });
-        }
-        return decisionCache.get(decision);
-    },
-}));
-
-vi.mock('@/sync/domains/state/storage', async () => {
-    const { createStorageModuleStub } = await import('@/dev/testkit/mocks/storage');
-    return createStorageModuleStub({ useSetting: () => false });
-});
 
 vi.mock('expo-router', async () => {
     const { createExpoRouterMock } = await import('@/dev/testkit/mocks/router');
@@ -47,19 +27,40 @@ vi.mock('@/text', async () => {
     return createTextModuleMock({ translate: (key: string) => key });
 });
 
-vi.mock('@/components/ui/text/Text', () => ({ Text: 'Text' }));
-vi.mock('@/components/ui/surfaces/SurfaceStateCard', () => ({
-    SurfaceStateCard: (props: Record<string, unknown>) => React.createElement('SurfaceStateCard', props),
-}));
+installDisconnectedServerSocketBoundary();
+const homes = createHomeGovernanceHarness();
+installHomeGovernanceBoundaries(homes);
+beforeAll(loadSyncSingletonForTests);
+const { WorkflowsGate } = await import('./WorkflowsGate');
 
-afterEach(() => {
-    decisions.workflows = null;
-    decisions.automations = null;
-    routerPush.mockReset();
+let serverId: string;
+beforeEach(async () => {
+    await homes.reset();
+    installHomeGovernanceBoundaries(homes);
+    const { getStorage } = await import('@/sync/domains/state/storage');
+    const { settingsDefaults } = await import('@/sync/domains/settings/settings');
+    getStorage().setState({ settings: { ...settingsDefaults, experiments: false }, settingsScope: null });
+    const { resetServerFeaturesClientForTests } = await import('@/sync/api/capabilities/serverFeaturesClient');
+    resetServerFeaturesClientForTests();
+    serverId = await homes.addHome({ name: 'Workflow Home', serverUrl: 'https://workflow-gate.example', accountId: 'gate-account' });
 });
 
+afterEach(() => {
+    standardCleanup();
+    routerPush.mockReset();
+    vi.restoreAllMocks();
+});
+
+async function publishFeatures(workflows: boolean, automations = true) {
+    const features = createRootLayoutFeaturesResponse({ features: {
+        workflows: { enabled: workflows }, automations: { enabled: automations },
+    } });
+    homes.answer(serverId, '/v1/features', { body: features });
+    const { getServerFeaturesSnapshot } = await import('@/sync/api/capabilities/serverFeaturesClient');
+    return getServerFeaturesSnapshot({ serverId, force: true });
+}
+
 async function renderGate(surface?: 'destination') {
-    const { WorkflowsGate } = await import('./WorkflowsGate');
     return (await renderScreen(
         <WorkflowsGate {...(surface ? { surface } : {})}><Allowed /></WorkflowsGate>,
     )).tree;
@@ -67,19 +68,22 @@ async function renderGate(surface?: 'destination') {
 
 describe('WorkflowsGate', () => {
     it('fails closed while the decisions are unresolved', async () => {
-        decisions.automations = { state: 'enabled', blockedBy: null };
-        const tree = await renderGate();
-
-        expect(tree.root.findAllByProps({ testID: 'workflows-allowed-child' })).toHaveLength(0);
-        expect(tree.root.findByProps({ testID: 'workflows-gate-loading' }).props).toMatchObject({
-            kind: 'loading',
-            accessibilitySemantics: 'status',
-        });
+        const response = createDeferred<void>();
+        homes.answer(serverId, '/v1/features', { body: createRootLayoutFeaturesResponse(), respondAfter: response.promise });
+        try {
+            const tree = await renderGate();
+            expect(tree.root.findAllByProps({ testID: 'workflows-allowed-child' })).toHaveLength(0);
+            expect(tree.root.findByProps({ testID: 'workflows-gate-loading' }).props).toMatchObject({
+                kind: 'loading',
+                accessibilitySemantics: 'status',
+            });
+        } finally {
+            await act(async () => { response.resolve(); await response.promise; });
+        }
     });
 
     it('renders children only for the enabled Workflows decision', async () => {
-        decisions.workflows = { state: 'enabled', blockedBy: null };
-        decisions.automations = { state: 'enabled', blockedBy: null };
+        await publishFeatures(true);
         const tree = await renderGate();
 
         expect(tree.root.findAllByProps({ testID: 'workflows-allowed-child' })).toHaveLength(1);
@@ -91,20 +95,41 @@ describe('WorkflowsGate', () => {
      * drop its document, pane and tab for a full-page loading state.
      */
     it('keeps an admitted destination mounted while its decision re-resolves', async () => {
-        decisions.workflows = { state: 'enabled', blockedBy: null };
-        decisions.automations = { state: 'enabled', blockedBy: null };
-        const { WorkflowsGate } = await import('./WorkflowsGate');
+        await publishFeatures(true);
         const tree = await renderGate();
         const child = tree.root.findByProps({ testID: 'workflows-allowed-child' });
 
-        decisions.workflows = null;
-        decisions.automations = null;
-        const { act } = await import('react-test-renderer');
-        await act(async () => { tree.update(<WorkflowsGate><Allowed /></WorkflowsGate>); });
+        const { deleteServerFeaturesSnapshot } = await import('@/sync/api/capabilities/serverFeaturesClient');
+        await act(async () => { deleteServerFeaturesSnapshot({ serverId }); });
 
         expect(tree.root.findAllByProps({ testID: 'workflows-gate-loading' })).toHaveLength(0);
         // The same mounted child, not a remount.
         expect(tree.root.findByProps({ testID: 'workflows-allowed-child' })).toBe(child);
+    });
+
+    it('does not carry an admitted destination into a different unresolved Home', async () => {
+        await publishFeatures(true);
+        const tree = await renderGate();
+        expect(tree.root.findAllByProps({ testID: 'workflows-allowed-child' })).toHaveLength(1);
+        const response = createDeferred<void>();
+        let nextServerId = '';
+        await act(async () => {
+            nextServerId = await homes.addHome({
+                name: 'Unresolved Home', serverUrl: 'https://workflow-gate-next.example',
+                accountId: 'next-account', active: false,
+            });
+            homes.answer(nextServerId, '/v1/features', {
+                body: createRootLayoutFeaturesResponse(), respondAfter: response.promise,
+            });
+        });
+        try {
+            const { setActiveServerId } = await import('@/sync/domains/server/serverProfiles');
+            await act(async () => { await setActiveServerId(nextServerId, { scope: 'device' }); });
+            expect(tree.root.findAllByProps({ testID: 'workflows-allowed-child' })).toHaveLength(0);
+            expect(tree.root.findByProps({ testID: 'workflows-gate-loading' }).props.kind).toBe('loading');
+        } finally {
+            await act(async () => { response.resolve(); await response.promise; });
+        }
     });
 
     /**
@@ -112,8 +137,7 @@ describe('WorkflowsGate', () => {
      * copy and its (absent) repair, so no retry is offered that could never succeed.
      */
     it('states Workflows are unavailable on a hard server denial, with no repair', async () => {
-        decisions.workflows = { state: 'disabled', blockedBy: 'server' };
-        decisions.automations = { state: 'disabled', blockedBy: 'server' };
+        await publishFeatures(false, false);
         const tree = await renderGate();
 
         expect(tree.root.findAllByProps({ testID: 'workflows-allowed-child' })).toHaveLength(0);
@@ -127,8 +151,9 @@ describe('WorkflowsGate', () => {
     });
 
     it('leads a local disablement to the Automations switch that repairs it', async () => {
-        decisions.workflows = { state: 'disabled', blockedBy: 'dependency', blockingDependencyId: 'automations' };
-        decisions.automations = { state: 'disabled', blockedBy: 'local_policy' };
+        await publishFeatures(true);
+        const { getStorage } = await import('@/sync/domains/state/storage');
+        getStorage().setState(state => ({ settings: { ...state.settings, featureToggles: { automations: false } } }));
         const tree = await renderGate();
 
         expect(tree.root.findAllByProps({ testID: 'workflows-allowed-child' })).toHaveLength(0);
@@ -142,8 +167,9 @@ describe('WorkflowsGate', () => {
     });
 
     it('speaks of Automations on the destination home, which also governs triggers', async () => {
-        decisions.workflows = { state: 'disabled', blockedBy: 'dependency', blockingDependencyId: 'automations' };
-        decisions.automations = { state: 'disabled', blockedBy: 'local_policy' };
+        await publishFeatures(true);
+        const { getStorage } = await import('@/sync/domains/state/storage');
+        getStorage().setState(state => ({ settings: { ...state.settings, featureToggles: { automations: false } } }));
         const tree = await renderGate('destination');
 
         expect(tree.root.findByProps({ testID: 'workflows-gate-local' }).props).toMatchObject({

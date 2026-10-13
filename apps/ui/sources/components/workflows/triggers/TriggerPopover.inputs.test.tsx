@@ -1,43 +1,72 @@
 import * as React from 'react';
-import { afterEach, describe, expect, it, vi } from 'vitest';
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { renderScreen } from '@/dev/testkit';
 import { act } from 'react-test-renderer';
-import { createActionExecutorBoundaryFixture } from '@/dev/testkit/fixtures/actionExecutorBoundary';
-import { createDeferred } from '@/dev/testkit';
-import { DropdownMenu } from '@/components/ui/forms/dropdown/DropdownMenu';
-import { getStorage } from '@/sync/domains/state/storageStore';
-import { getActiveServerSnapshot } from '@/sync/domains/server/serverRuntime';
 import { standardCleanup } from '@/dev/testkit/cleanup/standardCleanup';
-import { getAppliedActiveServerSnapshot, isAppliedActiveServerRuntimeAvailable, publishAppliedActiveServerSnapshot, publishAppliedActiveServerRuntimeAvailability } from '@/sync/runtime/orchestration/appliedActiveServerRuntime';
+import { createHomeGovernanceHarness, installHomeGovernanceBoundaries, waitForHomeGovernance } from '@/dev/testkit/harness/homeGovernanceHarness';
+import { installRealActionExecutorModuleLoader } from '@/dev/testkit/harness/actionHomesHttpHarness';
+import { installSessionActionRpcBoundary } from '@/dev/testkit/harness/sessionActionRpcBoundary';
+import { createPlainAccountEncryptionCurrentnessFixture } from '@/dev/testkit/fixtures/accountEncryptionCurrentness';
+import { createMachineFixture, createPlainMachineRowFixture } from '@/dev/testkit/fixtures/machineFixtures';
+import { PluginProjectionV2Schema } from '@happier-dev/protocol';
+import { RPC_METHODS } from '@happier-dev/protocol/rpc';
+import type { SocketRpcRequestPayload } from '@happier-dev/protocol/socketRpc';
 
-const execute = vi.hoisted(() => vi.fn());
-const alert = vi.hoisted(() => vi.fn());
-vi.mock('@/modal', () => ({ Modal: { alert } }));
-let previousProfileScope = getStorage().getState().profileScope;
+const machineRpc = vi.fn<(request: SocketRpcRequestPayload) => unknown>();
+// Home and machine transports enter through static imports; hoist the genuine
+// Socket.IO SDK boundary before those owners, then configure its replies below.
+vi.mock('socket.io-client', async importOriginal =>
+    (await import('@/dev/testkit/harness/serverAccountConnectionHarness')).createSocketIoClientBoundary(importOriginal));
+// Trigger inputs never stream Markdown; retain only the genuine vendor SDK leaf.
+vi.mock('react-native-enriched-markdown/lib/module/web/streamingReveal.js', () => ({
+    splitStreamingRevealTextParts: () => { throw new Error('Unexpected vendor Markdown reveal in trigger-input test'); },
+}));
+vi.mock('react-native', async () => (await import('@/dev/testkit/mocks/reactNative')).createReactNativeWebMock());
+// Radix is the DOM SDK boundary; the modal provider, manager and alert remain real.
+vi.mock('@/utils/web/radixCjs', async () => (await import('@/dev/testkit/mocks/radixCjs')).createRadixCjsModuleMock());
+const home = createHomeGovernanceHarness();
+installHomeGovernanceBoundaries(home);
+installSessionActionRpcBoundary(request => machineRpc(request));
+const { ModalProvider } = await import('@/modal');
+const { WebAlertModal } = await import('@/modal/components/WebAlertModal');
+const { DropdownMenu } = await import('@/components/ui/forms/dropdown/DropdownMenu');
+const { getAppliedActiveServerSnapshot, isAppliedActiveServerRuntimeAvailable, publishAppliedActiveServerSnapshot, publishAppliedActiveServerRuntimeAvailability } = await import('@/sync/runtime/orchestration/appliedActiveServerRuntime');
+const { getStorage } = await import('@/sync/domains/state/storageStore');
+const { getActiveServerSnapshot } = await import('@/sync/domains/server/serverRuntime');
+const { setRuntimeFetch, resetRuntimeFetch } = await import('@/utils/system/runtimeFetch');
+let disposeLoader: (() => void) | undefined;
+let serverId: string;
+let previousState = getStorage().getState();
 let previousAppliedSnapshot = getAppliedActiveServerSnapshot();
 let previousRuntimeAvailable = isAppliedActiveServerRuntimeAvailable();
-function establishDiagnosticScope() {
-    previousProfileScope = getStorage().getState().profileScope;
+beforeEach(async () => {
+    previousState = getStorage().getState();
     previousAppliedSnapshot = getAppliedActiveServerSnapshot();
     previousRuntimeAvailable = isAppliedActiveServerRuntimeAvailable();
+    await home.reset();
+    disposeLoader = await installRealActionExecutorModuleLoader();
+    serverId = await home.addHome({ name: 'Trigger inputs', serverUrl: `https://trigger-inputs-${crypto.randomUUID()}.test`, accountId: 'account-a' });
+    // The real scoped RPC pool proves reachability through runtimeFetch before
+    // connecting Socket.IO; it must use this same Home's HTTP boundary too.
+    home.answer(serverId, '/v1/auth/ping', { body: { ok: true } });
+    setRuntimeFetch(home.request);
+    home.answer(serverId, '/v1/account/encryption/currentness', { body: createPlainAccountEncryptionCurrentnessFixture() });
     const snapshot = getActiveServerSnapshot();
     publishAppliedActiveServerSnapshot(snapshot);
     publishAppliedActiveServerRuntimeAvailability(true);
-    getStorage().setState({ profileScope: { serverId: snapshot.serverId, accountId: 'account-a' } });
-}
-// The Action transport is a boundary; the library, scope and exact reader stay real.
-vi.mock('@/sync/ops/actions/frontDoorRuntimeActionExecutor', async (importOriginal) => {
-    const actual = await importOriginal<typeof import('@/sync/ops/actions/frontDoorRuntimeActionExecutor')>();
-    return { ...actual, createFrontDoorActionExecute: () => execute,
-        createFrontDoorUiActionExecutor: () => actual.createFrontDoorUiActionExecutor({ execute }) };
+    getStorage().setState({ profileScope: { serverId, accountId: 'account-a' }, settingsScope: { serverId, accountId: 'account-a' } });
 });
 afterEach(async () => {
-    standardCleanup();
+    await standardCleanup();
     (await import('../library/workflowLibraryReads')).resetWorkflowLibraryReadsForTests();
     (await import('@/sync/domains/scope/activeServerAccountScope')).retireActiveServerAccountScopeLifetime();
-    execute.mockReset();
-    alert.mockReset();
-    getStorage().setState({ profileScope: previousProfileScope });
+    (await import('@/agents/backendCatalog/loadDaemonMergedProjectionInputs')).clearDaemonMergedProjectionCacheForTests();
+    machineRpc.mockReset();
+    resetRuntimeFetch();
+    await home.reset();
+    disposeLoader?.();
+    disposeLoader = undefined;
+    getStorage().setState(previousState);
     publishAppliedActiveServerSnapshot(previousAppliedSnapshot);
     publishAppliedActiveServerRuntimeAvailability(previousRuntimeAvailable);
 });
@@ -145,10 +174,6 @@ describe('Run a workflow trigger inputs', () => {
         ['sourceMismatch', { action: 'opened' }, 'repository:42', 100, null, 'issue-opened', 4],
         ['tooOld', { action: 'opened' }, 'repository:42', 200, 50],
     ] as const)('tests a configured trigger against real retained event evidence: %s', async (result, payload, sourceInstanceId, observationReceivedAt, maximumObservationAgeMs, eventLocalId = 'issue-opened', sourceContractVersion = 3) => {
-        establishDiagnosticScope();
-        const { createActionExecutor } = await import('@happier-dev/protocol');
-        const executor = createActionExecutor(createActionExecutorBoundaryFixture({}));
-        execute.mockImplementation((actionId, input, context) => executor.execute(actionId, input, context));
         const { AutomationTriggerDefinitionInputSchema } = await import('@happier-dev/protocol/automations/automationTriggerDefinition');
         const { AutomationRunPluginEventTriggerEvidenceV1Schema } = await import('@happier-dev/protocol/automations/automationRunExecutionRecipeV1');
         const value = AutomationTriggerDefinitionInputSchema.parse({
@@ -174,18 +199,10 @@ describe('Run a workflow trigger inputs', () => {
         await screen.pressByTestIdAsync('event-trigger-test');
         expect(screen.findByTestId('event-trigger-test-result')?.props.children)
             .toBe(`workflows.triggers.activity.${result}`);
-        expect(execute).toHaveBeenCalledWith('workflow.trigger.test', {
-            trigger: { eventRef: value.eventRef, sourceInstanceId: value.sourceInstanceId,
-                sourceContractVersion: value.sourceContractVersion, filter: value.filter, maximumObservationAgeMs },
-            observation: { eventRef: activityEvent.eventRef, sourceInstanceId, sourceContractVersion,
-                occurredAt: activityEvent.occurredAt, observationReceivedAt, payload },
-        }, expect.objectContaining({ surface: 'ui', runtimeAccountId: 'account-a' }));
         expect(submit).not.toHaveBeenCalled();
     });
-    it.each(['transportError', 'changedDraft', 'changedAccount'] as const)(
+    it.each(['actionRefused', 'changedDraft', 'changedAccount'] as const)(
         'does not publish a diagnostic for %s', async (change) => {
-            establishDiagnosticScope();
-            const { createActionExecutor } = await import('@happier-dev/protocol');
             const { AutomationTriggerDefinitionInputSchema } = await import('@happier-dev/protocol/automations/automationTriggerDefinition');
             const { AutomationRunPluginEventTriggerEvidenceV1Schema } = await import('@happier-dev/protocol/automations/automationRunExecutionRecipeV1');
             const { TriggerPluginEventRows } = await import('./TriggerPluginEventRows');
@@ -201,33 +218,43 @@ describe('Run a workflow trigger inputs', () => {
                 occurrenceId: 'github-delivery-1', occurredAt: 100, sourceInstanceId: value.sourceInstanceId,
                 sourceContractVersion: 3, observationReceivedAt: 100, payload: {}, filter: { version: null, result: 'matched' },
             });
-            const deferred = createDeferred<void>();
-            const executor = createActionExecutor(createActionExecutorBoundaryFixture({}));
-            execute.mockImplementation(async (actionId, input, context) => {
-                const result = await executor.execute(actionId, input, context);
-                await deferred.promise;
-                return result;
-            });
+            if (change === 'actionRefused') {
+                const { ActionsSettingsV1Schema } = await import('@happier-dev/protocol/actions/actionSettings');
+                const { settingsParse } = await import('@/sync/domains/settings/settings');
+                const state = getStorage().getState();
+                state.applySettingsForScope({ serverId, accountId: 'account-a' }, settingsParse({ ...state.settings,
+                    actionsSettingsV1: ActionsSettingsV1Schema.parse({ v: 1, actions: { 'workflow.trigger.test': { enabled: false } } }),
+                }), 1);
+            }
             const when = { kind: 'pluginEvent', value } as const;
-            const renderRows = (nextWhen = when) => <TriggerPluginEventRows testID="pending-event"
-                when={nextWhen} activityEvent={activityEvent} onChange={vi.fn()} machineId={null} serverId={null} />;
-            const screen = await renderScreen(renderRows());
-            await screen.pressByTestIdAsync('pending-event-test');
+            let changeWhen!: React.Dispatch<React.SetStateAction<typeof when>>;
+            function Rows() {
+                const [currentWhen, setWhen] = React.useState(when);
+                changeWhen = setWhen;
+                return <TriggerPluginEventRows testID="pending-event" when={currentWhen}
+                    activityEvent={activityEvent} onChange={vi.fn()} machineId={null} serverId={null} />;
+            }
+            const screen = await renderScreen(<ModalProvider><Rows /></ModalProvider>);
+            // The diagnostic owner is pure. Its promise is still pending in this
+            // synchronous turn, so retire the draft/Account before flushing it.
+            act(() => { screen.pressByTestId('pending-event-test'); });
             expect(screen.findByTestId('pending-event-test-result')).toBeNull();
             expect(screen.findByTestId('pending-event-test')?.props.disabled).toBe(true);
-            await act(async () => {
-                if (change === 'changedDraft') screen.update(renderRows({ ...when, value: { ...value, maximumObservationAgeMs: 1 } }));
+            act(() => {
+                if (change === 'changedDraft') changeWhen({ ...when, value: { ...value, maximumObservationAgeMs: 1 } });
                 if (change === 'changedAccount') {
                     const scope = getStorage().getState().profileScope;
                     if (!scope) throw new Error('expected an Account scope');
                     getStorage().setState({ profileScope: { ...scope, accountId: 'account-b' } });
                 }
-                if (change === 'transportError') deferred.reject(new Error('transport unavailable'));
-                else deferred.resolve(undefined);
             });
+            await act(async () => {});
             expect(screen.findByTestId('pending-event-test-result')).toBeNull();
-            if (change === 'transportError') expect(alert).toHaveBeenCalledWith('common.error', expect.any(String));
-            else expect(alert).not.toHaveBeenCalled();
+            if (change === 'actionRefused') {
+                expect(screen.findByType(WebAlertModal).props.config).toMatchObject({ title: 'common.error', message: expect.any(String) });
+                await screen.pressByTestIdAsync('web-modal-button-0');
+                expect(screen.findAllByType(WebAlertModal)).toEqual([]);
+            } else expect(screen.findAllByType(WebAlertModal)).toEqual([]);
         });
     it('points the trigger form back to its resolved anchor', async () => {
         const screen = await renderScreen(<TriggerPopover testID="anchored-trigger" anchorRef={React.createRef()}
@@ -298,10 +325,8 @@ describe('Run a workflow trigger inputs', () => {
         const previousScope = getStorage().getState().profileScope;
         const previousApplied = getAppliedActiveServerSnapshot();
         const previousAvailable = isAppliedActiveServerRuntimeAvailable();
-        const runtime = await import('@/sync/domains/server/serverRuntime');
-        const server = await runtime.upsertAndActivateServer({ serverUrl: 'http://trigger-inputs.test', name: 'Trigger inputs' });
         publishAppliedActiveServerSnapshot(getActiveServerSnapshot());
-        getStorage().setState({ profileScope: { serverId: server.id, accountId: 'account-a' } });
+        getStorage().setState({ profileScope: { serverId, accountId: 'account-a' } });
         onTestFinished(async () => { await act(async () => {
             getStorage().setState({ profileScope: previousScope });
             publishAppliedActiveServerSnapshot(previousApplied, previousAvailable);
@@ -313,16 +338,27 @@ describe('Run a workflow trigger inputs', () => {
             input: [], result: { kind: 'text' } }] });
         const submit = vi.fn<ExistingTriggerSubmit>(async () => {});
         const ref = 'plugin:example.workflows/review';
-        execute.mockResolvedValue({ ok: true, result: { definitions: [], pluginWorkflows: [
-            { workflow: ref, pluginId: 'example.workflows', version: '1.0.0', title: 'Review', definition },
-        ] } });
+        const machine = createMachineFixture({ id: 'trigger-inputs-machine', activeAt: Date.now() });
+        getStorage().setState({ machines: { [machine.id]: machine }, machineListByServerId: { [serverId]: [machine] } });
+        home.answer(serverId, `/v1/machines/${machine.id}`, { body: {
+            machine: createPlainMachineRowFixture({ id: machine.id, accountId: 'account-a' }),
+        } });
+        machineRpc.mockImplementation(async (request) => request.method === `${machine.id}:${RPC_METHODS.DAEMON_MERGED_CONTRIBUTION_REGISTRY_PROJECTION_DESCRIBE}`
+            ? { protocolVersion: 1, projection: PluginProjectionV2Schema.parse({ v: 2, generation: 1,
+                installedPackagesById: { 'example.workflows': { id: 'example.workflows', displayName: 'Example workflows', version: '1.0.0', enabled: true,
+                    source: { kind: 'path', locator: '/plugins/example.workflows' } } }, familiesById: { workflows: { family: 'workflows', entriesById: {
+                    'example.workflows/review': { id: 'example.workflows/review', pluginId: 'example.workflows', pluginVersion: '1.0.0',
+                        definition: { id: 'review', title: 'Review', definition } },
+                } } } }) } : { error: 'method_not_found' });
         const screen = await renderScreen(<TriggerPopover testID="json-trigger" anchorRef={React.createRef()}
             onRequestClose={vi.fn()} whenKinds={['turnEnds']} sessionId="session-1"
             initial={{ when: { kind: 'turnEnds' }, enabled: true,
                 then: { kind: 'runWorkflow', ref, inputs: { payload: 'Saved JSON string', announce: false } } }}
             workflowOptions={[{ ref, title: 'Review' }]} onSubmit={submit} />);
-        await act(async () => { await Promise.resolve(); await Promise.resolve(); });
-        expect(screen.findByTestId('json-trigger-input-payload')?.props.value).toBe('"Saved JSON string"');
+        await waitForHomeGovernance(async () => {
+            await act(async () => {});
+            expect(screen.findByTestId('json-trigger-input-payload')?.props.value).toBe('"Saved JSON string"');
+        });
         await act(async () => { screen.changeTextByTestId('json-trigger-input-payload', '{"unfinished":'); });
         expect(screen.findByTestId('json-trigger-input-payload')?.props.value).toBe('{"unfinished":');
         await screen.pressByTestIdAsync('json-trigger-submit');
@@ -334,6 +370,24 @@ describe('Run a workflow trigger inputs', () => {
 });
 
 describe('a workflow trigger in its popover (07 S4)', () => {
+    it('chooses where an Account prompt runs from one select whose unavailable choice keeps its reason', async () => {
+        const { createDefaultWhen } = await import('./sessionTriggerForm');
+        const submit = vi.fn<ExistingTriggerSubmit>(async () => {});
+        const screen = await renderScreen(<TriggerPopover testID="runs-in" anchorRef={React.createRef()}
+            onRequestClose={vi.fn()} whenKinds={['schedule']} sessionId={null}
+            initial={{ when: createDefaultWhen('schedule'), enabled: true,
+                then: { kind: 'sendPrompt', prompt: 'Summarize the night', selection: {} } }}
+            workflowOptions={[]} onSubmit={submit} />);
+        // Three long choices do not fit a segmented bar in a popover or on a phone (DESIGN-18 T1).
+        const runsIn = () => screen.findAllByType(DropdownMenu).find((menu) => menu.props.testID === 'runs-in-runs-in');
+        const select = runsIn();
+        if (select === undefined) throw new Error('expected Runs in to be a select');
+        expect(select.props.selectedId).toBe('newSession');
+        expect(select.props.items.find((item: { id: string }) => item.id === 'session'))
+            .toMatchObject({ disabled: true, subtitle: 'workflows.triggers.then.noSessionOnMachine' });
+        await act(async () => { select.props.onSelect('backgroundRun'); });
+        expect(runsIn()?.props.selectedId).toBe('backgroundRun');
+    });
     it('edits a saved interval as itself: no session copy, its repeat shown, Done writes the same interval', async () => {
         const submit = vi.fn<ExistingTriggerSubmit>(async () => {});
         const screen = await renderScreen(<TriggerPopover testID="wf-trigger" anchorRef={React.createRef()}

@@ -1,8 +1,9 @@
 import * as React from 'react';
 import { act } from 'react-test-renderer';
-import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
+import { afterAll, afterEach, beforeAll, describe, expect, it, vi } from 'vitest';
 
 import { renderScreen, standardCleanup } from '@/dev/testkit';
+import { createHomeGovernanceHarness, installHomeGovernanceBoundaries } from '@/dev/testkit/harness/homeGovernanceHarness';
 
 /**
  * Render scope while authoring.
@@ -15,13 +16,36 @@ import { renderScreen, standardCleanup } from '@/dev/testkit';
  * another way passes.
  */
 
-const composerRenders = vi.hoisted(() => ({ byBlockId: new Map<string, number>() }));
+const composerRenders = vi.hoisted(() => ({ byBlockId: new Map<string, number>(), ownerType: null as unknown }));
 
 vi.mock('react-native', async () => {
     const { createReactNativeWebMock } = await import('@/dev/testkit/mocks/reactNative');
-    return createReactNativeWebMock();
+    const native = await createReactNativeWebMock();
+    const ReactRuntime = await import('react');
+    // Observe the real AgentInput at its platform hook, before any memoized
+    // text leaf. The installed development renderer exposes the current
+    // owner through the same dispatcher React uses for element ownership.
+    const internals = Reflect.get(ReactRuntime, '__CLIENT_INTERNALS_DO_NOT_USE_OR_WARN_USERS_THEY_CANNOT_UPGRADE') as {
+        A: null | { getOwner(): null | { type: unknown; pendingProps: { composerRef?: { blockId?: string } } } };
+    };
+    return {
+        ...native,
+        useWindowDimensions: () => {
+            const owner = internals.A?.getOwner();
+            if (owner != null && owner.type === composerRenders.ownerType && owner.pendingProps.composerRef?.blockId) {
+                const blockId = owner.pendingProps.composerRef.blockId;
+                composerRenders.byBlockId.set(blockId, (composerRenders.byBlockId.get(blockId) ?? 0) + 1);
+            }
+            return native.useWindowDimensions();
+        },
+    };
 });
 vi.mock('@expo/vector-icons', () => ({ Ionicons: 'Ionicons' }));
+vi.mock('expo-crypto', async () => ({ randomUUID: (await import('node:crypto')).randomUUID }));
+vi.mock('expo-router', async () => {
+    const { createExpoRouterMock } = await import('@/dev/testkit/mocks/router');
+    return createExpoRouterMock().module;
+});
 vi.mock('react-native-unistyles', async () => {
     const { createUnistylesMock } = await import('@/dev/testkit/mocks/unistyles');
     return createUnistylesMock();
@@ -30,42 +54,38 @@ vi.mock('@/text', async () => {
     const { createTextModuleMock } = await import('@/dev/testkit/mocks/text');
     return createTextModuleMock({ translate: (key) => key });
 });
-vi.mock('@/modal', async () => {
-    const { createModalModuleMock } = await import('@/dev/testkit/mocks/modal');
-    return createModalModuleMock().module;
+// Radix is the DOM boundary; the app's popover and modal owners stay real.
+vi.mock('@/utils/web/radixCjs', async () => {
+    const { createRadixCjsModuleMock } = await import('@/dev/testkit/mocks/radixCjs');
+    return createRadixCjsModuleMock();
 });
-vi.mock('@/components/ui/popover/Popover', () => ({
-    Popover: (props: { open: boolean; children: (render: unknown) => React.ReactNode }) =>
-        (props.open ? React.createElement(React.Fragment, null, props.children({})) : null),
-}));
-vi.mock('@/components/ui/icons/Icon', async (importOriginal) => ({
-    ...(await importOriginal<Record<string, unknown>>()),
-    Icon: (props: Record<string, unknown>) => React.createElement('Icon', props),
-}));
-// The composer host is the expensive leaf; counting its executions per block is
-// the measurement. The scoped authoring composer and its document owner stay
-// real above it.
-vi.mock('@/components/sessions/agentInput', () => ({
-    AgentInput: (props: Record<string, any>) => {
-        const blockId = String(props.composerRef?.blockId ?? '');
-        composerRenders.byBlockId.set(blockId, (composerRenders.byBlockId.get(blockId) ?? 0) + 1);
-        return React.createElement('AgentInput', {
-            testID: `composer-${blockId}`,
-            value: props.value,
-            onChangeText: props.onChangeText,
-        });
-    },
-}));
-vi.mock('@/agents/backendCatalog/useDaemonMergedProjectionInputs', () => ({
-    useDaemonMergedProjectionInputs: () => ({ phase: 'idle', inputs: null }),
-}));
-vi.mock('@/components/plugins/surfaces/PluginContextualResourceStoreProvider', () => ({
-    PluginContextualResourceStoreProvider: (props: Readonly<{ children?: React.ReactNode }>) =>
-        React.createElement(React.Fragment, null, props.children),
-}));
 
-beforeEach(() => {
+const home = createHomeGovernanceHarness();
+installHomeGovernanceBoundaries(home);
+const { WorkflowBlockListEditor } = await import('./WorkflowBlockListEditor');
+const { AgentInput } = await import('@/components/sessions/agentInput');
+const { createWorkflowEditorDraft } = await import('@/sync/domains/workflows/workflowEditorDraft');
+const { validateWorkflowEditorDraft } = await import('@/sync/domains/workflows/workflowAuthoring');
+const { createWorkflowAuthoringComposerCustody } = await import('@/components/sessions/authoring/authoringComposerCustody');
+composerRenders.ownerType = Reflect.get(AgentInput, 'type');
+let serverId: string;
+let restoreAppliedHome: (() => void) | undefined;
+
+beforeAll(async () => {
     composerRenders.byBlockId.clear();
+    const applied = await import('@/sync/runtime/orchestration/appliedActiveServerRuntime');
+    const previous = applied.getAppliedActiveServerSnapshot();
+    const wasAvailable = applied.isAppliedActiveServerRuntimeAvailable();
+    restoreAppliedHome = () => applied.publishAppliedActiveServerSnapshot(previous, wasAvailable);
+    serverId = await home.addHome({ name: 'Render scope Home', serverUrl: 'https://blocklist-scope.test', accountId: 'account-a' });
+    const { storage } = await import('@/sync/domains/state/storage');
+    storage.setState({ profileScope: { serverId, accountId: 'account-a' }, settingsScope: { serverId, accountId: 'account-a' } });
+    const { getActiveServerSnapshot } = await import('@/sync/domains/server/serverRuntime');
+    applied.publishAppliedActiveServerSnapshot(getActiveServerSnapshot());
+});
+afterAll(async () => {
+    restoreAppliedHome?.();
+    await home.reset();
 });
 
 afterEach(async () => {
@@ -76,12 +96,6 @@ const AGENT_TARGET = { kind: 'agent' as const, identity: { pluginId: 'happier.ag
 
 describe('workflow authoring render scope', () => {
     it('does not execute a sibling step composer when one step prompt changes', async () => {
-        const { WorkflowBlockListEditor } = await import('./WorkflowBlockListEditor');
-        const { createWorkflowEditorDraft } = await import('@/sync/domains/workflows/workflowEditorDraft');
-        const { validateWorkflowEditorDraft } = await import('@/sync/domains/workflows/workflowAuthoring');
-        const { createWorkflowAuthoringComposerCustody } = await import(
-            '@/components/sessions/authoring/authoringComposerCustody'
-        );
         const composerCustody = createWorkflowAuthoringComposerCustody('draft-1');
 
         const initialDraft = createWorkflowEditorDraft({
@@ -109,7 +123,7 @@ describe('workflow authoring render scope', () => {
                 composerScope: {
                     kind: 'machine',
                     machineId: 'machine-1',
-                    serverId: 'server-a',
+                    serverId,
                     directory: '/repo/project',
                     machineHomeDir: '/Users/me',
                 },
@@ -125,16 +139,28 @@ describe('workflow authoring render scope', () => {
         const screen = await renderScreen(React.createElement(Harness));
         const changedId = 'step-3';
         const siblingId = 'step-6';
-        expect(composerRenders.byBlockId.get(changedId)).toBe(1);
-        expect(composerRenders.byBlockId.get(siblingId)).toBe(1);
+        const before = new Map(composerRenders.byBlockId);
+        const blockIds = initialDraft.blocks.map(block => block.id);
+        expect([...before.keys()].sort()).toEqual([...blockIds].sort());
+        for (const blockId of blockIds) expect(before.get(blockId)).toBeGreaterThan(0);
 
         await act(async () => {
-            screen.findByTestId(`composer-${changedId}`)?.props.onChangeText('Prompt 3 edited');
+            const composer = screen.findAllByType(AgentInput).find(node => node.props.composerRef?.blockId === changedId);
+            expect(composer).toBeDefined();
+            composer!.props.onChangeText('Prompt 3 edited');
         });
 
-        expect(composerRenders.byBlockId.get(changedId)).toBe(2);
+        const editedComposer = screen.findAllByType(AgentInput).find(node => node.props.composerRef?.blockId === changedId);
+        expect(editedComposer?.props.value).toBe('Prompt 3 edited');
+        // The real composer also reconciles its own text/caret state. Its
+        // target-local work may take several executions; sibling scope must
+        // still remain exact across every one of them.
+        expect(composerRenders.byBlockId.get(changedId)).toBeGreaterThan(before.get(changedId)!);
         // The whole draft object necessarily changes on every keystroke, so a
         // sibling composer re-executing here is the fan-out UI-07 names.
-        expect(composerRenders.byBlockId.get(siblingId)).toBe(1);
+        expect(composerRenders.byBlockId.get(siblingId)).toBe(before.get(siblingId));
+        for (const [blockId, count] of before) {
+            if (blockId !== changedId) expect(composerRenders.byBlockId.get(blockId)).toBe(count);
+        }
     });
 });

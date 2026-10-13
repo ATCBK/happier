@@ -29,7 +29,7 @@ describe('Scheduled Work rows', () => {
         expect(screen.getTextContent()).toContain('nextMinutes(count=1)');
         expect(vi.getTimerCount()).toBe(1);
     });
-    it('puts a Writes-here occurrence\'s next run in the trailing meta column, beside the Runs\' state words', async () => {
+    it('keeps the occurrence next run separate from step context in both Account and Writes-here rows', async () => {
         // Lab lane12-final `b-habit T`: the quiet line says which step writes here; when is the row's meta.
         const now = new Date(2026, 9, 10, 10).getTime();
         vi.useFakeTimers();
@@ -42,8 +42,11 @@ describe('Scheduled Work rows', () => {
             triggers: [{ id: 'timer', revision: 1, enabled: true, kind: 'schedule', nextRunAt: now + 3 * 3_600_000,
                 createdAt: now, updatedAt: now, triggerDefinitionEnvelope: null,
                 schedule: { kind: 'interval', everyMs: 86_400_000, scheduleExpr: null, timezone: null } }] });
-        const screen = await renderScreen(<ScheduledWorkflowSectionView rows={projectScheduledWorkflowRows([set])}
-            onOpen={() => {}} sessionId="session-one" />);
+        const rows = projectScheduledWorkflowRows([set]);
+        const screen = await renderScreen(<ScheduledWorkflowSectionView rows={rows} onOpen={() => {}} />);
+        expect(screen.findByTestId('scheduled-workflow:habit:timer-next')?.props.children).toContain('nextHours(count=3)');
+        expect(screen.getTextContent().split('nextHours').length - 1).toBe(1);
+        await screen.update(<ScheduledWorkflowSectionView rows={rows} onOpen={() => {}} sessionId="session-one" />);
         expect(screen.findByTestId('scheduled-workflow:habit:timer-next')?.props.children).toContain('nextHours(count=3)');
         const subtitle = screen.findByTestId('scheduled-workflow:habit:timer-subtitle');
         expect(JSON.stringify(subtitle?.props.children)).toContain('sessionWork.scheduled.step(ordinal=2,title=Draft the notes)');
@@ -71,22 +74,6 @@ describe('Scheduled Work rows', () => {
         await screen.update(<ScheduledWorkflowGroup read={read('failed', false)} />);
         expect(screen.findByTestId('workflows-column:group:scheduled')).not.toBeNull();
         expect(screen.findByTestId('scheduled-workflow-read')).not.toBeNull();
-    });
-    it('gives an Account occurrence the same trailing next-run column as a Writes-here one', async () => {
-        const now = new Date(2026, 9, 10, 10).getTime();
-        vi.useFakeTimers();
-        vi.setSystemTime(now);
-        const set = WorkflowTriggerSetV1Schema.parse({ automationId: 'habit', revision: 1, enabled: true, health: 'available',
-            target: { kind: 'inline', definition: { version: 1, inputs: [], blocks: [{ kind: 'step', id: 'notes', name: 'Weekly release notes',
-                document: { text: 'Draft', references: [], attachments: [] }, input: [], result: { kind: 'text' } }] } },
-            destinations: { targetSessionIds: ['session-one'], usesOriginSession: false, unresolvedWorkflowRefs: [],
-                leaves: [{ sourceKey: '$root', blockId: 'notes', sessionIds: ['session-one'], ordinal: 2, name: 'Draft the notes' }] },
-            triggers: [{ id: 'timer', revision: 1, enabled: true, kind: 'schedule', nextRunAt: now + 3 * 3_600_000,
-                createdAt: now, updatedAt: now, triggerDefinitionEnvelope: null,
-                schedule: { kind: 'interval', everyMs: 86_400_000, scheduleExpr: null, timezone: null } }] });
-        const screen = await renderScreen(<ScheduledWorkflowSectionView rows={projectScheduledWorkflowRows([set])} onOpen={() => {}} />);
-        expect(screen.findByTestId('scheduled-workflow:habit:timer-next')?.props.children).toContain('nextHours(count=3)');
-        expect(screen.getTextContent().split('nextHours').length - 1).toBe(1);
     });
     it('opens the scheduled workflow separately from its Session destination, retaining authored step context', async () => {
         const set = WorkflowTriggerSetV1Schema.parse({ automationId: 'habit', revision: 1, enabled: true, health: 'available',

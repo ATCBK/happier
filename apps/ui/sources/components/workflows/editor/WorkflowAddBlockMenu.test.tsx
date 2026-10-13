@@ -15,20 +15,27 @@ import { TriggerPopover } from '../triggers/TriggerPopover';
 import { DropdownMenu } from '@/components/ui/forms/dropdown/DropdownMenu';
 import { useTriggerThenOptions } from '../triggers/useTriggerThenOptions';
 import { getAppliedActiveServerSnapshot, isAppliedActiveServerRuntimeAvailable, publishAppliedActiveServerSnapshot } from '@/sync/runtime/orchestration/appliedActiveServerRuntime';
+import { createWorkflowActionHttpTransport } from '@/dev/testkit/fixtures/workflowActionHttpTransport';
+import { installDisconnectedServerSocketBoundary, restoreServerAccountForTest } from '@/dev/testkit/harness/serverAccountConnectionHarness';
 
 const execute = vi.hoisted(() => vi.fn());
-vi.mock('@/sync/ops/actions/frontDoorRuntimeActionExecutor', async (importOriginal) => ({
-    ...(await importOriginal<typeof import('@/sync/ops/actions/frontDoorRuntimeActionExecutor')>()),
-    createFrontDoorActionExecute: () => execute,
-}));
+vi.mock('socket.io-client', async (importOriginal) =>
+    (await import('@/dev/testkit/harness/serverAccountConnectionHarness')).createSocketIoClientBoundary(importOriginal));
+installDisconnectedServerSocketBoundary();
+let account: Awaited<ReturnType<typeof restoreServerAccountForTest>> | undefined;
 let previousAppliedSnapshot = getAppliedActiveServerSnapshot();
 let previousRuntimeAvailable = isAppliedActiveServerRuntimeAvailable();
-beforeEach(() => {
+beforeEach(async () => {
     previousAppliedSnapshot = getAppliedActiveServerSnapshot();
     previousRuntimeAvailable = isAppliedActiveServerRuntimeAvailable();
+    execute.mockResolvedValue({ ok: true, result: { definitions: [] } });
+    const transport = createWorkflowActionHttpTransport({ fixtureResponse: execute, accountId: () => 'account-a' });
+    account = await restoreServerAccountForTest({ serverUrl: 'https://workflow-add.test', accountId: 'account-a', request: transport.fetch });
 });
 afterEach(async () => {
     standardCleanup();
+    await account?.dispose();
+    account = undefined;
     execute.mockReset();
     (await import('../library/workflowLibraryReads')).resetWorkflowLibraryReadsForTests();
     (await import('@/sync/domains/scope/activeServerAccountScope')).retireActiveServerAccountScopeLifetime();
@@ -53,14 +60,9 @@ vi.mock('@legendapp/list/react-native', async (importOriginal) => {
 });
 // The portal cannot position against a real window in the host renderer. Keep
 // the real SelectionList, catalog, query filtering and option activation below it.
-vi.mock('@/components/ui/popover/Popover', () => ({
-    Popover: (props: { open: boolean; children: (render: { maxHeight: number }) => React.ReactNode }) =>
-        props.open ? props.children({ maxHeight: 480 }) : null,
-}));
-vi.mock('@/components/ui/icons/Icon', async (importOriginal) => ({
-    ...(await importOriginal<Record<string, unknown>>()),
-    Icon: (props: Record<string, unknown>) => React.createElement('Icon', props),
-}));
+vi.mock('@/components/ui/popover/Popover', async (importOriginal) =>
+    (await import('@/dev/testkit/mocks/popover')).createInlinePopoverModuleMock(importOriginal,
+        { maxHeight: 480, maxWidth: 420, placement: 'bottom' }));
 
 describe('workflow Add Action picker', () => {
     it.each([
@@ -93,7 +95,8 @@ describe('workflow Add Action picker', () => {
         await screen.pressByTestIdAsync('add');
         await screen.pressByTestIdAsync('selection-list:add-root:option:add-workflow');
         const review = screen.findByTestId('selection-list:add-workflow:option:add-workflow:builtin:review-and-converge')!;
-        expect(review.findAll((node) => (node.type as unknown) === 'Icon').map((node) => node.props.name)).toContain('shield-check');
+        const { Icon } = await import('@/components/ui/icons/Icon');
+        expect(review.findAllByType(Icon).map((node) => node.props.name)).toContain('shield-check');
         await screen.pressByTestIdAsync('selection-list:add-workflow:option:add-workflow:builtin:review-and-converge');
         expect(onAdd).toHaveBeenCalledWith({ kind: 'workflow', workflowRef: 'builtin:review-and-converge' });
         expect(screen.findAllByType(SelectionList)).toHaveLength(0);
@@ -137,17 +140,16 @@ describe('workflow Add Action picker', () => {
     });
     it('preserves unavailable reasons through trigger options and refuses picking that source', async () => {
         const previous = storage.getState();
-        const runtime = await import('@/sync/domains/server/serverRuntime');
-        const server = await runtime.upsertAndActivateServer({ serverUrl: 'http://unavailable-trigger.test', name: 'Trigger picker' });
-        publishAppliedActiveServerSnapshot(runtime.getActiveServerSnapshot());
-        storage.setState({ profileScope: { serverId: server.id, accountId: 'account-a' } });
         execute.mockResolvedValue({ ok: true, result: { definitions: [
-            { kind: 'workflow-definition.v1', definitionId: 'missing-title', metadata: null, revision: null,
+            { kind: 'workflow-definition.v1', definitionId: 'missing-title', ownerAccountId: 'account-a', access: 'owner', metadata: null, revision: null,
                 contentStatus: 'unavailable', contentUnavailableReason: 'invalid_header', stepCount: null, triggers: [], nextRunAt: null },
         ] } });
         try {
             const hook = await renderHook(() => useTriggerThenOptions());
-            await act(async () => { await Promise.resolve(); await Promise.resolve(); });
+            await vi.waitFor(async () => {
+                await act(async () => {});
+                expect(hook.getCurrent().workflowOptions.find(option => option.ref === 'missing-title')).toBeDefined();
+            });
             const options = hook.getCurrent().workflowOptions;
             const screen = await renderScreen(<TriggerPopover testID="trigger" anchorRef={React.createRef()}
                 onRequestClose={() => {}} whenKinds={['turnEnds']} sessionId="session-1" onSubmit={vi.fn()}
@@ -163,14 +165,10 @@ describe('workflow Add Action picker', () => {
     });
     it('shows unavailable workflow sources with their reason and refuses inserting them', async () => {
         const previous = storage.getState();
-        const runtime = await import('@/sync/domains/server/serverRuntime');
-        const server = await runtime.upsertAndActivateServer({ serverUrl: 'http://unavailable-add.test', name: 'Add picker' });
-        publishAppliedActiveServerSnapshot(runtime.getActiveServerSnapshot());
-        storage.setState({ profileScope: { serverId: server.id, accountId: 'account-a' } });
         execute.mockResolvedValue({ ok: true, result: { definitions: [
-            { kind: 'workflow-definition.v1', definitionId: 'missing-title', metadata: null, revision: null,
+            { kind: 'workflow-definition.v1', definitionId: 'missing-title', ownerAccountId: 'account-a', access: 'owner', metadata: null, revision: null,
                 contentStatus: 'unavailable', contentUnavailableReason: 'invalid_header', stepCount: null, triggers: [], nextRunAt: null },
-            { kind: 'workflow-definition.v1', definitionId: 'readable', metadata: { title: 'Readable recipe' }, revision: { headerVersion: 1, bodyVersion: 1 },
+            { kind: 'workflow-definition.v1', definitionId: 'readable', ownerAccountId: 'account-a', access: 'owner', metadata: { title: 'Readable recipe' }, revision: { headerVersion: 1, bodyVersion: 1 },
                 contentStatus: 'available', stepCount: 1, triggers: [], nextRunAt: null },
         ] } });
         try {
@@ -178,13 +176,16 @@ describe('workflow Add Action picker', () => {
             const onAdd = vi.fn();
             const screen = await renderScreen(<WorkflowAddBlockMenu scopeLabel="Workflow" testID="add" onAdd={onAdd} />);
             await screen.pressByTestIdAsync('add');
-            await act(async () => { await Promise.resolve(); await Promise.resolve(); });
-            const root: React.ComponentProps<typeof SelectionList>['rootStep'] = screen.findByType(SelectionList).props.rootStep;
-            const kinds = root.sections.find(section => section.kind === 'static' && section.id === 'kinds');
-            if (kinds?.kind !== 'static') throw new Error('missing_step_kinds');
-            const workflowStep = kinds.options.find(option => option.id === 'add-workflow')!.openStep!;
-            const section = workflowStep.sections.find(section => section.kind === 'static' && section.id === 'library');
-            if (section?.kind !== 'static') throw new Error('missing_workflow_options');
+            const section = await vi.waitFor(async () => {
+                await act(async () => {});
+                const root: React.ComponentProps<typeof SelectionList>['rootStep'] = screen.findByType(SelectionList).props.rootStep;
+                const kinds = root.sections.find(section => section.kind === 'static' && section.id === 'kinds');
+                if (kinds?.kind !== 'static') throw new Error('missing_step_kinds');
+                const workflowStep = kinds.options.find(option => option.id === 'add-workflow')!.openStep!;
+                const section = workflowStep.sections.find(section => section.kind === 'static' && section.id === 'library');
+                if (section?.kind !== 'static') throw new Error('missing_workflow_options');
+                return section;
+            });
             const unavailable = section.options.find(option => option.id === 'add-workflow:missing-title')!;
             expect(unavailable).toMatchObject({ disabled: true, subtitle: t('workflows.contentReasons.invalidHeader') });
             await act(async () => { unavailable.onSelect?.(); });

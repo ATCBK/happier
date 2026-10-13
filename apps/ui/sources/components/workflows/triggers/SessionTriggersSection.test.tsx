@@ -6,7 +6,7 @@ import { renderScreen, standardCleanup } from '@/dev/testkit';
 import { projectSessionTriggerGroups } from './sessionTriggerGroups';
 import { formatRelativeTimeShort } from '@/utils/time/formatShortRelativeTime';
 
-(globalThis as any).IS_REACT_ACT_ENVIRONMENT = true;
+(globalThis as { IS_REACT_ACT_ENVIRONMENT?: boolean }).IS_REACT_ACT_ENVIRONMENT = true;
 // Native Markdown SDK boundary; trigger summaries do not use streaming text.
 vi.mock('react-native-enriched-markdown/lib/module/web/streamingReveal.js', () => ({
     splitStreamingRevealTextParts: () => [],
@@ -90,13 +90,13 @@ describe('SessionTriggersSectionView', () => {
         expect(inActions('session-work-trigger:ci:t3-history')).toBe(true);
         expect(inActions('session-work-trigger:ci:t3-runNow')).toBe(true);
         expect(inActions('session-work-trigger:ci:t3-switch')).toBe(true);
-        screen.pressByTestId('session-work-trigger:ci:t3-history');
+        await screen.pressByTestIdAsync('session-work-trigger:ci:t3-history');
         expect(history).toHaveBeenCalledWith(row);
-        screen.pressByTestId('session-work-trigger:ci:t3-runNow');
+        await screen.pressByTestIdAsync('session-work-trigger:ci:t3-runNow');
         expect(runNow).toHaveBeenCalledWith(row);
-        screen.findByTestId('session-work-trigger:ci:t3-switch')?.props.onValueChange(true);
+        await act(async () => { screen.findByTestId('session-work-trigger:ci:t3-switch')?.props.onValueChange(true); });
         expect(toggle).toHaveBeenCalledWith(row, true);
-        screen.pressByTestId('session-work-trigger:ci:t3');
+        await screen.pressByTestIdAsync('session-work-trigger:ci:t3');
         expect(onOpen).toHaveBeenCalledWith(row, expect.anything());
     });
     it('keeps a paused habit last result and offers no Run now for a row that cannot run', async () => {
@@ -115,7 +115,7 @@ describe('SessionTriggersSectionView', () => {
         expect(screen.findByTestId('session-work-trigger:review:t1-switch')?.props.disabled).not.toBe(true);
         expect(screen.findByTestId('session-work-triggers-failed')).toBeNull();
         expect(screen.findByTestId('session-work-trigger-links-unavailable')).not.toBeNull();
-        screen.pressByTestId('session-work-trigger-links-unavailable-action');
+        await screen.pressByTestIdAsync('session-work-trigger-links-unavailable-action');
         expect(retry).toHaveBeenCalledOnce();
     });
     it('does not claim Manual while the workflow trigger read failed, and offers Retry', async () => {
@@ -128,7 +128,7 @@ describe('SessionTriggersSectionView', () => {
         expect(screen.findByTestId('failed-editor-triggers-manual')).toBeNull();
         const action = screen.findAll((node) => node.props.testID === 'failed-editor-triggers-read-retry' && typeof node.props.onPress === 'function')[0];
         expect(action).toBeDefined();
-        await action?.props.onPress();
+        await act(async () => { await action?.props.onPress(); });
         expect(retry).toHaveBeenCalled();
     });
     it('does not expose legacy editing in the workflow editor', async () => {
@@ -193,10 +193,10 @@ describe('SessionTriggersSectionView', () => {
         expect(text).toContain('Ran 20m ago');
 
         // The switch writes through the host, and waits while its write is in flight.
-        screen.findByTestId('session-work-trigger:review:t1-switch')?.props.onValueChange(false);
+        await act(async () => { screen.findByTestId('session-work-trigger:review:t1-switch')?.props.onValueChange(false); });
         expect(onToggle).toHaveBeenCalledWith(GROUPS[0]!.rows[0], false);
         // Pressing a row opens its popover beside it.
-        screen.pressByTestId('session-work-trigger:review:t1');
+        await screen.pressByTestIdAsync('session-work-trigger:review:t1');
         expect(onOpen).toHaveBeenCalledWith(GROUPS[0]!.rows[0], expect.objectContaining({ current: null }));
         expect(screen.findByTestId('session-work-trigger:notify:t2-switch')?.props.disabled).toBe(true);
     });

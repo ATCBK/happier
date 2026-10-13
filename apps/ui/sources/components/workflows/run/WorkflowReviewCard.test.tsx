@@ -3,31 +3,20 @@ import * as Clipboard from 'expo-clipboard';
 import { act } from 'react-test-renderer';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import type { JsonValue, WorkflowProgressEnvelopeV1, WorkflowResultContract } from '@happier-dev/protocol';
-import { renderScreen } from '@/dev/testkit/render/renderScreen';
-import { Modal, ModalProvider } from '@/modal';
+import { renderScreen, standardCleanup } from '@/dev/testkit';
+import { ModalProvider } from '@/modal';
 import { WorkflowReviewCard, type WorkflowReviewCardProps } from './WorkflowReviewCard';
 
-const envelopeHttp = vi.hoisted(() => ({
-    createSessionDataKeyEnvelopeClient: vi.fn(),
-    readSessionDataKeyEnvelopeCollectionPage: vi.fn(),
-    prepareSessionDataKeyEnvelopesForScope: vi.fn(),
-    prepareSessionDataKeyEnvelopesDetached: vi.fn(),
-    createMembershipSessionDataKeyEnvelopeClient: vi.fn(),
-    prepareMembershipHistoryEnvelopesForScope: vi.fn(),
-    membershipHistoryPreparationScopeKey: vi.fn(),
-    prepareMembershipHistoryEnvelopesDetached: vi.fn(),
-}));
-// Recipient-envelope HTTP is not part of review rendering; no Collaboration or key preparation is opened.
-vi.mock('@/sync/api/session/sessionDataKeyEnvelopesApi', () => envelopeHttp);
-vi.mock('@/sync/api/teams/membershipSessionDataKeyEnvelopesApi', () => envelopeHttp);
+const retireCards: Array<() => Promise<void>> = [];
 afterEach(async () => {
-    for (const request of Object.values(envelopeHttp)) expect(request).not.toHaveBeenCalled();
-    await act(async () => Modal.hideAll());
+    for (const retire of retireCards.splice(0)) await retire();
+    await standardCleanup();
 });
 
-vi.mock('@/modal', async () => {
-    const { createModalModuleMock } = await import('@/dev/testkit/mocks/modal');
-    return createModalModuleMock({ renderCustomModals: true }).module;
+// Radix supplies the DOM portal primitives; the modal owner and full-value viewer stay real.
+vi.mock('@/utils/web/radixCjs', async () => {
+    const { createRadixCjsModuleMock } = await import('@/dev/testkit/mocks/radixCjs');
+    return createRadixCjsModuleMock();
 });
 vi.mock('expo-clipboard', () => ({ setStringAsync: vi.fn(async () => {}) }));
 
@@ -47,6 +36,9 @@ vi.mock('@/text', async () => {
 const contract: WorkflowResultContract = { kind: 'json', schema: { type: 'object', properties: {
     summary: { type: 'string', minLength: 1 }, approved: { type: 'boolean' },
 }, required: ['summary', 'approved'] } };
+function ReviewCardProvider({ children }: React.PropsWithChildren) {
+    return <ModalProvider>{children}</ModalProvider>;
+}
 function progress(overrides: Partial<WorkflowProgressEnvelopeV1> = {}): WorkflowProgressEnvelopeV1 {
     return { kind: 'happier.workflow-progress.v1', invocationPath: { blockId: 'review', scope: [] },
         blockKind: 'step', attempt: '0', logicalInvocationRecordId: 'review',
@@ -61,11 +53,13 @@ async function mount(extra: Partial<WorkflowReviewCardProps> = {}) {
         const [reading, onChangeReading] = React.useState(() => extra.reading
             ?? { value: publication.progress.result, revision: publication.revision });
         publish = (value, revision) => setPublication({ progress: value, revision });
-        return <ModalProvider><WorkflowReviewCard contract={contract} waitForYou={false}
+        return <WorkflowReviewCard contract={contract} waitForYou={false}
             draft={draft} onChangeDraft={onChangeDraft} reading={reading} onChangeReading={onChangeReading} onComplete={onComplete}
-            testIDPrefix="review" {...extra} progress={publication.progress} contentRevision={publication.revision} /></ModalProvider>;
+            testIDPrefix="review" {...extra} progress={publication.progress} contentRevision={publication.revision} />;
     }
-    return { screen: await renderScreen(<Host />), onComplete,
+    const screen = await renderScreen(<Host />, { wrapper: ReviewCardProvider });
+    retireCards.push(() => screen.update(<></>));
+    return { screen, onComplete,
         publish: async (value: WorkflowProgressEnvelopeV1, revision: string) => { await act(async () => publish(value, revision)); } };
 }
 async function changeText(screen: Awaited<ReturnType<typeof renderScreen>>, id: string, value: string) {
@@ -240,7 +234,7 @@ describe('WorkflowReviewCard', () => {
         const draft = { text: JSON.stringify({ summary: 'Local edit', approved: true }), contentRevision: '7' };
         const screen = await renderScreen(<WorkflowReviewCard progress={progress({ result: { summary: 'Newer', approved: false } })}
             contract={contract} waitForYou={false} contentRevision="8" draft={draft}
-            onChangeDraft={onChangeDraft} onComplete={onComplete} testIDPrefix="review" />);
+            onChangeDraft={onChangeDraft} onComplete={onComplete} testIDPrefix="review" />, { wrapper: ReviewCardProvider });
         expect(screen.findByTestId('review-newer')).not.toBeNull();
         expect(screen.findByTestId('review-field-summary')?.props.value).toBe('Local edit');
         await changeText(screen, 'review-field-summary', 'Still local');
@@ -253,7 +247,7 @@ describe('WorkflowReviewCard', () => {
         const value = { summary: 'Published', approved: false };
         const screen = await renderScreen(<WorkflowReviewCard progress={progress({ result: { approved: false, summary: 'Published' } })}
             contract={contract} waitForYou={false} contentRevision="8" draft={undefined}
-            reading={{ value, revision: '7' }} onChangeDraft={() => {}} onComplete={onComplete} testIDPrefix="review" />);
+            reading={{ value, revision: '7' }} onChangeDraft={() => {}} onComplete={onComplete} testIDPrefix="review" />, { wrapper: ReviewCardProvider });
         expect(screen.findAllHostsByTestId('review-newer')).toHaveLength(0);
         await screen.pressByTestIdAsync('review-use');
         expect(onComplete).toHaveBeenCalledWith({ mode: 'use_result', expectedContentRevision: '8' });

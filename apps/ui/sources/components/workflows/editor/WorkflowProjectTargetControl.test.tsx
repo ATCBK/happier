@@ -1,10 +1,22 @@
 import * as React from 'react';
+import 'fake-indexeddb/auto';
 import { act } from 'react-test-renderer';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
-import { createDeferred, renderScreen, standardCleanup } from '@/dev/testkit';
+import { createMachineFixture, renderScreen, standardCleanup, withPopoverWebGlobals } from '@/dev/testkit';
+import { ScmWorkingSnapshotSchema, createScmCapabilities } from '@happier-dev/protocol/scm';
+import { RPC_METHODS } from '@happier-dev/protocol/rpc';
+import { SOCKET_RPC_EVENTS } from '@happier-dev/protocol/socketRpc';
+import { DaemonFilesystemListDirectoryRequestSchema, DaemonFilesystemListDirectoryResponseSchema, DaemonFilesystemListRootsResponseSchema } from '@happier-dev/protocol/machines/fileBrowser';
+import { createPlainMachineRowFixture } from '@/dev/testkit/fixtures/machineFixtures';
+import { encodePlainMachineStoredContent } from '@happier-dev/protocol/machines/machineStoredContent';
+import { MachinePathBrowserView } from '@/components/ui/pathBrowser/MachinePathBrowserModal';
+import { MachineSelector } from '@/components/sessions/new/components/MachineSelector';
+import { AgentInputSelectionListPopover } from '@/components/sessions/agentInput/components/AgentInputSelectionListPopover';
+import { createWorkflowActionHttpTransport } from '@/dev/testkit/fixtures/workflowActionHttpTransport';
+import { installDisconnectedServerSocketBoundary, restoreServerAccountForTest } from '@/dev/testkit/harness/serverAccountConnectionHarness';
+import { recordMachineRequestSucceeded } from '@/sync/domains/machines/reachability/machineReachability';
 import type { SelectionListStep } from '@/components/ui/selectionList';
-import type { ScmWorkingSnapshot } from '@/sync/domains/state/storageTypes';
 import { storage } from '@/sync/domains/state/storage';
 import { authoringMemoryDefaults } from '@/sync/store/domains/authoringMemory';
 import { settingsDefaults } from '@/sync/domains/settings/settings';
@@ -12,15 +24,31 @@ import { settingsDefaults } from '@/sync/domains/settings/settings';
 /**
  * The Workflow "Where" row consumes New Session's project/checkout owners.
  *
- * Only genuine boundaries are replaced: the Machine list picker and the
- * SelectionList popover (virtualized list/portal UI, rendered here as the step
- * they are handed), the Machine path browser modal, and the SCM repository
- * service RPC. The checkout model, the one checkout picker builder, the
- * default-directory policy and the Workflow project adapter all run for real.
+ * HTTP, native RPC, recycler and Radix are the boundaries. The modal host,
+ * Machine/checkout pickers, SCM cache and mapper, folder-dialog promise and
+ * Workflow project adapter all run for real.
  */
 
-const browser = vi.hoisted(() => ({ open: vi.fn() }));
-const scm = vi.hoisted(() => ({ snapshot: null as ScmWorkingSnapshot | null }));
+const machineRpc = vi.hoisted(() => vi.fn());
+let restorePopoverGlobals: (() => void) | undefined;
+let account: Awaited<ReturnType<typeof restoreServerAccountForTest>> | undefined;
+vi.mock('socket.io-client', async (importOriginal) =>
+    (await import('@/dev/testkit/harness/serverAccountConnectionHarness')).createSocketIoClientBoundary(importOriginal));
+// The socket is the native Machine RPC boundary; scoped routing, guards,
+// currentness, parsers and caches all run through their real owners.
+installDisconnectedServerSocketBoundary((socket) => {
+    socket.connected = true;
+    socket.timeout = vi.fn<typeof socket.timeout>(() => socket);
+    socket.emitWithAck = vi.fn<typeof socket.emitWithAck>(async (event, raw: unknown) => {
+        if (event !== SOCKET_RPC_EVENTS.CALL) return { v: 1, ok: true, admittedSessionIds: [] };
+        if (!raw || typeof raw !== 'object' || !('method' in raw) || typeof raw.method !== 'string' || !('params' in raw)) {
+            throw new Error('Malformed native Machine RPC');
+        }
+        return { ok: true, result: await machineRpc({ method: raw.method.slice(raw.method.indexOf(':') + 1), payload: raw.params }) };
+    });
+});
+vi.mock('@/utils/web/radixCjs', async () =>
+    (await import('@/dev/testkit/mocks/radixCjs')).createRadixCjsModuleMock());
 
 vi.mock('react-native', async () => {
     const { createReactNativeWebMock } = await import('@/dev/testkit/mocks/reactNative');
@@ -38,46 +66,22 @@ vi.mock('@react-navigation/native', async () => {
     const { createReactNavigationNativeMock } = await import('@/dev/testkit/mocks/reactNavigation');
     return createReactNavigationNativeMock();
 });
-vi.mock('@/components/ui/icons/Icon', async (importOriginal) => ({
-    ...(await importOriginal<Record<string, unknown>>()),
-    Icon: (props: Record<string, unknown>) => React.createElement('Icon', props),
-}));
-vi.mock('@/components/sessions/new/components/MachineSelector', () => ({
-    MachineSelector: (props: Record<string, unknown>) => React.createElement('MachineSelector', props),
-}));
-vi.mock('@/components/sessions/agentInput/components/AgentInputSelectionListPopover', () => ({
-    AgentInputSelectionListPopover: (props: Record<string, unknown>) => (
-        props.open === true ? React.createElement('SelectionListPopover', props) : null
-    ),
-}));
-// The anchored popover's portal and measurement are a platform boundary; its content stays real.
-vi.mock('@/components/ui/popover/Popover', () => ({
-    Popover: (props: { open: boolean; children: (render: unknown) => React.ReactNode }) =>
-        (props.open ? React.createElement(React.Fragment, null, props.children({})) : null),
-}));
-vi.mock('@/components/ui/pathBrowser/openMachinePathBrowserModal', () => ({
-    openMachinePathBrowserModal: browser.open,
-}));
-vi.mock('@/scm/scmRepositoryService', async (importOriginal) => {
-    const actual = await importOriginal<typeof import('@/scm/scmRepositoryService')>();
-    return {
-        ...actual,
-        scmRepositoryService: {
-            readCachedSnapshotForMachinePath: () => scm.snapshot,
-            readCachedWorktreesEnrichment: () => null,
-            fetchSnapshotForMachinePath: async () => scm.snapshot,
-            fetchWorktreesEnrichment: async () => null,
-        },
-    };
-});
+vi.mock('@legendapp/list/react-native', async (importOriginal) =>
+    (await import('@/dev/testkit/mocks/legendList')).createCapturingLegendListMock({
+        original: await importOriginal<Record<string, unknown>>(), renderItems: true,
+    }).module);
+const { ModalProvider } = await import('@/modal/ModalProvider');
+function ModalHost({ children }: React.PropsWithChildren) {
+    return <ModalProvider>{children}</ModalProvider>;
+}
 
 const MACHINES = [
-    { id: 'machine-1', metadata: { displayName: 'Mac Studio', homeDir: '/Users/me', platform: 'darwin' } },
-    { id: 'machine-2', metadata: { displayName: 'Linux box', homeDir: '/home/me', platform: 'linux' } },
+    createMachineFixture({ id: 'machine-1', metadata: { ...createMachineFixture().metadata!, displayName: 'Mac Studio', homeDir: '/Users/me', platform: 'darwin' } }),
+    createMachineFixture({ id: 'machine-2', metadata: { ...createMachineFixture().metadata!, displayName: 'Linux box', homeDir: '/home/me', platform: 'linux' } }),
 ];
 
-function repoSnapshot(): ScmWorkingSnapshot {
-    return {
+function repoSnapshot() {
+    return ScmWorkingSnapshotSchema.parse({
         projectKey: 'machine-1:/repo/payments',
         fetchedAt: 1,
         repo: {
@@ -94,22 +98,67 @@ function repoSnapshot(): ScmWorkingSnapshot {
         stashCount: 0,
         hasConflicts: false,
         entries: [],
-    } as unknown as ScmWorkingSnapshot;
+        capabilities: createScmCapabilities({ readStatus: true }),
+        totals: { includedFiles: 0, pendingFiles: 0, untrackedFiles: 0, includedAdded: 0, includedRemoved: 0, pendingAdded: 0, pendingRemoved: 0 },
+    });
 }
 
 function workspaceRef(id: string, rootPath: string) {
-    return { id, machineId: 'machine-1', serverId: 'server-a', rootPath, createdAtMs: 1 };
+    return { id, machineId: 'machine-1', serverId: account!.home.id, rootPath, createdAtMs: 1 };
 }
 
-beforeEach(() => {
-    browser.open.mockReset();
-    scm.snapshot = repoSnapshot();
+beforeEach(async () => {
+    restorePopoverGlobals = withPopoverWebGlobals();
+    machineRpc.mockReset();
+    machineRpc.mockImplementation(async ({ method, payload }: { method: string; payload: unknown }) => {
+        if (method === RPC_METHODS.SCM_WORKTREES_ENRICHMENT) return { success: true, entries: [] };
+        if (method === RPC_METHODS.DAEMON_FILESYSTEM_LIST_ROOTS) return DaemonFilesystemListRootsResponseSchema.parse({
+            ok: true, roots: [{ id: 'root', label: 'Root', path: '/' }],
+        });
+        if (method === RPC_METHODS.DAEMON_FILESYSTEM_LIST_DIRECTORY) {
+            const request = DaemonFilesystemListDirectoryRequestSchema.parse(payload);
+            return DaemonFilesystemListDirectoryResponseSchema.parse({ ok: true, path: request.path, truncated: false,
+                entries: request.path === '/' ? [{ name: 'Users', path: '/Users', type: 'directory' }]
+                    : request.path === '/Users' ? [{ name: 'me', path: '/Users/me', type: 'directory' }]
+                    : request.path === '/Users/me' ? [{ name: 'unbound', path: '/Users/me/unbound', type: 'directory' }]
+                    : [],
+            });
+        }
+        if (method === RPC_METHODS.SCM_STATUS_SNAPSHOT) return { success: true, snapshot: repoSnapshot() };
+        throw new Error(`Unexpected native Machine RPC: ${method}`);
+    });
+    const transport = createWorkflowActionHttpTransport({ fixtureResponse: async () => ({ ok: true, result: { definitions: [] } }), accountId: () => 'account-a' });
+    const machineRows = MACHINES.map(machine => ({
+        ...createPlainMachineRowFixture({ id: machine.id, accountId: 'account-a' }),
+        metadata: encodePlainMachineStoredContent(machine.metadata),
+    }));
+    account = await restoreServerAccountForTest({ serverUrl: 'https://workflow-where.test', accountId: 'account-a', request: async (url, init) => {
+        const path = new URL(String(url)).pathname;
+        if (path === '/v1/machines') return Response.json(machineRows);
+        const machine = machineRows.find(row => path === `/v1/machines/${row.id}`);
+        if (machine) return Response.json({ machine });
+        if (path === '/health' || path.startsWith('/v1/features') || path.startsWith('/v1/account/encryption')
+            || path === '/v2/account/settings' || path === '/v1/artifacts' || path.startsWith('/v3/automations')) {
+            return transport.fetch(url, init);
+        }
+        // Unrelated bootstrap domains are absent on this Home, not network failures.
+        // Throwing here would retire reachability and stall the real Machine census.
+        return new Response('{}', { status: 404 });
+    } });
+    const scope = { serverId: account.home.id, accountId: 'account-a' };
+    // Hydrate through Sync so the plain Machine content mode is available to
+    // active RPC as well as scoped RPC; a display fixture has no storage-mode authority.
+    await (await import('@/sync/sync')).sync.refreshMachines();
+    for (const machine of MACHINES) {
+        machine.activeAt = Date.now();
+        recordMachineRequestSucceeded({ ...scope, machineId: machine.id });
+    }
     const workspaceRefs = [
             workspaceRef('ref-main', '/repo/payments'),
             workspaceRef('ref-feature', '/repo/payments-feature-auth'),
         ];
-    storage.setState({ profileScope: { serverId: 'server-a', accountId: 'account-a' },
-        projectAccountRows: { scope: { serverId: 'server-a', accountId: 'account-a' }, status: 'ready', coverage: 'complete', workspaceRefs,
+    storage.setState({ profileScope: scope,
+        projectAccountRows: { scope, status: 'ready', coverage: 'complete', workspaceRefs,
             relationships: [], organizations: [], revisionsByPhysicalKey: {} },
         settings: settingsDefaults,
         authoringMemory: { ...authoringMemoryDefaults, recentMachinePaths: [{ machineId: 'machine-2', path: '/home/me/service' }] } });
@@ -117,6 +166,9 @@ beforeEach(() => {
 
 afterEach(async () => {
     await standardCleanup();
+    restorePopoverGlobals?.();
+    await account?.dispose();
+    account = undefined;
 });
 
 async function renderControl(props: Readonly<Record<string, unknown>>) {
@@ -126,7 +178,7 @@ async function renderControl(props: Readonly<Record<string, unknown>>) {
         machines: MACHINES,
         testIDPrefix: 'workflow-editor',
         ...props,
-    } as never));
+    } as never), { wrapper: ModalHost });
 }
 
 function stepOptions(step: SelectionListStep, sectionId: string) {
@@ -141,10 +193,15 @@ describe('workflow project target control', () => {
             target: { machineId: 'machine-1', directory: '/repo/payments', workspaceRefId: 'ref-main' },
             onChange,
         });
-        await act(async () => {});
+        await vi.waitFor(async () => {
+            await act(async () => {});
+            expect(screen.findByTestId('workflow-editor-project-checkout'), JSON.stringify({
+                nativeRequests: machineRpc.mock.calls, rendered: screen.getTextContent(),
+            })).not.toBeNull();
+        });
 
         await screen.pressByTestIdAsync('workflow-editor-project-checkout');
-        const popover = screen.root.findByType('SelectionListPopover' as never);
+        const popover = screen.findAllByType(AgentInputSelectionListPopover).find(node => node.props.open)!;
         const rootStep = popover.props.rootStep as SelectionListStep;
 
         // A new worktree is the Workspace policy's job here, so the picker offers
@@ -153,9 +210,8 @@ describe('workflow project target control', () => {
             .toEqual(['current_path']);
         const feature = stepOptions(rootStep, 'worktree:existing')
             .find((option) => option.subtitle === '/repo/payments-feature-auth');
-        await act(async () => {
-            feature?.onSelect?.();
-        });
+        if (!feature) throw new Error('Expected the alternate checkout in the real picker');
+        await screen.pressByTestIdAsync(`selection-list:${rootStep.id}:option:${feature.id}`);
 
         expect(onChange).toHaveBeenCalledWith({
             machineId: 'machine-1',
@@ -171,21 +227,23 @@ describe('workflow project target control', () => {
             onChange,
         });
 
-        await act(async () => {
-            screen.root.findByType('MachineSelector' as never).props.onSelect(MACHINES[1]);
-        });
+        await screen.pressByTestIdAsync('workflow-editor-machine-option:machine-2');
 
         expect(onChange).toHaveBeenCalledWith({ machineId: 'machine-2', directory: '/home/me/service' });
     });
 
     it('applies a browsed folder only to the target it was opened for', async () => {
-        const picked = createDeferred<string | null>();
-        browser.open.mockImplementationOnce(() => picked.promise);
         const onChange = vi.fn();
         const opened = { machineId: 'machine-1', directory: '/repo/payments', workspaceRefId: 'ref-main' };
         const screen = await renderControl({ target: opened, onChange });
 
         await screen.pressByTestIdAsync('workflow-editor-project-directory');
+        // The real browser is owned by the real modal host, and its published
+        // selection callback settles the opener's promise for the captured target.
+        const browsers = screen.findAllByType(MachinePathBrowserView);
+        expect(browsers).toHaveLength(1);
+        const browser = browsers[0];
+        expect(browser.props.machineId).toBe('machine-1');
         const { WorkflowProjectTargetControl } = await import('./WorkflowProjectTargetControl');
         // The host moved to another target while the browser was open.
         await screen.update(React.createElement(WorkflowProjectTargetControl, {
@@ -196,15 +254,13 @@ describe('workflow project target control', () => {
             onChange,
         } as never));
         await act(async () => {
-            picked.resolve('/repo/other');
-            await picked.promise;
+            browser.props.onPickPath('/repo/other');
         });
 
         expect(onChange).not.toHaveBeenCalled();
     });
 
     it('drops a stale project binding when a browsed folder names another project', async () => {
-        browser.open.mockResolvedValueOnce('/Users/me/unbound');
         const onChange = vi.fn();
         const screen = await renderControl({
             target: { machineId: 'machine-1', directory: '/repo/payments', workspaceRefId: 'ref-main' },
@@ -212,7 +268,10 @@ describe('workflow project target control', () => {
         });
 
         await screen.pressByTestIdAsync('workflow-editor-project-directory');
-        await act(async () => {});
+        expect(screen.findAllByType(MachinePathBrowserView)).toHaveLength(1);
+        await act(async () => {
+            screen.findByType(MachinePathBrowserView).props.onPickPath('/Users/me/unbound');
+        });
 
         expect(onChange).toHaveBeenCalledWith({ machineId: 'machine-1', directory: '/Users/me/unbound' });
     });
@@ -232,14 +291,12 @@ describe('workflow project target control', () => {
         expect(screen.getTextContent()).toContain('Runs on');
         expect(screen.getTextContent()).toContain('Mac Studio / ~/project');
         expect(screen.getTextContent()).not.toContain('/Users/me/project');
-        expect(screen.root.findAllByType('MachineSelector' as never)).toHaveLength(0);
+        expect(screen.findAllByType(MachineSelector)).toHaveLength(0);
         expect(screen.findByTestId('workflow-editor-project-directory')).toBeNull();
 
         await screen.pressByTestIdAsync('workflow-editor-machine-row');
         expect(screen.findByTestId('workflow-editor-where-popover')).not.toBeNull();
-        await act(async () => {
-            screen.root.findByType('MachineSelector' as never).props.onSelect(MACHINES[1]);
-        });
+        await screen.pressByTestIdAsync('workflow-editor-machine-option:machine-2');
         expect(onChange).toHaveBeenCalledWith({ machineId: 'machine-2', directory: '/home/me/service' });
     });
 

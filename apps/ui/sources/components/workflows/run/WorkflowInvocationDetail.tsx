@@ -328,8 +328,10 @@ export function WorkflowInvocationDetail(props: WorkflowInvocationDetailProps): 
             ? t('workflows.recovery.choicesOnReconnect', { machine: unavailableMachine.name })
             : t('workflows.recovery.noChoices');
     // An interruption needs you; only a reported failure reads as failed (lab run-A_failed / _interrupted).
-    const recoveryTone = reportedMessage === null && (failureCause?.kind === 'lost_contact' || unavailableMachine !== null)
-        || props.lifecycle !== 'failed' ? 'attention' as const : 'danger' as const;
+    // With nothing to choose yet nothing needs you, so the card stays quiet (DESIGN-18 R1b).
+    const recoveryTone = !choiceOffered ? 'neutral' as const
+        : reportedMessage === null && (failureCause?.kind === 'lost_contact' || unavailableMachine !== null)
+            || props.lifecycle !== 'failed' ? 'attention' as const : 'danger' as const;
     const sessionLink = (execution?.kind === 'session' || execution?.kind === 'session_ready')
         && recovery.canInspectExecution && props.onOpenSession !== undefined ? execution.sessionId : null;
     const executionLink = execution?.kind === 'detached_run'
@@ -418,16 +420,16 @@ export function WorkflowInvocationDetail(props: WorkflowInvocationDetailProps): 
               */}
             {!showRecoveryCard ? null : (
                 <View testID={`${testIDPrefix}-recovery-card`}><ListPresentationProvider value="page">
-                    <ItemGroup
-                        title={causeHeadline}
-                        description={recoveryDescription}
-                        containerStyle={workStatusSurfaceStyle(recoveryTone)}
-                    >
-                        {noChoicesLine === null ? null : (
-                            <SectionContentRow testID={`${testIDPrefix}-recovery-unavailable`}>
-                                <Text style={styles.provenance}>{noChoicesLine}</Text>
-                            </SectionContentRow>
-                        )}
+                    <ItemGroup containerStyle={workStatusSurfaceStyle(recoveryTone) ?? undefined}>
+                        {/* The card's head, inside its sheet as the hold card's is: what happened, then what it means now. */}
+                        <Item
+                            testID={`${testIDPrefix}-recovery-cause`}
+                            title={causeHeadline}
+                            titleLines={0}
+                            subtitle={recoveryDescription ?? noChoicesLine ?? undefined}
+                            subtitleLines={0}
+                            showChevron={false}
+                        />
                         {recovery.remainingNotStartedSiblingCount === null
                             || recovery.remainingNotStartedSiblingCount === 0 ? null : (
                                 <SectionContentRow>

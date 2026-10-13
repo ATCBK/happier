@@ -7,7 +7,6 @@ import type {
 import { SessionAuthoringControls } from '@/components/sessions/authoring/controls/SessionAuthoringControls';
 import type {
     SessionAuthoringControlFacts,
-    SessionAuthoringFieldId,
 } from '@/components/sessions/authoring/controls/sessionAuthoringFieldControls';
 
 import type { WorkflowStepInspectorFieldId } from './WorkflowStepInspector';
@@ -44,7 +43,7 @@ export function useWorkflowStepFieldControlRenderer(params: Readonly<{
     const { facts, testIDPrefix } = params;
     return React.useCallback((renderParams) => (
         <SessionAuthoringControls
-            fields={[renderParams.field as SessionAuthoringFieldId]}
+            fields={[renderParams.field]}
             presentation="fields"
             values={renderParams.effective}
             engine={renderParams.engine} onChangeEngine={renderParams.onChangeEngine}

@@ -151,6 +151,8 @@ const styles = StyleSheet.create((theme) => ({
         flexWrap: 'wrap',
         gap: theme.margins.sm,
         paddingHorizontal: theme.margins.lg,
+        // The foot sits under a scrolling form: a breath above it so the last field never touches it.
+        paddingTop: theme.margins.md,
         paddingBottom: theme.margins.lg,
     },
     footEnd: {
@@ -750,23 +752,27 @@ function RunsInRows(props: Readonly<{
     const first = existingSessions[0];
     return (
         <>
-            <SegmentedChoiceItem<(typeof RUNS_IN_KINDS)[number]>
-                labelSize="field"
-                testIDPrefix={`${props.testID}-runs-in`}
+            {/* Three long choices: a select, not a segmented bar that cannot fit a popover or a phone (DESIGN-18 T1). */}
+            <FieldSelect
+                testID={`${props.testID}-runs-in`}
                 title={t('workflows.triggers.then.runsIn')}
-                value={props.runsIn.kind}
-                onChange={(kind) => {
+                items={RUNS_IN_KINDS.map((kind) => ({
+                    id: kind,
+                    testID: `${props.testID}-runs-in:${kind}`,
+                    title: t(`workflows.triggers.then.runsInChoice.${kind}`),
+                    ...(kind === 'session' && first === undefined
+                        ? { subtitle: t('workflows.triggers.then.noSessionOnMachine'), disabled: true } : {}),
+                }))}
+                selectedId={props.runsIn.kind}
+                onSelect={(id) => {
+                    const kind = RUNS_IN_KINDS.find((candidate) => candidate === id);
+                    if (kind === undefined) return;
                     if (kind === 'session') {
                         if (first !== undefined) props.onChange({ kind: 'session', sessionId: first.sessionId, machineId: first.machineId });
                         return;
                     }
                     props.onChange({ kind });
                 }}
-                options={RUNS_IN_KINDS.map((kind) => ({
-                    id: kind,
-                    label: t(`workflows.triggers.then.runsInChoice.${kind}`),
-                    ...(kind === 'session' && first === undefined ? { unavailableReason: t('workflows.triggers.then.noSessionOnMachine') } : {}),
-                }))}
             />
             {props.runsIn.kind === 'session' ? (
                 <FieldSelect

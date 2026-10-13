@@ -1,20 +1,13 @@
 import * as React from 'react';
-import { afterEach, describe, expect, it, vi } from 'vitest';
+import { describe, expect, it, vi } from 'vitest';
 
 import type { WorkflowDefinitionV1 } from '@happier-dev/protocol/workflows/workflowV1';
 
 import { renderScreen } from '@/dev/testkit';
-import { sessionEnvelopeTransportMock } from '@/dev/testkit/mocks/sessionEnvelopeTransport';
 
 import { WorkflowFlowView } from './WorkflowFlowView';
 import { projectWorkflowFlow } from './workflowFlowProjection';
 import { HappierPressable } from '@happier-dev/plugin-ui/presentation';
-
-vi.mock('@/sync/api/session/sessionDataKeyEnvelopesApi', async () => (await import('@/dev/testkit/mocks/sessionEnvelopeTransport')).sessionEnvelopeTransportMock);
-vi.mock('@/sync/api/teams/membershipSessionDataKeyEnvelopesApi', async () => (await import('@/dev/testkit/mocks/sessionEnvelopeTransport')).sessionEnvelopeTransportMock);
-afterEach(() => {
-    for (const request of Object.values(sessionEnvelopeTransportMock)) expect(request).not.toHaveBeenCalled();
-});
 
 vi.mock('react-native', async () => {
     const { createReactNativeWebMock } = await import('@/dev/testkit/mocks/reactNative');

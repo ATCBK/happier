@@ -2,24 +2,20 @@ import * as React from 'react';
 import { act } from 'react-test-renderer';
 import { afterEach, beforeAll, beforeEach, describe, expect, it, vi } from 'vitest';
 import { createDeferred, renderScreen, standardCleanup } from '@/dev/testkit';
-import { PluginProjectionV2Schema } from '@happier-dev/protocol';
+import { DaemonContributionRegistryProjectionDescribeResponseSchema, PluginProjectionV2Schema } from '@happier-dev/protocol';
+import { RPC_METHODS } from '@happier-dev/protocol/rpc';
+import { createMachineFixture } from '@/dev/testkit/fixtures/machineFixtures';
+import { createHomeGovernanceHarness, installHomeGovernanceBoundaries } from '@/dev/testkit/harness/homeGovernanceHarness';
+import { installDisconnectedServerSocketBoundary } from '@/dev/testkit/harness/serverAccountConnectionHarness';
+import { loadSyncSingletonForTests } from '@/dev/testkit/harness/syncSingletonLoader';
 import { createWorkflowDefinitionFixture } from '@/dev/testkit/fixtures/workflowRunFixtures';
-import { getStorage } from '@/sync/domains/state/storageStore';
 import { buildWorkflowEditorDraftFromDefinition } from '@/sync/domains/workflows/workflowAuthoring';
 import { useWorkflowEditorHistory } from './useWorkflowEditorHistory';
-import { DropdownMenu } from '@/components/ui/forms/dropdown/DropdownMenu';
 
-// Action transport is the system boundary; catalogs, parsers, scope and editor history stay real.
-const execute = vi.hoisted(() => vi.fn());
+// Only native RPC, HTTP, credentials and platform rendering leave the process.
+// Action admission, plugin discovery, codecs, scope and editor history stay real.
 const machineRpc = vi.hoisted(() => vi.fn());
 vi.mock('@/sync/runtime/orchestration/serverScopedRpc/serverScopedMachineRpc', () => ({ machineRpcWithServerScope: machineRpc }));
-vi.mock('@/sync/ops/actions/frontDoorRuntimeActionExecutor', () => ({ createFrontDoorActionExecute: () => execute }));
-vi.mock('@/sync/runtime/orchestration/connectionManager', async (importOriginal) => {
-    const { createConnectionManagerModuleMock } = await import('@/dev/testkit/mocks/connectionManager');
-    return createConnectionManagerModuleMock(importOriginal, {
-        getSnapshot: () => ({ serverId: 'server-a', serverUrl: 'https://server-a.example', generation: 0 }),
-    });
-});
 vi.mock('react-native', async () => (await import('@/dev/testkit/mocks/reactNative')).createReactNativeWebMock());
 vi.mock('react-native-unistyles', async () => (await import('@/dev/testkit/mocks/unistyles')).createUnistylesMock());
 vi.mock('@/text', async () => (await import('@/dev/testkit/mocks/text')).createTextModuleMock({ translate: (key: string) => key }));
@@ -30,24 +26,52 @@ vi.mock('@/components/ui/popover', async (importOriginal) => {
     return createInlinePopoverModuleMock(importOriginal, { maxHeight: 640, maxWidth: 280, placement: 'bottom' });
 });
 
-const child = createWorkflowDefinitionFixture({ inputs: [{ name: 'topic', valueType: 'string', required: true }] });
+const child = createWorkflowDefinitionFixture({ inputs: [{ name: 'topic', valueType: 'string', required: true }],
+    defaults: { agentTarget: { kind: 'agent', identity: { pluginId: 'happier.agent.claude', localId: 'claude' } } } });
 const definition = createWorkflowDefinitionFixture({ roles: [{ roleId: 'local_builder', name: 'Builder',
     instructions: 'Build carefully', runsAs: { kind: 'session' }, workspaceWrites: 'deny' }] });
 let harness: Awaited<ReturnType<typeof loadHarness>>;
+const home = createHomeGovernanceHarness();
+installHomeGovernanceBoundaries(home);
+installDisconnectedServerSocketBoundary();
+const { getStorage } = await import('@/sync/domains/state/storageStore');
+const { DropdownMenu } = await import('@/components/ui/forms/dropdown/DropdownMenu');
+const { getActiveServerSnapshot } = await import('@/sync/domains/server/serverRuntime');
+const { publishAppliedActiveServerSnapshot } = await import('@/sync/runtime/orchestration/appliedActiveServerRuntime');
+const { clearDaemonMergedProjectionCacheForTests } = await import('@/agents/backendCatalog/loadDaemonMergedProjectionInputs');
+const { resetWorkflowLibraryReadsForTests } = await import('../library/workflowLibraryReads');
+const { createWorkflowDefinition } = await import('@/sync/domains/workflows/workflowDefinitionActions');
+let serverId: string;
+
+function childProjection(localId = 'child') {
+    return DaemonContributionRegistryProjectionDescribeResponseSchema.parse({ protocolVersion: 1,
+        projection: { v: 2, generation: 1, familiesById: { workflows: { family: 'workflows', entriesById: {
+            [`example.tools/${localId}`]: { id: `example.tools/${localId}`, pluginId: 'example.tools',
+                pluginVersion: '1.0.0', definition: { id: localId, title: 'Plugin child', definition: child } },
+        } } }, actionsById: {} } });
+}
+
+async function switchAccount(accountId: string) {
+    await home.switchAccount(serverId, accountId);
+    getStorage().setState({ profileScope: { serverId, accountId } });
+}
 async function loadHarness() {
     return { ...(await import('./WorkflowInspector')), ...(await import('./WorkflowNestedWorkflowBlockEditor')),
         ...(await import('./WorkflowActionBlockEditor')) };
 }
-beforeAll(async () => { harness = await loadHarness(); }, 300_000);
-beforeEach(() => {
-    getStorage().setState({ profileScope: { serverId: 'server-a', accountId: 'account-a' } });
-    execute.mockReset();
+beforeAll(async () => { await loadSyncSingletonForTests(); harness = await loadHarness(); }, 300_000);
+beforeEach(async () => {
+    await home.reset();
+    serverId = await home.addHome({ name: 'Editor bindings', serverUrl: 'https://editor-bindings.test', accountId: 'account-a' });
+    publishAppliedActiveServerSnapshot(getActiveServerSnapshot());
+    getStorage().setState({ profileScope: { serverId, accountId: 'account-a' },
+        machines: { 'machine-a': createMachineFixture({ id: 'machine-a', activeAt: Date.now() }) }, machineListByServerId: {} });
+    clearDaemonMergedProjectionCacheForTests(); resetWorkflowLibraryReadsForTests();
     machineRpc.mockReset();
-    execute.mockImplementation(async (actionId: string) => ({ ok: true, result: actionId === 'roles.list' ? { items: [] }
-        : { definitions: [], pluginWorkflows: [{ workflow: 'plugin:example.tools/child', pluginId: 'example.tools',
-            version: '1.0.0', title: 'Plugin child', definition: child }] } }));
+    machineRpc.mockResolvedValue(childProjection());
+    home.answer(serverId, '/v3/automations', { body: { automations: [], nextCursor: null } });
 });
-afterEach(standardCleanup);
+afterEach(async () => { await standardCleanup(); resetWorkflowLibraryReadsForTests(); await home.reset(); });
 
 describe('workflow editor declared bindings', () => {
     it('edits command text literally while preserving its environment binding', async () => {
@@ -148,7 +172,7 @@ describe('workflow editor declared bindings', () => {
         function Host() {
             const [draft, setDraft] = React.useState(initial);
             currentDraft = draft;
-            const history = useWorkflowEditorHistory('draft', setDraft);
+            const history = useWorkflowEditorHistory<typeof initial>('draft', setDraft);
             undo = history.controls.undo;
             return <harness.WorkflowInspector subject={{ kind: 'workflow' }} presentation="pane" draft={draft}
                 machineName={null} testIDPrefix="editor" onChange={(next) => {
@@ -182,18 +206,15 @@ describe('workflow editor declared bindings', () => {
 
     it.each([false, true])('reads a later-page plugin child, retaining bindings and retrying a failed page (%s)', async (failPage) => {
         let failing = failPage;
-        const cursors: unknown[] = [];
-        const successor = createDeferred<unknown>();
-        execute.mockImplementation(async (actionId: string, input: unknown) => {
-            if (actionId !== 'workflow.definition.list') return { ok: false, errorCode: 'unsupported_action', error: 'Unsupported' };
-            if (getStorage().getState().profileScope?.accountId === 'account-b') return successor.promise;
-            const { cursor } = (await import('@happier-dev/protocol')).WorkflowDefinitionListRequestV1Schema.parse(input);
-            cursors.push(cursor);
-            if (!cursor) return { ok: true, result: { definitions: [], pluginWorkflows: [], nextCursor: 'later-child-page' } };
-            if (failing) return { ok: false, errorCode: 'target_unavailable', error: 'Page temporarily unavailable' };
-            return { ok: true, result: { definitions: [], pluginWorkflows: [{ workflow: 'plugin:example.tools/later-child',
-                pluginId: 'example.tools', version: '1.0.0', title: 'Later child', definition: child }] } };
-        });
+        const successor = createDeferred<void>();
+        machineRpc.mockResolvedValue(childProjection('later-child'));
+        // The real first page is Account Artifacts; the canonical continuation
+        // then discovers plugins. Refuse the second Account admission at HTTP.
+        const baseEncryption = { mode: 'plain', updatedAt: 0 };
+        home.answer(serverId, '/v1/account/encryption', { select: () => {
+            const artifactPageRead = home.requests.some(request => request.path.startsWith('/v1/artifacts?'));
+            return failing && artifactPageRead ? { status: 503, body: { error: 'storage_unavailable' } } : { body: baseEncryption };
+        } });
         const block = { kind: 'workflow' as const, id: 'later', workflowRef: 'plugin:example.tools/later-child',
             input: { oldField: { kind: 'literal' as const, value: 'Keep me' } } };
         const draft = buildWorkflowEditorDraftFromDefinition({ draftId: 'draft', name: 'Parent',
@@ -202,7 +223,7 @@ describe('workflow editor declared bindings', () => {
         const screen = await renderScreen(<harness.WorkflowNestedWorkflowBlockEditor block={block} draft={draft}
             ordinal={1} total={1} actions={[]} onSelect={() => {}} onChangeBlock={changed} testIDPrefix="editor" />);
         if (failPage) {
-            expect(cursors).toContain('later-child-page');
+            expect(home.requests.some(request => request.path.startsWith('/v1/artifacts?'))).toBe(true);
             expect(screen.findByTestId('editor-workflow-later-input-topic')).toBeNull();
             expect(screen.findByTestId('editor-workflow-later-input-oldField')).not.toBeNull();
             failing = false;
@@ -210,13 +231,17 @@ describe('workflow editor declared bindings', () => {
         }
         expect(screen.findByTestId('editor-workflow-later-input-topic')).not.toBeNull();
         expect(screen.findByTestId('editor-workflow-later-input-oldField')).not.toBeNull();
-        expect(cursors).toContain('later-child-page');
+        // Source discovery is produced only by the plugin-phase continuation.
+        expect(machineRpc.mock.calls.some(([request]) => request.method === RPC_METHODS.DAEMON_MERGED_CONTRIBUTION_REGISTRY_PROJECTION_DESCRIBE)).toBe(true);
         expect(changed).not.toHaveBeenCalled();
         if (!failPage) {
-            await act(async () => { getStorage().setState({ profileScope: { serverId: 'server-a', accountId: 'account-b' } }); });
+            machineRpc.mockImplementation(async () => { await successor.promise;
+                return DaemonContributionRegistryProjectionDescribeResponseSchema.parse({ protocolVersion: 1,
+                    projection: { v: 2, generation: 1, familiesById: {}, actionsById: {} } }); });
+            await act(async () => switchAccount('account-b'));
             expect(screen.findByTestId('editor-workflow-later-input-topic')).toBeNull();
             expect(screen.findByTestId('editor-workflow-later-input-oldField')).not.toBeNull();
-            await act(async () => successor.resolve({ ok: true, result: { definitions: [], pluginWorkflows: [] } }));
+            await act(async () => successor.resolve());
             expect(screen.findByTestId('editor-workflow-later-input-topic')).toBeNull();
             expect(changed).not.toHaveBeenCalled();
         }
@@ -251,14 +276,14 @@ describe('workflow editor declared bindings', () => {
     it('uses shared child Get disclosure, retries denial and retires old Account schema content', async () => {
         const ref = '24c7a5d2-1d30-4f7a-9abc-888888888888';
         let deny = false;
-        const successor = createDeferred<{ ok: true; result: unknown }>();
-        execute.mockImplementation(async (actionId: string) => {
-            if (actionId !== 'workflow.definition.get') return { ok: true, result: { definitions: [] } };
-            if (getStorage().getState().profileScope?.accountId === 'account-b') return successor.promise;
-            return deny ? { ok: false, errorCode: 'run_access_denied', error: 'Denied' }
-                : { ok: true, result: { definitionId: ref, revision: { headerVersion: 1, bodyVersion: 1 },
-                    definition: child, metadata: { title: 'Shared child' }, access: 'view' } };
-        });
+        const successor = createDeferred<void>();
+        await createWorkflowDefinition({ definitionId: ref, definition: child, metadata: { title: 'Shared child' } });
+        const row = home.artifacts(serverId).read(ref);
+        if (!row) throw new Error('Missing produced child Artifact');
+        home.answer(serverId, `/v1/artifacts/${ref}`, { select: () => deny
+            ? { status: 403, body: { error: 'run_access_denied' } }
+            : { body: { ...row, access: 'view' },
+                ...(getStorage().getState().profileScope?.accountId === 'account-b' ? { respondAfter: successor.promise } : {}) } });
         const block = { kind: 'workflow' as const, id: 'shared', workflowRef: ref,
             input: { oldField: { kind: 'literal' as const, value: 'Keep me' } } };
         const draft = buildWorkflowEditorDraftFromDefinition({ draftId: 'draft', name: 'Parent',
@@ -267,14 +292,13 @@ describe('workflow editor declared bindings', () => {
         const screen = await renderScreen(<harness.WorkflowNestedWorkflowBlockEditor block={block} draft={draft}
             ordinal={1} total={1} actions={[]} onSelect={() => {}} onChangeBlock={changed} testIDPrefix="editor" />);
         expect(screen.findByTestId('editor-workflow-shared-input-topic')).not.toBeNull();
-        await act(async () => { getStorage().setState({ profileScope: { serverId: 'server-a', accountId: 'account-b' } }); });
+        await act(async () => switchAccount('account-b'));
         expect(screen.findByTestId('editor-workflow-shared-input-topic')).toBeNull();
         expect(screen.findByTestId('editor-workflow-shared-input-oldField')).not.toBeNull();
-        await act(async () => successor.resolve({ ok: true, result: { definitionId: ref, revision: { headerVersion: 1, bodyVersion: 1 },
-            definition: child, metadata: { title: 'Shared child' }, access: 'view' } }));
+        await act(async () => successor.resolve());
         expect(screen.findByTestId('editor-workflow-shared-input-topic')).not.toBeNull();
         deny = true;
-        await act(async () => { getStorage().setState({ profileScope: { serverId: 'server-a', accountId: 'account-a' } }); });
+        await act(async () => switchAccount('account-a'));
         expect(screen.findByTestId('editor-workflow-shared-input-topic')).toBeNull();
         expect(screen.findByTestId('editor-workflow-shared-retry')).not.toBeNull();
         deny = false;

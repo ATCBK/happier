@@ -9,35 +9,35 @@ import {
     WorkflowRunRecipientCensusResponseV1Schema,
     type WorkflowRunStartResultV1,
 } from '@happier-dev/protocol';
-import { markRpcRequestDisposition } from '@happier-dev/sync-client';
 import { createDeferred, renderScreen } from '@/dev/testkit';
 import { createWorkflowDefinitionFixture, createWorkflowRunSummaryFixture } from '@/dev/testkit/fixtures/workflowRunFixtures';
 import { installDisconnectedServerSocketBoundary, restoreServerAccountForTest } from '@/dev/testkit/harness/serverAccountConnectionHarness';
 import { loadSyncSingletonForTests } from '@/dev/testkit/harness/syncSingletonLoader';
 import { installShippedNativeFrameScheduler } from '@/dev/testkit/legend/shippedNativeLegendRuntime';
-import { publishHomeAccountChange } from '@/sync/runtime/orchestration/homeAccountChange';
-import { Modal } from '@/modal';
 import { resolveAbsolutePath } from '@/utils/path/pathUtils';
-import { useWorkflowRunNowController } from './useWorkflowRunNowController';
-import { WorkflowRunComposer } from './WorkflowRunComposer';
 
 installDisconnectedServerSocketBoundary();
+const { ModalProvider, useModal } = await import('@/modal/ModalProvider');
+const { markRpcRequestDisposition } = await import('@happier-dev/sync-client');
+const { publishHomeAccountChange } = await import('@/sync/runtime/orchestration/homeAccountChange');
+const { useWorkflowRunNowController } = await import('./useWorkflowRunNowController');
+const { WorkflowRunComposer } = await import('./WorkflowRunComposer');
 const machineRpc = vi.hoisted(() => vi.fn());
+// Admission fixtures never stream Markdown; keep the genuine vendor SDK leaf outside this seam.
+vi.mock('react-native-enriched-markdown/lib/module/web/streamingReveal.js', () => ({
+    splitStreamingRevealTextParts: () => { throw new Error('Unexpected vendor Markdown reveal in start-reconciliation test'); },
+}));
 vi.mock('@/sync/runtime/orchestration/serverScopedRpc/serverScopedMachineRpc', () => ({ machineRpcWithServerScope: machineRpc }));
 vi.mock('react-native', async () => (await import('@/dev/testkit/mocks/reactNative')).createReactNativeWebMock());
 vi.mock('react-native-unistyles', async () => (await import('@/dev/testkit/mocks/unistyles')).createUnistylesMock());
 vi.mock('@/text', async () => (await import('@/dev/testkit/mocks/text')).createTextModuleMock());
-vi.mock('@/modal', async () => (await import('@/dev/testkit/mocks/modal')).createModalModuleMock().module);
+// Native DOM primitives stay at the SDK boundary; Modal custody stays real.
+vi.mock('@/utils/web/radixCjs', async () => (await import('@/dev/testkit/mocks/radixCjs')).createRadixCjsModuleMock());
 // Adapt Metro's synchronous loader to Vitest while retaining the real executor.
 vi.mock('@/sync/ops/actions/frontDoorRuntimeActionExecutor', async (importOriginal) => {
     const original = await importOriginal<typeof import('@/sync/ops/actions/frontDoorRuntimeActionExecutor')>();
-    return { ...original, createFrontDoorActionExecute: () => {
-        let execute: ReturnType<typeof original.createFrontDoorActionExecute> | undefined;
-        return async (...args: Parameters<ReturnType<typeof original.createFrontDoorActionExecute>>) => {
-            execute ??= original.createFrontDoorActionExecute((await import('@/sync/ops/actions/defaultActionExecutor')).createDefaultActionExecutor());
-            return execute(...args);
-        };
-    } };
+    const { createFrontDoorActionExecuteForVitest } = await import('@/dev/testkit/harness/frontDoorActionExecutorBoundary');
+    return { ...original, createFrontDoorActionExecute: createFrontDoorActionExecuteForVitest(original) };
 });
 await vi.hoisted(async () => { vi.stubGlobal('React', await import('react')); });
 
@@ -49,7 +49,6 @@ const disposals: Array<() => Promise<void>> = [];
 afterEach(async () => {
     for (const dispose of disposals.splice(0).reverse()) await dispose();
     machineRpc.mockReset();
-    vi.mocked(Modal.alert).mockClear();
     vi.unstubAllGlobals();
 });
 
@@ -131,7 +130,9 @@ async function harness(outcome: 'admitted' | 'not-sent' | 'unknown', holdFirstMi
     const opened = vi.fn<(result: WorkflowRunStartResultV1) => void>();
     let pending: Promise<unknown> | undefined;
     let state = 'idle';
+    let modals: ReturnType<typeof useModal>['state']['modals'] = [];
     function Host() {
+        modals = useModal().state.modals;
         const controller = useWorkflowRunNowController();
         state = controller.stateFor(runId);
         return <WorkflowRunComposer inputs={[]} definition={definition} values={{}} onChangeValues={() => {}} onCancel={() => {}}
@@ -140,9 +141,9 @@ async function harness(outcome: 'admitted' | 'not-sent' | 'unknown', holdFirstMi
             startProblem={controller.refusal?.message ?? null}
             onRun={() => { pending = controller.runNow({ ...input, project: context.externalActionTarget.project, refusal: 'inline' }).then(result => { if (result) opened(result); }); }} />;
     }
-    const screen = await renderScreen(<Host />);
+    const screen = await renderScreen(<ModalProvider><Host /></ModalProvider>);
     disposals.push(screen.unmount);
-    return { screen, opened, owner, input, context, account, readState: () => state,
+    return { screen, opened, owner, input, context, account, readState: () => state, readModals: () => modals,
         counts: () => ({ admissions, reads }), pending: () => pending, releaseFirstMissingRead: () => firstMissingRead.resolve() };
 }
 
@@ -150,10 +151,10 @@ describe('Run start response-loss through the real composer, Machine transport a
     it('opens the admitted Run after the Machine transport times out, without a failure or second start', async () => {
         const h = await harness('admitted');
         await h.screen.pressByTestIdAsync('workflow-run-inputs-run');
-        await h.pending();
+        await act(async () => { await h.pending(); });
         expect(h.counts().admissions).toBe(1);
         await vi.waitFor(() => expect(h.opened).toHaveBeenCalledWith(expect.objectContaining({ admission: 'existing', run: expect.objectContaining({ id: runId }) })));
-        expect(Modal.alert).not.toHaveBeenCalled();
+        expect(h.readModals()).toEqual([]);
         expect(h.counts()).toMatchObject({ admissions: 1 });
         expect(machineRpc).toHaveBeenCalledTimes(1);
         // A deliberate retry with the same admission identity rejoins at the real owner.
@@ -163,10 +164,10 @@ describe('Run start response-loss through the real composer, Machine transport a
     it('keeps a confirmed not-sent refusal in the composer with its reason and retry available', async () => {
         const h = await harness('not-sent');
         await h.screen.pressByTestIdAsync('workflow-run-inputs-run');
-        await h.pending();
+        await act(async () => { await h.pending(); });
         expect(h.opened).not.toHaveBeenCalled();
         // 04 §4.8: a known refusal stays in the review, never a system alert.
-        expect(Modal.alert).not.toHaveBeenCalled();
+        expect(h.readModals()).toEqual([]);
         await vi.waitFor(() => expect(h.screen.findByTestId('workflow-run-inputs-reason-text')?.props.children)
             .toBe('workflows.problem.targetUnavailable'));
         expect(h.readState()).toBe('idle');
@@ -178,7 +179,8 @@ describe('Run start response-loss through the real composer, Machine transport a
         await h.screen.pressByTestIdAsync('workflow-run-inputs-run');
         await vi.waitFor(() => expect(h.readState()).toBe('reconciling'));
         await vi.waitFor(() => expect(h.counts().reads).toBe(1));
-        expect(Modal.alert).not.toHaveBeenCalled();
+        await act(async () => {});
+        expect(h.readModals()).toEqual([]);
         expect(h.opened).not.toHaveBeenCalled();
         expect(h.screen.findByTestId('workflow-run-inputs-run')?.props.disabled).toBe(true);
         expect(h.screen.findHostByTestId('workflow-run-inputs-reconciling')).not.toBeNull();

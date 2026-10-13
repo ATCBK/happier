@@ -31,14 +31,9 @@ vi.mock('@/text', async () => {
     const { createTextModuleMock } = await import('@/dev/testkit/mocks/text');
     return createTextModuleMock({ translate: (key) => key });
 });
-vi.mock('@/components/ui/icons/Icon', async (importOriginal) => ({
-    ...(await importOriginal<Record<string, unknown>>()),
-    Icon: (props: Record<string, unknown>) => React.createElement('Icon', props),
-}));
-vi.mock('@/components/ui/popover/Popover', () => ({
-    Popover: (props: { open: boolean; children: (render: unknown) => React.ReactNode }) =>
-        (props.open ? React.createElement(React.Fragment, null, props.children({})) : null),
-}));
+// Native portal/measurement is the boundary; all picker and field decisions stay real.
+vi.mock('@/components/ui/popover/Popover', async (importOriginal) =>
+    (await import('@/dev/testkit/mocks/popover')).createInlinePopoverModuleMock(importOriginal));
 
 afterEach(async () => {
     await standardCleanup();
@@ -65,7 +60,7 @@ function buildDraft(harness: Harness) {
 
 function InspectorHarness(props: Readonly<{
     harness: Harness;
-    fields: readonly string[];
+    fields?: readonly string[];
     onChangeField: (field: string, value: unknown) => void;
     onResetField?: (field: string) => void;
     onChangeTimeout?: (timeoutMs: number | undefined) => void;
@@ -85,6 +80,21 @@ function InspectorHarness(props: Readonly<{
 }
 
 describe('workflow step inspector field controls', () => {
+    it('renders the default inspector through real field controls while retaining execution tool policy', async () => {
+        const harness = await loadHarness();
+        const draft = { ...buildDraft(harness), defaults: {
+            ...buildDraft(harness).defaults, allowedTools: ['Read'], unlistedTools: 'deny' as const,
+        } };
+        const screen = await renderScreen(<InspectorHarness harness={harness} draft={draft} onChangeField={() => {}} />);
+        expect(screen.findByTestId('workflow-inspector-control-permissionMode')).toBeTruthy();
+        expect(screen.findByTestId('workflow-inspector-allowedTools')).toBeNull();
+        expect(screen.findByTestId('workflow-inspector-unlistedTools')).toBeNull();
+        const { validateWorkflowEditorDraft } = await import('@/sync/domains/workflows/workflowAuthoring');
+        const validation = validateWorkflowEditorDraft(harness.setWorkflowStepText(draft, draft.blocks[0]!.id, 'Review'));
+        expect(validation.normalizedDefinition?.defaults).toMatchObject({ allowedTools: ['Read'], unlistedTools: 'deny' });
+        await screen.unmount();
+    });
+
     it('uses visible default copy rather than accessibility-only state copy', async () => {
         const harness = await loadHarness();
         const screen = await renderScreen(<InspectorHarness harness={harness} fields={['permissionMode']}

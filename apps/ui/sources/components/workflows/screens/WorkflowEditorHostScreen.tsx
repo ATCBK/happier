@@ -352,7 +352,10 @@ function WorkflowEditorHostScreenReady(props: Readonly<{
     // Definition grants do not confer ownership of anyone else's trigger set.
     // Every admitted reader manages only the active Account's personal set.
     const canManagePersonalTriggers = accessResolved;
-    const editableDefinitionId = props.source.kind === 'saved' ? props.source.definitionId : saved?.definitionId ?? null;
+    // A successful Copy acknowledges a new current Artifact without replacing
+    // this route's accepted draft or its pending personal-memory Save.
+    const editableDefinitionId = saved?.definitionId ?? (props.source.kind === 'saved' ? props.source.definitionId : null);
+    const routeAgentSourceIsCurrent = props.source.kind === 'saved' && props.source.definitionId === editableDefinitionId;
     const sourceKind = props.source.kind;
     const sourceDefinitionId = props.source.kind === 'saved' ? props.source.definitionId : null;
     const privateSeedWithdrawn = reviewedRunSeedState.retired || definitionDraftSeedState.retired
@@ -372,17 +375,17 @@ function WorkflowEditorHostScreenReady(props: Readonly<{
     const authoringSourceKey = String(sourceGenerationRef.current);
     const [agentSession, setAgentSession] = React.useState<Readonly<{ sessionId: string; serverId: string; scopeKey: string | null; definitionId: string; sourceKey: string }> | null>(null);
     const authoringSessionId = agentSession?.scopeKey === accountScopeKey && agentSession.sourceKey === authoringSourceKey && agentSession.definitionId === editableDefinitionId
-        ? agentSession.sessionId : props.source.kind === 'saved' ? agentSeed?.sessionId ?? props.source.authoringSessionId ?? null : null;
+        ? agentSession.sessionId : routeAgentSourceIsCurrent && props.source.kind === 'saved' ? agentSeed?.sessionId ?? props.source.authoringSessionId ?? null : null;
     const authoringServerId = agentSession?.sessionId === authoringSessionId ? agentSession.serverId : activeAccountScope?.serverId ?? null;
     const authoringHomeIsActive = authoringServerId !== null && activeAccountScope !== null
         && areServerProfileIdentifiersEquivalent(authoringServerId, activeAccountScope.serverId);
     const liveAgentRevision = useWorkflowAgentRevision(authoringHomeIsActive ? authoringSessionId : null, editableDefinitionId, `${authoringSourceKey}\u0000${accountScopeKey ?? ''}`);
-    const initialAgentRevision = props.source.kind === 'saved' ? props.source.agentRevision ?? agentSeed?.snapshot ?? null : null;
+    const initialAgentRevision = routeAgentSourceIsCurrent && props.source.kind === 'saved' ? props.source.agentRevision ?? agentSeed?.snapshot ?? null : null;
     const agentRevision = liveAgentRevision && (!initialAgentRevision
         || liveAgentRevision.revision.headerVersion > initialAgentRevision.revision.headerVersion
         || liveAgentRevision.revision.bodyVersion > initialAgentRevision.revision.bodyVersion) ? liveAgentRevision : initialAgentRevision;
     const onAgentSessionCreated = React.useCallback((target: Readonly<{ sessionId: string; serverId: string }>) => {
-        if (editableDefinitionId === null) return;
+        if (editableDefinitionId === null || authoringSourceKey !== String(sourceGenerationRef.current)) return;
         setAgentSession({ ...target, scopeKey: accountScopeKey, definitionId: editableDefinitionId, sourceKey: authoringSourceKey });
     }, [accountScopeKey, authoringSourceKey, editableDefinitionId]);
     const openAgentAuthoring = useWorkflowAgentAuthoring(onAgentSessionCreated, t('workflows.authoring.edit'));
@@ -400,12 +403,13 @@ function WorkflowEditorHostScreenReady(props: Readonly<{
             return;
         }
         const definitionId = editableDefinitionId;
-        seedWorkflowAgentDraft(seed, (draft) => setAgentDraft({
-            ...draft, scopeKey: accountScopeKey, definitionId, sourceKey: authoringSourceKey,
-        }));
+        seedWorkflowAgentDraft(seed, (draft) => {
+            if (authoringSourceKey !== String(sourceGenerationRef.current)) return;
+            setAgentDraft({ ...draft, scopeKey: accountScopeKey, definitionId, sourceKey: authoringSourceKey });
+        });
     }, [accountScopeKey, authoringSourceKey, detailsPaneAvailable, editableDefinitionId, openAgentAuthoring]);
     const onAgentDraftSessionCreated = React.useCallback((_destination: string, target: Readonly<{ sessionId: string; serverId: string }>) => {
-        if (agentDraft === null || !agentDraft.isCurrent()) return;
+        if (agentDraft === null || !agentDraft.isCurrent() || agentDraft.sourceKey !== String(sourceGenerationRef.current)) return;
         setAgentDraft(null);
         onAgentSessionCreated(target);
     }, [agentDraft, onAgentSessionCreated]);
@@ -625,7 +629,7 @@ function WorkflowEditorHostScreenReady(props: Readonly<{
         // Refetching the route's original Artifact would replace that copy's
         // identity and redirect a partial Save retry to the original definition.
         if (saved !== null && contentScopeKey === accountScopeKey
-            && agentRevision === null && agentSeedId === null) return;
+            && (saved.definitionId !== sourceDefinitionId || agentRevision === null && agentSeedId === null)) return;
         const lifetime = accountLifetime;
         if (lifetime === null) return;
         const requestScopeKey = accountScopeKey;
@@ -675,9 +679,9 @@ function WorkflowEditorHostScreenReady(props: Readonly<{
     const triggers = useWorkflowTriggerEditing({ definitionId: saved?.definitionId ?? null, sourceKey: authoringSourceKey, projectTarget });
     React.useEffect(() => {
         const trigger = definitionDraftSeed?.trigger;
-        if (trigger === undefined || privateSeedWithdrawn) return;
+        if (trigger === undefined || privateSeedWithdrawn || saved !== null) return;
         triggers.setDraft(editWorkflowTriggerDraft(EMPTY_WORKFLOW_TRIGGER_DRAFT, { kind: 'add', clientId: randomUUID(), trigger }));
-    }, [initializationKey, definitionDraftSeed?.trigger, privateSeedWithdrawn, triggers.setDraft]);
+    }, [initializationKey, definitionDraftSeed?.trigger, privateSeedWithdrawn, saved?.definitionId, triggers.setDraft]);
     const snapshotRef = React.useRef<WorkflowEditorSnapshot | null>(null);
     snapshotRef.current = draft === null ? null : { draft, description, projectTarget, executionTarget, triggers: triggers.captureSnapshot() };
     // Import opens a fresh review document with a new draft id; it is an
@@ -759,7 +763,7 @@ function WorkflowEditorHostScreenReady(props: Readonly<{
         if (sourceKind !== 'new' || reviewedRunSeed !== null) return;
         if (contextualAgentTarget === null || draft === null) return;
         if (draft !== initialDraftBaselineRef.current) return;
-        if (draft.defaults.agentTarget) return;
+        if (draft.defaults.engine !== undefined || draft.defaults.agentTarget) return;
         seededContextualAgentRef.current = true;
         const seeded = setWorkflowDefaultField(draft, 'agentTarget', contextualAgentTarget);
         initialDraftBaselineRef.current = seeded;
@@ -987,7 +991,7 @@ function WorkflowEditorHostScreenReady(props: Readonly<{
         if (lifetime === null) return { status: 'unavailable' };
         // Same Account is not the same workflow: a save that resolves after this
         // editor moved to another source must not stamp that source's revision.
-        const sourceIsCurrent = captureSourceGeneration();
+        let sourceIsCurrent = captureSourceGeneration();
         const isCurrent = () => lifetime.isCurrent() && sourceIsCurrent();
         setSavePending(true);
         setSaveFailure(undefined);
@@ -1023,6 +1027,24 @@ function WorkflowEditorHostScreenReady(props: Readonly<{
                     setSavedByAgent(false);
                     setSaveConflict(null);
                     persisted = { definitionId: result.definitionId, revision: result.revision };
+                    if (asCopy) {
+                        // Copy is a document-identity transition. Retire A's
+                        // producers and history at the existing source boundary,
+                        // while this Save continues persisting B's captured Where.
+                        sourceGenerationRef.current += 1;
+                        sourceIsCurrent = captureSourceGeneration();
+                        setAgentSession(null);
+                        setAgentDraft(null);
+                        setAgentSeedState((current) => ({ ...current, seed: null }));
+                        observedAgentRevisionRef.current = null;
+                        setHighlightedBlockIds([]);
+                        pendingRetargetRef.current = null;
+                        setRetargetFailed(false);
+                        setTestSource(null);
+                        setTestRun(null);
+                        pendingRunIdRef.current = null;
+                        history.reset();
+                    }
                 }
                 if (persisted === null || !isCurrent()) return { status: 'refused', reason: 'draft_retired' };
                 if (project !== null || rememberedProject !== null) {
@@ -1618,7 +1640,7 @@ function WorkflowEditorHostScreenReady(props: Readonly<{
     // is no id to re-open it under this one and no honest way to keep showing
     // it, so the editor states that rather than presenting the previous
     // Account's prompts with this Account's Save.
-    if (privateSeedWithdrawn || (agentSeedId !== null && agentSeedState.lifetime !== null
+    if (privateSeedWithdrawn || (routeAgentSourceIsCurrent && agentSeedId !== null && agentSeedState.lifetime !== null
         && !agentSeedState.lifetime.isCurrent())) {
         return (
             <SurfaceStateCard
@@ -1632,7 +1654,7 @@ function WorkflowEditorHostScreenReady(props: Readonly<{
     }
     // Reload loses a temporary handle without changing the Account. Keep that
     // missing source unavailable rather than substituting a blank editable draft.
-    if (privateDraftSeedUnavailable || (agentSeedId !== null && agentSeed === null)) {
+    if (privateDraftSeedUnavailable || (routeAgentSourceIsCurrent && agentSeedId !== null && agentSeed === null)) {
         return <WorkflowMissingDefinitionState testID="workflow-editor-draft-unavailable"
             source={privateDraftSeedUnavailable ? 'unsaved-copy' : 'definition'}
             onOpenCollection={() => router.replace('/workflows')} />;

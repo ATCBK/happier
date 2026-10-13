@@ -11,6 +11,7 @@ import { createWorkBoardV1, getBuiltinWorkflowCatalogV1, normalizeSessionListFil
 import { createWorkflowDefinitionRoute } from '@/sync/domains/workflows/workflowRunRoute';
 import { useBoardMembership } from '@/components/boards/model/useBoardContent';
 import { createWorkflowRunSummaryFixture } from '@/dev/testkit/fixtures/workflowRunFixtures';
+import { installWorkflowActionHttpBoundary } from '@/dev/testkit/fixtures/workflowActionHttpBoundary';
 import { configureSessionDraftRepository, resetSessionDraftRepositoryForTests, writeNewSessionDraft } from '@/sync/ops/sessionDrafts/sessionDraftRepository';
 import { WorkflowsRunsRoute } from '@/app/(app)/workflows/runs/index';
 import { WorkflowsColumn } from './WorkflowsColumn';
@@ -29,12 +30,7 @@ const executeMock = vi.hoisted(() => vi.fn());
 const routerPush = vi.hoisted(() => vi.fn());
 const routeState = vi.hoisted(() => ({ pathname: '/workflows', params: {} as Record<string, string> }));
 
-// The Action front door is the transport boundary; the list clients, parsers, Run store and
-// projections below it stay real.
-vi.mock('@/sync/ops/actions/frontDoorRuntimeActionExecutor', async (importOriginal) => ({
-    ...await importOriginal<typeof import('@/sync/ops/actions/frontDoorRuntimeActionExecutor')>(),
-    createFrontDoorActionExecute: () => executeMock,
-}));
+// Fixture replies are serialized below the real Action owner by the canonical HTTP boundary.
 
 vi.mock('expo-router', async () => {
     const { createExpoRouterMock } = await import('@/dev/testkit/mocks/router');
@@ -57,20 +53,7 @@ vi.mock('@legendapp/list/react-native', async (importOriginal) => {
     return createCapturingLegendListMock({ original }).module;
 });
 
-// The capability API and applied network identity are boundaries; their real feature and Account
-// scope owners decide whether the mounted list can read the returned Run window.
-vi.mock('@/sync/api/capabilities/serverFeaturesClient', async (importOriginal) => {
-    const original = await importOriginal<typeof import('@/sync/api/capabilities/serverFeaturesClient')>();
-    const { createRootLayoutFeaturesResponse } = await import('@/dev/testkit/fixtures/featureFixtures');
-    const snapshot = { status: 'ready' as const, features: createRootLayoutFeaturesResponse() };
-    return { ...original, getCachedServerFeaturesSnapshot: () => snapshot, getServerFeaturesSnapshot: async () => snapshot };
-});
-vi.mock('@/auth/storage/tokenStorage', async (importOriginal) => {
-    const original = await importOriginal<typeof import('@/auth/storage/tokenStorage')>();
-    return { ...original, TokenStorage: { ...original.TokenStorage,
-        getCredentialsForServerUrl: async () => ({ token: 'header.eyJzdWIiOiJhY2NvdW50LWEifQ==.signature' }),
-    } };
-});
+let httpBoundary: Awaited<ReturnType<typeof installWorkflowActionHttpBoundary>> | undefined;
 let appliedSnapshot: typeof import('@/sync/domains/server/serverRuntime')['getActiveServerSnapshot'];
 
 const waiting = createWorkflowRunSummaryFixture({ id: 'run-waiting', state: 'running', ownerAccountId: 'account-a', startedBy: 'user', attentionRequired: true });
@@ -103,6 +86,8 @@ beforeEach(async () => {
     previousStorageState = storage.getState();
     previousAppliedSnapshot = getAppliedActiveServerSnapshot();
     previousRuntimeAvailable = isAppliedActiveServerRuntimeAvailable();
+    httpBoundary = await installWorkflowActionHttpBoundary({ fixtureResponse: async (actionId, input) => executeMock(actionId, input) });
+    httpBoundary.prime();
     await loadSyncSingletonForTests();
     const runtime = await import('@/sync/domains/server/serverRuntime');
     appliedSnapshot = runtime.getActiveServerSnapshot;
@@ -128,6 +113,8 @@ afterEach(async () => {
     routerPush.mockReset();
     storage.setState(previousStorageState);
     publishAppliedActiveServerSnapshot(previousAppliedSnapshot, previousRuntimeAvailable);
+    httpBoundary?.dispose();
+    httpBoundary = undefined;
 });
 
 describe('WorkflowsColumn', () => {
@@ -221,18 +208,27 @@ describe('WorkflowsColumn', () => {
         expect(row('rests').detail).toContain('time.daysAgoShort');
         expect(row('never').detail).toBeUndefined();
     });
-    it('states a failed library in the one in-list state line, whose Try again retries the read', async () => {
+    it('states a failed library in the one in-list state line, whose Try again retries the read', async ({ onTestFinished }) => {
         answerLists();
-        const answer = executeMock.getMockImplementation()!;
-        executeMock.mockImplementation((actionId: string, input: Record<string, unknown>) => actionId === 'workflow.definition.list'
-            ? Promise.resolve({ ok: false, error: 'unavailable', errorCode: 'unavailable' }) : answer(actionId, input));
+        const network = await import('@/utils/system/runtimeFetch');
+        const request = network.runtimeFetch;
+        let reads = 0;
+        // The Home still answers HTTP: a library-only refusal must not simulate loss of reachability.
+        const unavailable = vi.spyOn(network, 'runtimeFetch').mockImplementation(async (input, init) => {
+            if (new URL(String(input)).pathname === '/v1/artifacts') {
+                reads++;
+                return Response.json({ error: 'artifact_list_refused' }, { status: 400 });
+            }
+            return request(input, init);
+        });
+        onTestFinished(() => unavailable.mockRestore());
         const screen = await renderScreen(<WorkflowsColumn />, { wrapper: TestAuth });
-        await act(async () => { await Promise.resolve(); await Promise.resolve(); });
+        await vi.waitFor(() => expect(screen.tree.findHostByTestId('workflows-column:library:failed:retry')).not.toBeNull());
         const target = screen.tree.findHostByTestId('workflows-column:library:failed:retry')!;
         // The shared state line's action: a button with the canonical keyboard focus owner (HappierPressable).
         expect(target.props.role ?? target.props.accessibilityRole).toBe('button');
         await screen.pressByTestIdAsync('workflows-column:library:failed:retry');
-        expect(executeMock.mock.calls.filter(([actionId]) => actionId === 'workflow.definition.list').length).toBeGreaterThan(1);
+        await vi.waitFor(() => expect(reads).toBeGreaterThan(1));
     });
 
     it('uses the shared starter and attention predicate for a Board Runs filter', async () => {
