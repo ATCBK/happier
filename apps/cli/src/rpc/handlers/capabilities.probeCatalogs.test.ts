@@ -18,6 +18,23 @@ import { resolveAccountSettingsCachePath } from '@/settings/accountSettings/acco
 import { writeExecutableShim } from '@/testkit/fs/executableShim';
 
 describe('capabilities.invoke pre-session catalogs', () => {
+  it('reports connected-service launch support from the registered materializer and lifecycle', async () => {
+    const { call } = createEncryptedRpcTestClient({ scopePrefix: 'actual-auth-support', registerHandlers: registerCapabilitiesHandlers });
+    await expect(call(RPC_METHODS.CAPABILITIES_INVOKE, { id: 'cli.agy', method: 'connectedServiceAuthSupport' }))
+      .resolves.toMatchObject({ ok: true, result: { supportedServiceIds: ['antigravity'] } });
+    await expect(call(RPC_METHODS.CAPABILITIES_INVOKE, { id: 'cli.cursor', method: 'connectedServiceAuthSupport' }))
+      .resolves.toMatchObject({ ok: true, result: { supportedServiceIds: [] } });
+  });
+  it.each(['probeModels', 'probeModes', 'probeConfigOptions'])('refuses selected auth for an adapter without materialization: %s', async (method) => {
+    const { call } = createEncryptedRpcTestClient({ scopePrefix: `unsupported-auth-${method}`, registerHandlers: registerCapabilitiesHandlers });
+    await expect(call(RPC_METHODS.CAPABILITIES_INVOKE, {
+      id: 'cli.cursor', method, params: {
+        connectedServices: { v: 1, bindingsByServiceId: {
+          'openai-codex': { source: 'connected', selection: 'profile', profileId: 'fixture' },
+        } },
+      },
+    })).resolves.toMatchObject({ ok: false, error: { code: 'connected-service-preflight-failed' } });
+  });
   it.each(['mkdir', 'write', 'promote', 'credential-http'] as const)('settles acquired selected-account artifacts before returning a catalog deadline: %s', async (boundary) => {
     await withTempDir('catalog-auth-custody-', async (cwd) => {
       const overrides = {
