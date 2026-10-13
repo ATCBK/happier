@@ -1,13 +1,11 @@
-import { execFile } from 'node:child_process';
 import * as fsPromises from 'node:fs/promises';
 import { chmod, link, mkdir, mkdtemp, readdir, readFile, realpath, rename, rm, stat, symlink, utimes, writeFile } from 'node:fs/promises';
 import { homedir, tmpdir } from 'node:os';
 import { basename, dirname, join, resolve } from 'node:path';
-import { promisify } from 'node:util';
 import { setFlagsFromString } from 'node:v8';
 import { runInNewContext } from 'node:vm';
 import { afterAll, beforeAll, describe, expect, it, vi } from 'vitest';
-import { CLI_BINARY_TARGETS, resolveCurrentBinaryTarget, stageProcessCustodyRuntime } from '@happier-dev/cli-common/componentArtifacts';
+import { createProcessCustodyFixture } from '@/testkit/processCustodyFixture';
 import { getHappierTempDirOwnerPath, removeHappierTempDirAsync } from '@happier-dev/cli-common/tempDirs';
 import { STORAGE_CHART_MAX_DRAWABLE_NODES, MachineStorageScanGetResultV1Schema } from '@happier-dev/protocol/storage/storageV1';
 import { createStorageScanIndex } from './scanIndex';
@@ -21,19 +19,14 @@ vi.mock('node:fs/promises', async importOriginal => {
     const actual = await importOriginal<typeof import('node:fs/promises')>();
     return { ...actual, open: vi.fn(actual.open) };
 });
-const execute = promisify(execFile);
-const executable = Object.getOwnPropertyDescriptor(process, 'execPath')!;
+let disposeNative: (() => Promise<void>) | undefined;
 let scratch: string;
 describe('resident streamed disk index', () => {
     beforeAll(async () => {
         scratch = await realpath(await mkdtemp(join(tmpdir(), 'happier-scan-test-')));
-        const payload = join(scratch, 'native');
-        await stageProcessCustodyRuntime({ repoRoot: resolve(import.meta.dirname, '../../../../..'), payloadDir: payload,
-            target: resolveCurrentBinaryTarget({ availableTargets: CLI_BINARY_TARGETS }),
-            runCommand: async (command, args, options) => { await execute(command, args, { cwd: options?.cwd, env: options?.env }); } });
-        Object.defineProperty(process, 'execPath', { ...executable, value: join(payload, 'happier') });
+        disposeNative = await createProcessCustodyFixture();
     });
-    afterAll(async () => { Object.defineProperty(process, 'execPath', executable); if (scratch) await rm(scratch, { recursive: true, force: true }); });
+    afterAll(async () => { await disposeNative?.(); if (scratch) await rm(scratch, { recursive: true, force: true }); });
     it.each(['open', 'close'] as const)('removes prior-projection scratch and ownership after a filesystem %s failure', async phase => {
         const root = join(scratch, `projection-${phase}`); const volumeId = `projection-${phase}`;
         const index = createStorageScanIndex({ activeServerDir: join(scratch, `projection-${phase}-state`) });

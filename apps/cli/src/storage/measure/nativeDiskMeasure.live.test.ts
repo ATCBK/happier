@@ -1,18 +1,18 @@
 import { execFile } from 'node:child_process';
 import { link, lstat, mkdir, mkdtemp, open, realpath, rm, symlink, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
-import { join, resolve } from 'node:path';
+import { join } from 'node:path';
 import { promisify } from 'node:util';
 
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 
-import { CLI_BINARY_TARGETS, resolveCurrentBinaryTarget, stageProcessCustodyRuntime } from '@happier-dev/cli-common/componentArtifacts';
+import { createProcessCustodyFixture } from '@/testkit/processCustodyFixture';
 import { createHappierTempDir, removeHappierTempDir } from '@happier-dev/cli-common/tempDirs';
 
 import { measureNativeDisk, startNativeDiskScan, type NativeDiskScanRecord } from './nativeDiskMeasure';
 
 const execute = promisify(execFile);
-const originalExecutable = Object.getOwnPropertyDescriptor(process, 'execPath')!;
+let disposeNative: (() => Promise<void>) | undefined;
 let scratch: string;
 
 // POSIX du independently reports allocated bytes; Windows allocation is covered by the Go NTFS fixtures.
@@ -21,20 +21,11 @@ describe.skipIf(process.platform !== 'linux' && process.platform !== 'darwin')('
         // Darwin's temp root may be reached through /var -> /private/var.
         // The helper intentionally refuses symlink ancestors; fixtures use its physical path.
         scratch = await realpath(await mkdtemp(join(tmpdir(), 'happier-disk-live-')));
-        const payload = join(scratch, 'payload');
-        await stageProcessCustodyRuntime({
-            repoRoot: resolve('../..'),
-            payloadDir: payload,
-            target: resolveCurrentBinaryTarget({ availableTargets: CLI_BINARY_TARGETS }),
-            runCommand: async (command, args, options) => {
-                await execute(command, args, { cwd: options?.cwd, env: options?.env });
-            },
-        });
-        Object.defineProperty(process, 'execPath', { ...originalExecutable, value: join(payload, 'happier') });
+        disposeNative = await createProcessCustodyFixture();
     });
 
     afterAll(async () => {
-        Object.defineProperty(process, 'execPath', originalExecutable);
+        await disposeNative?.();
         if (scratch) await rm(scratch, { recursive: true, force: true });
     });
 

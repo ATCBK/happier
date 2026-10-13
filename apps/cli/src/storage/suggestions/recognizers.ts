@@ -50,8 +50,17 @@ type RecognitionRule = Readonly<{
   code: StorageReasonV1['code'];
 }>;
 const homePaths = (...parts: string[]) => (facts: StorageRecognitionFacts) => parts.map(part => join(facts.protection.homeDir, part));
-const cacheBase = (facts: StorageRecognitionFacts) => facts.protection.env?.XDG_CACHE_HOME ?? join(facts.protection.homeDir, '.cache');
-const localAppData = (facts: StorageRecognitionFacts) => facts.protection.env?.LOCALAPPDATA ?? join(facts.protection.homeDir, 'AppData', 'Local');
+const cacheBase = (facts: Pick<StorageRecognitionFacts, 'protection'>) => (facts.protection.env ?? process.env).XDG_CACHE_HOME ?? join(facts.protection.homeDir, '.cache');
+const localAppData = (facts: Pick<StorageRecognitionFacts, 'protection'>) => (facts.protection.env ?? process.env).LOCALAPPDATA ?? join(facts.protection.homeDir, 'AppData', 'Local');
+const downloadsRoot = (facts: Pick<StorageRecognitionFacts, 'protection'>) => facts.protection.knownFolders?.Downloads ?? join(facts.protection.homeDir, 'Downloads');
+
+/** Shortcut and recognizer paths share the same daemon environment authority. */
+export function resolveStorageScanShortcuts(facts: Pick<StorageRecognitionFacts, 'protection'>) {
+  const platform = facts.protection.platform ?? process.platform;
+  const cache = platform === 'darwin' ? join(facts.protection.homeDir, 'Library', 'Caches')
+    : platform === 'win32' ? localAppData(facts) : cacheBase(facts);
+  return [{ kind: 'downloads' as const, path: downloadsRoot(facts) }, { kind: 'cache' as const, path: cache }];
+}
 const pythonManifests = ['pyproject.toml', 'setup.py', 'setup.cfg', 'requirements.txt', 'Pipfile'];
 const projectManifests = ['package.json', 'Cargo.toml', 'pom.xml', 'build.gradle', 'build.gradle.kts', 'CMakeLists.txt', 'Makefile', ...pythonManifests];
 
@@ -76,7 +85,7 @@ export const STORAGE_RECOGNIZERS: readonly RecognitionRule[] = [
   { id: 'ios-device-support', paths: homePaths('Library/Developer/Xcode/iOS DeviceSupport'), verdict: 'safe', code: 'downloads_again' },
   { id: 'crash-reports', paths: facts => [join(facts.protection.homeDir, 'Library/Logs/DiagnosticReports'), join(localAppData(facts), 'CrashDumps')], verdict: 'safe', code: 'old' },
   { id: 'ios-backups', paths: facts => [join(facts.protection.homeDir, 'Library/Application Support/MobileSync/Backup'), join(facts.protection.env?.APPDATA ?? join(facts.protection.homeDir, 'AppData/Roaming'), 'Apple Computer/MobileSync/Backup')], verdict: 'caution', code: 'not_rebuildable' },
-  { id: 'old-download', paths: facts => [facts.protection.knownFolders?.Downloads ?? join(facts.protection.homeDir, 'Downloads')], children: true, old: true, verdict: 'caution', code: 'not_rebuildable' },
+  { id: 'old-download', paths: facts => [downloadsRoot(facts)], children: true, old: true, verdict: 'caution', code: 'not_rebuildable' },
   { id: 'core-simulator-devices', paths: homePaths('Library/Developer/CoreSimulator/Devices'), verdict: 'caution', code: 'not_rebuildable' },
   { id: 'maven-repository', paths: homePaths('.m2/repository'), verdict: 'safe', code: 'reinstalls' },
   { id: 'rustup-toolchains', paths: homePaths('.rustup/toolchains'), verdict: 'caution', code: 'downloads_again' },

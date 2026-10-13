@@ -1,11 +1,9 @@
-import { execFile } from 'node:child_process';
 import * as childProcess from 'node:child_process';
 import * as fs from 'node:fs/promises';
-import { join, resolve } from 'node:path';
+import { join } from 'node:path';
 import { tmpdir } from 'node:os';
-import { promisify } from 'node:util';
 import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it, vi } from 'vitest';
-import { CLI_BINARY_TARGETS, resolveCurrentBinaryTarget, stageProcessCustodyRuntime } from '@happier-dev/cli-common/componentArtifacts';
+import { createProcessCustodyFixture } from '@/testkit/processCustodyFixture';
 import { MachineStoragePolicyV1Schema } from '@happier-dev/protocol/storage/storageV1';
 import { createActivityLog } from '@/daemon/guard/activityLog';
 import { createBrowserRecordingDaemonService } from '@/daemon/browser/recording/service';
@@ -34,9 +32,8 @@ vi.mock('node:child_process', async importOriginal => {
 });
 
 
-const execute = promisify(execFile);
 const day = 86_400_000;
-const originalExecutable = Object.getOwnPropertyDescriptor(process, 'execPath')!;
+let disposeNative: (() => Promise<void>) | undefined;
 let scratch: string;
 let serial = 0;
 const size = { allocatedBytes: 0, freesBytes: 0, sharedBytes: 0, sharedExtentsUnmeasured: false, atLeast: false };
@@ -95,15 +92,11 @@ async function fixture(withRecording = false, readIdle?: () => boolean | Promise
 describe('one due-time storage maintenance owner with real retained files', () => {
   beforeAll(async () => {
     scratch = await fs.realpath(await fs.mkdtemp(join(tmpdir(), 'happier-maintenance-')));
-    const payload = join(scratch, 'native');
-    await stageProcessCustodyRuntime({ repoRoot: resolve(import.meta.dirname, '../../../../..'), payloadDir: payload,
-      target: resolveCurrentBinaryTarget({ availableTargets: CLI_BINARY_TARGETS }),
-      runCommand: async (command, args, options) => { await execute(command, args, { cwd: options?.cwd, env: options?.env }); } });
-    Object.defineProperty(process, 'execPath', { ...originalExecutable, value: join(payload, 'happier') });
+    disposeNative = await createProcessCustodyFixture();
   });
   beforeEach(() => { vi.useFakeTimers({ toFake: ['Date', 'setTimeout', 'clearTimeout'] }); vi.setSystemTime(new Date('2026-10-11T09:00:00Z')); });
   afterEach(() => { vi.restoreAllMocks(); vi.useRealTimers(); });
-  afterAll(async () => { Object.defineProperty(process, 'execPath', originalExecutable); await fs.rm(scratch, { recursive: true, force: true }); });
+  afterAll(async () => { await disposeNative?.(); await fs.rm(scratch, { recursive: true, force: true }); });
 
   it('composes due volume scans through fresh idle/power admission, edge resumption and disabling pending work', async () => {
     let idle = true; let scheduled = false; let closeMakesBusy = false;

@@ -49,7 +49,7 @@ function roots(context: StorageCategoryContext) {
     const home = context.deps.happyHomeDir;
     const plugins = resolvePluginStorePaths({ happyHomeDir: home });
     return [join(home, 'cache'), join(home, 'tools'), plugins.cacheDir, plugins.installedDir,
-        join(home, 'providers', 'materialized'), join(home, 'runtime'), join(home, '.runner-snapshots')];
+        join(home, 'providers', 'materialized'), join(home, 'runtime'), join(home, '.runner-snapshots'), join(home, 'skills')];
 }
 export function cacheCanGo(path: string, context: StorageCategoryContext, requiresLiveFacts = false): StorageCategoryVerdict {
     if (isInUse(path, context)) return inUse;
@@ -74,8 +74,12 @@ export const caches: StorageCategoryDefinition = {
         const catalog = context.deps.readAcpCatalog?.();
         const snapshots = join(context.deps.happyHomeDir, '.runner-snapshots');
         const liveSnapshots = context.deps.readLiveRunnerSnapshotPaths?.();
+        const skillRoot = join(context.deps.happyHomeDir, 'skills');
+        const liveSkills = await context.deps.readLiveSkillCachePaths?.();
         for (const root of roots(context)) for (const entry of await entries(root, unavailableDirectory(context, 'caches'))) {
-          for (const path of await cacheLeaves(entry, installs, context)) {
+          const leaves = root === skillRoot && entry === join(skillRoot, 'cache')
+            ? await entries(entry, unavailableDirectory(context, 'caches')) : await cacheLeaves(entry, installs, context);
+          for (const path of leaves) {
             let verdict: StorageCategoryVerdict;
             const install = byPath.get(path);
             if (install) {
@@ -89,6 +93,9 @@ export const caches: StorageCategoryDefinition = {
             }
             if (root === snapshots) {
                 verdict = !liveSnapshots?.reliable ? check : [...liveSnapshots.paths].some(live => contains(path, live)) ? inUse : safe;
+            } else if (root === skillRoot) {
+                verdict = !liveSkills?.reliable ? check
+                    : [...liveSkills.paths].some(live => contains(path, live)) ? inUse : safe;
             } else {
                 const basicCache = root === join(context.deps.happyHomeDir, 'cache') || root === resolvePluginStorePaths({ happyHomeDir: context.deps.happyHomeDir }).cacheDir;
                 verdict = cacheCanGo(path, context, !basicCache);

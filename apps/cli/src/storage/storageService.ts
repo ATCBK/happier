@@ -10,7 +10,7 @@ import type { MachineStoragePolicyV1 } from '@happier-dev/protocol/storage/stora
 import type { MachineGuardActivityEntryV1 } from '@happier-dev/protocol/machines/guard/activityV1';
 import { createStorageOperations } from './storageOperations';
 import type { StorageProtectionFacts } from './protection/protectedPaths';
-import { readStorageScanHints, type CompletedStorageSuggestionScan } from './suggestions/recognizers';
+import { readStorageScanHints, resolveStorageScanShortcuts, type CompletedStorageSuggestionScan } from './suggestions/recognizers';
 import { readStorageIgnoredPaths } from './worktrees/readStorageIgnoredPaths';
 import { homedir } from 'node:os';
 import type { ScmBackendRegistry } from '@/scm/registry';
@@ -273,8 +273,10 @@ export function createStorageService(deps: StorageServiceDeps) {
         const trashEntries = await operations.trashEntries();
         if (trash) trash.count = trashEntries.length;
         const suggestionsTop = await operations.summarySuggestions(nextItems);
+        const environment = await deps.readStorageProtectionFacts?.();
         const result = HappierStorageSummaryV1Schema.parse({
             revision: dirty ? measuredRevision : Math.max(measuredRevision, revision), sizedAt: now(),
+            scanShortcuts: resolveStorageScanShortcuts({ protection: { ...environment, homeDir: deps.homeDir ?? homedir() } }),
             volumes: volumeFacts.map(volume => ({ volume: { volumeId: volume.id, label: volume.label, mountPath: volume.mount },
                 totalBytes: volume.totalBytes, freeBytes: volume.availableBytes, happierBytes: byVolume.get(volume.id) ?? 0,
                 ...(volume.availableIncludingPurgeableBytes === undefined ? {} : { availableIncludingPurgeableBytes: volume.availableIncludingPurgeableBytes }),

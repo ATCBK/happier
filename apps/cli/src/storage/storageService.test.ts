@@ -1,10 +1,10 @@
 import { execFile } from 'node:child_process';
 import { link, lstat, mkdir, mkdtemp, readFile, realpath, rm, utimes, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
-import { join, resolve } from 'node:path';
+import { join } from 'node:path';
 import { promisify } from 'node:util';
-import { afterAll, beforeAll, describe, expect, it } from 'vitest';
-import { CLI_BINARY_TARGETS, resolveCurrentBinaryTarget, stageProcessCustodyRuntime } from '@happier-dev/cli-common/componentArtifacts';
+import { afterAll, beforeAll, describe, expect, it, vi } from 'vitest';
+import { createProcessCustodyFixture } from '@/testkit/processCustodyFixture';
 import { managedAcpInstallId } from '@happier-dev/cli-common/agents';
 import { createStorageService, type StorageOperationActor, type StorageService } from './storageService';
 import { createDaemonStorageRoutes, registerDaemonStorageRpcHandlers } from '@/rpc/handlers/storage';
@@ -15,7 +15,11 @@ import { createActivityLog } from '@/daemon/guard/activityLog';
 import { createMachineResourceSummary } from '@/daemon/resources/machineResourceSummary';
 import { createMachineVitalsSampler } from '@/daemon/vitals/createMachineVitalsSampler';
 import { createMinuteHistoryStore } from '@/daemon/vitals/history/minuteHistoryStore';
-import { MachineStoragePolicyV1Schema, STORAGE_CHART_MAX_DRAWABLE_NODES } from '@happier-dev/protocol/storage/storageV1';
+import { MachineStoragePolicyV1Schema, STORAGE_CHART_MAX_DRAWABLE_NODES,
+    DiskScanStateV1Schema, HappierStorageSummaryV1Schema, MachineStorageScanGetResultV1Schema, MachineStoragePileResultV1Schema,
+    MachineStorageTrashMoveInputV1Schema, PileReviewV1Schema, PileApplyResultV1Schema,
+    MachineStorageCategoryListResultV1Schema, TrashRestoreResultV1Schema } from '@happier-dev/protocol/storage/storageV1';
+import { createStorageScanIndex } from './scan/scanIndex';
 import { createGitScmBackendRuntimeRegistration } from '../../../../packages/plugins/scm-git/src/backend';
 import { createRegisteredScmBackendAdapter } from '@/scm/pluginBackends/registeredScmBackendAdapter';
 import { createScmBackendRegistry } from '@/scm/registry';
@@ -24,7 +28,7 @@ import { readStorageWorktrees } from '@/daemon/resources/readStorageWorktrees';
 import { createStorageWorktreeOperations } from './worktrees/storageWorktreeOperations';
 
 const execute = promisify(execFile);
-const originalExecutable = Object.getOwnPropertyDescriptor(process, 'execPath')!;
+let disposeNative: (() => Promise<void>) | undefined;
 let scratch: string;
 
 /** The mounted watch surface has one outstanding read; native record notifications are coalesced. */
@@ -54,16 +58,41 @@ async function waitForStorageScan(service: StorageService, scanId: string, actor
 describe.skipIf(process.platform !== 'linux' && process.platform !== 'darwin')('storage service with the actual native helper', () => {
     beforeAll(async () => {
         scratch = await realpath(await mkdtemp(join(tmpdir(), 'happier-storage-service-')));
-        const payload = join(scratch, 'payload');
-        await stageProcessCustodyRuntime({ repoRoot: resolve('../..'), payloadDir: payload,
-            target: resolveCurrentBinaryTarget({ availableTargets: CLI_BINARY_TARGETS }),
-            runCommand: async (command, args, options) => { await execute(command, args, { cwd: options?.cwd, env: options?.env }); },
-        });
-        Object.defineProperty(process, 'execPath', { ...originalExecutable, value: join(payload, 'happier') });
+        disposeNative = await createProcessCustodyFixture();
     });
     afterAll(async () => {
-        Object.defineProperty(process, 'execPath', originalExecutable);
+        await disposeNative?.();
         if (scratch) await rm(scratch, { recursive: true, force: true });
+    });
+
+    it.each(['linux', 'darwin', 'win32'] as const)('serves daemon-qualified %s scan shortcuts through the strict summary consumer', async platform => {
+        const home = join(scratch, `shortcut-${platform}`); await mkdir(home);
+        const downloads = join(scratch, `relocated-downloads-${platform}`);
+        const cache = join(scratch, `relocated-cache-${platform}`);
+        const service = createStorageService({ machineId: 'machine', homeDir: home,
+            catalog: { happyHomeDir: home, activeServerDir: home, tempRoot: join(scratch, 'no-shortcut-temp'),
+                readProjects: () => ({ status: 'ready', projects: [] }), readInUsePaths: () => ({ reliable: true, paths: [] }) },
+            readStorageProtectionFacts: () => ({ platform, knownFolders: { Downloads: downloads },
+                env: { ...process.env, XDG_CACHE_HOME: cache, LOCALAPPDATA: cache } }), readVolumes: () => [] });
+        try {
+            const summary = HappierStorageSummaryV1Schema.parse(await service.summary());
+            const shortcuts = summary.scanShortcuts;
+            expect(shortcuts).toEqual([{ kind: 'downloads', path: downloads }, { kind: 'cache',
+                path: platform === 'darwin' ? join(home, 'Library', 'Caches') : cache }]);
+        } finally { service.dispose(); }
+    });
+
+    it('uses the daemon cache environment when no custom environment reader is bound', async () => {
+        const home = join(scratch, 'shortcut-daemon-environment'); await mkdir(home);
+        const cache = join(scratch, 'actual-daemon-cache');
+        vi.stubEnv('XDG_CACHE_HOME', cache);
+        const service = createStorageService({ homeDir: home,
+            catalog: { happyHomeDir: home, activeServerDir: home, tempRoot: join(scratch, 'no-env-shortcut-temp') },
+            readStorageProtectionFacts: () => ({ platform: 'linux' }), readVolumes: () => [] });
+        try {
+            expect(HappierStorageSummaryV1Schema.parse(await service.summary()).scanShortcuts)
+                .toContainEqual({ kind: 'cache', path: cache });
+        } finally { service.dispose(); vi.unstubAllEnvs(); }
     });
 
     it('removes orphaned ACP installs through their owner and refuses ancestor, descendant and live-session bypasses', async () => {
@@ -323,12 +352,30 @@ describe.skipIf(process.platform !== 'linux' && process.platform !== 'darwin')('
                 .rejects.toMatchObject({ code: 'unauthorized' });
             policy = MachineStoragePolicyV1Schema.parse({ wholeDiskEnabled: true }); changed();
             const state = await service.scanStart(request, { actor });
+            expect(DiskScanStateV1Schema.parse(state)).toEqual(state);
             await waitForStorageScan(service, state.scanId, actor);
             const large = await service.scanGet({ machineId: 'machine', scanId: state.scanId,
                 view: { tab: 'large' as const, depth: 1 as const, minBytes: 0 } }, { actor });
+            expect(MachineStorageScanGetResultV1Schema.parse(large)).toEqual(large);
+            // Reopen the daemon's real database independently of the resident service.
+            // A wrong service→index path binding must lose both admission and file facts.
+            const persisted = createStorageScanIndex({ activeServerDir: home });
+            try {
+                await persisted.initialize([
+                    { id: 'scan-volume', mountPath: scratch, usedBytes: 500_000 },
+                    { id: 'other-volume', mountPath: otherVolume, usedBytes: 500_000 },
+                ], true);
+                const replay = persisted.readView({ scanId: state.scanId, view: { tab: 'large', depth: 1, minBytes: 0 } });
+                expect(replay.state?.scanId).toBe(state.scanId);
+                expect(replay.nodes.find(node => node.name === 'large.bin')).toMatchObject({
+                    nodeId: join(fixture, 'large.bin'), logicalBytes: largeBytes,
+                });
+                expect(MachineStorageScanGetResultV1Schema.parse(replay)).toEqual(replay);
+            } finally { persisted.close(); }
             expect(large.nodes.filter(node => node.name === 'large.bin' || node.name === 'tiny.bin').map(node => node.name).sort()).toEqual(['large.bin', 'tiny.bin']);
             expect(large.nodes.find(node => node.name === 'tiny.bin')?.flags).toMatchObject({ inUse: true, protection: 'keep' });
             const folded = await service.scanGet({ machineId: 'machine', scanId: state.scanId }, { actor });
+            expect(MachineStorageScanGetResultV1Schema.parse(folded)).toEqual(folded);
             expect(folded).toHaveProperty('root', expect.objectContaining({ nodeId: fixture,
                 size: expect.objectContaining({ allocatedBytes: folded.state?.progress.sizedBytes }) }));
             const small = folded.nodes.find(node => node.kind === 'small-items')!;
@@ -338,6 +385,7 @@ describe.skipIf(process.platform !== 'linux' && process.platform !== 'darwin')('
             const scannedFile = large.nodes.find(node => node.name === 'large.bin')!;
             const ref = { itemId: scannedFile.nodeId, path: join(fixture, 'large.bin') };
             const inventedReview = await service.itemsCheck([{ ...ref, itemId: 'unknown-index-id' }], { actor });
+            expect(PileReviewV1Schema.parse(inventedReview)).toEqual(inventedReview);
             expect(inventedReview.items).toEqual([]);
             expect(inventedReview.staying).toEqual([{ item: { ...ref, itemId: 'unknown-index-id' }, reason: { code: 'facts_unavailable' } }]);
             const directReview = await service.itemsCheck([ref], { actor });
@@ -347,14 +395,22 @@ describe.skipIf(process.platform !== 'linux' && process.platform !== 'darwin')('
             await expect(service.pileSet({ machineId: 'machine', add: [{ ...ref, itemId: 'unknown-index-id' }] }, { actor }))
                 .rejects.toMatchObject({ code: 'storage_item_not_collectable' });
             const collected = await service.pileSet({ machineId: 'machine', add: [ref] }, { actor });
+            expect(MachineStoragePileResultV1Schema.parse(collected)).toEqual(collected);
             await expect(service.pileSet({ machineId: 'machine', add: [ref] },
                 { actor: { ...actor, accountId: 'recipient', sessionIds: new Set<string>() } })).rejects.toMatchObject({ code: 'unauthorized' });
             const review = await service.itemsCheck(collected.items.map(({ itemId, path }) => ({ itemId, path })), { actor });
+            expect(PileReviewV1Schema.parse(review)).toEqual(review);
             expect(review.items).toHaveLength(1);
-            const moved = await service.trashMove({ machineId: 'machine', items: [{ ref: collected.items[0]!, expect: review.items[0]!.expect,
-                claimedVerdict: review.items[0]!.verdict }] }, { actor });
+            const moveInput = MachineStorageTrashMoveInputV1Schema.parse({ machineId: 'machine', items: review.items.map(item => ({
+                ref: item.ref, expect: item.expect, claimedVerdict: item.verdict,
+            })) });
+            const moved = await service.trashMove(moveInput, { actor });
+            expect(PileApplyResultV1Schema.parse(moved)).toEqual(moved);
             expect(moved.outcomes).toEqual([{ itemId: ref.itemId, status: 'moved' }]);
             await expect(lstat(ref.path)).rejects.toMatchObject({ code: 'ENOENT' });
+            const trash = await service.categoryList('trash');
+            expect(MachineStorageCategoryListResultV1Schema.parse(trash)).toEqual(trash);
+            expect(trash.trashEntries).toContainEqual(expect.objectContaining({ batchId: moved.batchId, originalPath: ref.path }));
             const otherItem = (await service.categoryList('caches')).items.find(item => item.path === otherCache)!;
             const otherCollected = await service.pileSet({ machineId: 'machine', add: [{ ...ref, itemId: otherItem.itemId, path: otherCache }] }, { actor });
             const otherReview = await service.itemsCheck(otherCollected.items, { actor });
@@ -364,7 +420,9 @@ describe.skipIf(process.platform !== 'linux' && process.platform !== 'darwin')('
             expect((await service.scanGet({ machineId: 'machine', scanId: state.scanId,
                 view: { tab: 'insights', depth: 1 } }, { actor })).insights?.trashBytes).toBe(moved.inTrashBytes);
             await service.trashRestore({ machineId: 'machine', batchId: otherMoved.batchId }, { actor });
-            expect((await service.trashRestore({ machineId: 'machine', batchId: moved.batchId }, { actor })).outcomes)
+            const restored = await service.trashRestore({ machineId: 'machine', batchId: moved.batchId }, { actor });
+            expect(TrashRestoreResultV1Schema.parse(restored)).toEqual(restored);
+            expect(restored.outcomes)
                 .toEqual([expect.objectContaining({ status: 'restored', path: ref.path })]);
             expect((await lstat(ref.path)).size).toBe(largeBytes);
             if (process.platform === 'linux') {
@@ -628,6 +686,8 @@ describe.skipIf(process.platform !== 'linux' && process.platform !== 'darwin')('
             expect((await service.summary({ actor })).pile.count).toBe(1);
             const review = await service.itemsCheck(collected.items.map(({ itemId, path }) => ({ itemId, path })), { actor });
             expect(review.items[0]?.verdict).toBe('keep');
+            expect(review.items[0]?.loses).toContainEqual({ code: 'in_use', detail: { path: cache } });
+            expect(PileReviewV1Schema.parse(review)).toEqual(review);
             expect(review.items[0]?.ref).toMatchObject({ identity: collected.items[0]!.identity,
                 collectedBy: { accountId: 'owner', kind: 'person' } });
             const unavailable = { itemId: 'missing-ref', path: join(scratch, 'missing-ref') };
@@ -776,9 +836,11 @@ describe.skipIf(process.platform !== 'linux' && process.platform !== 'darwin')('
             const full = await invoke(RPC_METHODS.DAEMON_STORAGE_SUMMARY_GET, {});
             expect(full).toMatchObject({ volumes: [{ happierBytes: expect.any(Number), canGoBytes: expect.any(Number) }],
                 categories: expect.arrayContaining([expect.objectContaining({ categoryId: 'sessionFolders', count: 2 })]) });
+            expect(HappierStorageSummaryV1Schema.parse(full).scanShortcuts).toHaveLength(2);
             const shared = await invoke(RPC_METHODS.DAEMON_STORAGE_SUMMARY_GET, {}, 'recipient', 'use');
             expect(shared).toMatchObject({ categories: [], suggestionsTop: [] });
             expect(JSON.stringify(shared)).not.toContain('"canGoBytes"');
+            expect(JSON.stringify(shared)).not.toContain('"scanShortcuts"');
             const own = await invoke(RPC_METHODS.DAEMON_STORAGE_CATEGORY_LIST, { categoryId: 'sessionFolders' }, 'recipient', 'use');
             expect(own).toMatchObject({ items: [expect.objectContaining({ path: join(workspace, '.happier', 'uploads', 'messages', 'own-session'),
                 size: expect.objectContaining({ allocatedBytes: expect.any(Number) }) })] });

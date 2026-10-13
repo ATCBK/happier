@@ -460,6 +460,8 @@ export function createStorageScanIndex(deps: Readonly<{ activeServerDir: string;
             state.finishedAt = now(); delete state.progress.currentPath; delete state.progress.stuckSinceMs;
             if (typeof summary !== 'string') {
                 state.unreadable = { counts: summary.unreadableCounts, examples: summary.unreadable };
+                if (summary.apfsLocalSnapshotCount !== undefined) state.apfsLocalSnapshotCount = summary.apfsLocalSnapshotCount;
+                else delete state.apfsLocalSnapshotCount;
                 const aggregate = db.prepare('SELECT allocated,items FROM nodes WHERE id=?').get(metadata(db, 'root'));
                 const total = aggregate ? z.object({ allocated: z.number(), items: z.number() }).parse(aggregate) : undefined;
                 state.progress.sizedBytes = total?.allocated ?? summary.allocatedBytes; state.progress.items = total?.items ?? summary.items;

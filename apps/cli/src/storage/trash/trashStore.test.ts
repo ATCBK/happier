@@ -1,10 +1,8 @@
-import { execFile } from 'node:child_process';
 import { chmod, lstat, mkdir, mkdtemp, readFile, readdir, realpath, rename, rm, symlink, unlink, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
-import { join, resolve } from 'node:path';
-import { promisify } from 'node:util';
+import { join } from 'node:path';
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
-import { CLI_BINARY_TARGETS, resolveCurrentBinaryTarget, stageProcessCustodyRuntime } from '@happier-dev/cli-common/componentArtifacts';
+import { createProcessCustodyFixture } from '@/testkit/processCustodyFixture';
 import { createActivityLog } from '@/daemon/guard/activityLog';
 import { createTrashStore } from './trashStore';
 import { measureNativeDisk } from '../measure/nativeDiskMeasure';
@@ -15,8 +13,7 @@ import { createManagedSessionDirectories } from '@/session/creation/managedSessi
 import { sessionFolders } from '../categories/sessionFolders';
 import { MachineGuardActivityStoredReadV1Schema } from '@happier-dev/protocol/machines/guard/activityV1';
 
-const execute = promisify(execFile);
-const originalExecutable = Object.getOwnPropertyDescriptor(process, 'execPath')!;
+let disposeNative: (() => Promise<void>) | undefined;
 let scratch: string;
 const emptySize = { allocatedBytes: 0, freesBytes: 0, sharedBytes: 0, sharedExtentsUnmeasured: false, atLeast: false };
 
@@ -38,15 +35,10 @@ async function fixture(name: string) {
 describe('Trash with the real filesystem and native measurement', () => {
     beforeAll(async () => {
         scratch = await realpath(await mkdtemp(join(tmpdir(), 'happier-trash-test-')));
-        const payload = join(scratch, 'native');
-        await stageProcessCustodyRuntime({ repoRoot: resolve(import.meta.dirname, '../../../../..'), payloadDir: payload,
-            target: resolveCurrentBinaryTarget({ availableTargets: CLI_BINARY_TARGETS }),
-            runCommand: async (command, args, options) => { await execute(command, args, { cwd: options?.cwd, env: options?.env }); },
-        });
-        Object.defineProperty(process, 'execPath', { ...originalExecutable, value: join(payload, 'happier') });
+        disposeNative = await createProcessCustodyFixture();
     });
     afterAll(async () => {
-        Object.defineProperty(process, 'execPath', originalExecutable);
+        await disposeNative?.();
         if (scratch) await rm(scratch, { recursive: true, force: true });
     });
     it('moves an item without freeing it and emits its actual measured bytes', async () => {
@@ -99,11 +91,17 @@ describe('Trash with the real filesystem and native measurement', () => {
         expect(await readFile(join(f.source, 'bytes'))).toEqual(Buffer.alloc(8192, 9));
         expect(await restarted.list()).toEqual([]);
     });
-    it.skipIf(process.platform === 'win32')('roundtrips an invalid UTF-8 POSIX name without touching its replacement-character twin', async () => {
+    it.skipIf(process.platform === 'win32')('roundtrips an invalid UTF-8 POSIX name without touching its replacement-character twin', async context => {
         const f = await fixture('byte-name');
         const path = Buffer.concat([Buffer.from(`${f.base}/invalid-`), Buffer.from([0xff]), Buffer.from('.bin')]);
         const twin = join(f.base, 'invalid-\ufffd.bin');
-        await writeFile(path, 'exact byte payload'); await writeFile(twin, 'untouched twin');
+        try { await writeFile(path, 'exact byte payload'); } catch (error) {
+            if (error !== null && typeof error === 'object' && 'code' in error && error.code === 'EILSEQ') {
+                context.skip('Filesystem rejects non-UTF8 names'); return;
+            }
+            throw error;
+        }
+        await writeFile(twin, 'untouched twin');
         const encoded = `bytes:${path.toString('base64')}`;
         const prepared = await f.store.prepare({ path: encoded, batchId: 'byte-name', title: 'Invalid name', size: emptySize,
             movedBy: { accountId: 'alice', kind: 'person' } });

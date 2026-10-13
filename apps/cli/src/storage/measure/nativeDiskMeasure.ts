@@ -102,6 +102,7 @@ const summary = z.object({
     items: bytes,
     pendingFrontier: z.array(z.string()).optional(),
     streamedFrontier: z.literal(true).optional(),
+    apfsLocalSnapshotCount: bytes.optional(),
 }).strict();
 const frontierStart = z.object({ v: z.literal(1), type: z.literal('frontier-start') }).strict();
 const frontierItem = z.object({ v: z.literal(1), type: z.literal('frontier-item'), path: z.string() }).strict();

@@ -7,6 +7,7 @@ import type { ScmWorktreeEnrichmentEntry } from '@happier-dev/protocol/scm';
 import type { SessionDraftPresence } from '@/session/drafts/readSessionDraftPresence';
 import type { AcpCatalogSnapshotV1 } from '@happier-dev/protocol/acp/catalog/catalogRowsV1';
 import type { createStorageWorktreeOperations } from '../worktrees/storageWorktreeOperations';
+import type { SkillCachePaths } from '@/prompts/skills/store/skillStore';
 
 export type StorageCleanupItem = Omit<StorageItemV1, 'size'> & Readonly<{
     /** A disk-index item has no invented Happier category. */
@@ -69,6 +70,7 @@ export type StorageCategoryCatalogDeps = Readonly<{
     readModelPacks?: () => Promise<readonly DaemonPublicVoiceModelPackEntry[]>;
     readRecordings?: () => Promise<readonly StorageRecording[]>;
     readLiveRunnerSnapshotPaths?: () => Readonly<{ reliable: boolean; paths: ReadonlySet<string> }>;
+    readLiveSkillCachePaths?: () => SkillCachePaths | Promise<SkillCachePaths>;
     readInUsePaths?: () => StoragePathUse | Promise<StoragePathUse>;
     readPolicy?: () => Readonly<{ suggestUnusedAfterDays: number }>;
     readTemporaryFacts?: () => Promise<readonly StorageTemporaryFact[]>;

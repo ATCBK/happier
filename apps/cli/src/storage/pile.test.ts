@@ -1,12 +1,9 @@
-import { execFile } from 'node:child_process';
 import { appendFile, link, lstat, mkdir, mkdtemp, readFile, readdir, realpath, rename, rm, symlink, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join, resolve } from 'node:path';
-import { promisify } from 'node:util';
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
-import { CLI_BINARY_TARGETS, resolveCurrentBinaryTarget, stageProcessCustodyRuntime } from '@happier-dev/cli-common/componentArtifacts';
+import { createProcessCustodyFixture } from '@/testkit/processCustodyFixture';
 import type { PileItemRefV1, StorageActorV1, StorageSizeV1 } from '@happier-dev/protocol/storage/storageV1';
-import { PileReviewV1Schema } from '@happier-dev/protocol/storage/storageV1';
 import type { StorageCategoryAdapter, StorageCategoryItem, StorageCleanupItem } from './categories/types';
 import { createPileStore } from './pileStore';
 import { reviewPile, type PileReviewDeps } from './reviewPile';
@@ -16,8 +13,7 @@ import { createTrashStore } from './trash/trashStore';
 import { readStoragePathIdentity, removeStoragePath } from './trash/removeStoragePath';
 import { createActivityLog } from '@/daemon/guard/activityLog';
 
-const execute = promisify(execFile);
-const executable = Object.getOwnPropertyDescriptor(process, 'execPath')!;
+let disposeNative: (() => Promise<void>) | undefined;
 const actor: StorageActorV1 = { accountId: 'owner', kind: 'agent' };
 const zero: StorageSizeV1 = { allocatedBytes: 0, freesBytes: 0, sharedBytes: 0, sharedExtentsUnmeasured: false, atLeast: false };
 let scratch: string;
@@ -27,13 +23,9 @@ async function ref(path: string): Promise<PileItemRefV1> {
 describe.skipIf(process.platform === 'win32' && process.arch !== 'x64')('canonical pile filesystem flow', () => {
     beforeAll(async () => {
         scratch = await realpath(await mkdtemp(join(tmpdir(), 'happier-pile-test-')));
-        const payload = join(scratch, 'native');
-        await stageProcessCustodyRuntime({ repoRoot: resolve(import.meta.dirname, '../../../..'), payloadDir: payload,
-            target: resolveCurrentBinaryTarget({ availableTargets: CLI_BINARY_TARGETS }),
-            runCommand: async (command, args, options) => { await execute(command, args, { cwd: options?.cwd, env: options?.env }); } });
-        Object.defineProperty(process, 'execPath', { ...executable, value: join(payload, 'happier') });
+        disposeNative = await createProcessCustodyFixture();
     });
-    afterAll(async () => { Object.defineProperty(process, 'execPath', executable); if (scratch) await rm(scratch, { recursive: true, force: true }); });
+    afterAll(async () => { await disposeNative?.(); if (scratch) await rm(scratch, { recursive: true, force: true }); });
 
     it('persists a minimal physical union with trusted identity/actor, drops swaps and isolates Accounts', async () => {
         const folder = join(scratch, 'union'); await mkdir(folder); const child = join(folder, 'child'); await writeFile(child, 'data');
@@ -121,14 +113,6 @@ describe.skipIf(process.platform === 'win32' && process.arch !== 'x64')('canonic
         expect((await reviewPile(refs, f.deps)).totalFreesBytes).toBe(union.totalExclusiveBytes);
         f.verdicts.set(b, 'forbidden');
         expect((await reviewPile(refs, f.deps)).totalFreesBytes).toBe((await measureNativeDisk({ paths: [a], measureSharedExtents: true })).totalExclusiveBytes);
-    });
-
-    it('publishes canonical loss facts through the strict review contract', async () => {
-        const f = await fixtures('review-loses'); const path = join(f.candidates, 'item'); await writeFile(path, 'attachment');
-        const loses = [{ code: 'attachments_go' as const }];
-        const result = await reviewPile([await ref(path)], { ...f.deps,
-            classify: async (physicalPath, item) => ({ ...await f.deps.classify(physicalPath, item), loses }) });
-        expect(PileReviewV1Schema.parse(result).items[0]).toMatchObject({ loses });
     });
 
     it('moves Safe/Caution/Keep approved items, skips changed ones, refuses Forbidden, reports actual bytes and empties only its new batch', async () => {

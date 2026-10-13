@@ -20,8 +20,12 @@ it('projects each skill cache entry from session manifest roots and fails closed
     const catalog = createStorageCategoryCatalog({ happyHomeDir, activeServerDir: join(happyHomeDir, 'servers', 'active'),
         readInUsePaths: () => ({ reliable: true, paths: [] }), readLiveSkillCachePaths: store.readLiveSkillCachePaths });
     const first = await catalog.discover();
-    expect(first.find(item => item.path === livePath)).toMatchObject({ reason: { code: 'in_use' }, collectable: false });
-    expect(first.find(item => item.path === unusedPath)).toMatchObject({ verdict: 'safe' });
+    expect(first.find(item => item.path === livePath)).toMatchObject({
+        verdict: 'keep', reason: { code: 'in_use' }, collectable: true, loses: [{ code: 'in_use' }],
+    });
+    expect(first.find(item => item.path === unusedPath)).toMatchObject({
+        verdict: 'safe', reason: { code: 'rebuilds' }, collectable: true,
+    });
     await writeFile(manifestPath, '{invalid');
     const uncertain = await catalog.discover();
     expect(uncertain.find(item => item.path === unusedPath)).toMatchObject({ verdict: 'check', collectable: false });

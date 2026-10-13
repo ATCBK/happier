@@ -8,6 +8,9 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { getHappierTempDirOwnerPath } from '@happier-dev/cli-common/tempDirs';
 
 import { measureNativeDisk, startNativeDiskScan } from './nativeDiskMeasure';
+import { createStorageScanIndex } from '../scan/scanIndex';
+import { createStorageScanRunner } from '../scan/scanRunner';
+import { MachineStorageScanGetResultV1Schema } from '@happier-dev/protocol/storage/storageV1';
 
 // The OS process boundary is simulated; executable resolution and the parser stay real.
 const processBoundary = vi.hoisted(() => ({ spawn: vi.fn() }));
@@ -49,6 +52,33 @@ afterEach(async () => {
 });
 
 describe('native disk measurement process boundary', () => {
+    it.each([undefined, 0, 3])('persists observed APFS local snapshot count %s through the production runner and strict reader', async count => {
+        const index = createStorageScanIndex({ activeServerDir: scratch });
+        const runner = createStorageScanRunner({ index,
+            readEnabled: () => true, readVolumes: () => [{ id: 'apfs', mountPath: scratch, usedBytes: 0, apfsContainerId: 'container' }],
+            fullDiskAccess: () => ({ state: 'unknown', binary: { name: 'fixture', path: process.execPath } }) });
+        try {
+            await runner.initialize();
+            const state = await runner.start({ target: { volumeId: 'apfs' } });
+            await vi.waitFor(() => expect(processBoundary.spawn).toHaveBeenCalledOnce());
+            helper.stdout.write(JSON.stringify({ v: 1, type: 'summary', termination: 'completed', unreadable: [],
+                unreadableCounts: { permission: 0, os_private: 0, timeout: 0, io: 0 }, skipped: [],
+                backendByDirCounts: {}, allocatedBytes: 0, items: 0, apfsLocalSnapshotCount: count }) + '\n');
+            helper.close();
+            await runner.wait(state.scanId);
+            const result = MachineStorageScanGetResultV1Schema.parse(await runner.get({ scanId: state.scanId }));
+            expect(result.state).toMatchObject({ status: 'complete' });
+            expect(result.state?.apfsLocalSnapshotCount).toBe(count);
+            expect(result.nodes.some(node => node.kind === 'hidden-space')).toBe(false);
+            index.close();
+            const reopened = createStorageScanIndex({ activeServerDir: scratch });
+            try {
+                await reopened.initialize([{ id: 'apfs', mountPath: scratch, usedBytes: 0 }], true);
+                expect(MachineStorageScanGetResultV1Schema.parse(reopened.readView({ scanId: state.scanId })).state?.apfsLocalSnapshotCount)
+                    .toBe(count);
+            } finally { reopened.close(); }
+        } finally { await runner.dispose(); }
+    });
 
     it('returns distinct native union totals from the same helper result', async () => {
         const measured = measureNativeDisk({ paths: ['/測定'], unions: [{ id: 'safe', paths: ['/測定'], excludeIncomplete: true }] });
