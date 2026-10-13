@@ -10,6 +10,7 @@ import { getActiveServerSnapshot } from '@/sync/domains/server/serverRuntime';
 import { publishAppliedActiveServerSnapshot } from '@/sync/runtime/orchestration/appliedActiveServerRuntime';
 import { createEmptyTerminalSurfaceState, readTerminalSurfaceState, replaceTerminalSurfaceState } from '@/components/sessions/terminal/terminalSurfaceStateCache';
 import { useMachineTerminalSession } from './useMachineTerminalSession';
+import { createPlainMachineRowFixture } from '@/dev/testkit/fixtures/machineFixtures';
 
 // The encrypted Machine RPC transport is the external daemon boundary; Actions,
 // policy, Account currentness, request schemas and admission stay real.
@@ -19,7 +20,9 @@ vi.mock('@/sync/runtime/orchestration/serverScopedRpc/serverScopedMachineRpc', (
 describe('Project terminal admission through canonical Machine Actions', () => {
     it('requires the same Machine Action admission for a Session package-script process', async () => {
         const home = await serveActionHomes({ homes: [{ key: 'session', serverUrl: 'https://session-terminal-admission.test', accountId: 'bob',
-            settings: { actionsSettingsV1: { v: 1, actions: {}, approvalWaivedSurfaces: { 'machines.terminal.open': ['ui'] } } } }], route: () => undefined });
+            settings: { actionsSettingsV1: { v: 1, actions: {}, approvalWaivedSurfaces: { 'machines.terminal.open': ['ui'] } } } }],
+            route: request => request.path === '/v1/machines'
+                ? Response.json([createPlainMachineRowFixture({ id: 'machine', accountId: 'bob' })]) : undefined });
         try {
             publishAppliedActiveServerSnapshot(getActiveServerSnapshot());
             rpc.mockReset(); rpc.mockResolvedValue({ ok: true, terminalId: 'script-pty', reused: false });
@@ -31,7 +34,7 @@ describe('Project terminal admission through canonical Machine Actions', () => {
             expect(rpc).toHaveBeenCalledWith(expect.objectContaining({ method: RPC_METHODS.DAEMON_TERMINAL_ENSURE,
                 payload: expect.objectContaining({ launch, sessionId: 'session', terminalKey: 'session-script' }) }));
             await hook.unmount();
-        } finally { home.dispose(); }
+        } finally { await home.dispose(); }
     });
     it('clears active requester bytes and stops attachment when the applied Home retires', async () => {
         const home = await serveActionHomes({ homes: [{ key: 'project', serverUrl: 'https://project-terminal-retire.test', accountId: 'bob' }], route: () => undefined });
@@ -54,11 +57,13 @@ describe('Project terminal admission through canonical Machine Actions', () => {
             expect(renderer.clear).toHaveBeenCalled();
             read.resolve({ ok: false, errorCode: 'terminal_forbidden', error: 'Denied' });
             await hook.unmount();
-        } finally { home.dispose(); }
+        } finally { await home.dispose(); }
     });
     it('opens one admitted requester shell and rejects retired Account interest before another open', async () => {
         const home = await serveActionHomes({ homes: [{ key: 'project', serverUrl: 'https://project-admission.test', accountId: 'bob',
-            settings: { actionsSettingsV1: { v: 1, actions: {}, approvalWaivedSurfaces: { 'machines.terminal.open': ['ui'] } } } }], route: () => undefined });
+            settings: { actionsSettingsV1: { v: 1, actions: {}, approvalWaivedSurfaces: { 'machines.terminal.open': ['ui'] } } } }],
+            route: request => request.path === '/v1/machines'
+                ? Response.json([createPlainMachineRowFixture({ id: 'machine', accountId: 'bob' })]) : undefined });
         try {
             publishAppliedActiveServerSnapshot(getActiveServerSnapshot());
             const serverId = home.homes.project!.id;
@@ -77,6 +82,6 @@ describe('Project terminal admission through canonical Machine Actions', () => {
                 .toMatchObject({ ok: false, errorCode: 'terminal_access_denied' });
             expect(rpc).toHaveBeenCalledTimes(1);
             await hook.unmount();
-        } finally { home.dispose(); }
+        } finally { await home.dispose(); }
     });
 });

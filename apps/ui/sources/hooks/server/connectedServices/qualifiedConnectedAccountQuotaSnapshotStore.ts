@@ -43,6 +43,7 @@ type InternalEntry = {
     error: string | null;
     /** Credential scope this entry was last retained for; drives eviction. */
     credentialScope: string | null;
+    producerRefreshPending: boolean;
     loadAttempted: boolean;
     loadPromise:
         Promise<QualifiedConnectedAccountQuotaSnapshotV4 | null> | null;
@@ -95,6 +96,7 @@ function getOrCreateEntry(key: string): InternalEntry {
         refreshing: false,
         error: null,
         credentialScope: null,
+        producerRefreshPending: false,
         loadAttempted: false,
         loadPromise: null,
         refreshPromise: null,
@@ -115,7 +117,7 @@ function publish(key: string, entry: InternalEntry): void {
         usageRecordId: entry.usageRecordId,
         supported: entry.supported,
         loading: entry.loading,
-        refreshing: entry.refreshing,
+        refreshing: entry.refreshing || entry.producerRefreshPending,
         error: entry.error,
         read: entry.loadAttempted && !entry.loading,
     });
@@ -161,12 +163,16 @@ async function runLoad(
             const snapshot = read?.snapshot ?? null;
             entry.snapshot = snapshot;
             entry.usageRecordId = read?.recordId ?? null;
+            const diagnostic = snapshot?.diagnostics?.find((value) => value.kind === 'provider_http');
+            // POST only queues acquisition. A fresh observation or a later producer
+            // failure settles it; the last-known snapshot's timestamp cannot do so.
+            const observedAt = Math.max(snapshot?.fetchedAt ?? 0, diagnostic?.observedAtMs ?? 0);
+            entry.producerRefreshPending = read?.refreshRequestedAt !== undefined && read.refreshRequestedAt > observedAt;
             // An absent producer observation says nothing about quota capability.
             // Manual refresh still goes through the canonical runtime admission.
             if (snapshot) entry.supported = true;
             entry.error = null;
             if (read?.status === 'error') {
-                const diagnostic = snapshot?.diagnostics?.find((value) => value.kind === 'provider_http');
                 // Provider messages/headers stay diagnostic-only, never user-facing copy.
                 const error = `${t('connectedServices.errors.quotaRefreshFailed')}${diagnostic?.status ? ` (HTTP ${diagnostic.status})` : ''}`;
                 entry.error = typeof diagnostic?.retryAtMs === 'number'
@@ -187,6 +193,7 @@ async function runLoad(
                 entry.snapshot = null;
                 entry.usageRecordId = null;
             }
+            entry.producerRefreshPending = false;
             entry.error = resolveConnectedServiceSettingsErrorMessage(error);
             entry.consecutiveErrors += 1;
             entry.nextFetchAtMs = getUsageProjectionNextReadAtMs({ consecutiveErrors: entry.consecutiveErrors });
@@ -315,6 +322,7 @@ export async function refreshQualifiedQuotaSnapshot(
             if (readConnectedServiceSettingsErrorCode(error) === 'connected_account_v4_operation_unsupported') {
                 entry.supported = false;
             }
+            entry.producerRefreshPending = false;
             entry.error = resolveConnectedServiceSettingsErrorMessage(error);
         } finally {
             entry.refreshPromise = null;

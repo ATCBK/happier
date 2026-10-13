@@ -1,89 +1,42 @@
-import { afterEach, describe, expect, it, vi } from 'vitest';
+import { afterEach, beforeEach, describe, expect, it } from 'vitest';
+import { renderHook, createSessionMessagesFixture, createSessionFixture, createRootLayoutFeaturesResponse } from '@/dev/testkit';
+import { createProviderSettingsAccountHarness } from '@/dev/testkit/harness/providerSettingsHarness';
 
-import { storage } from '@/sync/domains/state/storageStore';
-
-import { useUserMessageHistory } from './useUserMessageHistory';
-import { renderHook } from '@/dev/testkit';
-
-const serverFeaturesSnapshotState = vi.hoisted(() => ({
-  current: {
-    status: 'loading' as const,
-    features: null,
-  } as
-    | Readonly<{ status: 'loading'; features: null }>
-    | Readonly<{
-      status: 'ready';
-      features: {
-        capabilities: {
-          session: {
-            messages: {
-              role: boolean;
-            };
-          };
-        };
-      };
-    }>,
-}));
-const fetchUserMessageHistoryPageMock = vi.hoisted(() =>
-  vi.fn(async (_sessionId: string, _opts?: { beforeSeq?: number | null; limit?: number }) => ({
-    status: 'unsupported' as const,
-  })),
-);
-
-vi.mock('@/sync/sync', () => ({
-  sync: {
-    fetchUserMessageHistoryPage: (
-      sessionId: string,
-      opts?: { beforeSeq?: number | null; limit?: number },
-    ) => fetchUserMessageHistoryPageMock(sessionId, opts),
-  },
-}));
-
-vi.mock('@/agents/registry/registryUiBehavior', async () => {
-  const { createRegistryUiBehaviorModuleMock } = await import('@/dev/testkit/mocks/registryUiBehavior');
-  return createRegistryUiBehaviorModuleMock();
-});
-
-vi.mock('@/sync/runtime/orchestration/serverScopedRpc/usePreferredServerIdForSession', () => ({
-  usePreferredServerIdForSession: () => 'server-1',
-}));
-
-vi.mock('@/sync/domains/features/featureDecisionRuntime', () => ({
-  useServerFeaturesSnapshotForServerId: () => serverFeaturesSnapshotState.current,
-}));
+const account = createProviderSettingsAccountHarness();
+const { storage } = await import('@/sync/domains/state/storageStore');
+const { useUserMessageHistory } = await import('./useUserMessageHistory');
+const { primeServerFeaturesSnapshot } = await import('@/sync/api/capabilities/serverFeaturesClient');
+let serverId = '';
 
 describe('useUserMessageHistory', () => {
-  afterEach(() => {
-    fetchUserMessageHistoryPageMock.mockClear();
-    serverFeaturesSnapshotState.current = {
-      status: 'loading',
-      features: null,
-    };
+  beforeEach(async () => {
+    await account.reset();
+    ({ serverId } = await account.restore());
+    storage.setState({ sessions: { s1: createSessionFixture({ id: 's1', serverId }) } });
+    account.home.answer(serverId, '/v1/sessions/s1/messages', { body: { messages: [], hasMore: false, nextBeforeSeq: null } });
+    const features = createRootLayoutFeaturesResponse();
+    features.capabilities.session.messages.role = false;
+    primeServerFeaturesSnapshot({ serverId, snapshot: { status: 'ready', features } });
   });
+  afterEach(async () => { await account.reset(); });
 
   it('returns a referentially stable navigator when store state is unchanged', async () => {
     const previousState = storage.getState();
     try {
       const messagesById = {
-        u1: { kind: 'user-text', id: 'u1', localId: null, createdAt: 1, text: 'hi' } as any,
-        a1: { kind: 'agent-text', id: 'a1', localId: null, createdAt: 2, text: 'ok', isThinking: false } as any,
-        u2: { kind: 'user-text', id: 'u2', localId: null, createdAt: 3, text: 'bye' } as any,
+        u1: { kind: 'user-text', id: 'u1', localId: null, createdAt: 1, text: 'hi' } as const,
+        a1: { kind: 'agent-text', id: 'a1', localId: null, createdAt: 2, text: 'ok', isThinking: false } as const,
+        u2: { kind: 'user-text', id: 'u2', localId: null, createdAt: 3, text: 'bye' } as const,
       };
 
       storage.setState((state) => ({
         ...state,
         sessionMessages: {
           ...state.sessionMessages,
-          s1: {
+          s1: createSessionMessagesFixture({
             messageIdsOldestFirst: ['u1', 'a1', 'u2'],
             messagesById,
-            messagesMap: messagesById,
-            reducerState: {} as any,
-            latestThinkingMessageId: null,
-            latestThinkingMessageActivityAtMs: null,
-            messagesVersion: 1,
-            isLoaded: true,
-          },
+          }),
         },
       }));
 
@@ -107,7 +60,7 @@ describe('useUserMessageHistory', () => {
     const previousState = storage.getState();
     try {
       const messagesById = {
-        u1: { kind: 'user-text', id: 'u1', localId: null, createdAt: 1, text: 'first' } as any,
+        u1: { kind: 'user-text', id: 'u1', localId: null, createdAt: 1, text: 'first' } as const,
         u2: { kind: 'user-text', id: 'u2', localId: null, createdAt: 2, text: 'expanded second', displayText: '  second\n' } as const,
       };
 
@@ -115,16 +68,10 @@ describe('useUserMessageHistory', () => {
         ...state,
         sessionMessages: {
           ...state.sessionMessages,
-          s1: {
+          s1: createSessionMessagesFixture({
             messageIdsOldestFirst: ['u1', 'u2'],
             messagesById,
-            messagesMap: messagesById,
-            reducerState: {} as any,
-            latestThinkingMessageId: null,
-            latestThinkingMessageActivityAtMs: null,
-            messagesVersion: 1,
-            isLoaded: true,
-          },
+          }),
         },
       }));
 
@@ -144,24 +91,18 @@ describe('useUserMessageHistory', () => {
     const previousState = storage.getState();
     try {
       const messagesById = {
-        u1: { kind: 'user-text', id: 'u1', localId: null, createdAt: 1, text: 'first' } as any,
-        u2: { kind: 'user-text', id: 'u2', localId: null, createdAt: 2, text: 'second' } as any,
+        u1: { kind: 'user-text', id: 'u1', localId: null, createdAt: 1, text: 'first' } as const,
+        u2: { kind: 'user-text', id: 'u2', localId: null, createdAt: 2, text: 'second' } as const,
       };
 
       storage.setState((state) => ({
         ...state,
         sessionMessages: {
           ...state.sessionMessages,
-          s1: {
+          s1: createSessionMessagesFixture({
             messageIdsOldestFirst: ['u1', 'u2'],
             messagesById,
-            messagesMap: messagesById,
-            reducerState: {} as any,
-            latestThinkingMessageId: null,
-            latestThinkingMessageActivityAtMs: null,
-            messagesVersion: 1,
-            isLoaded: true,
-          },
+          }),
         },
       }));
 
@@ -173,18 +114,9 @@ describe('useUserMessageHistory', () => {
       expect(browsingNavigator.moveUp('draft')).toBe('second');
       expect(browsingNavigator.isBrowsing()).toBe(true);
 
-      serverFeaturesSnapshotState.current = {
-        status: 'ready',
-        features: {
-          capabilities: {
-            session: {
-              messages: {
-                role: true,
-              },
-            },
-          },
-        },
-      };
+      const features = createRootLayoutFeaturesResponse();
+      features.capabilities.session.messages.role = true;
+      primeServerFeaturesSnapshot({ serverId, snapshot: { status: 'ready', features } });
       await hook.rerender();
 
       expect(hook.getCurrent()).toBe(browsingNavigator);

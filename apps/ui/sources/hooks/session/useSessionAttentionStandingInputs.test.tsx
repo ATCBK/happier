@@ -1,33 +1,24 @@
-import { afterEach, describe, expect, it, vi } from 'vitest';
+import { act } from 'react-test-renderer';
+import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 
 import { renderHook, standardCleanup } from '@/dev/testkit';
 
-const standingInputs = vi.hoisted(() => ({
-    placementMode: 'global' as 'off' | 'global' | 'withinGroups',
-    defaultStanding: false,
-    overridesBySessionKey: {} as Readonly<Record<string, boolean>>,
-}));
+import { storage } from '@/sync/domains/state/storageStore';
+import { useSessionAttentionStandingInputs } from './useSessionAttentionStandingInputs';
 
-vi.mock('@/sync/domains/state/storage', async (importOriginal) => {
-    const { createStorageModuleMock, createUseSettingMock } = await import('@/dev/testkit/mocks/storage');
-    return createStorageModuleMock({
-        importOriginal,
-        overrides: {
-            useSetting: createUseSettingMock({
-                fallback: (key) => (key === 'sessionListAttentionStandingDefaultV1'
-                    ? standingInputs.defaultStanding
-                    : standingInputs.placementMode),
-            }),
-        },
-    });
-});
+let previousState = storage.getState();
+let overridesBySessionKey: Readonly<Record<string, boolean>> = {};
 
 describe('useSessionAttentionStandingInputs', () => {
+    beforeEach(() => {
+        previousState = storage.getState();
+        storage.setState({ settings: { ...previousState.settings,
+            sessionListAttentionPromotionModeV1: 'global', sessionListAttentionStandingDefaultV1: false } });
+    });
     afterEach(() => {
         standardCleanup();
-        standingInputs.placementMode = 'global';
-        standingInputs.defaultStanding = false;
-        standingInputs.overridesBySessionKey = {};
+        storage.setState(previousState);
+        overridesBySessionKey = {};
     });
 
     it('keeps the policy identity across an unrelated organization projection rebuild', async () => {
@@ -37,26 +28,24 @@ describe('useSessionAttentionStandingInputs', () => {
         // identity in the row-model gate, so a fresh object there rebuilds every row view model
         // for traffic that changed no standing at all. Pin defends the same seam by content in
         // `resolveSessionListOrderingPersistenceState`.
-        standingInputs.overridesBySessionKey = { 'server-a:s1': true };
+        overridesBySessionKey = { 'server-a:s1': true };
 
-        const { useSessionAttentionStandingInputs } = await import('./useSessionAttentionStandingInputs');
-        const hook = await renderHook(() => useSessionAttentionStandingInputs(standingInputs.overridesBySessionKey));
+        const hook = await renderHook(() => useSessionAttentionStandingInputs(overridesBySessionKey));
         const first = hook.getCurrent();
 
-        standingInputs.overridesBySessionKey = { 'server-a:s1': true };
+        overridesBySessionKey = { 'server-a:s1': true };
         await hook.rerender();
 
         expect(hook.getCurrent()?.policy).toBe(first?.policy);
     });
 
     it('mints a new policy when a standing actually changes', async () => {
-        standingInputs.overridesBySessionKey = { 'server-a:s1': true };
+        overridesBySessionKey = { 'server-a:s1': true };
 
-        const { useSessionAttentionStandingInputs } = await import('./useSessionAttentionStandingInputs');
-        const hook = await renderHook(() => useSessionAttentionStandingInputs(standingInputs.overridesBySessionKey));
+        const hook = await renderHook(() => useSessionAttentionStandingInputs(overridesBySessionKey));
         const first = hook.getCurrent();
 
-        standingInputs.overridesBySessionKey = { 'server-a:s1': false };
+        overridesBySessionKey = { 'server-a:s1': false };
         await hook.rerender();
 
         expect(hook.getCurrent()?.policy).not.toBe(first?.policy);
@@ -64,24 +53,20 @@ describe('useSessionAttentionStandingInputs', () => {
     });
 
     it('mints a new policy when the account default flips', async () => {
-        standingInputs.overridesBySessionKey = {};
-
-        const { useSessionAttentionStandingInputs } = await import('./useSessionAttentionStandingInputs');
-        const hook = await renderHook(() => useSessionAttentionStandingInputs(standingInputs.overridesBySessionKey));
+        const hook = await renderHook(() => useSessionAttentionStandingInputs(overridesBySessionKey));
         const first = hook.getCurrent();
 
-        standingInputs.defaultStanding = true;
-        await hook.rerender();
+        await act(async () => {
+            storage.setState({ settings: { ...storage.getState().settings, sessionListAttentionStandingDefaultV1: true } });
+        });
 
         expect(hook.getCurrent()?.policy).not.toBe(first?.policy);
         expect(hook.getCurrent()?.policy.defaultStanding).toBe(true);
     });
 
     it('hides the action while the attention band is off', async () => {
-        standingInputs.placementMode = 'off';
-
-        const { useSessionAttentionStandingInputs } = await import('./useSessionAttentionStandingInputs');
-        const hook = await renderHook(() => useSessionAttentionStandingInputs(standingInputs.overridesBySessionKey));
+        storage.setState({ settings: { ...storage.getState().settings, sessionListAttentionPromotionModeV1: 'off' } });
+        const hook = await renderHook(() => useSessionAttentionStandingInputs(overridesBySessionKey));
 
         expect(hook.getCurrent()?.actionEnabled).toBe(false);
         expect(hook.getCurrent()?.placementMode).toBe('off');

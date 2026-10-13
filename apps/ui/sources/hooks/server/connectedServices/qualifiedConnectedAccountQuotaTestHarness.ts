@@ -29,7 +29,7 @@ export const quotaTestSnapshot: QualifiedConnectedAccountQuotaSnapshotV4 = {
     planLabel: 'Pro', accountLabel: null, meters: [],
 };
 
-export function quotaTestResponse(snapshot = quotaTestSnapshot, status: 'ok' | 'error' = 'ok') {
+export function quotaTestResponse(snapshot = quotaTestSnapshot, status: 'ok' | 'error' = 'ok', refreshRequestedAt?: number) {
     return QualifiedConnectedAccountQuotaResponseV4Schema.parse({
         ref: snapshot.ref,
         sourceResolution: {
@@ -38,7 +38,8 @@ export function quotaTestResponse(snapshot = quotaTestSnapshot, status: 'ok' | '
             providerAccountId: snapshot.activeAccountId, fetchedAt: snapshot.fetchedAt, staleAfterMs: snapshot.staleAfterMs,
         },
         content: { t: 'plain', v: snapshot },
-        metadata: { fetchedAt: snapshot.fetchedAt, staleAfterMs: snapshot.staleAfterMs, status },
+        metadata: { fetchedAt: snapshot.fetchedAt, staleAfterMs: snapshot.staleAfterMs, status,
+            ...(refreshRequestedAt === undefined ? {} : { refreshRequestedAt }) },
     });
 }
 

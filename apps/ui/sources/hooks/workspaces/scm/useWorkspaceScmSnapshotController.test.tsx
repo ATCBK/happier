@@ -1,101 +1,59 @@
-import { describe, expect, it, vi } from 'vitest';
+import { beforeEach, describe, expect, it, vi } from 'vitest';
+import { RPC_METHODS } from '@happier-dev/protocol/rpc';
+import { createScmCapabilities, ScmWorkingSnapshotSchema } from '@happier-dev/protocol/scm';
+import { renderHook } from '@/dev/testkit';
+import { storage } from '@/sync/domains/state/storage';
+import { projectManager } from '@/sync/runtime/orchestration/projectManager';
+import { useWorkspaceScmSnapshotController } from './useWorkspaceScmSnapshotController';
 
-import { flushHookEffects, renderHook } from '@/dev/testkit';
+type RpcRequest = Parameters<typeof import('@/sync/runtime/orchestration/serverScopedRpc/serverScopedMachineRpc').machineRpcWithServerScope>[0];
+const rpc = vi.hoisted(() => vi.fn<(request: RpcRequest) => Promise<unknown>>());
+vi.mock('@/sync/runtime/orchestration/serverScopedRpc/serverScopedMachineRpc', async () =>
+    (await import('@/dev/testkit/mocks/serverScopedRpc')).createServerScopedMachineRpcBoundaryMock(rpc));
 
-(globalThis as any).IS_REACT_ACT_ENVIRONMENT = true;
-
-const workspaceSnapshotState = {
-    value: null as any,
-};
-
-const workspaceErrorState = {
-    value: null as any,
-};
-
-const updateWorkspaceScmSnapshotSpy = vi.fn();
-const updateWorkspaceScmSnapshotErrorSpy = vi.fn();
-const updateWorkspaceScmStatusSpy = vi.fn();
-const pruneWorkspaceScmTouchedPathsSpy = vi.fn();
-const pruneWorkspaceScmCommitSelectionPathsSpy = vi.fn();
-const pruneWorkspaceScmCommitSelectionPatchesSpy = vi.fn();
-
-vi.mock('@/sync/domains/state/storage', async () => {
-    const { createStorageModuleStub, createStorageStoreMock } = await import('@/dev/testkit/mocks/storage');
-    const store = createStorageStoreMock({
-        updateWorkspaceScmSnapshot: (scope: any, snapshot: any) => updateWorkspaceScmSnapshotSpy(scope, snapshot),
-        updateWorkspaceScmSnapshotError: (scope: any, error: any) => updateWorkspaceScmSnapshotErrorSpy(scope, error),
-        updateWorkspaceScmStatus: (scope: any, status: any) => updateWorkspaceScmStatusSpy(scope, status),
-        pruneWorkspaceScmTouchedPaths: (scope: any, activePaths: any) => pruneWorkspaceScmTouchedPathsSpy(scope, activePaths),
-        pruneWorkspaceScmCommitSelectionPaths: (scope: any, activePaths: any) => pruneWorkspaceScmCommitSelectionPathsSpy(scope, activePaths),
-        pruneWorkspaceScmCommitSelectionPatches: (scope: any, activePaths: any) => pruneWorkspaceScmCommitSelectionPatchesSpy(scope, activePaths),
-    } as any);
-
-    return createStorageModuleStub({
-        storage: store as any,
-        useWorkspaceScmSnapshot: () => workspaceSnapshotState.value,
-        useWorkspaceScmSnapshotError: () => workspaceErrorState.value,
-    });
-});
-
-const fetchSnapshotForMachinePathSpy = vi.fn<(input: { machineId: string; path: string; serverId?: string }) => Promise<any>>(async () => ({
-    fetchedAt: Date.now(),
-    projectKey: 'm1:/repo',
-    repo: { isRepo: true, rootPath: '/repo', backendId: 'git', mode: null },
-    capabilities: {},
-    branch: { head: null, upstream: null, ahead: 0, behind: 0, detached: false },
-    stashCount: 0,
+const scope = { serverId: 'snapshot-home', machineId: 'snapshot-machine', rootPath: '/snapshot-repo' };
+const snapshot = ScmWorkingSnapshotSchema.parse({
+    projectKey: 'snapshot-machine:/snapshot-repo', fetchedAt: 1,
+    repo: { isRepo: true, rootPath: scope.rootPath, backendId: 'git', mode: '.git' },
+    capabilities: createScmCapabilities({ readStatus: true }),
+    branch: { head: 'main', upstream: null, ahead: 0, behind: 0, detached: false },
     hasConflicts: false,
-    entries: [{ path: 'src/a.ts', kind: 'modified', previousPath: null, stats: { includedAdded: 0, includedRemoved: 0, pendingAdded: 1, pendingRemoved: 0, isBinary: false }, includeStatus: null, pendingStatus: 'pending', hasIncludedDelta: false, hasPendingDelta: true }],
-    totals: {
-        includedFiles: 0,
-        pendingFiles: 1,
-        untrackedFiles: 0,
-        includedAdded: 0,
-        includedRemoved: 0,
-        pendingAdded: 1,
-        pendingRemoved: 0,
-    },
-} as any));
-
-vi.mock('@/scm/scmRepositoryService', async (importOriginal) => {
-    const actual = await importOriginal<typeof import('@/scm/scmRepositoryService')>();
-    return {
-        ...actual,
-        scmRepositoryService: {
-            fetchSnapshotForMachinePath: (input: any) => fetchSnapshotForMachinePathSpy(input),
-        } as any,
-    };
+    entries: [{ path: 'src/a.ts', kind: 'modified', previousPath: null,
+        stats: { includedAdded: 0, includedRemoved: 0, pendingAdded: 1, pendingRemoved: 0, isBinary: false },
+        includeStatus: '', pendingStatus: 'pending', hasIncludedDelta: false, hasPendingDelta: true }],
+    totals: { includedFiles: 0, pendingFiles: 1, untrackedFiles: 0, includedAdded: 0,
+        includedRemoved: 0, pendingAdded: 1, pendingRemoved: 0 },
 });
 
 describe('useWorkspaceScmSnapshotController', () => {
-    it('refreshes and writes snapshot into workspace-scoped store state', async () => {
-        updateWorkspaceScmSnapshotSpy.mockClear();
-        updateWorkspaceScmSnapshotErrorSpy.mockClear();
-        updateWorkspaceScmStatusSpy.mockClear();
-        pruneWorkspaceScmTouchedPathsSpy.mockClear();
-        pruneWorkspaceScmCommitSelectionPathsSpy.mockClear();
-        pruneWorkspaceScmCommitSelectionPatchesSpy.mockClear();
-        fetchSnapshotForMachinePathSpy.mockClear();
+    beforeEach(() => {
+        projectManager.clear();
+        storage.setState(storage.getInitialState(), true);
+        rpc.mockReset().mockResolvedValue({ success: true, snapshot });
+    });
+    it('refreshes the addressed workspace, publishes status and prunes only its obsolete selections', async () => {
+        const state = storage.getState();
+        const other = { ...scope, serverId: 'other-home' };
+        state.markWorkspaceScmTouchedPaths(scope, ['src/a.ts', 'deleted.ts']);
+        state.markWorkspaceScmCommitSelectionPaths(scope, ['src/a.ts', 'deleted.ts']);
+        for (const path of ['src/a.ts', 'deleted.ts']) state.upsertWorkspaceScmCommitSelectionPatch(scope, { path, patch: 'retained patch' });
+        state.markWorkspaceScmCommitSelectionPaths(other, ['deleted.ts']);
+        state.updateWorkspaceScmSnapshotError(scope, { message: 'old error', at: 0 });
 
-        const { useWorkspaceScmSnapshotController } = await import('./useWorkspaceScmSnapshotController');
-        await renderHook(() => useWorkspaceScmSnapshotController({
-            serverId: 'srv1',
-            machineId: 'm1',
-            rootPath: '/repo',
+        const hook = await renderHook(() => useWorkspaceScmSnapshotController(scope));
+        await vi.waitFor(() => expect(hook.getCurrent().snapshot?.entries.map(entry => entry.path)).toEqual(['src/a.ts']));
+        expect(rpc).toHaveBeenCalledWith(expect.objectContaining({
+            serverId: scope.serverId, machineId: scope.machineId, method: RPC_METHODS.SCM_STATUS_SNAPSHOT,
+            payload: expect.objectContaining({ cwd: scope.rootPath }),
         }));
-        await flushHookEffects({ cycles: 2, turns: 2 });
-
-        expect(fetchSnapshotForMachinePathSpy).toHaveBeenCalledWith({ serverId: 'srv1', machineId: 'm1', path: '/repo' });
-        expect(updateWorkspaceScmSnapshotSpy).toHaveBeenCalledTimes(1);
-        expect(updateWorkspaceScmSnapshotSpy.mock.calls[0]?.[0]).toEqual(expect.objectContaining({
-            serverId: 'srv1',
-            machineId: 'm1',
-            rootPath: '/repo',
-        }));
-        expect(updateWorkspaceScmSnapshotErrorSpy).toHaveBeenCalledWith(expect.anything(), null);
-        expect(updateWorkspaceScmStatusSpy).toHaveBeenCalledTimes(1);
-        expect(pruneWorkspaceScmTouchedPathsSpy).toHaveBeenCalledTimes(1);
-        expect(pruneWorkspaceScmCommitSelectionPathsSpy).toHaveBeenCalledTimes(1);
-        expect(pruneWorkspaceScmCommitSelectionPatchesSpy).toHaveBeenCalledTimes(1);
+        expect(hook.getCurrent()).toMatchObject({ loading: false, error: null, snapshot: { branch: { head: 'main' } } });
+        expect(state.getWorkspaceScmSnapshot(scope)?.entries.map(entry => entry.path)).toEqual(['src/a.ts']);
+        expect(state.getWorkspaceScmSnapshotError(scope)).toBeNull();
+        expect(state.getWorkspaceScmStatus(scope)).not.toBeNull();
+        expect(state.getWorkspaceScmTouchedPaths(scope)).toEqual(['src/a.ts']);
+        expect(state.getWorkspaceScmCommitSelectionPaths(scope)).toEqual(['src/a.ts']);
+        expect(state.getWorkspaceScmCommitSelectionPatches(scope).map(patch => patch.path)).toEqual(['src/a.ts']);
+        expect(state.getWorkspaceScmCommitSelectionPaths(other)).toEqual(['deleted.ts']);
+        await hook.unmount();
     });
 });

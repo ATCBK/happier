@@ -8,12 +8,18 @@ import { resolveConnectedServiceSettingsErrorMessage } from '@/components/settin
 import { __resetQualifiedConnectedAccountQuotaSnapshotStore } from './qualifiedConnectedAccountQuotaSnapshotStore';
 import { createQualifiedQuotaTestHarness, quotaTestRef as ref, quotaTestSnapshot as snapshot, quotaTestResponse } from './qualifiedConnectedAccountQuotaTestHarness';
 import { useQualifiedConnectedAccountQuota } from './useQualifiedConnectedAccountQuota';
+import { publishHomeAccountChange } from '@/sync/runtime/orchestration/homeAccountChange';
+import { PROVIDER_ACCOUNT_USAGE_ACCOUNT_CHANGE_ENTITY_ID_V1 } from '@happier-dev/protocol/changes';
+import { t } from '@/text';
+import { loadSyncSingletonForTests } from '@/dev/testkit/harness/syncSingletonLoader';
 
 vi.mock('socket.io-client', async (importOriginal) => (await import('@/dev/testkit/harness/serverAccountConnectionHarness')).createSocketIoClientBoundary(importOriginal));
 vi.mock('react-native', async () => (await import('@/dev/testkit/mocks/reactNative')).createReactNativeWebMock());
 vi.mock('react-native-unistyles', async () => (await import('@/dev/testkit/mocks/unistyles')).createUnistylesMock());
 vi.mock('@/text', async () => (await import('@/dev/testkit/mocks/text')).createTextModuleMock());
 installDisconnectedServerSocketBoundary();
+// The loaded app already owns Sync before an Account's first Action; warm that real graph before restoration.
+await loadSyncSingletonForTests();
 
 describe('useQualifiedConnectedAccountQuota', () => {
     let boundary: Awaited<ReturnType<typeof createQualifiedQuotaTestHarness>>;
@@ -51,6 +57,42 @@ describe('useQualifiedConnectedAccountQuota', () => {
         expect(boundary.refresh).toHaveBeenCalledWith(ref);
         expect(hook.getCurrent().snapshot).toEqual(fresh);
     });
+
+    it.each(['fresh observation', 'producer failure'] as const)(
+        'keeps an acknowledged refresh pending across shared readers until a %s arrives', async outcome => {
+            const hook = await renderHook(() => useQualifiedConnectedAccountQuota(ref), { wrapper: Wrapper });
+            const detail = await renderHook(() => useQualifiedConnectedAccountQuota(ref, { refreshMachineId: null }), { wrapper: Wrapper });
+            await vi.waitFor(() => expect(hook.getCurrent().snapshot).toEqual(snapshot));
+            const waiting = outcome === 'producer failure'
+                ? { ...snapshot, diagnostics: [{ kind: 'provider_http' as const, status: 429, observedAtMs: 5 }] }
+                : snapshot;
+            boundary.refresh.mockImplementation(async () => {
+                boundary.read.mockImplementation(async () => Response.json(quotaTestResponse(waiting,
+                    outcome === 'producer failure' ? 'error' : 'ok', 10)));
+                return Response.json({ success: true });
+            });
+            await act(async () => { await hook.getCurrent().refresh(); });
+            expect(boundary.refresh).toHaveBeenCalledWith(ref);
+            // An older failure is last-known evidence, not completion of the newly requested attempt.
+            expect(hook.getCurrent()).toMatchObject({ snapshot: waiting, refreshing: true });
+            expect(detail.getCurrent()).toMatchObject({ snapshot: waiting, refreshing: true });
+            // The daemon's later publication, not the HTTP acknowledgement, supplies completion.
+            const settled = outcome === 'fresh observation' ? { ...snapshot, fetchedAt: 11 }
+                : { ...snapshot, diagnostics: [{ kind: 'provider_http' as const, status: 429, observedAtMs: 11 }] };
+            boundary.read.mockImplementation(async () => Response.json(quotaTestResponse(settled,
+                outcome === 'producer failure' ? 'error' : 'ok', 10)));
+            await act(async () => {
+                publishHomeAccountChange(boundary.context().serverBasis.serverId,
+                    [PROVIDER_ACCOUNT_USAGE_ACCOUNT_CHANGE_ENTITY_ID_V1]);
+            });
+            await vi.waitFor(() => expect(hook.getCurrent().refreshing).toBe(false));
+            expect(hook.getCurrent().snapshot).toEqual(settled);
+            expect(detail.getCurrent().snapshot).toEqual(settled);
+            expect(hook.getCurrent().error).toBe(outcome === 'producer failure'
+                ? `${t('connectedServices.errors.quotaRefreshFailed')} (HTTP 429)` : null);
+            expect(boundary.refresh).toHaveBeenCalledOnce();
+        },
+    );
 
     it('keeps an absent first snapshot refreshable until the real quota leaf refuses', async () => {
         boundary.read.mockImplementation(async () => missing());

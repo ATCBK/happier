@@ -42,6 +42,8 @@ let artifactWrites: Array<Record<string, unknown>> = [];
 let disposeActionLoader: (() => void) | undefined;
 
 installDisconnectedServerSocketBoundary();
+vi.mock('socket.io-client', async (importOriginal) =>
+    (await import('@/dev/testkit/harness/serverAccountConnectionHarness')).createSocketIoClientBoundary(importOriginal));
 vi.mock('react-native', async () => (await import('@/dev/testkit/mocks/reactNative')).createReactNativeWebMock());
 vi.mock('@more-tech/react-native-libsodium', () => import('libsodium-wrappers'));
 vi.mock('@/platform/cryptoRandom', () => import('@/platform/cryptoRandom.node'));

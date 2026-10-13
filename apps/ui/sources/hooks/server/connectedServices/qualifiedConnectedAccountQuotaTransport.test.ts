@@ -52,6 +52,10 @@ const response = {
     metadata: { fetchedAt: 1, staleAfterMs: 60_000, status: 'ok' },
 };
 
+// Compile the real transport graph during collection, after the HTTP boundary
+// is installed. The read's deadline must measure delivery/opening, not cold imports.
+const { readQualifiedConnectedAccountQuota } = await import('./qualifiedConnectedAccountQuotaTransport');
+
 describe('qualifiedConnectedAccountQuotaTransport', () => {
     beforeEach(() => {
         vi.clearAllMocks();
@@ -64,10 +68,6 @@ describe('qualifiedConnectedAccountQuotaTransport', () => {
             callOrder.push('request');
             return response;
         });
-        const { readQualifiedConnectedAccountQuota } = await import(
-            './qualifiedConnectedAccountQuotaTransport'
-        );
-
         await expect(readQualifiedConnectedAccountQuota({
             credentials,
             ref,
@@ -81,10 +81,6 @@ describe('qualifiedConnectedAccountQuotaTransport', () => {
     });
 
     it('opens plain V4 quota for token-only credentials without resolving account encryption material', async () => {
-        const { readQualifiedConnectedAccountQuota } = await import(
-            './qualifiedConnectedAccountQuotaTransport'
-        );
-
         await expect(readQualifiedConnectedAccountQuota({
             credentials: tokenOnlyCredentials,
             ref,
@@ -97,7 +93,6 @@ describe('qualifiedConnectedAccountQuotaTransport', () => {
             ...response,
             sourceResolution: { ...response.sourceResolution, providerAccountId: 'another-provider-account' },
         });
-        const { readQualifiedConnectedAccountQuota } = await import('./qualifiedConnectedAccountQuotaTransport');
         await expect(readQualifiedConnectedAccountQuota({
             credentials, ref, serverBasis,
         })).rejects.toMatchObject({ code: 'qualified_connected_account_quota_invalid' });

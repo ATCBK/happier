@@ -1,6 +1,12 @@
 import * as React from 'react';
 import { act } from 'react-test-renderer';
-import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
+import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it, vi } from 'vitest';
+import 'fake-indexeddb/auto';
+import { installDisconnectedServerSocketBoundary, restoreServerAccountForTest } from '@/dev/testkit/harness/serverAccountConnectionHarness';
+import { installRealActionExecutorModuleLoader } from '@/dev/testkit/harness/actionHomesHttpHarness';
+import { loadSyncSingletonForTests } from '@/dev/testkit/harness/syncSingletonLoader';
+import { SetSessionAttentionStandingRequestSchema, SetSessionAttentionStandingResponseSchema } from '@happier-dev/protocol/sessions/organization/standings';
+import { SessionReadStateSetResultV1Schema } from '@happier-dev/protocol/sessions/readState/actions';
 
 import { createPlainAccountEncryptionCurrentnessFixture, createSessionFixture, renderScreen, standardCleanup } from '@/dev/testkit';
 import { buildSessionOrganizationSessionKey } from '@/sync/domains/session/organization/keys';
@@ -11,7 +17,8 @@ import { ConversationBindingV1Schema } from '@happier-dev/channels-protocol/v1';
 import { clearPluginAccountAvailabilityProjection, replacePluginAccountAvailabilityProjection } from '@/sync/domains/plugins/availability/projection';
 import { resetActivePluginCollectionChanges } from '@/sync/api/plugins/data/pluginCollectionChangeWatch';
 import { recordAccountStoredContentServerRequirements } from '@/sync/http/accountStoredContentCompatibility';
-import { createActionExecutor, type ActionExecutorDeps } from '@happier-dev/protocol/actions';
+import { createActionExecutor } from '@happier-dev/protocol/actions';
+import { createActionExecutorBoundaryFixture } from '@/dev/testkit/fixtures/actionExecutorBoundary';
 import { invokeMountedWorkRead } from '@/sync/ops/actions/mountedWorkReadAction';
 import { deleteServerFeaturesSnapshot, primeServerFeaturesSnapshot } from '@/sync/api/capabilities/serverFeaturesClient';
 import { createAutomationRunFixture, createWorkflowRunSummaryFixture } from '@/dev/testkit/fixtures/workflowRunFixtures';
@@ -24,6 +31,11 @@ import { useSessionManagedWorkflowRuns, type SessionManagedWorkflowRunsState } f
 import { projectWork, resolveWorkReadPresentation } from '@/components/sessions/work/workProjection';
 import type { DecryptedArtifact } from '@/sync/domains/artifacts/artifactTypes';
 import { createUsageNoticeArtifactFixture, usageNoticeFixture } from '@/dev/testkit/fixtures/usageNoticeFixtures';
+import { AutomationDefinitionListItemSchema } from '@happier-dev/protocol/automations/automationApiV3';
+import { createAutomationDefinitionSummary } from '@/sync/domains/automations/automationDefinitionProjection';
+import { buildVoiceBrief, type VoiceBriefItem } from '@/voice/context/buildVoiceBrief';
+import { VoiceBriefList } from '@/components/voice/brief/VoiceBrief';
+import { Item } from '@/components/ui/lists/Item';
 
 import { InboxModelProvider, useInboxModel, type InboxModel } from './useInboxModel';
 
@@ -31,37 +43,25 @@ import { InboxModelProvider, useInboxModel, type InboxModel } from './useInboxMo
 
 /**
  * The Inbox model groups by work root over the real classifier and the real workflow window.
- * Boundaries: the Run-list Action (network) and the Action front door (host executor).
+ * Only HTTP, Socket.IO and device credentials are boundaries; the Action front door stays real.
  */
 const listRuns = vi.hoisted(() => vi.fn<(params: { filter?: Record<string, unknown> }) => Promise<WorkflowRunListPage>>());
 const executed = vi.hoisted(() => [] as Array<{ actionId: string; input: unknown }>);
 const automationBoundary = vi.hoisted(() => ({ request: vi.fn() }));
 const collectionBoundary = vi.hoisted(() => ({ request: vi.fn() }));
-vi.mock('@/sync/runtime/orchestration/serverScopedRpc/createServerRequestWithServerScope', () => ({
-    captureServerRequestAuthorityForServerAccountScope: async ({ scope }: { scope: import('@/sync/domains/scope/serverAccountScope').ServerAccountScope }) => ({
-        scope, context: { token: 'account-token' }, request: collectionBoundary.request,
-    }),
-}));
-vi.mock('@/sync/http/client', async (importOriginal) => ({
-    ...await importOriginal<typeof import('@/sync/http/client')>(), serverFetch: automationBoundary.request,
-}));
 let appliedSnapshot: typeof import('@/sync/domains/server/serverRuntime')['getActiveServerSnapshot'];
-vi.mock('@/sync/ops/actions/frontDoorRuntimeActionExecutor', () => ({
-    createFrontDoorActionExecute: () => async (actionId: string, input: unknown) => {
-        if (actionId === 'workflow.run.list') return { ok: true, result: await listRuns(input as { filter?: Record<string, unknown> }) };
-        executed.push({ actionId, input });
-        return { ok: true, result: {} };
-    },
-}));
-vi.mock('@/hooks/server/useFriendsEnabled', () => ({ useFriendsEnabled: () => false }));
-vi.mock('@/hooks/server/useFriendsIdentityReadiness', () => ({ useFriendsIdentityReadiness: () => ({ isReady: false }) }));
+let connection: Awaited<ReturnType<typeof restoreServerAccountForTest>> | undefined;
+let disposeActionLoader: (() => void) | undefined;
+installDisconnectedServerSocketBoundary();
+vi.mock('socket.io-client', async (importOriginal) =>
+    (await import('@/dev/testkit/harness/serverAccountConnectionHarness')).createSocketIoClientBoundary(importOriginal));
 
 function page(runs: ReturnType<typeof createWorkflowRunSummaryFixture>[]): WorkflowRunListPage {
     return { runs, metadataByRunId: {}, nextCursor: undefined };
 }
 
 let model: InboxModel | null = null;
-const readExecutor = createActionExecutor({ appShellAction: invokeMountedWorkRead } as unknown as ActionExecutorDeps);
+const readExecutor = createActionExecutor(createActionExecutorBoundaryFixture({ appShellAction: invokeMountedWorkRead }));
 function readInbox(accountId = 'account-a') {
     return readExecutor.execute('inbox.get', {}, { surface: 'agent', authority: 'account_automation',
         serverId: appliedSnapshot().serverId, runtimeAccountId: accountId });
@@ -71,30 +71,78 @@ function Probe(): null {
     return null;
 }
 
-async function renderModel() {
-    const screen = await renderScreen(<InboxModelProvider><Probe /></InboxModelProvider>);
+function BriefRows(props: Readonly<{ onOpen: (item: VoiceBriefItem) => void }>) {
+    const inbox = useInboxModel();
+    const brief = buildVoiceBrief({ inbox, settings: storage.getState().settings });
+    return <VoiceBriefList brief={brief} onOpen={props.onOpen} />;
+}
+
+async function renderModel(children?: React.ReactNode) {
+    const screen = await renderScreen(<InboxModelProvider><Probe />{children}</InboxModelProvider>);
     await act(async () => {});
     return screen;
 }
 
 describe('useInboxModel work groups (ORC R-10)', () => {
+    beforeAll(async () => {
+        await loadSyncSingletonForTests();
+        disposeActionLoader = await installRealActionExecutorModuleLoader();
+    });
+    afterAll(() => disposeActionLoader?.());
     beforeEach(async () => {
         clearPluginAccountAvailabilityProjection();
         const runtime = await import('@/sync/domains/server/serverRuntime');
         appliedSnapshot = runtime.getActiveServerSnapshot;
-        await runtime.upsertAndActivateServer({ serverUrl: 'http://inbox-home.test', name: 'Inbox Home' });
-        publishAppliedActiveServerSnapshot(appliedSnapshot());
         (await import('@/components/workflows/library/workflowLibraryReads')).resetWorkflowLibraryReadsForTests();
         model = null;
         executed.length = 0;
         listRuns.mockReset();
         automationBoundary.request.mockReset();
-        collectionBoundary.request.mockReset();
+        collectionBoundary.request.mockReset().mockResolvedValue(null);
         automationBoundary.request.mockImplementation(async () => new Response(JSON.stringify({ runs: [], nextCursor: null }), { status: 200 }));
         const base = createRootLayoutFeaturesResponse();
-        primeServerFeaturesSnapshot({ snapshot: { status: 'ready', features: FeaturesResponseSchema.parse({
-            ...base, features: { ...base.features, workflows: { enabled: true }, automations: { ...base.features.automations, enabled: true } },
-        }) } });
+        const features = FeaturesResponseSchema.parse({
+            ...base, features: { ...base.features, workflows: { enabled: true }, automations: { ...base.features.automations, enabled: true },
+                social: { ...base.features.social, friends: { enabled: false } } },
+        });
+        connection = await restoreServerAccountForTest({ serverUrl: 'http://inbox-home.test', accountId: 'account-a', request: async (url, init) => {
+            const path = new URL(String(url)).pathname;
+            if (path === '/v1/features' || path === '/v1/features/authenticated') return Response.json(features);
+            if (path === '/v1/account/encryption/currentness') return Response.json(createPlainAccountEncryptionCurrentnessFixture());
+            if (path === '/v1/account/encryption') return Response.json({ mode: 'plain', updatedAt: 0 });
+            if (path === '/v2/account/settings') return Response.json({ content: { t: 'plain', v: {
+                experiments: true, featureToggles: { automations: true },
+            } }, version: 1 });
+            if (path === '/v3/automations/runs') return automationBoundary.request(url, init);
+            if (path === '/v3/automations/runs/workflow-storage') {
+                const body = JSON.parse(String(init?.body)) as { request: Record<string, unknown> };
+                const result = await listRuns({ filter: body.request });
+                return Response.json({ runs: result.runs, acceptedEnvelopesByRunId: {}, keyCensusByRunId: {}, nextCursor: result.nextCursor });
+            }
+            if (path.startsWith('/v2/session-organization/attention-standings/')) {
+                const sessionId = decodeURIComponent(path.split('/').at(-1)!);
+                const request = SetSessionAttentionStandingRequestSchema.parse(JSON.parse(String(init?.body)));
+                executed.push({ actionId: 'session.attention.set', input: { sessionId, ...request } });
+                return Response.json(SetSessionAttentionStandingResponseSchema.parse({ standing:
+                    request.standing === null || request.remindAt === null ? null : {
+                        sessionId, standing: request.standing ?? false, updatedAt: 1,
+                        ...(typeof request.remindAt === 'number' ? { remindAt: request.remindAt } : {}),
+                    },
+                }));
+            }
+            if (path.endsWith('/read-state')) {
+                const sessionId = decodeURIComponent(path.split('/').at(-2)!);
+                const request = JSON.parse(String(init?.body)) as { state: 'read' | 'unread' };
+                executed.push({ actionId: 'session.read_state.set', input: { sessionId, ...request } });
+                return Response.json({ success: true, ...SessionReadStateSetResultV1Schema.parse({
+                    state: request.state, lastViewedSessionSeq: 1, didChange: true,
+                }) });
+            }
+            if (path.startsWith('/v1/plugins/data')) return collectionBoundary.request(path, init);
+            return null;
+        } });
+        publishAppliedActiveServerSnapshot(appliedSnapshot());
+        primeServerFeaturesSnapshot({ snapshot: { status: 'ready', features } });
         storage.setState({
             settings: { ...storage.getState().settings, experiments: true, featureToggles: { ...storage.getState().settings.featureToggles, automations: true } },
             profileScope: { serverId: runtime.getActiveServerSnapshot().serverId, accountId: 'account-a' },
@@ -103,6 +151,7 @@ describe('useInboxModel work groups (ORC R-10)', () => {
             sessionListRowsByServerId: {},
             ordinarySessionListMembershipByServerId: {},
             artifacts: {},
+            automations: {},
             isDataReady: true,
             workflowRunsById: {},
             workflowRunListWindows: {},
@@ -112,6 +161,8 @@ describe('useInboxModel work groups (ORC R-10)', () => {
 
     afterEach(async () => {
         standardCleanup();
+        await connection?.dispose();
+        connection = undefined;
         clearPluginAccountAvailabilityProjection();
         deleteServerFeaturesSnapshot();
         (await import('@/components/workflows/library/workflowLibraryReads')).resetWorkflowLibraryReadsForTests();
@@ -204,19 +255,34 @@ describe('useInboxModel work groups (ORC R-10)', () => {
 
     it('exposes a pre-session Automation failure with its exact Run route and removes it on the Account wake', async () => {
         listRuns.mockResolvedValue(page([]));
-        automationBoundary.request.mockResolvedValueOnce(new Response(JSON.stringify({
-            runs: [createAutomationRunFixture({ id: 'pre-session', state: 'failed', errorCode: 'machine_unavailable' })], nextCursor: null,
-        }), { status: 200 })).mockResolvedValueOnce(new Response(JSON.stringify({ runs: [], nextCursor: null }), { status: 200 }));
-        await renderModel();
+        const automation = createAutomationDefinitionSummary(AutomationDefinitionListItemSchema.parse({
+            id: 'automation-1', name: 'Nightly dependency check', description: null, enabled: true, targetType: 'newSession',
+            existingSessionId: null, templateVersion: 1, lastRunAt: null, createdAt: 1, updatedAt: 1, assignments: [], triggers: [],
+        }));
+        storage.setState({ automations: { [automation.id]: automation } });
+        const run = createAutomationRunFixture({ id: 'pre-session', state: 'failed', errorCode: 'machine_unavailable' });
+        let needsAttention = true;
+        // HTTP reports the same current window until its producer changes;
+        // mounting another real consumer must not consume a one-shot fixture.
+        automationBoundary.request.mockImplementation(async () => Response.json({ runs: needsAttention ? [run] : [], nextCursor: null }));
+        const opened = vi.fn();
+        const screen = await renderModel(<BriefRows onOpen={opened} />);
         expect(model?.automationAttentionItems).toEqual([expect.objectContaining({
-            key: 'automation-run:pre-session', run: expect.objectContaining({ producedSessionId: null }),
+            key: 'automation-run:pre-session', title: automation.name, run: expect.objectContaining({ producedSessionId: null }),
             route: { pathname: '/automations/[id]/runs/[runId]', params: { id: 'automation-1', runId: 'pre-session' } },
         })]);
         expect(model?.hasPrimaryAttention).toBe(true);
+        expect(screen.findAllByType(Item).map(item => item.props.title)).toEqual([automation.name]);
+        await screen.pressByTestIdAsync('voice-brief.item.automation-run:pre-session');
+        expect(opened.mock.lastCall?.[0].destination).toEqual({ kind: 'automation', route: model?.automationAttentionItems[0]?.route });
+        await act(async () => { storage.setState({ automations: { [automation.id]: { ...automation, name: 'Morning dependency check' } } }); });
+        expect(model?.automationAttentionItems[0]).toMatchObject({ title: 'Morning dependency check' });
+        expect(screen.findAllByType(Item).map(item => item.props.title)).toEqual(['Morning dependency check']);
+        needsAttention = false;
         await act(async () => { publishHomeAccountChange(appliedSnapshot().serverId, ['automation:automation-1']); });
         expect(model?.automationAttentionItems).toEqual([]);
+        expect(screen.findAllByType(Item)).toEqual([]);
         expect(model?.showCaughtUp).toBe(true);
-        expect(automationBoundary.request).toHaveBeenCalledTimes(2);
     });
 
     it('lists an off-page hold once as its own work root, and lets it recede when it leaves the window', async () => {
@@ -361,7 +427,7 @@ describe('useInboxModel work groups (ORC R-10)', () => {
         await renderModel();
 
         await act(async () => {
-            await model?.settle({ id: 'session-1', serverId: 'home-a' } as Session);
+            await model?.settle(createSessionFixture({ id: 'session-1', serverId: appliedSnapshot().serverId }));
         });
 
         expect(executed).toEqual([
@@ -426,8 +492,8 @@ describe('useInboxModel work groups (ORC R-10)', () => {
         await renderModel();
 
         await act(async () => {
-            await model?.setReminder({ id: 'session-1', serverId: 'home-a' } as Session, 9_000);
-            await model?.setReminder({ id: 'session-1', serverId: 'home-a' } as Session, null);
+            await model?.setReminder(createSessionFixture({ id: 'session-1', serverId: appliedSnapshot().serverId }), 9_000);
+            await model?.setReminder(createSessionFixture({ id: 'session-1', serverId: appliedSnapshot().serverId }), null);
         });
 
         expect(executed).toEqual([

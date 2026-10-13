@@ -1,47 +1,53 @@
-import { describe, expect, it, vi } from 'vitest';
+import { beforeEach, describe, expect, it, vi } from 'vitest';
+import { act } from 'react-test-renderer';
 
 import { renderHook } from '@/dev/testkit';
+import { createHomeGovernanceHarness, installHomeGovernanceBoundaries } from '@/dev/testkit/harness/homeGovernanceHarness';
 
-import { useTeamInvitations } from './useTeamInvitations';
+const harness = createHomeGovernanceHarness();
+installHomeGovernanceBoundaries(harness);
+const { useTeamInvitations } = await import('./useTeamInvitations');
 
-const listTeamInvitations = vi.hoisted(() => vi.fn());
-
-vi.mock('@/sync/ops/teams/teamInvitationOperations', () => ({
-    listTeamInvitations,
-}));
+beforeEach(async () => {
+    await harness.reset();
+});
 
 describe('useTeamInvitations', () => {
     it('does not let a superseded Home answer replace the current delivery capability', async () => {
-        let releaseFirst!: (value: unknown) => void;
-        const first = new Promise((resolve) => { releaseFirst = resolve; });
-        listTeamInvitations
-            .mockReturnValueOnce(first)
-            .mockResolvedValueOnce({
-                kind: 'succeeded',
-                value: { items: [], nextCursor: null, emailDelivery: 'unavailable', linkDelivery: 'unavailable' },
-            });
+        let releaseFirst!: () => void;
+        const first = new Promise<void>((resolve) => { releaseFirst = resolve; });
+        const homeA = await harness.addHome({ name: 'Home A', serverUrl: 'https://home-a.example', accountId: 'account-a', teamsEnabled: true });
+        const homeB = await harness.addHome({ name: 'Home B', serverUrl: 'https://home-b.example', accountId: 'account-b', teamsEnabled: true });
+        const path = '/v1/teams/invitations/list';
+        harness.answer(homeA, path, {
+            respondAfter: first,
+            body: { items: [], nextCursor: null, emailDelivery: 'available', linkDelivery: 'available' },
+        });
+        harness.answer(homeB, path, {
+            body: { items: [], nextCursor: null, emailDelivery: 'unavailable', linkDelivery: 'unavailable' },
+        });
 
         const rendered = await renderHook(
-            (props: Readonly<{ serverId: string }>) => useTeamInvitations({
-                scope: { serverId: props.serverId, accountId: `account:${props.serverId}` },
+            (props: Readonly<{ serverId: string; accountId: string }>) => useTeamInvitations({
+                scope: { serverId: props.serverId, accountId: props.accountId },
                 address: { serverId: props.serverId, teamId: 'team-1' },
                 state: null,
                 enabled: true,
             }),
-            { initialProps: { serverId: 'home-a' } },
+            { initialProps: { serverId: homeA, accountId: 'account-a' } },
         );
 
-        await rendered.rerender({ serverId: 'home-b' });
+        await vi.waitFor(() => expect(harness.requestsFor(path).some((request) => request.serverId === homeA)).toBe(true));
+        await rendered.rerender({ serverId: homeB, accountId: 'account-b' });
         await vi.waitFor(() => expect(rendered.getCurrent().emailDelivery).toBe('unavailable'));
 
-        releaseFirst({
-            kind: 'succeeded',
-            value: { items: [], nextCursor: null, emailDelivery: 'available', linkDelivery: 'available' },
+        await act(async () => {
+            releaseFirst();
         });
-        await Promise.resolve();
 
         expect(rendered.getCurrent().emailDelivery).toBe('unavailable');
         expect(rendered.getCurrent().linkDelivery).toBe('unavailable');
+        expect(harness.requestsFor(path).map((request) => request.serverId)).toEqual([homeA, homeB]);
         await rendered.unmount();
     });
 });

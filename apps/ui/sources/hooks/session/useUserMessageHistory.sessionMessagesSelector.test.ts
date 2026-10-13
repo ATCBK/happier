@@ -30,7 +30,7 @@ describe('collectUserTextMessagesBySessionIdFromSessionMessagesState', () => {
           u3: user('u3', 2, 'yo'),
         },
       },
-    } as any);
+    });
 
     expect(out.s1?.map((m) => m.id)).toEqual(['u1', 'u2']);
     expect(out.s2?.map((m) => m.id)).toEqual(['u3']);
@@ -44,7 +44,7 @@ describe('collectUserTextMessagesBySessionIdFromSessionMessagesState', () => {
           u1: user('u1', 1, 'hi'),
         },
       },
-    } as any);
+    });
 
     expect(out.s1?.map((m) => m.id)).toEqual(['u1']);
   });

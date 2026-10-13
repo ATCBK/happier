@@ -2,48 +2,46 @@ import React from 'react';
 import 'fake-indexeddb/auto';
 import { act } from 'react-test-renderer';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
-import { createWorkBoardV1, normalizeSessionListFilterV1 } from '@happier-dev/protocol';
+import { createWorkBoardV1, normalizeSessionListFilterV1, WorkflowRunListRequestV1Schema,
+    WorkflowRunRecipientCensusResponseV1Schema, materializeWorkflowAcceptedSnapshotV1,
+    sealWorkflowAcceptedSnapshotStoredEnvelopeV1, serializeWorkflowStoredContentEnvelopeV1, AutomationRunCauseSchema } from '@happier-dev/protocol';
+import { createHomeGovernanceHarness, installHomeGovernanceBoundaries } from '@/dev/testkit/harness/homeGovernanceHarness';
+import { createPlainAccountEncryptionCurrentnessFixture } from '@/dev/testkit/fixtures/accountEncryptionCurrentness';
+import { createRootLayoutFeaturesResponse } from '@/dev/testkit';
+import { createWorkflowDefinitionFixture } from '@/dev/testkit/fixtures/workflowRunFixtures';
+import type { WorkflowRunSummaryV1 } from '@happier-dev/protocol/workflows/workflowProgressV1';
 
 import { flushHookEffects } from '@/dev/testkit/hooks/flushHookEffects';
 import { renderHook } from '@/dev/testkit/hooks/renderHook';
 import { standardCleanup } from '@/dev/testkit/cleanup/standardCleanup';
 import { createWorkflowRunSummaryFixture } from '@/dev/testkit/fixtures/workflowRunFixtures';
 import { createSessionListRenderableSessionFixture } from '@/dev/testkit/fixtures/sessionFixtures';
-import { storage } from '@/sync/domains/state/storageStore';
-import { settingsDefaults } from '@/sync/domains/settings/settings';
-import { getActiveServerSnapshot, upsertAndActivateServer, upsertServerProfileOnly } from '@/sync/domains/server/serverRuntime';
-import { loadHomeViewState, saveHomeViewState, setServerProfileIdentityForUrl } from '@/sync/domains/server/serverProfiles';
-import { getActiveServerAccountScope, retireActiveServerAccountScopeLifetime } from '@/sync/domains/scope/activeServerAccountScope';
-import {
-    getAppliedActiveServerSnapshot,
-    isAppliedActiveServerRuntimeAvailable,
-    publishAppliedActiveServerSnapshot,
-} from '@/sync/runtime/orchestration/appliedActiveServerRuntime';
-import { useWorkflowRunWindow, resetWorkflowLibraryReadsForTests } from '@/components/workflows/library/workflowLibraryReads';
-import { useBoardMembership } from '@/components/boards/model/useBoardContent';
-import { useVisibleSessionListPaneState } from './useVisibleSessionListPaneState';
-import { useSessionListSelectionState } from './useSessionListSelectionState';
 import { renderScreen } from '@/dev/testkit';
-import { clearSessionListViewFilterRetentionForTests } from '@/components/sessions/shell/search/useSessionListViewFilters';
-import { resetSessionListPaneRetentionForTests } from '@/components/sessions/shell/sessionListPaneRetention';
 
-const execute = vi.hoisted(() => vi.fn());
-
-// The Action front door and server-capability API are transport boundaries. Run reads,
-// feature decisions, Account lifetime, storage, selection, projection and Board membership stay real.
-vi.mock('@/sync/ops/actions/frontDoorRuntimeActionExecutor', () => ({ createFrontDoorActionExecute: () => execute }));
-vi.mock('@/sync/api/capabilities/serverFeaturesClient', async (importOriginal) => {
-    const original = await importOriginal<typeof import('@/sync/api/capabilities/serverFeaturesClient')>();
-    const { createRootLayoutFeaturesResponse } = await import('@/dev/testkit/fixtures/featureFixtures');
-    const snapshot = { status: 'ready' as const, features: createRootLayoutFeaturesResponse() };
-    return { ...original, getCachedServerFeaturesSnapshot: () => snapshot, getServerFeaturesSnapshot: async () => snapshot };
-});
-vi.mock('@/auth/storage/tokenStorage', async (importOriginal) => {
-    const original = await importOriginal<typeof import('@/auth/storage/tokenStorage')>();
-    return { ...original, TokenStorage: { ...original.TokenStorage,
-        getCredentialsForServerUrl: async () => ({ token: 'header.eyJzdWIiOiJhY2NvdW50LWEifQ==.signature' }),
-    } };
-});
+const home = createHomeGovernanceHarness();
+installHomeGovernanceBoundaries(home);
+const { storage } = await import('@/sync/domains/state/storageStore');
+const { settingsDefaults } = await import('@/sync/domains/settings/settings');
+const { getActiveServerSnapshot, upsertServerProfileOnly } = await import('@/sync/domains/server/serverRuntime');
+const { loadHomeViewState, saveHomeViewState, setServerProfileIdentityForUrl } = await import('@/sync/domains/server/serverProfiles');
+const { getActiveServerAccountScope, retireActiveServerAccountScopeLifetime } = await import('@/sync/domains/scope/activeServerAccountScope');
+const { getAppliedActiveServerSnapshot, isAppliedActiveServerRuntimeAvailable, publishAppliedActiveServerSnapshot } = await import('@/sync/runtime/orchestration/appliedActiveServerRuntime');
+const { useWorkflowRunWindow, resetWorkflowLibraryReadsForTests } = await import('@/components/workflows/library/workflowLibraryReads');
+const { useBoardMembership } = await import('@/components/boards/model/useBoardContent');
+const { useVisibleSessionListPaneState } = await import('./useVisibleSessionListPaneState');
+const { useSessionListSelectionState } = await import('./useSessionListSelectionState');
+const { clearSessionListViewFilterRetentionForTests } = await import('@/components/sessions/shell/search/useSessionListViewFilters');
+const { resetSessionListPaneRetentionForTests } = await import('@/components/sessions/shell/sessionListPaneRetention');
+const { primeServerFeaturesSnapshot, resetServerFeaturesClientForTests } = await import('@/sync/api/capabilities/serverFeaturesClient');
+const { useSessionListViewFilterController } = await import('@/components/sessions/shell/search/useSessionListViewFilterController');
+const { SessionsListPaneContent } = await import('@/components/sessions/shell/SessionsListPaneContent');
+const { SessionsListViewWithFilterController } = await import('@/components/sessions/shell/SessionsList');
+const { InjectedAuthProvider } = await import('@/auth/context/AuthContext');
+const { UniversalSearchRuntimeProvider } = await import('@/components/appShell/search/UniversalSearchRuntimeContext');
+const { prepareSessionDraftPersistenceStorage } = await import('@/sync/ops/sessionDrafts/sessionDraftPersistenceStorage');
+const route = '/v3/automations/runs/workflow-storage';
+// Only the HTTP answer is controlled; Account/Action admission, parsing, projection and Board membership stay real.
+const readPage = vi.fn<() => Promise<Readonly<{ runs: readonly WorkflowRunSummaryV1[]; nextCursor?: string; unavailable?: boolean }>>>();
 // Markdown is a third-party rendering boundary; these hooks never render Markdown.
 vi.mock('react-native-enriched-markdown/lib/module/web/streamingReveal.js', () => ({ splitStreamingRevealTextParts: () => [] }));
 
@@ -76,8 +74,9 @@ beforeEach(async () => {
     previousStorageState = storage.getState();
     previousAppliedSnapshot = getAppliedActiveServerSnapshot();
     previousAppliedAvailability = isAppliedActiveServerRuntimeAvailable();
-    const profile = await upsertAndActivateServer({ serverUrl: 'http://unified-list.test', name: 'List Home' });
-    serverId = profile.id;
+    await home.reset();
+    serverId = await home.addHome({ serverUrl: 'http://unified-list.test', name: 'List Home', accountId: 'account-a' });
+    installPageAnswer(serverId);
     storage.setState({
         profileScope: { serverId, accountId: 'account-a' },
         settings: { ...settingsDefaults, experiments: true, featureToggles: { automations: true },
@@ -88,12 +87,14 @@ beforeEach(async () => {
         workflowRunsById: {},
     });
     publishAppliedActiveServerSnapshot(getActiveServerSnapshot());
-    execute.mockReset();
+    readPage.mockReset();
     expect(getActiveServerAccountScope()).toEqual({ serverId, accountId: 'account-a' });
 });
 
-afterEach(() => {
-    standardCleanup();
+afterEach(async () => {
+    await standardCleanup();
+    await home.reset();
+    resetServerFeaturesClientForTests();
     clearSessionListViewFilterRetentionForTests();
     resetSessionListPaneRetentionForTests();
     resetWorkflowLibraryReadsForTests();
@@ -102,27 +103,62 @@ afterEach(() => {
     publishAppliedActiveServerSnapshot(previousAppliedSnapshot, previousAppliedAvailability);
 });
 
+function installPageAnswer(targetServerId: string, featureServerId = targetServerId) {
+    home.answer(targetServerId, '/v1/account/encryption/currentness', { body: createPlainAccountEncryptionCurrentnessFixture() });
+    primeServerFeaturesSnapshot({ serverId: featureServerId, snapshot: { status: 'ready', features: createRootLayoutFeaturesResponse() } });
+    home.answer(targetServerId, route, { select: async (input) => {
+        if (!input || typeof input !== 'object' || !('operation' in input) || input.operation !== 'list' || !('request' in input)) {
+            throw new Error('Unexpected Workflow storage operation');
+        }
+        WorkflowRunListRequestV1Schema.parse(input.request);
+        const page = await readPage();
+        if (page.unavailable) return { status: 503, body: { error: 'content_unavailable' } };
+        const acceptedEnvelopesByRunId: Record<string, string> = {};
+        const keyCensusByRunId: Record<string, ReturnType<typeof WorkflowRunRecipientCensusResponseV1Schema.parse>> = {};
+        for (const run of page.runs) {
+            const materialized = await materializeWorkflowAcceptedSnapshotV1({
+                definition: createWorkflowDefinitionFixture({ blocks: [{ kind: 'wait', id: 'wait', document: { text: 'Continue', references: [], attachments: [] } }] }),
+                admission: { kind: 'user' }, effects: { resolveTargetAvailability: async () => true },
+                context: { source: run.origin.kind === 'automation' ? { kind: 'automation', automationId: run.origin.automationId } : { kind: 'inline' }, inputs: {}, machineId: run.machineId, executionTarget: { kind: 'session' },
+                    workspaceTarget: { project: { machineId: run.machineId, directory: '/repo', checkoutRootPath: '/repo' } },
+                    ...(run.origin.kind === 'direct' ? { origin: run.origin } : {}), authorization: { principal: { kind: 'host' } },
+                    ...(run.origin.kind === 'automation' ? { actionCaller: { kind: 'automationRun' as const, runId: run.id,
+                        automationId: run.origin.automationId, cause: AutomationRunCauseSchema.parse(run.origin.cause) } } : {}) },
+            });
+            if (!materialized.ok) throw new Error(`fixture_materialization_failed:${materialized.error.code}`);
+            acceptedEnvelopesByRunId[run.id] = serializeWorkflowStoredContentEnvelopeV1(sealWorkflowAcceptedSnapshotStoredEnvelopeV1({ mode: 'plain',
+                binding: { v: 1, purpose: 'accepted_snapshot', accountId: run.ownerAccountId, runId: run.id }, acceptedSnapshot: materialized.snapshot }));
+            keyCensusByRunId[run.id] = WorkflowRunRecipientCensusResponseV1Schema.parse({ runId: run.id, ownerAccountId: run.ownerAccountId,
+                access: 'owner', encryptionMode: 'plain', dataEncryptionKey: null, callerDataEncryptionKey: null, recipients: [], visibleTeamId: null,
+                ownerAccountCurrentness: { mode: 'plain', version: 1, contentKeyFingerprint: null } });
+        }
+        return { body: { runs: page.runs, acceptedEnvelopesByRunId, keyCensusByRunId, ...(page.nextCursor ? { nextCursor: page.nextCursor } : {}) } };
+    } });
+}
+
 function filter(show: 'runs' | 'both' | 'sessions' = 'runs') {
     return normalizeSessionListFilterV1({ homeServerIds: [serverId], show });
 }
 
+function runFixture(overrides: Parameters<typeof createWorkflowRunSummaryFixture>[0] = {}) {
+    return createWorkflowRunSummaryFixture({ ownerAccountId: 'account-a',
+        origin: overrides.startedBy === 'trigger' ? { kind: 'automation', automationId: 'automation-1',
+            cause: AutomationRunCauseSchema.parse({ kind: 'trigger', triggerId: 'trigger-1', triggerRevision: 1,
+                triggerKind: 'schedule', occurrenceKey: 'A'.repeat(43), occurredAt: 1, evidence: { scheduledFor: 1 } }) }
+            : { kind: 'direct' }, ...overrides });
+}
+
 describe('the mounted unified list feed', () => {
     it.each(['you', 'triggers'] as const)('switches the Sessions destination from Sessions to Runs through its shared filter controller for %s', async (starter) => {
-        execute.mockResolvedValue({ ok: true, result: { runs: [
-            createWorkflowRunSummaryFixture({ id: 'user-run', startedBy: 'user' }),
-            createWorkflowRunSummaryFixture({ id: 'trigger-run', startedBy: 'trigger' }),
-        ], metadataByRunId: {} } });
+        readPage.mockResolvedValue({ runs: [
+            runFixture({ id: 'user-run', startedBy: 'user' }),
+            runFixture({ id: 'trigger-run', startedBy: 'trigger' }),
+        ] });
         storage.getState().mergeSessionListRowsForServerScope(serverId, [createSessionListRenderableSessionFixture()]);
         storage.setState({
             ordinarySessionListMembershipByServerId: { [serverId]: ['session-1'] },
             sessionListIndexByServerId: { [serverId]: [{ type: 'session', serverId, sessionId: 'session-1', groupKey: 'sessions', groupKind: 'project' }] },
         });
-        const { useSessionListViewFilterController } = await import('@/components/sessions/shell/search/useSessionListViewFilterController');
-        const { SessionsListPaneContent } = await import('@/components/sessions/shell/SessionsListPaneContent');
-        const { SessionsListViewWithFilterController } = await import('@/components/sessions/shell/SessionsList');
-        const { InjectedAuthProvider } = await import('@/auth/context/AuthContext');
-        const { UniversalSearchRuntimeProvider } = await import('@/components/appShell/search/UniversalSearchRuntimeContext');
-        const { prepareSessionDraftPersistenceStorage } = await import('@/sync/ops/sessionDrafts/sessionDraftPersistenceStorage');
         await prepareSessionDraftPersistenceStorage();
         const screen = await renderScreen(
             <InjectedAuthProvider credentials={null}>
@@ -152,7 +188,7 @@ describe('the mounted unified list feed', () => {
     });
 
     it('renders and counts a loaded Run while the Sessions source is null', async () => {
-        execute.mockResolvedValue({ ok: true, result: { runs: [createWorkflowRunSummaryFixture({ startedBy: 'user' })], metadataByRunId: {} } });
+        readPage.mockResolvedValue({ runs: [runFixture({ startedBy: 'user' })] });
         const hook = await renderHook(() => useVisibleSessionListPaneState('all', { workFilter: filter() }));
         await flushHookEffects();
         expect(hook.getCurrent().visibleSessionListIndex).toEqual(expect.arrayContaining([
@@ -163,24 +199,24 @@ describe('the mounted unified list feed', () => {
     });
 
     it('makes a loaded empty Runs window ready and reports a failed read instead of onboarding', async () => {
-        execute.mockResolvedValueOnce({ ok: true, result: { runs: [], metadataByRunId: {} } });
+        readPage.mockResolvedValueOnce({ runs: [] });
         const hook = await renderHook(() => useVisibleSessionListPaneState('all', { workFilter: filter() }));
         await flushHookEffects();
         expect(hook.getCurrent().summary).toEqual({ sessionsReady: true, sessionCount: 0 });
         expect(hook.getCurrent().visibleSessionListIndex).toEqual([]);
         expect(hook.getCurrent().showEmptyState).toBe(false);
-        execute.mockResolvedValueOnce({ ok: false, error: 'offline', errorCode: 'machine_offline' });
+        readPage.mockResolvedValueOnce({ runs: [], unavailable: true });
         await act(async () => { hook.getCurrent().workflowRunWindow?.retry(); });
         await flushHookEffects();
         expect(hook.getCurrent().queryPresentation).toEqual({ kind: 'error', retainedRows: false });
     });
 
     it('invalidates retained projection when the starter filter changes, preserving attention runs', async () => {
-        execute.mockResolvedValue({ ok: true, result: { runs: [
-            createWorkflowRunSummaryFixture({ id: 'user-run', startedBy: 'user' }),
-            createWorkflowRunSummaryFixture({ id: 'trigger-run', startedBy: 'trigger' }),
-            createWorkflowRunSummaryFixture({ id: 'attention-run', startedBy: 'trigger', attentionRequired: true }),
-        ], metadataByRunId: {} } });
+        readPage.mockResolvedValue({ runs: [
+            runFixture({ id: 'user-run', startedBy: 'user' }),
+            runFixture({ id: 'trigger-run', startedBy: 'trigger' }),
+            runFixture({ id: 'attention-run', startedBy: 'trigger', attentionRequired: true }),
+        ] });
         let workFilter = filter();
         const hook = await renderHook(() => useVisibleSessionListPaneState('all', { workFilter }));
         await flushHookEffects();
@@ -203,15 +239,15 @@ describe('the mounted unified list feed', () => {
             await flushHookEffects();
             await hook.unmount();
         }
-        expect(execute.mock.calls.filter(([id]) => id === 'workflow.run.list')).toEqual([]);
+        expect(home.requestsFor(route)).toEqual([]);
     });
 
     it('uses the same FIN Run window and filter for Board membership, preserving paged incompleteness', async () => {
-        execute.mockResolvedValue({ ok: true, result: { runs: [
-            createWorkflowRunSummaryFixture({ id: 'user-run', startedBy: 'user' }),
-            createWorkflowRunSummaryFixture({ id: 'trigger-run', startedBy: 'trigger' }),
-            createWorkflowRunSummaryFixture({ id: 'attention-run', startedBy: 'trigger', attentionRequired: true }),
-        ], metadataByRunId: {}, nextCursor: 'page-2' } });
+        readPage.mockResolvedValue({ runs: [
+            runFixture({ id: 'user-run', startedBy: 'user' }),
+            runFixture({ id: 'trigger-run', startedBy: 'trigger' }),
+            runFixture({ id: 'attention-run', startedBy: 'trigger', attentionRequired: true }),
+        ], nextCursor: 'page-2' });
         const board = { ...createWorkBoardV1({ id: 'board-1', name: 'Runs' }), source: { filter: filter(), picked: [] } };
         const homes = { activeServerId: serverId, mountedServerIds: [serverId], isHomeMounted: (id: string) => id === serverId };
         const hook = await renderHook(() => useBoardMembership(board, homes));
@@ -221,14 +257,14 @@ describe('the mounted unified list feed', () => {
     });
 
     it('does not authorize Board pruning after the Run window fails with retained members', async () => {
-        execute.mockResolvedValueOnce({ ok: true, result: { runs: [createWorkflowRunSummaryFixture({ startedBy: 'user' })], metadataByRunId: {} } });
+        readPage.mockResolvedValueOnce({ runs: [runFixture({ startedBy: 'user' })] });
         const board = { ...createWorkBoardV1({ id: 'board-1', name: 'Runs' }), source: { filter: filter(), picked: [] } };
         const homes = { activeServerId: serverId, mountedServerIds: [serverId], isHomeMounted: (id: string) => id === serverId };
         const hook = await renderHook(() => ({ membership: useBoardMembership(board, homes), window: useWorkflowRunWindow('all') }));
         await flushHookEffects();
         expect(hook.getCurrent().membership.complete).toBe(true);
         expect(hook.getCurrent().membership.members.map((member) => member.ref.qualifiedId.id)).toEqual(['run-1']);
-        execute.mockResolvedValueOnce({ ok: false, error: 'offline', errorCode: 'machine_offline' });
+        readPage.mockResolvedValueOnce({ runs: [], unavailable: true });
         await act(async () => { hook.getCurrent().window.retry(); });
         await flushHookEffects();
         expect(hook.getCurrent().membership.complete).toBe(false);
@@ -236,7 +272,8 @@ describe('the mounted unified list feed', () => {
     });
 
     it('qualifies a Run by portable Home identity when the filter names its saved alias', async () => {
-        const profile = await upsertAndActivateServer({ serverUrl: 'http://unified-list-alias.test', name: 'Alias Home' });
+        const id = await home.addHome({ serverUrl: 'http://unified-list-alias.test', name: 'Alias Home', accountId: 'account-a' });
+        const profile = { id, serverUrl: 'http://unified-list-alias.test' };
         const portableId = 'srv_unified-list-alias';
         const identified = await setServerProfileIdentityForUrl(profile.serverUrl, portableId);
         expect(identified).not.toBeNull();
@@ -246,8 +283,9 @@ describe('the mounted unified list feed', () => {
             sessionListIndexByServerId: { [profile.id]: null },
         });
         publishAppliedActiveServerSnapshot(getActiveServerSnapshot());
+        installPageAnswer(profile.id, portableId);
         expect(getActiveServerAccountScope()).toEqual({ serverId: portableId, accountId: 'account-a' });
-        execute.mockResolvedValue({ ok: true, result: { runs: [createWorkflowRunSummaryFixture({ startedBy: 'user' })], metadataByRunId: {} } });
+        readPage.mockResolvedValue({ runs: [runFixture({ startedBy: 'user' })] });
         const workFilter = normalizeSessionListFilterV1({ homeServerIds: [profile.id], show: 'runs' });
         const hook = await renderHook(() => useVisibleSessionListPaneState('all', { workFilter }));
         await flushHookEffects();
@@ -263,9 +301,9 @@ describe('the mounted unified list feed', () => {
             serverIds: [serverId, other.id], presentation: 'grouped' }],
             activeTargetKind: 'group', activeTargetId: 'two-homes' });
         try {
-            execute.mockResolvedValue({ ok: true, result: { runs: [
-                createWorkflowRunSummaryFixture({ startedBy: 'user' }),
-            ], metadataByRunId: {} } });
+            readPage.mockResolvedValue({ runs: [
+                runFixture({ startedBy: 'user' }),
+            ] });
             const workFilter = normalizeSessionListFilterV1({ show: 'runs', homeServerIds: [serverId, other.id] });
             const hook = await renderHook(() => ({
                 selection: useSessionListSelectionState(),

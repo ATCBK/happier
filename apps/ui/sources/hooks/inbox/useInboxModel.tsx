@@ -57,6 +57,8 @@ import {
 /** Public summary only. ORC renders the item and opens the exact existing Run route. */
 export type AutomationInboxItem = Readonly<{
     key: string;
+    /** The same Account-scoped definition name the Inbox row displays, when known. */
+    title?: string;
     run: AutomationDefinitionRun;
     route: Readonly<{ pathname: '/automations/[id]/runs/[runId]'; params: Readonly<{ id: string; runId: string }> }>;
 }>;
@@ -208,10 +210,11 @@ function useCreateInboxModel(): InboxModel {
     const workflowRuns = useWorkflowRunRows(workflowAttention.runIds);
     const automationAttention = useAutomationAttentionSource();
     const automationRuns = useWorkflowRunRows(automationAttention.runIds);
+    const automations = storage((state) => state.automations);
     const automationAttentionItems = React.useMemo(() => automationRuns.flatMap((row): AutomationInboxItem[] => row.automation ? [{
-        key: `automation-run:${row.id}`, run: row.automation,
+        key: `automation-run:${row.id}`, title: automations[row.automation.automationId]?.name, run: row.automation,
         route: { pathname: '/automations/[id]/runs/[runId]', params: { id: row.automation.automationId, runId: row.id } },
-    }] : []), [automationRuns]);
+    }] : []), [automationRuns, automations]);
     const attentionStandings = storage((state) => state.sessionOrganizationAttentionStandingsBySessionKey) ?? EMPTY_STANDINGS;
     const sessionPresentation = React.useMemo(
         () => buildInboxSessionPresentation({

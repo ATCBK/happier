@@ -1,74 +1,35 @@
-import * as React from 'react';
 import { act } from 'react-test-renderer';
 import { describe, expect, it, vi } from 'vitest';
+import { renderHook } from '@/dev/testkit';
+import { DaemonFilesystemListDirectoryRequestSchema } from '@happier-dev/protocol/machines/fileBrowser';
+import { useWorkspaceRepositoryTreeBrowser } from './useWorkspaceRepositoryTreeBrowser';
+import { clearCachedWorkspaceRepositoryDirectoryEntries } from '@/sync/domains/workspaces/files/workspaceRepositoryDirectory';
+import { buildWorkspaceCacheKey } from '@/sync/domains/workspaces/workspaceScope';
 
-import { renderScreen } from '@/dev/testkit';
-
-(globalThis as any).IS_REACT_ACT_ENVIRONMENT = true;
-
-let latestLazyDirectoryTreeInput: any = null;
-
-vi.mock('react-native', async () => {
-    const { createReactNativeWebMock } = await import('@/dev/testkit/mocks/reactNative');
-    return createReactNativeWebMock();
+type RpcRequest = Parameters<typeof import('@/sync/runtime/orchestration/serverScopedRpc/serverScopedMachineRpc').machineRpcWithServerScope>[0];
+const directoryRpc = vi.hoisted(() => vi.fn<(request: RpcRequest) => Promise<unknown>>());
+vi.mock('@/sync/runtime/orchestration/serverScopedRpc/serverScopedMachineRpc', async () => {
+    const { createServerScopedMachineRpcBoundaryMock } = await import('@/dev/testkit/mocks/serverScopedRpc');
+    return createServerScopedMachineRpcBoundaryMock(directoryRpc);
 });
 
-vi.mock('@/sync/ops/machineFileBrowser', () => ({
-    machineFilesystemListDirectory: vi.fn(),
-}));
-
-vi.mock('@/hooks/ui/filesystem/useLazyDirectoryTree', () => ({
-    useLazyDirectoryTree: (input: any) => {
-        latestLazyDirectoryTreeInput = input;
-        return {
-            rootLoading: false,
-            rootError: null,
-            nodes: [],
-            toggleDirectory: vi.fn(),
-            collapseAll: vi.fn(),
-            expandedCount: 0,
-            retryRoot: vi.fn(),
-            retryDirectory: vi.fn(),
-        };
-    },
-}));
-
 describe('useWorkspaceRepositoryTreeBrowser', () => {
-    it('forces mounted trees to reload when the workspace directory cache is cleared', async () => {
-        latestLazyDirectoryTreeInput = null;
-
-        const { clearCachedWorkspaceRepositoryDirectoryEntries } = await import(
-            '@/sync/domains/workspaces/files/workspaceRepositoryDirectory'
-        );
-        const { useWorkspaceRepositoryTreeBrowser } = await import('./useWorkspaceRepositoryTreeBrowser');
-        const { buildWorkspaceCacheKey } = await import('@/sync/domains/workspaces/workspaceScope');
-
-        // The hook is handed a SCOPE and derives the cache key itself. Clearing by the key
-        // built from that same scope must reach the entry the hook subscribed to — if the two
-        // derivations drifted apart, the reload token below would never move.
-        const scope = { serverId: 'server', machineId: 'm1', rootPath: '/repo' } as const;
-
-        function Test() {
-            useWorkspaceRepositoryTreeBrowser({
-                scope,
-                enabled: true,
-                expandedPaths: [],
-                onExpandedPathsChange: () => {},
-                reloadToken: 0,
-            });
-            return null;
-        }
-
-        await renderScreen(<Test />);
-
-        const initialReloadToken = latestLazyDirectoryTreeInput?.reloadToken;
-
-        act(() => {
-            clearCachedWorkspaceRepositoryDirectoryEntries({ workspaceCacheKey: buildWorkspaceCacheKey(scope) });
+    it('reloads the mounted real tree after its qualified workspace directory cache is cleared', async () => {
+        const scope = { serverId: 'reload-home', machineId: 'm1', rootPath: '/reload-repo' };
+        let name = 'before.ts';
+        directoryRpc.mockImplementation(async request => {
+            const input = DaemonFilesystemListDirectoryRequestSchema.parse(request.payload);
+            return { ok: true, path: input.path, truncated: false, entries: [
+                { name, path: `${input.path}/${name}`, type: 'file' },
+            ] };
         });
-
-        await vi.waitFor(() => {
-            expect(latestLazyDirectoryTreeInput?.reloadToken).not.toBe(initialReloadToken);
-        });
+        const hook = await renderHook(() => useWorkspaceRepositoryTreeBrowser({ scope, enabled: true }));
+        await vi.waitFor(() => expect(hook.getCurrent().nodes.map(node => node.path)).toEqual(['before.ts']));
+        expect(directoryRpc).toHaveBeenCalledWith(expect.objectContaining({ serverId: scope.serverId,
+            machineId: scope.machineId, payload: expect.objectContaining({ path: scope.rootPath }) }));
+        name = 'after.ts';
+        await act(async () => clearCachedWorkspaceRepositoryDirectoryEntries({ workspaceCacheKey: buildWorkspaceCacheKey(scope) }));
+        await vi.waitFor(() => expect(hook.getCurrent().nodes.map(node => node.path)).toEqual(['after.ts']));
+        await hook.unmount();
     });
 });

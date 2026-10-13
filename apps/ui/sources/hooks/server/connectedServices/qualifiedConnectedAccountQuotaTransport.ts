@@ -32,6 +32,7 @@ export async function readQualifiedConnectedAccountQuota(
     snapshot: QualifiedConnectedAccountQuotaSnapshotV4;
     recordId: ProviderAccountUsageRecordId;
     status: QualifiedConnectedAccountQuotaResponseV4['metadata']['status'];
+    refreshRequestedAt?: number;
 }> | null> {
     // The server serves and scopes the read; the opened response is checked against `ref`.
     const response = await getQualifiedConnectedAccountQuotaV4(
@@ -56,7 +57,8 @@ export async function readQualifiedConnectedAccountQuota(
             { code: 'qualified_connected_account_quota_invalid' },
         );
     }
-    return { snapshot: opened, recordId: response.sourceResolution.recordId, status: response.metadata.status };
+    return { snapshot: opened, recordId: response.sourceResolution.recordId, status: response.metadata.status,
+        ...(response.metadata.refreshRequestedAt === undefined ? {} : { refreshRequestedAt: response.metadata.refreshRequestedAt }) };
 }
 
 export async function refreshQualifiedConnectedAccountQuota(

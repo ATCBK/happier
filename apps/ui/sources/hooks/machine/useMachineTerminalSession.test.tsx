@@ -168,7 +168,7 @@ describe('useMachineTerminalSession', () => {
     afterEach(async () => {
         await standardCleanup();
         vi.useRealTimers();
-        servedHomes.dispose();
+        await servedHomes.dispose();
     });
 
     it('reads borrowed output with independent credit identities while refusing all process mutations', async () => {

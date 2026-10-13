@@ -3,81 +3,109 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
 import { createDeferred, createSessionMessagesFixture, flushHookEffects, renderHook } from '@/dev/testkit';
 import { createReducer } from "@happier-dev/session-core/reducer";
-import { storage } from '@/sync/domains/state/storageStore';
-import { fetchUserMessageHistoryPage } from '@/sync/engine/sessions/fetchUserMessageHistoryPage';
-import { useUserMessageHistoryEntries } from './useUserMessageHistoryEntries';
 import { createSessionFixture } from '@/dev/testkit/fixtures/sessionFixtures';
+import { createRootLayoutFeaturesResponse } from '@/dev/testkit/fixtures/featureFixtures';
+import { createProviderSettingsAccountHarness } from '@/dev/testkit/harness/providerSettingsHarness';
+import { SessionMessagesPageV1Schema } from '@happier-dev/protocol/sessions/messages/sessionMessagesPageV1';
+import type { FetchUserMessageHistoryPageResult } from '@/sync/engine/sessions/fetchUserMessageHistoryPage';
 
-import {
+const account = createProviderSettingsAccountHarness();
+const { storage } = await import('@/sync/domains/state/storageStore');
+const { useUserMessageHistoryEntries } = await import('./useUserMessageHistoryEntries');
+const { primeServerFeaturesSnapshot } = await import('@/sync/api/capabilities/serverFeaturesClient');
+const {
     USER_MESSAGE_HISTORY_REMOTE_RETRY_COOLDOWN_MS,
     resetUserMessageHistoryRemoteEntriesForTests,
     useUserMessageHistory,
     useUserMessageHistoryRemoteEntries,
-} from './useUserMessageHistory';
+} = await import('./useUserMessageHistory');
 
 (globalThis as unknown as { IS_REACT_ACT_ENVIRONMENT?: boolean }).IS_REACT_ACT_ENVIRONMENT = true;
 
-const fetchUserMessageHistoryPageMock = vi.hoisted(() => vi.fn());
-const roleQuerySupportedState = vi.hoisted(() => ({ supported: true }));
-
-vi.mock('@/sync/sync', () => ({
-    sync: {
-        fetchUserMessageHistoryPage: (...args: unknown[]) => fetchUserMessageHistoryPageMock(...args),
+// Response sequencing is at the genuine HTTP boundary. Sync admission, paging,
+// stored-content parsing and row projection stay real for every scenario.
+const historyPageHttpReply = vi.fn<(sessionId: string, options: { limit: number; beforeSeq?: number }) => Promise<FetchUserMessageHistoryPageResult>>();
+let serverId = '';
+const roleQuerySupportedState = {
+    set supported(supported: boolean) {
+        const features = createRootLayoutFeaturesResponse();
+        features.capabilities.session.messages.role = supported;
+        account.home.answer(serverId, '/v1/features', { body: features });
+        account.home.answer(serverId, '/v1/features/authenticated', { body: features });
+        primeServerFeaturesSnapshot({ serverId, snapshot: { status: 'ready', features } });
     },
-}));
+};
 
-vi.mock('@/sync/runtime/orchestration/serverScopedRpc/usePreferredServerIdForSession', () => ({
-    usePreferredServerIdForSession: () => 'server-1',
-}));
-
-vi.mock('@/sync/domains/features/featureDecisionRuntime', () => ({
-    useServerFeaturesSnapshotForServerId: () => ({
-        status: 'ready',
-        features: {
-            capabilities: {
-                session: {
-                    messages: {
-                        role: roleQuerySupportedState.supported,
-                    },
-                },
+function installHistoryHttpPage(sessionId: string) {
+    const path = `/v1/sessions/${sessionId}/messages`;
+    account.home.answer(serverId, path, { select: async () => {
+        const request = account.home.requests.filter(request => request.path.startsWith(`${path}?`)).at(-1);
+        if (!request) throw new Error('History request did not reach HTTP');
+        const query = new URL(request.path, 'https://history.test').searchParams;
+        expect(query.get('role')).toBe('user');
+        expect(query.get('roles')).toBe('user,agent');
+        const page = await historyPageHttpReply(sessionId, { limit: Number(query.get('limit')),
+            ...(query.has('beforeSeq') ? { beforeSeq: Number(query.get('beforeSeq')) } : {}) });
+        if (page.status !== 'loaded') return { status: page.status === 'unsupported' ? 400 : 503, body: {} };
+        return { body: SessionMessagesPageV1Schema.parse({ messages: page.rows.map(row => ({
+            id: row.messageId, seq: row.seq, createdAt: row.createdAt, localId: null,
+            messageRole: row.role === 'user' ? 'user' : 'agent',
+            content: { t: 'plain', v: row.role === 'user'
+                ? { role: 'user', content: { type: 'text', text: row.text } }
+                : { role: 'agent', content: { type: 'output', data: { type: 'assistant', uuid: row.messageId,
+                    message: { role: 'assistant', content: row.role === 'tool'
+                        ? [{ type: 'tool_use', id: row.messageId, name: row.text, input: {} }]
+                        : [{ type: 'text', text: row.text }] } } } },
             },
-        },
-    }),
-}));
+        })), hasMore: page.hasMore, nextBeforeSeq: page.nextBeforeSeq }) };
+    } });
+}
+
+async function switchAccount(accountId: string) {
+    ({ serverId } = await account.restore({ accountId }));
+    storage.setState({ sessions: { s1: createSessionFixture({ id: 's1', serverId }), s2: createSessionFixture({ id: 's2', serverId }) },
+        sessionListRowsByServerId: {} });
+    roleQuerySupportedState.supported = true;
+}
 
 describe('useUserMessageHistory server role query', () => {
-    beforeEach(() => {
+    beforeEach(async () => {
+        await account.reset();
+        ({ serverId } = await account.restore({ accountId: 'account-1' }));
+        historyPageHttpReply.mockReset();
+        roleQuerySupportedState.supported = true;
+        for (const sessionId of ['s1', 's2', 'newer', 'older']) installHistoryHttpPage(sessionId);
         storage.setState((state) => ({
             ...state,
-            profileScope: { serverId: 'server-1', accountId: 'account-1' },
+            profileScope: { serverId, accountId: 'account-1' },
             sessionMessages: {},
-            sessions: {},
+            sessions: { s1: createSessionFixture({ id: 's1', serverId }), s2: createSessionFixture({ id: 's2', serverId }) },
             sessionListRowsByServerId: {},
         }));
     });
 
-    afterEach(() => {
+    afterEach(async () => {
         vi.useRealTimers();
         vi.clearAllMocks();
         resetUserMessageHistoryRemoteEntriesForTests();
         roleQuerySupportedState.supported = true;
         storage.setState((state) => ({
             ...state,
-            profileScope: { serverId: 'server-1', accountId: 'account-1' },
             sessionMessages: {},
         }));
+        await account.reset();
     });
 
     it('pages global sent history from unhydrated sessions in recency order, one page per demand', async () => {
         storage.setState({
             sessions: {
-                older: createSessionFixture({ id: 'older', serverId: 'server-1', updatedAt: 100, meaningfulActivityAt: 10 }),
-                newer: createSessionFixture({ id: 'newer', serverId: 'server-1', updatedAt: 20, meaningfulActivityAt: 20 }),
+                older: createSessionFixture({ id: 'older', serverId, updatedAt: 100, meaningfulActivityAt: 10 }),
+                newer: createSessionFixture({ id: 'newer', serverId, updatedAt: 20, meaningfulActivityAt: 20 }),
                 otherHome: createSessionFixture({ id: 'otherHome', serverId: 'server-2', updatedAt: 30 }),
             },
             sessionListRowsByServerId: {},
         });
-        fetchUserMessageHistoryPageMock
+        historyPageHttpReply
             .mockResolvedValueOnce({ status: 'loaded', rows: [
                 { messageId: 'm9', routeMessageId: 'server:m9', seq: 9, createdAt: 90, role: 'user', text: 'repeat' },
                 { messageId: 'a9', routeMessageId: 'server:a9', seq: 10, createdAt: 91, role: 'assistant', text: 'answer' },
@@ -89,19 +117,19 @@ describe('useUserMessageHistory server role query', () => {
                 { messageId: 'm9', routeMessageId: 'server:m9', seq: 9, createdAt: 9, role: 'user', text: 'older session' },
             ], hasMore: false, nextBeforeSeq: null });
         const hook = await renderHook(() => useUserMessageHistoryEntries({ scope: 'global', enabled: true }));
-        expect(fetchUserMessageHistoryPageMock).not.toHaveBeenCalled();
+        expect(historyPageHttpReply).not.toHaveBeenCalled();
         expect(hook.getCurrent().coverage).toBe('loaded');
         await act(async () => { await hook.getCurrent().loadMore(); });
-        expect(fetchUserMessageHistoryPageMock).toHaveBeenCalledTimes(1);
-        expect(fetchUserMessageHistoryPageMock).toHaveBeenNthCalledWith(1, 'newer', { limit: 40 });
+        expect(historyPageHttpReply).toHaveBeenCalledTimes(1);
+        expect(historyPageHttpReply).toHaveBeenNthCalledWith(1, 'newer', { limit: 40 });
         expect(hook.getCurrent().entries).toEqual([
-            { serverId: 'server-1', sessionId: 'newer', messageId: 'm9', seq: 9, createdAtMs: 90, text: 'repeat' },
+            { serverId, sessionId: 'newer', messageId: 'm9', seq: 9, createdAtMs: 90, text: 'repeat' },
         ]);
         expect(hook.getCurrent().coverage).toBe('partial');
         await act(async () => { await hook.getCurrent().loadMore(); });
-        expect(fetchUserMessageHistoryPageMock).toHaveBeenNthCalledWith(2, 'newer', { limit: 40, beforeSeq: 9 });
+        expect(historyPageHttpReply).toHaveBeenNthCalledWith(2, 'newer', { limit: 40, beforeSeq: 9 });
         await act(async () => { await hook.getCurrent().loadMore(); });
-        expect(fetchUserMessageHistoryPageMock).toHaveBeenNthCalledWith(3, 'older', { limit: 40 });
+        expect(historyPageHttpReply).toHaveBeenNthCalledWith(3, 'older', { limit: 40 });
         expect(hook.getCurrent().entries.map((entry) => [entry.sessionId, entry.messageId, entry.text])).toEqual([
             ['newer', 'm9', 'repeat'], ['newer', 'm4', 'repeat'], ['older', 'm9', 'older session'],
         ]);
@@ -113,14 +141,14 @@ describe('useUserMessageHistory server role query', () => {
     });
 
     it('keeps disabled history inert and Stop rejects late publication while leaving the shared page usable', async () => {
-        const page = createDeferred<Awaited<ReturnType<typeof fetchUserMessageHistoryPage>>>();
-        fetchUserMessageHistoryPageMock.mockReturnValueOnce(page.promise);
+        const page = createDeferred<FetchUserMessageHistoryPageResult>();
+        historyPageHttpReply.mockReturnValueOnce(page.promise);
         const hook = await renderHook(
             (props: { enabled: boolean }) => useUserMessageHistoryEntries({ scope: 'perSession', sessionId: 's1', enabled: props.enabled }),
             { initialProps: { enabled: false } },
         );
         await act(async () => { await hook.getCurrent().loadMore(); });
-        expect(fetchUserMessageHistoryPageMock).not.toHaveBeenCalled();
+        expect(historyPageHttpReply).not.toHaveBeenCalled();
         await hook.rerender({ enabled: true });
         let pending!: Promise<void>;
         await act(async () => { pending = hook.getCurrent().loadMore(); });
@@ -137,18 +165,18 @@ describe('useUserMessageHistory server role query', () => {
         await act(async () => { await hook.getCurrent().loadMore(); });
         expect(hook.getCurrent().entries[0]?.text).toBe('late');
         expect(hook.getCurrent().coverage).toBe('complete');
-        expect(fetchUserMessageHistoryPageMock).toHaveBeenCalledTimes(1);
+        expect(historyPageHttpReply).toHaveBeenCalledTimes(1);
         await hook.unmount();
     });
 
     it('does not publish an old Account page into the newly addressed history', async () => {
-        const page = createDeferred<Awaited<ReturnType<typeof fetchUserMessageHistoryPage>>>();
-        fetchUserMessageHistoryPageMock.mockReturnValueOnce(page.promise);
+        const page = createDeferred<FetchUserMessageHistoryPageResult>();
+        historyPageHttpReply.mockReturnValueOnce(page.promise);
         const hook = await renderHook(() => useUserMessageHistoryEntries({ scope: 'perSession', sessionId: 's1' }));
         let pending!: Promise<void>;
         await act(async () => { pending = hook.getCurrent().loadMore(); });
         await act(async () => {
-            storage.setState({ profileScope: { serverId: 'server-1', accountId: 'account-2' } });
+            await switchAccount('account-2');
             await hook.rerender();
             page.resolve({ status: 'loaded', rows: [
                 { messageId: 'm1', routeMessageId: 'server:m1', seq: 1, createdAt: 1, role: 'user', text: 'private old Account' },
@@ -157,9 +185,9 @@ describe('useUserMessageHistory server role query', () => {
         });
         expect(hook.getCurrent().entries).toEqual([]);
         expect(hook.getCurrent().coverage).toBe('loaded');
-        fetchUserMessageHistoryPageMock.mockResolvedValueOnce({ status: 'loaded', rows: [], hasMore: false, nextBeforeSeq: null });
+        historyPageHttpReply.mockResolvedValueOnce({ status: 'loaded', rows: [], hasMore: false, nextBeforeSeq: null });
         await act(async () => { await hook.getCurrent().loadMore(); });
-        expect(fetchUserMessageHistoryPageMock).toHaveBeenCalledTimes(2);
+        expect(historyPageHttpReply).toHaveBeenCalledTimes(2);
         expect(hook.getCurrent().coverage).toBe('complete');
         await hook.unmount();
     });
@@ -167,7 +195,7 @@ describe('useUserMessageHistory server role query', () => {
     it('retains readable records and partial coverage through a failed older page, then retries its cursor', async () => {
         vi.useFakeTimers({ toFake: ['Date'] });
         vi.setSystemTime(new Date('2026-01-01T00:00:00.000Z'));
-        fetchUserMessageHistoryPageMock
+        historyPageHttpReply
             .mockResolvedValueOnce({ status: 'loaded', rows: [
                 { messageId: 'm9', routeMessageId: 'server:m9', seq: 9, createdAt: 9, role: 'user', text: 'readable' },
             ], hasMore: true, nextBeforeSeq: 9 })
@@ -182,7 +210,7 @@ describe('useUserMessageHistory server role query', () => {
         expect(hook.getCurrent().isLoading).toBe(false);
         vi.setSystemTime(Date.now() + USER_MESSAGE_HISTORY_REMOTE_RETRY_COOLDOWN_MS);
         await act(async () => { await hook.getCurrent().retry(); });
-        expect(fetchUserMessageHistoryPageMock).toHaveBeenLastCalledWith('s1', { limit: 40, beforeSeq: 9 });
+        expect(historyPageHttpReply).toHaveBeenLastCalledWith('s1', { limit: 40, beforeSeq: 9 });
         expect(hook.getCurrent().entries[0]?.text).toBe('readable');
         expect(hook.getCurrent().coverage).toBe('complete');
         expect(hook.getCurrent().error).toBe(false);
@@ -190,7 +218,7 @@ describe('useUserMessageHistory server role query', () => {
     });
 
     it('reuses already read history when the picker reopens without issuing another page request', async () => {
-        fetchUserMessageHistoryPageMock.mockResolvedValueOnce({ status: 'loaded', rows: [
+        historyPageHttpReply.mockResolvedValueOnce({ status: 'loaded', rows: [
             { messageId: 'm1', routeMessageId: 'server:m1', seq: 1, createdAt: 1, role: 'user', text: 'retained prompt' },
         ], hasMore: false, nextBeforeSeq: null });
         const first = await renderHook(() => useUserMessageHistoryEntries({ scope: 'perSession', sessionId: 's1' }));
@@ -199,7 +227,7 @@ describe('useUserMessageHistory server role query', () => {
         const reopened = await renderHook(() => useUserMessageHistoryEntries({ scope: 'perSession', sessionId: 's1' }));
         expect(reopened.getCurrent().entries[0]?.text).toBe('retained prompt');
         expect(reopened.getCurrent().coverage).toBe('complete');
-        expect(fetchUserMessageHistoryPageMock).toHaveBeenCalledTimes(1);
+        expect(historyPageHttpReply).toHaveBeenCalledTimes(1);
         await reopened.unmount();
     });
 
@@ -212,14 +240,14 @@ describe('useUserMessageHistory server role query', () => {
         roleQuerySupportedState.supported = false;
         const hook = await renderHook(() => useUserMessageHistoryEntries({ scope: 'perSession', sessionId: 's1' }));
         await act(async () => { await hook.getCurrent().loadMore(); });
-        expect(fetchUserMessageHistoryPageMock).not.toHaveBeenCalled();
+        expect(historyPageHttpReply).not.toHaveBeenCalled();
         expect(hook.getCurrent().coverage).toBe('partial');
         expect(hook.getCurrent().error).toBe(true);
         expect(hook.getCurrent().entries).toEqual([
-            { serverId: 'server-1', sessionId: 's1', messageId: 'm1', seq: 1, createdAtMs: 1, text: '  readable prompt\n' },
+            { serverId, sessionId: 's1', messageId: 'm1', seq: 1, createdAtMs: 1, text: '  readable prompt\n' },
         ]);
         roleQuerySupportedState.supported = true;
-        fetchUserMessageHistoryPageMock.mockResolvedValueOnce({ status: 'loaded', rows: [
+        historyPageHttpReply.mockResolvedValueOnce({ status: 'loaded', rows: [
             { messageId: 'm1', routeMessageId: 'server:m1', seq: 1, createdAt: 1, role: 'user', text: '  readable prompt\n' },
         ], hasMore: false, nextBeforeSeq: null });
         await hook.rerender();
@@ -231,7 +259,7 @@ describe('useUserMessageHistory server role query', () => {
 
     it('keeps an explicitly addressed Home isolated from another active Home inventory', async () => {
         storage.setState({
-            sessions: { s1: createSessionFixture({ id: 's1', serverId: 'server-1' }) },
+            sessions: { s1: createSessionFixture({ id: 's1', serverId }) },
             sessionMessages: { s1: createSessionMessagesFixture({ messageIdsOldestFirst: ['m1'], messagesById: {
                 m1: { kind: 'user-text', id: 'm1', localId: null, createdAt: 1, text: 'private active Home' },
             } }) },
@@ -239,14 +267,14 @@ describe('useUserMessageHistory server role query', () => {
         const hook = await renderHook(() => useUserMessageHistoryEntries({ scope: 'global', serverId: 'server-2' }));
         expect(hook.getCurrent().entries).toEqual([]);
         await act(async () => { await hook.getCurrent().loadMore(); });
-        expect(fetchUserMessageHistoryPageMock).not.toHaveBeenCalled();
+        expect(historyPageHttpReply).not.toHaveBeenCalled();
         expect(hook.getCurrent().coverage).toBe('partial');
         expect(hook.getCurrent().error).toBe(true);
         await hook.unmount();
     });
 
     it('reads the latest history before certifying a shared cache that began below a loaded transcript window', async () => {
-        fetchUserMessageHistoryPageMock
+        historyPageHttpReply
             .mockResolvedValueOnce({ status: 'loaded', rows: [
                 { messageId: 'm4', routeMessageId: 'server:m4', seq: 4, createdAt: 4, role: 'user', text: 'older navigation cache' },
             ], hasMore: false, nextBeforeSeq: null })
@@ -259,11 +287,11 @@ describe('useUserMessageHistory server role query', () => {
         await navigation.unmount();
         const hook = await renderHook(() => useUserMessageHistoryEntries({ scope: 'perSession', sessionId: 's1' }));
         await act(async () => { await hook.getCurrent().loadMore(); });
-        expect(fetchUserMessageHistoryPageMock).toHaveBeenNthCalledWith(2, 's1', { limit: 40 });
+        expect(historyPageHttpReply).toHaveBeenNthCalledWith(2, 's1', { limit: 40 });
         expect(hook.getCurrent().entries.map((entry) => entry.text)).toEqual(['latest prompt', 'older navigation cache']);
         expect(hook.getCurrent().coverage).toBe('partial');
         await act(async () => { await hook.getCurrent().loadMore(); });
-        expect(fetchUserMessageHistoryPageMock).toHaveBeenNthCalledWith(3, 's1', { limit: 40, beforeSeq: 9 });
+        expect(historyPageHttpReply).toHaveBeenNthCalledWith(3, 's1', { limit: 40, beforeSeq: 9 });
         expect(hook.getCurrent().coverage).toBe('complete');
         await hook.unmount();
     });
@@ -275,7 +303,7 @@ describe('useUserMessageHistory server role query', () => {
             hasMore: boolean;
             nextBeforeSeq: number | null;
         }>();
-        fetchUserMessageHistoryPageMock.mockReturnValueOnce(page.promise);
+        historyPageHttpReply.mockReturnValueOnce(page.promise);
 
         const hook = await renderHook(() => {
             const first = useUserMessageHistoryRemoteEntries({
@@ -297,8 +325,8 @@ describe('useUserMessageHistory server role query', () => {
             await flushHookEffects();
         });
 
-        expect(fetchUserMessageHistoryPageMock).toHaveBeenCalledTimes(1);
-        expect(fetchUserMessageHistoryPageMock).toHaveBeenCalledWith('s1', { limit: 40 });
+        expect(historyPageHttpReply).toHaveBeenCalledTimes(1);
+        expect(historyPageHttpReply).toHaveBeenCalledWith('s1', { limit: 40 });
 
         await act(async () => {
             page.resolve({
@@ -317,7 +345,7 @@ describe('useUserMessageHistory server role query', () => {
     });
 
     it('keys shared remote history by active server account scope', async () => {
-        fetchUserMessageHistoryPageMock
+        historyPageHttpReply
             .mockResolvedValueOnce({
                 status: 'loaded',
                 rows: [{ messageId: 'm5', routeMessageId: 'server:m5', seq: 5, createdAt: 50, role: 'user' as const, text: 'account one prompt' }],
@@ -346,10 +374,7 @@ describe('useUserMessageHistory server role query', () => {
         expect(hook.getCurrent().rows.map((entry) => entry.text)).toEqual(['account one prompt']);
 
         await act(async () => {
-            storage.setState((state) => ({
-                ...state,
-                profileScope: { serverId: 'server-1', accountId: 'account-2' },
-            }));
+            await switchAccount('account-2');
             await hook.rerender();
         });
 
@@ -358,13 +383,13 @@ describe('useUserMessageHistory server role query', () => {
             await flushHookEffects();
         });
 
-        expect(fetchUserMessageHistoryPageMock).toHaveBeenCalledTimes(2);
+        expect(historyPageHttpReply).toHaveBeenCalledTimes(2);
         expect(hook.getCurrent().rows.map((entry) => entry.text)).toEqual(['account two prompt']);
         await hook.unmount();
     });
 
     it('reuses shared remote entries when composer history warms up later', async () => {
-        fetchUserMessageHistoryPageMock.mockResolvedValueOnce({
+        historyPageHttpReply.mockResolvedValueOnce({
             status: 'loaded',
             rows: [{ messageId: 'm5', routeMessageId: 'server:m5', seq: 5, createdAt: 50, role: 'user' as const, text: 'cached remote prompt' }],
             hasMore: false,
@@ -392,13 +417,13 @@ describe('useUserMessageHistory server role query', () => {
             await flushHookEffects();
         });
 
-        expect(fetchUserMessageHistoryPageMock).toHaveBeenCalledTimes(1);
+        expect(historyPageHttpReply).toHaveBeenCalledTimes(1);
         expect(historyHook.getCurrent().moveUp('draft')).toBe('cached remote prompt');
         await historyHook.unmount();
     });
 
     it('preserves repeated remote prompt text as distinct seq-backed entries', async () => {
-        fetchUserMessageHistoryPageMock.mockResolvedValueOnce({
+        historyPageHttpReply.mockResolvedValueOnce({
             status: 'loaded',
             rows: [
                 { messageId: 'm8', routeMessageId: 'server:m8', seq: 8, createdAt: 80, role: 'user' as const, text: 'repeat this' },
@@ -427,7 +452,7 @@ describe('useUserMessageHistory server role query', () => {
     });
 
     it('extends the cached record when the transcript cursor moves older instead of refetching from scratch', async () => {
-        fetchUserMessageHistoryPageMock
+        historyPageHttpReply
             .mockResolvedValueOnce({
                 status: 'loaded',
                 rows: [{ messageId: 'm9', routeMessageId: 'server:m9', seq: 9, createdAt: 90, role: 'user' as const, text: 'first page' }],
@@ -464,13 +489,13 @@ describe('useUserMessageHistory server role query', () => {
             await flushHookEffects();
         });
 
-        expect(fetchUserMessageHistoryPageMock).toHaveBeenNthCalledWith(2, 's1', { limit: 40, beforeSeq: 9 });
+        expect(historyPageHttpReply).toHaveBeenNthCalledWith(2, 's1', { limit: 40, beforeSeq: 9 });
         expect(hook.getCurrent().rows.map((row) => row.text)).toEqual(['first page', 'second page']);
         await hook.unmount();
     });
 
     it('keeps agent rows out of composer history while sharing one fetched page', async () => {
-        fetchUserMessageHistoryPageMock.mockResolvedValueOnce({
+        historyPageHttpReply.mockResolvedValueOnce({
             status: 'loaded',
             rows: [
                 { messageId: 'm5', routeMessageId: 'server:m5', seq: 5, createdAt: 50, role: 'user' as const, text: 'a prompt' },
@@ -495,8 +520,8 @@ describe('useUserMessageHistory server role query', () => {
     });
 
     it('walks the newest remote prompt first when the real history fetch produces the page', async () => {
-        // Composed on purpose: the mock stops at the HTTP transport so the real page pipeline,
-        // the real row builder and the real merge decide the order the composer navigates.
+        // The raw stored wire retains expanded text and authored display text separately.
+        // Real Sync, content parsing and the history projection decide what is replayed.
         const serverPage = {
             // A `beforeSeq` page comes back newest-first from the server.
             messages: [3, 2, 1].map((seq) => ({
@@ -513,18 +538,7 @@ describe('useUserMessageHistory server role query', () => {
             hasMore: false,
             nextBeforeSeq: null,
         };
-        fetchUserMessageHistoryPageMock.mockImplementation((
-            sessionId: string,
-            options?: Readonly<{ beforeSeq?: number | null; limit?: number }>,
-        ) => fetchUserMessageHistoryPage({
-            sessionId,
-            sessionEncryptionMode: 'plain',
-            beforeSeq: options?.beforeSeq ?? null,
-            limit: options?.limit,
-            // Narrow transport fixture: only the network response shape is faked.
-            request: async () => ({ ok: true, status: 200, json: async () => serverPage } as Response),
-            getSessionEncryption: () => null,
-        }));
+        account.home.answer(serverId, '/v1/sessions/s1/messages', { body: SessionMessagesPageV1Schema.parse(serverPage) });
 
         const hook = await renderHook(() =>
             useUserMessageHistory({ scope: 'perSession', sessionId: 's1', maxEntries: 20 }),
@@ -541,10 +555,9 @@ describe('useUserMessageHistory server role query', () => {
         await hook.unmount();
     });
 
-    it('keeps the cursor retryable when session keys are not ready yet', async () => {
-        fetchUserMessageHistoryPageMock
-            .mockResolvedValueOnce({ status: 'not_ready' })
-            .mockResolvedValueOnce({
+    it('keeps the cursor retryable until the addressed Session shell is hydrated', async () => {
+        storage.setState({ sessions: {}, sessionListRowsByServerId: {} });
+        historyPageHttpReply.mockResolvedValueOnce({
                 status: 'loaded',
                 rows: [{ messageId: 'm3', routeMessageId: 'server:m3', seq: 3, createdAt: 30, role: 'user' as const, text: 'decrypted later' }],
                 hasMore: false,
@@ -556,6 +569,7 @@ describe('useUserMessageHistory server role query', () => {
                 enabled: true,
                 initialBeforeSeq: null,
                 sessionId: 's1',
+                serverId,
             }),
         );
 
@@ -565,8 +579,10 @@ describe('useUserMessageHistory server role query', () => {
         });
         expect(hook.getCurrent().pendingEncryption).toBe(true);
         expect(hook.getCurrent().hasMore).toBe(true);
+        expect(historyPageHttpReply).not.toHaveBeenCalled();
 
         await act(async () => {
+            storage.setState({ sessions: { s1: createSessionFixture({ id: 's1', serverId }) } });
             hook.getCurrent().requestNextPage();
             await flushHookEffects();
         });
@@ -577,7 +593,7 @@ describe('useUserMessageHistory server role query', () => {
     });
 
     it('loads server user messages on warmup when no local per-session history is loaded', async () => {
-        fetchUserMessageHistoryPageMock.mockResolvedValueOnce({
+        historyPageHttpReply.mockResolvedValueOnce({
             status: 'loaded',
             rows: [{ messageId: 'm3', routeMessageId: 'server:m3', seq: 3, createdAt: 30, role: 'user' as const, text: 'from server' }],
             hasMore: false,
@@ -593,7 +609,7 @@ describe('useUserMessageHistory server role query', () => {
             await flushHookEffects();
         });
 
-        expect(fetchUserMessageHistoryPageMock).toHaveBeenCalledWith('s1', {
+        expect(historyPageHttpReply).toHaveBeenCalledWith('s1', {
             limit: 40,
         });
         expect(hook.getCurrent().moveUp('draft')).toBe('from server');
@@ -611,7 +627,7 @@ describe('useUserMessageHistory server role query', () => {
             await flushHookEffects();
         });
 
-        expect(fetchUserMessageHistoryPageMock).not.toHaveBeenCalled();
+        expect(historyPageHttpReply).not.toHaveBeenCalled();
         await hook.unmount();
     });
 
@@ -620,7 +636,7 @@ describe('useUserMessageHistory server role query', () => {
         // hook still runs on real microtasks.
         vi.useFakeTimers({ toFake: ['Date'] });
         vi.setSystemTime(new Date('2026-01-01T00:00:00.000Z'));
-        fetchUserMessageHistoryPageMock
+        historyPageHttpReply
             .mockResolvedValueOnce({ status: 'error' })
             .mockResolvedValueOnce({
                 status: 'loaded',
@@ -642,7 +658,7 @@ describe('useUserMessageHistory server role query', () => {
             await flushHookEffects();
         });
         expect(hook.getCurrent().rows).toEqual([]);
-        expect(fetchUserMessageHistoryPageMock).toHaveBeenCalledTimes(1);
+        expect(historyPageHttpReply).toHaveBeenCalledTimes(1);
 
         // A failed page leaves the cursor unchanged, so the transcript-navigation continuation
         // effect re-drives it on every transcript store update. Those must not reach the wire.
@@ -652,7 +668,7 @@ describe('useUserMessageHistory server role query', () => {
             hook.getCurrent().requestNextPage();
             await flushHookEffects();
         });
-        expect(fetchUserMessageHistoryPageMock).toHaveBeenCalledTimes(1);
+        expect(historyPageHttpReply).toHaveBeenCalledTimes(1);
 
         vi.setSystemTime(Date.now() + USER_MESSAGE_HISTORY_REMOTE_RETRY_COOLDOWN_MS);
         await act(async () => {
@@ -660,7 +676,7 @@ describe('useUserMessageHistory server role query', () => {
             await flushHookEffects();
         });
 
-        expect(fetchUserMessageHistoryPageMock).toHaveBeenCalledTimes(2);
+        expect(historyPageHttpReply).toHaveBeenCalledTimes(2);
         expect(hook.getCurrent().rows.map((entry) => entry.text)).toEqual(['retried prompt']);
         await hook.unmount();
     });
@@ -668,7 +684,7 @@ describe('useUserMessageHistory server role query', () => {
     it('cools the cursor down when the remote history request rejects outright', async () => {
         vi.useFakeTimers({ toFake: ['Date'] });
         vi.setSystemTime(new Date('2026-01-01T00:00:00.000Z'));
-        fetchUserMessageHistoryPageMock.mockRejectedValueOnce(new Error('offline'));
+        historyPageHttpReply.mockRejectedValueOnce(new Error('offline'));
 
         const hook = await renderHook(() =>
             useUserMessageHistoryRemoteEntries({
@@ -688,13 +704,13 @@ describe('useUserMessageHistory server role query', () => {
             await flushHookEffects();
         });
 
-        expect(fetchUserMessageHistoryPageMock).toHaveBeenCalledTimes(1);
+        expect(historyPageHttpReply).toHaveBeenCalledTimes(1);
         expect(hook.getCurrent().hasMore).toBe(true);
         await hook.unmount();
     });
 
     it('prefetches before reaching the oldest loaded user message and stops after exhaustion', async () => {
-        fetchUserMessageHistoryPageMock
+        historyPageHttpReply
             .mockResolvedValueOnce({
                 status: 'loaded',
                 rows: [
@@ -729,7 +745,7 @@ describe('useUserMessageHistory server role query', () => {
             await flushHookEffects();
         });
 
-        expect(fetchUserMessageHistoryPageMock).toHaveBeenLastCalledWith('s1', {
+        expect(historyPageHttpReply).toHaveBeenLastCalledWith('s1', {
             limit: 40,
             beforeSeq: 7,
         });
@@ -740,7 +756,7 @@ describe('useUserMessageHistory server role query', () => {
             await flushHookEffects();
         });
 
-        expect(fetchUserMessageHistoryPageMock).toHaveBeenCalledTimes(2);
+        expect(historyPageHttpReply).toHaveBeenCalledTimes(2);
         await hook.unmount();
     });
 
@@ -751,7 +767,7 @@ describe('useUserMessageHistory server role query', () => {
             hasMore: boolean;
             nextBeforeSeq: number | null;
         }>();
-        fetchUserMessageHistoryPageMock.mockReturnValueOnce(stalePage.promise);
+        historyPageHttpReply.mockReturnValueOnce(stalePage.promise);
 
         const hook = await renderHook(
             (props: { sessionId: string }) =>
@@ -811,7 +827,7 @@ describe('useUserMessageHistory server role query', () => {
             await flushHookEffects();
         });
 
-        fetchUserMessageHistoryPageMock.mockResolvedValueOnce({
+        historyPageHttpReply.mockResolvedValueOnce({
             status: 'loaded',
             rows: [],
             hasMore: false,
@@ -855,7 +871,7 @@ describe('useUserMessageHistory server role query', () => {
         expect(hook.getCurrent().moveUp('draft')).toBe('newer prompt');
 
         roleQuerySupportedState.supported = true;
-        fetchUserMessageHistoryPageMock.mockResolvedValue({
+        historyPageHttpReply.mockResolvedValue({
             status: 'loaded',
             rows: [],
             hasMore: false,

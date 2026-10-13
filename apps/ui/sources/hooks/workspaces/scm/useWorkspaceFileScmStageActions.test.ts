@@ -1,230 +1,126 @@
-import { describe, expect, it, vi } from 'vitest';
 import { act } from 'react-test-renderer';
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
+import { createScmCapabilities, ScmWorkingSnapshotSchema } from '@happier-dev/protocol/scm';
+import { RPC_METHODS } from '@happier-dev/protocol/rpc';
+import { normalizeActionsSettingsV1 } from '@happier-dev/protocol/actions/actionSettings';
+import { renderHook, standardCleanup } from '@/dev/testkit';
+import { serveActionHomes } from '@/dev/testkit/harness/actionHomesHttpHarness';
+import { createPlainAccountEncryptionCurrentnessFixture } from '@/dev/testkit/fixtures/accountEncryptionCurrentness';
 
-import { renderHook } from '@/dev/testkit';
+vi.mock('socket.io-client', async importOriginal =>
+    (await import('@/dev/testkit/harness/serverAccountConnectionHarness')).createSocketIoClientBoundary(importOriginal));
+vi.mock('@/modal', async () => (await import('@/dev/testkit/mocks/modal')).createModalModuleMock().module);
+vi.mock('@/text', async () => (await import('@/dev/testkit/mocks/text')).createTextModuleMock({ translate: key => key }));
+type RpcRequest = Parameters<typeof import('@/sync/runtime/orchestration/serverScopedRpc/serverScopedMachineRpc').machineRpcWithServerScope>[0];
+const rpc = vi.hoisted(() => vi.fn<(request: RpcRequest) => Promise<unknown>>());
+vi.mock('@/sync/runtime/orchestration/serverScopedRpc/serverScopedMachineRpc', async () =>
+    (await import('@/dev/testkit/mocks/serverScopedRpc')).createServerScopedMachineRpcBoundaryMock(rpc));
 
-(globalThis as any).IS_REACT_ACT_ENVIRONMENT = true;
-
-const state = vi.hoisted(() => ({
-    markPaths: vi.fn(),
-    unmarkPaths: vi.fn(),
-    removePatch: vi.fn(),
-    upsertPatch: vi.fn(),
-    appendOp: vi.fn(),
-    beginWorkspaceScmOperation: vi.fn((_scope: unknown, _operation: unknown) => ({
-        started: true as const,
-        operation: { id: 'workspace-op-1', startedAt: 1, sessionId: 'workspace', operation: 'stage' as const },
-    })),
-    finishWorkspaceScmOperation: vi.fn((_scope: unknown, _operationId: unknown) => true),
-    updateWorkspaceScmSnapshot: vi.fn(),
-    updateWorkspaceScmSnapshotError: vi.fn(),
-    updateWorkspaceScmStatus: vi.fn(),
-    pruneWorkspaceScmTouchedPaths: vi.fn(),
-    pruneWorkspaceScmCommitSelectionPaths: vi.fn(),
-    pruneWorkspaceScmCommitSelectionPatches: vi.fn(),
-}));
-const settingsState = vi.hoisted(() => ({
-    isAtomic: true,
-}));
-const machineScmChangeIncludeMock = vi.hoisted(() => vi.fn(async (..._args: unknown[]) => ({ success: true })));
-const machineScmChangeExcludeMock = vi.hoisted(() => vi.fn(async (..._args: unknown[]) => ({ success: true })));
-const fetchSnapshotForMachinePathMock = vi.hoisted(() => vi.fn(async (..._args: unknown[]) => null));
-
-vi.mock('@/sync/domains/state/storage', async () => {
-    const { createStorageModuleStub, createStorageStoreMock } = await import('@/dev/testkit/mocks/storage');
-    const store = createStorageStoreMock({
-        markWorkspaceScmCommitSelectionPaths: (scope: any, paths: any) => state.markPaths(scope, paths),
-        unmarkWorkspaceScmCommitSelectionPaths: (scope: any, paths: any) => state.unmarkPaths(scope, paths),
-        removeWorkspaceScmCommitSelectionPatch: (scope: any, path: any) => state.removePatch(scope, path),
-        upsertWorkspaceScmCommitSelectionPatch: (scope: any, patch: any) => state.upsertPatch(scope, patch),
-        appendWorkspaceScmOperation: (scope: any, entry: any) => state.appendOp(scope, entry),
-        beginWorkspaceScmOperation: (scope: any, operation: any) => state.beginWorkspaceScmOperation(scope, operation),
-        finishWorkspaceScmOperation: (scope: any, operationId: any) => state.finishWorkspaceScmOperation(scope, operationId),
-        updateWorkspaceScmSnapshot: (scope: any, snapshot: any) => state.updateWorkspaceScmSnapshot(scope, snapshot),
-        updateWorkspaceScmSnapshotError: (scope: any, error: any) => state.updateWorkspaceScmSnapshotError(scope, error),
-        updateWorkspaceScmStatus: (scope: any, status: any) => state.updateWorkspaceScmStatus(scope, status),
-        pruneWorkspaceScmTouchedPaths: (scope: any, activePaths: any) => state.pruneWorkspaceScmTouchedPaths(scope, activePaths),
-        pruneWorkspaceScmCommitSelectionPaths: (scope: any, activePaths: any) => state.pruneWorkspaceScmCommitSelectionPaths(scope, activePaths),
-        pruneWorkspaceScmCommitSelectionPatches: (scope: any, activePaths: any) => state.pruneWorkspaceScmCommitSelectionPatches(scope, activePaths),
-    } as any);
-
-    return createStorageModuleStub({
-        storage: store as any,
-    });
+const { storage } = await import('@/sync/domains/state/storage');
+const { projectManager } = await import('@/sync/runtime/orchestration/projectManager');
+const { useWorkspaceFileScmStageActions } = await import('./useWorkspaceFileScmStageActions');
+const capabilities = createScmCapabilities({ readStatus: true, writeInclude: true, writeExclude: true, writeCommitLineSelection: true });
+let home: Awaited<ReturnType<typeof serveActionHomes>>;
+let disconnect: (() => Promise<void>) | undefined;
+let scope = { serverId: '', machineId: 'machine-1', rootPath: '/stage-repo' };
+let sequence = 0;
+const snapshot = () => ScmWorkingSnapshotSchema.parse({
+    projectKey: 'stage-project', fetchedAt: 1,
+    repo: { isRepo: true, rootPath: scope.rootPath, backendId: 'git', mode: '.git' },
+    capabilities, branch: { head: 'main', upstream: null, ahead: 0, behind: 0, detached: false },
+    hasConflicts: false,
+    entries: [{ path: 'src/a.ts', kind: 'modified', previousPath: null, includeStatus: '', pendingStatus: 'M',
+        hasIncludedDelta: false, hasPendingDelta: true,
+        stats: { includedAdded: 0, includedRemoved: 0, pendingAdded: 1, pendingRemoved: 1, isBinary: false } }],
+    totals: { includedFiles: 0, pendingFiles: 1, untrackedFiles: 0, includedAdded: 0,
+        includedRemoved: 0, pendingAdded: 1, pendingRemoved: 1 },
 });
-
-vi.mock('@/modal', async () => {
-    const { createModalModuleMock } = await import('@/dev/testkit/mocks/modal');
-    return createModalModuleMock().module;
-});
-
-vi.mock('@/text', async () => {
-    const { createTextModuleMock } = await import('@/dev/testkit/mocks/text');
-    return createTextModuleMock({ translate: (key: string) => key });
-});
-
-vi.mock('@/scm/settings/commitStrategy', () => ({
-    SCM_COMMIT_STRATEGIES: ['atomic', 'split'] as const,
-    isAtomicCommitStrategy: () => settingsState.isAtomic,
-}));
-
-vi.mock('@/hooks/ui/useMountedRef', () => ({
-    useMountedRef: () => ({ current: false }),
-}));
-
-vi.mock('@/sync/ops/scm/machineScm', () => ({
-    machineScmChangeInclude: (...args: unknown[]) => machineScmChangeIncludeMock(...args),
-    machineScmChangeExclude: (...args: unknown[]) => machineScmChangeExcludeMock(...args),
-}));
-
-vi.mock('@/scm/scmRepositoryService', async (importOriginal) => {
-    const actual = await importOriginal<typeof import('@/scm/scmRepositoryService')>();
-    return {
-        ...actual,
-        scmRepositoryService: {
-            fetchSnapshotForMachinePath: (...args: unknown[]) => fetchSnapshotForMachinePathMock(...args),
-        },
-    };
-});
+const diff = ['diff --git a/src/a.ts b/src/a.ts', '--- a/src/a.ts', '+++ b/src/a.ts',
+    '@@ -1 +1 @@', '-old', '+new', ''].join('\n');
+function input(overrides: Partial<Parameters<typeof useWorkspaceFileScmStageActions>[0]> = {}) {
+    return { scope, filePath: 'src/a.ts', scmSnapshot: snapshot(), scmWriteEnabled: true,
+        scmCommitStrategy: 'atomic' as const, includeExcludeEnabled: false,
+        diffMode: 'pending' as const, diffContent: null, lineSelectionEnabled: false,
+        selectedLineKeys: new Set<string>(), refreshAll: async () => {},
+        setSelectedLineKeys: vi.fn(), ...overrides };
+}
 
 describe('useWorkspaceFileScmStageActions', () => {
-    it('marks/unmarks workspace commit selection in atomic commit strategy', async () => {
-        settingsState.isAtomic = true;
-        state.markPaths.mockClear();
-        state.unmarkPaths.mockClear();
-        state.removePatch.mockClear();
-        state.upsertPatch.mockClear();
-        state.appendOp.mockClear();
-
-        const { useWorkspaceFileScmStageActions } = await import('./useWorkspaceFileScmStageActions');
-        const scope = { serverId: 'server-1', machineId: 'machine-1', rootPath: '/repo' };
-
-        const hook = await renderHook(() => useWorkspaceFileScmStageActions({
-            scope,
-            filePath: 'src/a.ts',
-            scmSnapshot: null,
-            scmWriteEnabled: true,
-            scmCommitStrategy: 'atomic' as any,
-            includeExcludeEnabled: false,
-            diffMode: 'pending',
-            diffContent: null,
-            lineSelectionEnabled: false,
-            selectedLineKeys: new Set<string>(),
-            refreshAll: async () => {},
-            setSelectedLineKeys: () => {},
-        }));
-
-        await act(async () => {
-            await hook.getCurrent().handleStage(true);
-        });
-        expect(state.markPaths).toHaveBeenCalledWith(expect.objectContaining({ machineId: 'machine-1' }), ['src/a.ts']);
-        expect(state.removePatch).toHaveBeenCalledWith(expect.objectContaining({ machineId: 'machine-1' }), 'src/a.ts');
-
-        await hook.getCurrent().handleStage(false);
-        expect(state.unmarkPaths).toHaveBeenCalledWith(expect.objectContaining({ machineId: 'machine-1' }), ['src/a.ts']);
-        expect(state.removePatch).toHaveBeenCalledWith(expect.objectContaining({ machineId: 'machine-1' }), 'src/a.ts');
+    beforeEach(async () => {
+        projectManager.clear();
+        home = await serveActionHomes({ homes: [{ key: 'stage', serverUrl: `https://stage-${++sequence}.test`,
+            accountId: 'stage-account', currentAccount: true, settings: {
+                actionsSettingsV1: normalizeActionsSettingsV1({ v: 1, approvalWaivedSurfaces: {
+                    'scm.change.include': ['ui'], 'scm.change.exclude': ['ui'],
+                } }),
+            } }], route: request => request.path === '/v1/account/encryption/currentness'
+                ? Response.json(createPlainAccountEncryptionCurrentnessFixture()) : undefined });
+        disconnect = await home.restoreActiveConnection();
+        scope = { ...scope, serverId: home.homes.stage!.id };
+        rpc.mockReset().mockImplementation(async request =>
+            request.method === RPC_METHODS.SCM_STATUS_SNAPSHOT ? { success: true, snapshot: snapshot() }
+                : request.method === RPC_METHODS.SCM_BACKEND_DESCRIBE ? { success: true, capabilities }
+                : { success: true });
     });
-
-    it('reports atomic line-selection persistence failure without clearing selected lines', async () => {
-        settingsState.isAtomic = true;
-        state.markPaths.mockClear();
-        state.unmarkPaths.mockClear();
-        state.removePatch.mockClear();
-        state.upsertPatch.mockReset();
-        state.appendOp.mockClear();
-        state.upsertPatch.mockImplementationOnce(() => {
-            throw new Error('persist failed');
-        });
-        const setSelectedLineKeys = vi.fn();
-
-        const { useWorkspaceFileScmStageActions } = await import('./useWorkspaceFileScmStageActions');
-        const scope = { serverId: 'server-1', machineId: 'machine-1', rootPath: '/repo' };
-
-        const hook = await renderHook(() => useWorkspaceFileScmStageActions({
-            scope,
-            filePath: 'src/a.ts',
-            scmSnapshot: {
-                capabilities: {
-                    writeCommitLineSelection: true,
-                },
-            } as any,
-            scmWriteEnabled: true,
-            scmCommitStrategy: 'atomic' as any,
-            includeExcludeEnabled: false,
-            diffMode: 'pending',
-            diffContent: [
-                'diff --git a/src/a.ts b/src/a.ts',
-                '--- a/src/a.ts',
-                '+++ b/src/a.ts',
-                '@@ -1 +1 @@',
-                '-old',
-                '+new',
-                '',
-            ].join('\n'),
-            lineSelectionEnabled: true,
-            selectedLineKeys: new Set<string>(['additions:1']),
-            refreshAll: async () => {},
-            setSelectedLineKeys,
-        }));
-
+    afterEach(async () => {
+        await standardCleanup();
+        await disconnect?.(); disconnect = undefined;
+        await home?.dispose();
+    });
+    it('marks/unmarks real atomic selection and removes the superseded line patch', async () => {
+        storage.getState().upsertWorkspaceScmCommitSelectionPatch(scope, { path: 'src/a.ts', patch: 'old patch' });
+        const hook = await renderHook(() => useWorkspaceFileScmStageActions(input()));
+        await act(async () => { await hook.getCurrent().handleStage(true); });
+        expect(storage.getState().getWorkspaceScmCommitSelectionPaths(scope)).toEqual(['src/a.ts']);
+        expect(storage.getState().getWorkspaceScmCommitSelectionPatches(scope)).toEqual([]);
+        await act(async () => { await hook.getCurrent().handleStage(false); });
+        expect(storage.getState().getWorkspaceScmCommitSelectionPaths(scope)).toEqual([]);
+        expect(storage.getState().getWorkspaceScmCommitSelectionPatches(scope)).toEqual([]);
+        expect(rpc).not.toHaveBeenCalled();
+    });
+    it('refuses an invalid atomic line selection without throwing or clearing the selected lines', async () => {
+        const request = input({ diffContent: diff, lineSelectionEnabled: true, selectedLineKeys: new Set(['additions:999']) });
+        const hook = await renderHook(() => useWorkspaceFileScmStageActions(request));
         let result: unknown;
         let caught: unknown = null;
-        try {
-            result = await hook.getCurrent().applySelectedLines();
-        } catch (error) {
-            caught = error;
-        }
-
+        try { await act(async () => { result = await hook.getCurrent().applySelectedLines(); }); }
+        catch (error) { caught = error; }
         expect(caught).toBeNull();
         expect(result).toBe(false);
-        expect(setSelectedLineKeys).not.toHaveBeenCalled();
+        expect(request.setSelectedLineKeys).not.toHaveBeenCalled();
+        expect(storage.getState().getWorkspaceScmCommitSelectionPatches(scope)).toEqual([]);
+        expect(rpc).not.toHaveBeenCalled();
     });
-
-    it('keeps workspace server scope when live-staging a file and refreshing the snapshot', async () => {
-        settingsState.isAtomic = false;
-        state.beginWorkspaceScmOperation.mockClear();
-        state.finishWorkspaceScmOperation.mockClear();
-        machineScmChangeIncludeMock.mockClear();
-        fetchSnapshotForMachinePathMock.mockClear();
-
-        const { useWorkspaceFileScmStageActions } = await import('./useWorkspaceFileScmStageActions');
-        const scope = { serverId: 'server-1', machineId: 'machine-1', rootPath: '/repo' };
-
-        const hook = await renderHook(() => useWorkspaceFileScmStageActions({
-            scope,
-            filePath: 'src/a.ts',
-            scmSnapshot: {
-                repo: { isRepo: true, rootPath: '/repo' },
-                capabilities: {
-                    writeInclude: true,
-                    writeExclude: true,
-                },
-                hasConflicts: false,
-                totals: {},
-                entries: [],
-            } as any,
-            scmWriteEnabled: true,
-            scmCommitStrategy: 'git_staging' as any,
-            includeExcludeEnabled: true,
-            diffMode: 'pending',
-            diffContent: null,
-            lineSelectionEnabled: false,
-            selectedLineKeys: new Set<string>(),
-            refreshAll: async () => {},
-            setSelectedLineKeys: () => {},
+    it('persists a valid atomic line patch and clears the selection only after accepting it', async () => {
+        storage.getState().markWorkspaceScmCommitSelectionPaths(scope, ['src/a.ts']);
+        const request = input({ diffContent: diff, lineSelectionEnabled: true, selectedLineKeys: new Set(['additions:1']) });
+        const hook = await renderHook(() => useWorkspaceFileScmStageActions(request));
+        let result: unknown;
+        await act(async () => { result = await hook.getCurrent().applySelectedLines(); });
+        expect(result).toBe(true);
+        expect(storage.getState().getWorkspaceScmCommitSelectionPaths(scope)).toEqual([]);
+        expect(storage.getState().getWorkspaceScmCommitSelectionPatches(scope)).toEqual([
+            expect.objectContaining({ path: 'src/a.ts', patch: expect.stringContaining('+new') }),
+        ]);
+        expect(request.setSelectedLineKeys).toHaveBeenCalledWith(new Set());
+        expect(rpc).not.toHaveBeenCalled();
+    });
+    it('live-stages through real Action admission and refreshes the same workspace snapshot', async () => {
+        const hook = await renderHook(() => useWorkspaceFileScmStageActions(input({
+            scmCommitStrategy: 'git_staging', includeExcludeEnabled: true,
+        })));
+        await act(async () => { await hook.getCurrent().handleStage(true); });
+        expect(rpc).toHaveBeenCalledWith(expect.objectContaining({
+            serverId: scope.serverId, machineId: scope.machineId, method: RPC_METHODS.SCM_CHANGE_INCLUDE,
+            payload: expect.objectContaining({ cwd: scope.rootPath, paths: ['src/a.ts'] }),
         }));
-
-        await hook.getCurrent().handleStage(true);
-
-        expect(machineScmChangeIncludeMock).toHaveBeenCalledWith(
-            'machine-1',
-            { cwd: '/repo', paths: ['src/a.ts'] },
-            { serverId: 'server-1' },
-        );
-        expect(fetchSnapshotForMachinePathMock).toHaveBeenCalledWith({
-            serverId: 'server-1',
-            machineId: 'machine-1',
-            path: '/repo',
-        });
+        expect(rpc).toHaveBeenCalledWith(expect.objectContaining({
+            serverId: scope.serverId, machineId: scope.machineId, method: RPC_METHODS.SCM_STATUS_SNAPSHOT,
+            payload: expect.objectContaining({ cwd: scope.rootPath }),
+        }));
+        expect(storage.getState().getWorkspaceScmSnapshot(scope)?.entries.map(entry => entry.path)).toEqual(['src/a.ts']);
+        expect(storage.getState().getWorkspaceScmOperationLog(scope).at(-1)).toMatchObject({ operation: 'stage', status: 'success' });
+        expect(storage.getState().getWorkspaceScmInFlightOperation(scope)).toBeNull();
+        expect(hook.getCurrent().isApplyingStage).toBe(false);
     });
 });
