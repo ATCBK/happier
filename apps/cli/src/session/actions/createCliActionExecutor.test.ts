@@ -137,6 +137,9 @@ const env = process.env;
 
 function createPlainExecutor(extra: Partial<Parameters<typeof createCliActionExecutor>[0]> = {}) {
   return createCliActionExecutor({
+    // These existing launch fixtures represent the in-daemon OS boundary.
+    // Exact remote routing is exercised with the real creator/codec in its owner suite.
+    directSpawnTransport: { spawn: spawnDaemonSession, resolveSpawnSessionByNonce: resolveDaemonSpawnSessionByNonce },
     token: 'token',
     credentials: {
       token: 'token',
@@ -159,6 +162,7 @@ function createDataKeyExecutor(extra: Partial<Parameters<typeof createCliActionE
   const machineKey = new Uint8Array(32).fill(7);
   const publicKey = deriveBoxPublicKeyFromSeed(machineKey);
   return createCliActionExecutor({
+    directSpawnTransport: { spawn: spawnDaemonSession, resolveSpawnSessionByNonce: resolveDaemonSpawnSessionByNonce },
     token: 'token',
     credentials: {
       token: 'token',
