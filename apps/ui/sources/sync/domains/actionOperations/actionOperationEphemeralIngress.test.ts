@@ -92,13 +92,13 @@ describe('normalizeActionOperationEphemeralIngress', () => {
                 type: 'action-operation-updated', machineId: 'machine-1', content: { t: 'plain', v: rpcSnapshot },
             });
             await startedGet;
-            homes.switchAccount('inactive', 'replacement-inactive-account');
+            await homes.switchAccount('inactive', 'replacement-inactive-account');
             const inactiveReplacement = await TokenStorage.getCredentialsForServerUrl(homes.homes.inactive!.serverUrl);
             if (!inactiveReplacement) throw new Error('Replacement inactive Account credential fixture missing');
             expect(await TokenStorage.setCredentialsForServerUrl(homes.homes.inactive!.serverUrl,
                 { serverId: homes.homes.inactive!.id }, inactiveReplacement)).toBe(true);
             expect(originalSocket.connected).toBe(true);
-            homes.switchAccount('secondary', 'replacement-secondary-account');
+            await homes.switchAccount('secondary', 'replacement-secondary-account');
             const replacement = await TokenStorage.getCredentialsForServerUrl(homes.homes.secondary!.serverUrl);
             if (!replacement) throw new Error('Replacement secondary Account credential fixture missing');
             expect(await TokenStorage.setCredentialsForServerUrl(homes.homes.secondary!.serverUrl,
@@ -115,7 +115,7 @@ describe('normalizeActionOperationEphemeralIngress', () => {
             await disconnectActiveServerConnection();
             await updateEffectiveHomeViewState(current => ({ ...current, groups: [], activeTargetKind: 'server',
                 activeTargetId: homes.homes.focused!.id }), { scope: 'device' });
-            homes.dispose(); bridge.dispose(); actionOperationStore.reset(); installDisconnectedServerSocketBoundary();
+            await homes.dispose(); bridge.dispose(); actionOperationStore.reset(); installDisconnectedServerSocketBoundary();
         }
     });
     it('observes keyless Plain Script updates through the restored Sync socket and drops retired Account interest', async () => {

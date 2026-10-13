@@ -1,5 +1,5 @@
 import Fuse from 'fuse.js';
-import { WORKSPACE_FILE_LIST_MAX_RESULTS, type DaemonWorkspaceFileListErrorCode } from '@happier-dev/protocol/machines/workspaceFiles';
+import { WORKSPACE_FILE_LIST_MAX_RESULTS } from '@happier-dev/protocol/machines/workspaceFiles';
 
 import type { FileSearchItem } from '@/sync/domains/fileSystem/fileSearchItem';
 import { resolveServerCredentialAccountScope } from '@/sync/domains/scope/serverCredentialAccountScope';
@@ -7,7 +7,7 @@ import { areServerProfileIdentifiersEquivalent } from '@/sync/domains/server/ser
 import { subscribeHomeCredentialChange } from '@/sync/runtime/orchestration/homeAccountChange';
 import { tryBuildWorkspaceCacheKey, type WorkspaceScopeBase } from '@/sync/domains/workspaces/workspaceScope';
 import { machineFilesystemListDirectory } from '@/sync/ops/machineFileBrowser';
-import { machineWorkspaceFileList } from '@/sync/ops/machineWorkspaceFileList';
+import { machineWorkspaceFileList, type MachineWorkspaceFileListErrorCode } from '@/sync/ops/machineWorkspaceFileList';
 import { AsyncLock } from '@/utils/system/lock';
 
 type WorkspaceCache = {
@@ -35,7 +35,7 @@ export type WorkspaceFileSearchAccountLifetime = Readonly<{
 export class WorkspaceFileSearchUnavailableError extends Error {
     readonly code = 'WORKSPACE_FILE_SEARCH_UNAVAILABLE';
 
-    constructor(readonly errorCode?: DaemonWorkspaceFileListErrorCode) {
+    constructor(readonly errorCode?: MachineWorkspaceFileListErrorCode) {
         super('Workspace file search is unavailable');
         this.name = 'WorkspaceFileSearchUnavailableError';
     }

@@ -19,10 +19,11 @@ import { getActiveServerSnapshot } from '@/sync/domains/server/serverRuntime';
 import { storage } from '@/sync/domains/state/storage';
 import { parseToken } from '@/utils/auth/parseToken';
 import { resolvePeerMediationDirectPreferencesForScope } from '@/sync/domains/settings/peerMediationPreferences';
+import { readMachineRequestReachabilityObservation, recordMachineRequestFailed, recordMachineRequestSucceeded } from '@/sync/domains/machines/reachability/machineReachability';
 
 import { requestPeerMediationServerJsonForCredential } from '../peerMediationServerRequest';
 import { readPeerEndpointForServerScope } from '../readPeerEndpointForServerScope';
-import type { MachineRpcDirectRouteResolution } from './client';
+import { resolveDirectRpcUrl, type MachineRpcDirectRouteResolution } from './client';
 import { resolveMachineRpcDirectRoutePreflight } from './directRoutePreflight';
 
 const MACHINE_RPC_DIRECT_FETCH_TIMEOUT_MS = 5_000;
@@ -204,6 +205,7 @@ export async function resolveProductionMachineRpcDirectRoute(input: Readonly<{
     timeoutMs?: number;
     /** Remaining setup budget from the machine RPC caller's deadline owner. */
     resolveRemainingTimeoutMs?: () => number;
+    signal?: AbortSignal;
 }>): Promise<MachineRpcDirectRouteResolution> {
     const server = resolveTargetServer(input.serverId);
     if (!server) return fallback('topology_unavailable');
@@ -271,6 +273,12 @@ export async function resolveProductionMachineRpcDirectRoute(input: Readonly<{
             : fallback('topology_unavailable');
     }
     const endpoint = routePreflight.endpoint;
+    const routeServerProfile = getServerProfileById(server.serverId);
+    const routeScope = { serverId: routeServerProfile ? resolveServerProfileScopeId(routeServerProfile) : server.serverId,
+        accountId, machineId: input.machineId, route: 'loopback_direct' as const };
+    if (readMachineRequestReachabilityObservation(routeScope, input.machineId, routeScope.route)?.outcome === 'failed') {
+        return fallback('topology_unavailable');
+    }
 
     {
         const proofHandle = createEphemeralPeerRouteProofHandleV2({ randomBytes: getRandomBytes });
@@ -287,6 +295,20 @@ export async function resolveProductionMachineRpcDirectRoute(input: Readonly<{
                 timeoutMs: grantTimeoutMs,
             });
             if (!grant.ok) return fallback(grant.reasonCode);
+            // Browsers expose the same network TypeError for a refused connection
+            // and a lost POST reply. Test the existing harmless OPTIONS ingress
+            // before issuing the RPC, so only a proven unsent call may use relay.
+            const readinessTimeoutMs = input.resolveRemainingTimeoutMs?.() ?? input.timeoutMs;
+            if (readinessTimeoutMs !== undefined && readinessTimeoutMs <= 0) return fallback('topology_unavailable');
+            try {
+                await fetchJson({ url: resolveDirectRpcUrl(endpoint.url), init: { method: 'OPTIONS' },
+                    timeoutMs: readinessTimeoutMs, signal: input.signal });
+            } catch (error) {
+                if (input.signal?.aborted) throw error;
+                recordMachineRequestFailed(routeScope);
+                return fallback('topology_unavailable');
+            }
+            recordMachineRequestSucceeded(routeScope);
             const proof = proofHandle.sign(grant.value);
             return {
                 kind: 'selected',

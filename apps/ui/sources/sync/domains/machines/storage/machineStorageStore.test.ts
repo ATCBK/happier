@@ -1,49 +1,73 @@
-import { afterEach, describe, expect, it, vi } from 'vitest';
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
+import { getActionSpec } from '@happier-dev/protocol';
+import { MACHINE_STORAGE_ACTION_IDS } from '@happier-dev/protocol/actions/specs/storage';
+import { createHomeGovernanceHarness, installHomeGovernanceBoundaries } from '@/dev/testkit/harness/homeGovernanceHarness';
+import { installDisconnectedServerSocketBoundary } from '@/dev/testkit/harness/serverAccountConnectionHarness';
 import { createDeferred } from '@/dev/testkit/hooks/createDeferred';
-import type { HappierStorageSummaryV1, MachineStorageCategoryListResultV1, MachineStorageWatchResultV1 } from '@happier-dev/protocol/storage/storageV1';
-import { RPC_ERROR_CODES } from '@happier-dev/protocol/rpc';
+import { HappierStorageSummaryV1Schema, MachineStorageCategoryListResultV1Schema,
+    type HappierStorageSummaryV1, type MachineStorageCategoryListResultV1, type MachineStorageWatchResultV1 } from '@happier-dev/protocol/storage/storageV1';
+import { RPC_ERROR_CODES, RPC_METHODS } from '@happier-dev/protocol/rpc';
 import { createMachineStorageStore, type MachineStorageStore } from './machineStorageStore';
 import { fetchMachineStorageSummaryViaAction, fetchMachineStorageCategoryViaAction, refreshMachineStorageSizeViaAction, watchMachineStorageViaMachineRpc,
     type MachineStorageClients, type MachineStorageWatchInput } from './machineRpc';
 
-const boundary = vi.hoisted(() => ({ execute: vi.fn(), rpc: vi.fn() }));
-// These are the external Action and Machine network boundaries. Adapters, parsers,
-// domain state and the canonical shared subscription lifecycle remain real.
-vi.mock('@/sync/ops/actions/frontDoorRuntimeActionExecutor', () => ({ createFrontDoorActionExecute: () => boundary.execute }));
-vi.mock('@/sync/runtime/orchestration/serverScopedRpc/serverScopedMachineRpc', () => ({ machineRpcWithServerScope: boundary.rpc }));
-await import('@/sync/ops/actions/frontDoorRuntimeActionExecutor');
+const boundary = vi.hoisted(() => ({ reply: vi.fn(), rpc: vi.fn() }));
+// The fixture replies sit behind the Machine network. Actions, admission, parsers and stores remain real.
+vi.mock('@/sync/runtime/orchestration/serverScopedRpc/serverScopedMachineRpc', async () => {
+    const { createServerScopedMachineRpcBoundaryMock } = await import('@/dev/testkit/mocks/serverScopedRpc');
+    return createServerScopedMachineRpcBoundaryMock(boundary.rpc);
+});
+const homes = createHomeGovernanceHarness();
+installHomeGovernanceBoundaries(homes);
+installDisconnectedServerSocketBoundary();
 
 const key = { serverId: 'home-a', machineId: 'machine-a', expectedAccountId: 'account-a' };
-const summary = (revision = 1): HappierStorageSummaryV1 => ({
+beforeEach(async () => {
+    await homes.reset();
+    key.serverId = await homes.addHome({ name: 'Storage store', serverUrl: 'https://storage-store.test',
+        serverIdentityId: 'srv_storage_store', accountId: key.expectedAccountId, currentAccount: true });
+    homes.answer(key.serverId, '/v2/account/settings', { body: { content: { t: 'plain', v: { actionsSettingsV1: {
+        v: 1, actions: {}, approvalWaivedSurfaces: {
+            'machines.storage.trash.move': ['ui'], 'machines.storage.trash.empty': ['ui'],
+        },
+    } } }, version: 1 } });
+});
+afterEach(async () => { await homes.reset(); });
+const summary = (revision = 1): HappierStorageSummaryV1 => HappierStorageSummaryV1Schema.parse({
     revision, sizedAt: 100, volumes: [], categories: [
         { categoryId: 'logs', size: { allocatedBytes: 20, freesBytes: 10, sharedBytes: 0, sharedExtentsUnmeasured: false, atLeast: false }, canGoBytes: 10, count: 1, detailFacts: {} },
         { categoryId: 'caches', size: { allocatedBytes: 30, freesBytes: 30, sharedBytes: 0, sharedExtentsUnmeasured: false, atLeast: false }, canGoBytes: 30, count: 1, detailFacts: {} },
     ], suggestionsTop: [], pile: { count: 0, freesBytes: 0, droppedSinceLastView: [] }, trash: { count: 0, allocatedBytes: 0 }, wholeDisk: { enabled: false, scans: [] },
 });
-const category = (revision = 1): MachineStorageCategoryListResultV1 => ({ revision, sizedAt: 100, categoryId: 'logs', items: [], nextCursor: 'next-page' });
-async function settle() { for (let turn = 0; turn < 16; turn++) await Promise.resolve(); }
+const category = (revision = 1): MachineStorageCategoryListResultV1 => MachineStorageCategoryListResultV1Schema.parse({ revision, sizedAt: 100, categoryId: 'logs', items: [], nextCursor: 'next-page' });
 const success = (result: unknown) => ({ ok: true, result });
 const unavailable = { ok: false, errorCode: RPC_ERROR_CODES.METHOD_NOT_FOUND, error: 'Method not found' };
 const failed = { ok: false, errorCode: 'request_failed', error: 'Request failed' };
 const stores: MachineStorageStore[] = [];
 function harness() {
-    boundary.execute.mockReset(); boundary.rpc.mockReset();
+    boundary.reply.mockReset(); boundary.rpc.mockReset();
     const watches: { input: Pick<MachineStorageWatchInput, 'signal'>; answer: ReturnType<typeof createDeferred<MachineStorageWatchResultV1>> }[] = [];
     const responses = {
         summary: vi.fn<(input: unknown) => Promise<unknown>>(async () => success(summary())),
         category: vi.fn<(input: unknown) => Promise<unknown>>(async () => success(category())),
         refresh: vi.fn<(input: unknown) => Promise<unknown>>(async () => success(summary(2))),
     };
-    boundary.execute.mockImplementation((action: string, input: unknown) => {
+    boundary.reply.mockImplementation((action: string, input: unknown) => {
         if (action === 'machines.storage.summary.get') return responses.summary(input);
         if (action === 'machines.storage.category.list') return responses.category(input);
         if (action === 'machines.storage.size.refresh') return responses.refresh(input);
         throw new Error(`Unexpected storage Action: ${action}`);
     });
-    boundary.rpc.mockImplementation((input: { signal?: AbortSignal }) => {
-        const answer = createDeferred<MachineStorageWatchResultV1>();
-        watches.push({ input, answer });
-        return answer.promise;
+    boundary.rpc.mockImplementation(async (input: { method: string; payload: unknown; signal?: AbortSignal }) => {
+        if (input.method === RPC_METHODS.DAEMON_STORAGE_WATCH) {
+            const answer = createDeferred<MachineStorageWatchResultV1>();
+            watches.push({ input, answer });
+            return answer.promise;
+        }
+        const action = MACHINE_STORAGE_ACTION_IDS.find(id => getActionSpec(id).bindings?.rpcMethod === input.method);
+        if (!action) throw new Error(`Unexpected storage RPC: ${input.method}`);
+        const reply = await boundary.reply(action, input.payload);
+        return reply.ok ? reply.result : reply;
     });
     const clients: MachineStorageClients = {
         summaryClient: fetchMachineStorageSummaryViaAction,
@@ -70,10 +94,11 @@ describe('machine storage subscription owner', () => {
         await h.store.read(key);
         expect(h.store.getState(key).summary?.volumes).toEqual(reported.volumes);
         const retained = h.store.getState(key).summary!.volumes[1];
-        const release = h.store.demand(key); await settle();
+        const release = h.store.demand(key);
+        await vi.waitFor(() => expect(h.watches).toHaveLength(1));
         h.watches[0].answer.resolve({ changed: true, summary: { ...reported, revision: 2,
             volumes: [{ ...reported.volumes[0], canGoBytes: 20 }, ...reported.volumes.slice(1)] } });
-        await settle();
+        await vi.waitFor(() => expect(h.store.getState(key).summary?.volumes[0]).toMatchObject({ canGoBytes: 20 }));
         expect(h.store.getState(key).summary?.volumes[0]).toMatchObject({ canGoBytes: 20 });
         expect(h.store.getState(key).summary?.volumes[1]).toBe(retained);
         release();
@@ -83,15 +108,17 @@ describe('machine storage subscription owner', () => {
         const input = { ...key, view: { tab: 'old' as const, depth: 1 as const, olderThanDays: 1000 } };
         const page = { state: null, nodes: [], coverage: [], indexedAt: 100 };
         let current = page;
-        boundary.execute.mockImplementation((action: string) => Promise.resolve(success(action === 'machines.storage.scan.get' ? current : summary())));
+        boundary.reply.mockImplementation((action: string) => Promise.resolve(success(action === 'machines.storage.scan.get' ? current : summary())));
         vi.useFakeTimers();
         const first = h.store.demandScan(input); const second = h.store.demandScan(input);
-        await settle();
+        await vi.waitFor(() => expect(h.store.getScan(input)).toEqual({ status: 'ready', page }));
         expect(h.store.getScan(input)).toEqual({ status: 'ready', page });
         expect(h.store.getScan({ ...input, expectedAccountId: 'other' }).page).toBeNull();
         const retained = h.store.getScan(input).page;
         current = { ...page, indexedAt: 200 };
-        h.watches[0].answer.resolve({ changed: true, summary: summary(2) }); await settle();
+        await vi.waitFor(() => expect(h.watches).toHaveLength(1));
+        h.watches[0].answer.resolve({ changed: true, summary: summary(2) });
+        await vi.waitFor(() => expect(h.store.getScan(input).page?.indexedAt).toBe(200));
         expect(h.store.getScan(input).page?.indexedAt).toBe(200);
         expect(h.store.getScan(input).page).not.toBe(retained);
         expect(vi.getTimerCount()).toBe(0);
@@ -102,16 +129,16 @@ describe('machine storage subscription owner', () => {
     it('projects optimistic pile membership and rolls back a rejected delta against current daemon truth', async () => {
         const h = harness();
         await h.store.read(key);
-        const ref = { itemId: 'log-1', path: '/fixture/log', identity: { dev: '1', ino: '2', kind: 'file' as const },
-            collectedAt: 100, collectedBy: { accountId: 'account-a', kind: 'person' as const } };
+        const served = { itemId: 'log-1', path: '/fixture/log' };
         const pending = createDeferred<unknown>();
-        boundary.execute.mockImplementation((action: string) => action === 'machines.storage.pile.get'
+        boundary.reply.mockImplementation((action: string) => action === 'machines.storage.pile.get'
             ? Promise.resolve(success({ revision: 1, items: [], summary: summary().pile }))
             : action === 'machines.storage.pile.set' ? pending.promise : Promise.resolve(success(summary())));
         await h.store.readPile(key);
-        const writing = h.store.setPile({ ...key, add: [ref] });
-        expect(h.store.getPile(key)).toMatchObject({ page: { items: [ref], summary: { count: 1 } }, pending: true });
+        const writing = h.store.setPile({ ...key, add: [served] });
+        expect(h.store.getPile(key)).toMatchObject({ page: { items: [served], summary: { count: 1 } }, pending: true });
         expect(h.store.getState(key).summary?.pile.count).toBe(1);
+        await vi.waitFor(() => expect(boundary.reply.mock.calls.some(([action]) => action === 'machines.storage.pile.set')).toBe(true));
         pending.resolve(failed);
         expect(await writing).toEqual({ ok: false, reason: 'request_failed' });
         expect(h.store.getPile(key)).toMatchObject({ page: { items: [], summary: { count: 0 } }, pending: false });
@@ -125,7 +152,10 @@ describe('machine storage subscription owner', () => {
         vi.useFakeTimers();
         const releaseSummary = h.store.demand(key);
         const releaseCategory = h.store.demandCategory({ ...key, categoryId: 'logs' });
-        await settle();
+        await vi.waitFor(() => {
+            expect(h.store.getCategory({ ...key, categoryId: 'logs' })).toMatchObject({ status: 'ready', page: { nextCursor: 'next-page' } });
+            expect(h.watches).toHaveLength(1);
+        });
         expect(h.store.getState(key).summary?.revision).toBe(1);
         expect(h.store.getCategory({ ...key, categoryId: 'logs' })).toMatchObject({ status: 'ready', page: { nextCursor: 'next-page' } });
         expect(h.watches).toHaveLength(1);
@@ -133,7 +163,7 @@ describe('machine storage subscription owner', () => {
         const next = summary(2); next.categories[0].size.allocatedBytes = 25;
         h.responses.category.mockResolvedValueOnce(success(category(2)));
         h.watches[0].answer.resolve({ changed: true, summary: next });
-        await settle();
+        await vi.waitFor(() => expect(h.store.getCategory({ ...key, categoryId: 'logs' }).page).toMatchObject({ revision: 2, nextCursor: 'next-page' }));
         const after = h.store.getState(key).summary!;
         expect(after.categories[1]).toBe(before.categories[1]);
         expect(after.pile).toBe(before.pile);
@@ -150,17 +180,23 @@ describe('machine storage subscription owner', () => {
         const ref = { itemId: 'log-1', path: '/fixture/log', identity: { dev: '1', ino: '2', kind: 'file' as const },
             collectedAt: 100, collectedBy: { accountId: 'account-a', kind: 'person' as const } };
         const other = { ...ref, itemId: 'log-2', path: '/fixture/other' };
+        const served = { itemId: ref.itemId, path: ref.path };
         const pending = createDeferred<unknown>();
         let daemonItems = [other];
-        boundary.execute.mockImplementation((action: string) => action === 'machines.storage.pile.get'
+        boundary.reply.mockImplementation((action: string) => action === 'machines.storage.pile.get'
             ? Promise.resolve(success({ revision: 2, items: daemonItems,
                 summary: { ...summary().pile, count: daemonItems.length } }))
             : action === 'machines.storage.pile.set' ? pending.promise : Promise.resolve(success(summary())));
-        const release = h.store.demandPile(key); await settle();
-        const writing = h.store.setPile({ ...key, add: [ref] });
+        const release = h.store.demandPile(key);
+        await vi.waitFor(() => {
+            expect(h.store.getPile(key).page?.items).toEqual([other]);
+            expect(h.watches).toHaveLength(1);
+        });
+        const writing = h.store.setPile({ ...key, add: [served] });
+        await vi.waitFor(() => expect(boundary.reply.mock.calls.some(([action]) => action === 'machines.storage.pile.set')).toBe(true));
         daemonItems = [];
-        h.watches[0].answer.resolve({ changed: true, summary: summary(3) }); await settle();
-        expect(h.store.getPile(key)).toMatchObject({ page: { items: [ref] }, pending: true });
+        h.watches[0].answer.resolve({ changed: true, summary: summary(3) });
+        await vi.waitFor(() => expect(h.store.getPile(key)).toMatchObject({ page: { items: [served] }, pending: true }));
         expect(h.store.getState(key).summary?.pile.count).toBe(1);
         pending.resolve(failed); await writing;
         expect(h.store.getPile(key)).toMatchObject({ page: { items: [] }, pending: false });
@@ -181,12 +217,16 @@ describe('machine storage subscription owner', () => {
 
     it('ignores aborted reads and old revisions arriving after a watched revision', async () => {
         const h = harness();
-        const release = h.store.demand(key); await settle();
+        const release = h.store.demand(key);
+        await vi.waitFor(() => expect(h.watches).toHaveLength(1));
         expect(h.watches).toHaveLength(1);
         const slow = createDeferred<unknown>();
         h.responses.summary.mockImplementationOnce(() => slow.promise);
+        const readCount = h.responses.summary.mock.calls.length;
         const pending = h.store.read(key);
-        h.watches[0].answer.resolve({ changed: true, summary: summary(3) }); await settle();
+        await vi.waitFor(() => expect(h.responses.summary).toHaveBeenCalledTimes(readCount + 1));
+        h.watches[0].answer.resolve({ changed: true, summary: summary(3) });
+        await vi.waitFor(() => expect(h.store.getState(key).summary?.revision).toBe(3));
         slow.resolve(success(summary(2))); await pending;
         expect(h.store.getState(key).summary?.revision).toBe(3);
         const late = createDeferred<unknown>();
@@ -200,13 +240,16 @@ describe('machine storage subscription owner', () => {
     it('degrades only unavailable operations and retries after the daemon changes', async () => {
         const h = harness();
         h.responses.summary.mockResolvedValueOnce(unavailable);
-        const release = h.store.demand(key); await settle();
+        const release = h.store.demand(key);
+        await vi.waitFor(() => expect(h.store.getState(key).status).toBe('not_reported'));
         expect(h.store.getState(key).status).toBe('not_reported');
         expect(h.watches).toHaveLength(0);
-        h.store.daemonStateChanged(key, 2); await settle();
+        h.store.daemonStateChanged(key, 2);
+        await vi.waitFor(() => expect(h.store.getState(key).status).toBe('ready'));
         expect(h.store.getState(key).status).toBe('ready');
         h.responses.category.mockResolvedValueOnce(unavailable);
-        const releaseCategory = h.store.demandCategory({ ...key, categoryId: 'logs' }); await settle();
+        const releaseCategory = h.store.demandCategory({ ...key, categoryId: 'logs' });
+        await vi.waitFor(() => expect(h.store.getCategory({ ...key, categoryId: 'logs' }).status).toBe('not_reported'));
         expect(h.store.getCategory({ ...key, categoryId: 'logs' }).status).toBe('not_reported');
         expect(h.store.getState(key).status).toBe('ready');
         release(); releaseCategory(); h.store.reset();
@@ -215,10 +258,10 @@ describe('machine storage subscription owner', () => {
     it('keeps older-daemon pile mutation unavailable without hiding its supported summary', async () => {
         const h = harness();
         await h.store.read(key);
-        boundary.execute.mockImplementation(async (action: string) => action === 'machines.storage.pile.get' ? unavailable : success(summary()));
+        boundary.reply.mockImplementation(async (action: string) => action === 'machines.storage.pile.get' ? unavailable : success(summary()));
         expect(await h.store.setPile({ ...key, clear: true })).toEqual({ ok: false, reason: 'older_happier' });
         expect(h.store.getState(key).status).toBe('ready');
-        expect(boundary.execute.mock.calls.some(([action]) => action === 'machines.storage.pile.set')).toBe(false);
+        expect(boundary.reply.mock.calls.some(([action]) => action === 'machines.storage.pile.set')).toBe(false);
     });
 
     it('sizes explicitly once and publishes the new summary without starting a polling loop', async () => {
@@ -233,11 +276,14 @@ describe('machine storage subscription owner', () => {
 
     it('does not let a pending Size again response overwrite a newer watched summary', async () => {
         const h = harness();
-        const release = h.store.demand(key); await settle();
+        const release = h.store.demand(key);
+        await vi.waitFor(() => expect(h.watches).toHaveLength(1));
         const slow = createDeferred<unknown>();
         h.responses.refresh.mockImplementationOnce(() => slow.promise);
         const pending = h.store.sizeAgain(key);
-        h.watches[0].answer.resolve({ changed: true, summary: summary(3) }); await settle();
+        await vi.waitFor(() => expect(h.responses.refresh).toHaveBeenCalled());
+        h.watches[0].answer.resolve({ changed: true, summary: summary(3) });
+        await vi.waitFor(() => expect(h.store.getState(key).summary?.revision).toBe(3));
         slow.resolve(success(summary(2))); await pending;
         expect(h.store.getState(key).summary?.revision).toBe(3);
         release(); h.store.reset();
@@ -249,12 +295,16 @@ describe('machine storage subscription owner', () => {
         h.responses.summary.mockResolvedValueOnce(success(summary(0)));
         await h.store.read(key);
         expect(h.store.getState(key).summary?.revision).toBe(0);
-        const release = h.store.demand(key); await settle();
+        const release = h.store.demand(key);
+        await vi.waitFor(() => expect(h.watches).toHaveLength(1));
         const slow = createDeferred<unknown>();
         h.responses.category.mockImplementationOnce(() => slow.promise).mockResolvedValueOnce(success(category(3)));
         const releaseCategory = h.store.demandCategory({ ...key, categoryId: 'logs' });
-        h.watches[0].answer.resolve({ changed: true, summary: summary(3) }); await settle();
-        slow.resolve(success(category(1))); await settle();
+        await vi.waitFor(() => expect(h.responses.category).toHaveBeenCalledTimes(1));
+        h.watches[0].answer.resolve({ changed: true, summary: summary(3) });
+        await vi.waitFor(() => expect(h.store.getState(key).summary?.revision).toBe(3));
+        slow.resolve(success(category(1)));
+        await vi.waitFor(() => expect(h.store.getCategory({ ...key, categoryId: 'logs' }).page?.revision).toBe(3));
         expect(h.store.getCategory({ ...key, categoryId: 'logs' }).page?.revision).toBe(3);
         releaseCategory(); release(); h.store.reset();
     });
@@ -272,7 +322,7 @@ describe('machine storage cleanup and item lists', () => {
         const h = harness();
         await h.store.read(key);
         const calls: Array<[string, unknown]> = [];
-        boundary.execute.mockImplementation((action: string, input: unknown) => {
+        boundary.reply.mockImplementation((action: string, input: unknown) => {
             calls.push([action, input]);
             return Promise.resolve(success(action === 'machines.storage.items.check' ? { items: [], staying: [], countedOnceBytes: 0, totalFreesBytes: 0, trashVolumes: [] } : summary()));
         });
@@ -286,7 +336,7 @@ describe('machine storage cleanup and item lists', () => {
         const h = harness();
         await h.store.read(key);
         const calls: Array<[string, unknown]> = [];
-        boundary.execute.mockImplementation((action: string, input: unknown) => {
+        boundary.reply.mockImplementation((action: string, input: unknown) => {
             calls.push([action, input]);
             if (action === 'machines.storage.trash.move') return Promise.resolve(success({ batchId: 'batch-1', mode: 'trash', inTrashBytes: 5, freedBytes: 0,
                 outcomes: [{ itemId: 'wt-1', status: 'moved' }] }));
@@ -295,14 +345,15 @@ describe('machine storage cleanup and item lists', () => {
             return Promise.resolve(success(summary(calls.length + 1)));
         });
         // A mounted Storage tab holds the summary's demand; the move makes it read the machine again.
-        const release = h.store.demand(key); await settle();
+        const release = h.store.demand(key);
+        await vi.waitFor(() => expect(h.watches).toHaveLength(1));
         const readsBefore = calls.filter(([action]) => action === 'machines.storage.summary.get').length;
         const moved = await h.store.applyPile({ ...key, mode: 'trash', items: [{ ref, expect: 'token', claimedVerdict: 'safe' }] });
         expect(moved.ok).toBe(true);
         expect(calls.find(([action]) => action === 'machines.storage.trash.move')?.[1]).toMatchObject({ items: [{ ref, expect: 'token', claimedVerdict: 'safe' }] });
         expect(h.store.getReceipt(key)).toMatchObject({ kind: 'applied', result: { batchId: 'batch-1' } });
         expect(h.store.getReceipt({ ...key, machineId: 'other' })).toBeNull();
-        await settle();
+        await vi.waitFor(() => expect(calls.filter(([action]) => action === 'machines.storage.summary.get').length).toBeGreaterThan(readsBefore));
         // The summary is read again so the Trash row and the disk's hatch follow the move.
         expect(calls.filter(([action]) => action === 'machines.storage.summary.get').length).toBeGreaterThan(readsBefore);
 
@@ -322,18 +373,22 @@ describe('machine storage cleanup and item lists', () => {
         await h.store.read(key);
         let listRevision = 1;
         const lists: unknown[] = [];
-        boundary.execute.mockImplementation((action: string, input: unknown) => {
+        boundary.reply.mockImplementation((action: string, input: unknown) => {
             if (action === 'machines.storage.worktrees.list') { lists.push(input); return Promise.resolve(success({ revision: listRevision, items: [item] })); }
             return Promise.resolve(success(summary()));
         });
         const input = { ...key, list: 'worktrees' as const, filter: 'safe' as const };
         const first = h.store.demandItems(input); const second = h.store.demandItems(input);
-        await settle();
+        await vi.waitFor(() => {
+            expect(h.store.getItems(input)).toMatchObject({ status: 'ready', page: { items: [item] } });
+            expect(h.watches).toHaveLength(1);
+        });
         expect(h.store.getItems(input)).toMatchObject({ status: 'ready', page: { items: [item] } });
         expect(lists).toHaveLength(1);
         expect(lists[0]).toMatchObject({ filter: 'safe' });
         listRevision = 2;
-        h.watches[0]!.answer.resolve({ changed: true, summary: summary(2) }); await settle();
+        h.watches[0]!.answer.resolve({ changed: true, summary: summary(2) });
+        await vi.waitFor(() => expect(h.store.getItems(input).page?.revision).toBe(2));
         expect(lists).toHaveLength(2);
         expect(h.store.getItems(input).page?.revision).toBe(2);
         first(); second();
@@ -348,7 +403,7 @@ describe('machine storage cleanup and item lists', () => {
             { ...item, itemId: 'b', path: '/data/b', verdict: 'caution' as const },
             { ...item, itemId: 'c', path: '/data/c', collectable: false },
         ];
-        boundary.execute.mockImplementation((action: string, input: Record<string, unknown>) => {
+        boundary.reply.mockImplementation((action: string, input: Record<string, unknown>) => {
             calls.push([action, input]);
             if (action === 'machines.storage.suggestions.list') return Promise.resolve(success({ revision: 1, items: quickest }));
             if (action === 'machines.storage.pile.get') return Promise.resolve(success({ revision: 1, items: [], summary: summary().pile }));
@@ -361,7 +416,7 @@ describe('machine storage cleanup and item lists', () => {
         expect(sets).toHaveLength(1);
         // Served references only: the machine reads identity and records who collected it (no placeholder facts).
         expect(sets[0]![1].add).toEqual([{ itemId: 'a', path: '/data/a' }]);
-        boundary.execute.mockImplementation((action: string, input: Record<string, unknown>) => {
+        boundary.reply.mockImplementation((action: string, input: Record<string, unknown>) => {
             calls.push([action, input]);
             return Promise.resolve(success(action === 'machines.storage.suggestions.list' ? { revision: 1, items: [quickest[1]] } : summary()));
         });

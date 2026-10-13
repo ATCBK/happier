@@ -22,10 +22,9 @@ export type SessionForkReplaySettingsSource = HappierReplayConfigSource
 /**
  * The one place the UI turns account Replay settings into fork-request options.
  *
- * The seed budget is clamped through the canonical Replay-config owner: the
- * stored account setting allows a wider range than the fork wire schema accepts,
- * so forwarding it raw makes an otherwise valid preference fail validation. The
- * fork entry points used to derive this twice, and only one of them clamped.
+ * The canonical Replay-config owner tolerates retained preferences below the
+ * usable seed minimum by reading the default. Every fork entry point consumes
+ * that same value rather than forwarding an undersized stored preference.
  */
 export function resolveSessionForkReplayOptions(params: Readonly<{
     settings: SessionForkReplaySettingsSource | null | undefined;

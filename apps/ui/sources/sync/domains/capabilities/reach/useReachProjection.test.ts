@@ -35,7 +35,13 @@ it.each(['mcp_server', 'skill'] as const)('%s includes offline machines and Proj
     const scope = { serverId: home.serverIdentityId, accountId: 'reach-projection-account' };
     const online = createMachineFixture({ id: 'online', active: true, activeAt: Date.now() });
     const offline = createMachineFixture({ id: 'offline', active: false, activeAt: 1 });
+    for (const machine of [online, offline]) {
+        machine.metadata = { ...machine.metadata!, agentInventory: { checkedAt: 2, installedAgentIds: ['codex', 'gemini'] } };
+    }
     storage.setState({ settingsScope: scope, profileScope: scope, machines: { online, offline },
+        projectAccountRows: { scope, status: 'ready', coverage: 'complete', workspaceRefs: [
+            { id: 'checkout-a', serverId: scope.serverId, machineId: 'online', rootPath: '/repo', projectKey: 'shared-project', createdAtMs: 1 },
+        ], relationships: [], organizations: [], revisionsByPhysicalKey: {} },
         machineListByServerId: { [scope.serverId]: [online, offline] }, machineListStatusByServerId: { [scope.serverId]: 'idle' } });
     applyMcpServerCatalogSnapshot(scope, { status: 'ready', authority: 'active', revision: 1, diagnostics: [], catalog: {
         v: 1, servers: [{ id: 'server', name: 'server', transport: 'stdio', stdio: { command: 'server', args: [] }, env: {}, createdAt: 1, updatedAt: 1 }],
@@ -47,11 +53,11 @@ it.each(['mcp_server', 'skill'] as const)('%s includes offline machines and Proj
             { id: 'project-on', skillId: 'server', target: { t: 'project', projectKey: 'shared-project' }, enabled: true, createdAt: 1, updatedAt: 1 },
             { id: 'gemini-off', skillId: 'server', target: { t: 'allMachines' }, agentId: 'gemini', enabled: false, createdAt: 1, updatedAt: 1 },
         ] } } }], tombstones: [], diagnostics: [] }, rawSettings: {}, sourceSettingsVersion: 1 }, true);
-    for (const machine of [online, offline]) machineAgentInventoryStore.publish(serverAccountScopedResourceKey(scope, 'machine-agents', machine.id), {
-        status: machine.active ? 'ready' : 'offline', lastCheckedAt: 1, items: [agent('codex'), agent('gemini'), agent('claude', false)],
+    for (const machine of [offline]) machineAgentInventoryStore.publish(serverAccountScopedResourceKey(scope, 'machine-agents', machine.id), {
+        status: machine.active ? 'ready' : 'offline', lastCheckedAt: 1, items: [agent('claude')],
     });
-    const hook = await renderHook((projectKey: string) => useReachProjection(kind, 'server', { projectKey }),
-        { initialProps: 'shared-project' });
+    const hook = await renderHook((options: { projectKey?: string }) => useReachProjection(kind, 'server', options),
+        { initialProps: { projectKey: 'shared-project' } as { projectKey?: string } });
     await act(async () => { await vi.waitFor(() => expect(hook.getCurrent()).toHaveLength(2)); });
     expect(hook.getCurrent().find(row => row.machineId === 'offline')).toMatchObject({ offline: true,
         agents: [{ agentId: 'codex', enabled: true }, { agentId: 'gemini', enabled: false }] });
@@ -60,10 +66,14 @@ it.each(['mcp_server', 'skill'] as const)('%s includes offline machines and Proj
     expect(hook.getCurrent().find(row => row.machineId === 'online')?.offline).toBe(true);
     expect(network.requests).toEqual([]);
     if (kind === 'skill') {
-        await hook.rerender('other-project');
+        await hook.rerender({ projectKey: 'other-project' });
         expect(hook.getCurrent().every(row => row.agents.every(agent => !agent.enabled))).toBe(true);
-        await hook.rerender('shared-project');
+        await hook.rerender({ projectKey: 'shared-project' });
         expect(hook.getCurrent().every(row => row.agents.find(agent => agent.agentId === 'codex')?.enabled)).toBe(true);
+        await hook.rerender({});
+        const projectRows = hook.getCurrent().filter(row => 'projectKey' in row);
+        expect(projectRows).toMatchObject([{ machineId: 'online', projectKey: 'shared-project',
+            agents: [{ agentId: 'codex', enabled: true }, { agentId: 'gemini', enabled: false }] }]);
     }
     await act(async () => {
         if (kind === 'mcp_server') applyMcpServerCatalogSnapshot(scope, { status: 'unavailable', reason: 'invalid-stored-content' }, true);

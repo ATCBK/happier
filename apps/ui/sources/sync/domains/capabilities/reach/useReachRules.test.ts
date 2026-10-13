@@ -30,6 +30,7 @@ beforeEach(() => {
         record: { key: 'skill-rules', value: { v: 1, rules: [{ ...initial, skillId: 'server' }] } } }],
         tombstones: [], diagnostics: [] }, rawSettings: {}, sourceSettingsVersion: 1 }, true);
 });
+
 afterEach(async () => {
     await standardCleanup();
     resetMcpServerCatalogEngineForTests();
@@ -40,6 +41,19 @@ afterEach(async () => {
 describe.each(['mcp_server', 'skill'] as const)('%s reach rules authoring', kind => {
     const item = (rules: readonly ReachRuleV1[], previous: readonly ReachRuleV1[]) => ({
         [kind === 'skill' ? 'skillId' : 'serverId']: 'server', rules, previous,
+    });
+    it('reads the approval Home rather than the focused Account', async () => {
+        const captured = { serverId: 'approval-home', accountId: 'approval-account' };
+        const exception = { ...initial, id: 'approval-exception', agentId: 'gemini', enabled: false };
+        if (kind === 'mcp_server') applyMcpServerCatalogSnapshot(captured, { status: 'ready', revision: 1, authority: 'active', diagnostics: [], catalog: {
+            v: 1, servers: [{ id: 'server', name: 'server', transport: 'stdio', stdio: { command: 'server', args: [] }, env: {}, createdAt: 1, updatedAt: 1 }],
+            bindings: [{ ...exception, serverId: 'server' }],
+        } }, true);
+        else applyPromptLibraryCatalogSnapshot(captured, { catalog: { status: 'ready', rows: [{ revision: 1,
+            record: { key: 'skill-rules', value: { v: 1, rules: [{ ...exception, skillId: 'server' }] } } }],
+            tombstones: [], diagnostics: [] }, rawSettings: {}, sourceSettingsVersion: 1 }, true);
+        const hook = await renderHook(() => useReachRules(kind, 'server', captured));
+        expect(hook.getCurrent().rules).toEqual([exception]);
     });
     it('projects a replace immediately and restores the last acknowledged rules on typed refusal', async () => {
         const pending = createDeferred<unknown>();

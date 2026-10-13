@@ -53,12 +53,15 @@ describe('nestSessionListReports', () => {
         expect(shape(nested)).toEqual(['# g1', 'lead:0', 'api:1', 'ledger:2', 'checkout:1', 'solo:0']);
     });
 
-    it('never pulls a report across a group boundary', () => {
-        const items = [header('today'), session('lead', 'today'), header('yesterday'), session('worker', 'yesterday')];
-        const nested = nestSessionListReports(items, rows({ lead: null, worker: 'lead' }));
+    it('pulls reports and reports of reports into their root lead display group', () => {
+        const items = [header('today'), session('lead', 'today'), header('yesterday'), session('worker', 'yesterday'),
+            header('older'), session('grandchild', 'older'), session('solo', 'older')];
+        const nested = nestSessionListReports(items, rows({ lead: null, worker: 'lead', grandchild: 'worker', solo: null }));
 
-        expect(shape(nested)).toEqual(['# today', 'lead:0', '# yesterday', 'worker:0']);
-        expect(nested).toBe(items);
+        expect(shape(nested)).toEqual(['# today', 'lead:0', 'worker:1', 'grandchild:2', '# yesterday', '# older', 'solo:0']);
+        expect(nested.filter(item => item.type === 'session').map(item => item.groupKey)).toEqual(['today', 'today', 'today', 'older']);
+        expect(nested[1]).toMatchObject({ reportsParent: true });
+        expect(nested[2]).toMatchObject({ reportsParent: true });
     });
 
     it('returns the same array and rows when nothing reports to anything', () => {

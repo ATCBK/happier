@@ -97,7 +97,7 @@ export function createPrivateContinuationTransportError(cause: unknown, issued =
     return error;
 }
 
-function resolveDirectRpcUrl(endpointUrl: string): string {
+export function resolveDirectRpcUrl(endpointUrl: string): string {
     const parsed = new URL(endpointUrl);
     parsed.pathname = PEER_MACHINE_RPC_DIRECT_PATH_V2;
     parsed.search = '';

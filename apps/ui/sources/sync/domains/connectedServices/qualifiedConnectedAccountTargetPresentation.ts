@@ -1,3 +1,4 @@
+import type { ConnectedAccountPurposeTargetEligibilityReason } from './connectedAccountPurposeTargetEligibility';
 import type {
   PluginContributionIdentityV1,
   QualifiedConnectedAccountPurposeBindingTargetV1,
@@ -51,6 +52,8 @@ export type QualifiedConnectedAccountTargetPresentation = Readonly<{
   summaryLabel?: string;
   /** The canonical passive eligibility owner's repair guidance, when supplied. */
   unavailableReason?: string;
+  /** Why it cannot serve: only `targetMissing` is a wrong value; the rest are repairs the user can make. */
+  unavailableReasonCode?: ConnectedAccountPurposeTargetEligibilityReason;
   /**
    * De-duplicated target identity for assistive technology. It carries the same
    * recognisable facts a sighted user reads, never a canonical id: an assistive

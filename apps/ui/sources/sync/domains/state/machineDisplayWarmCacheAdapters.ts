@@ -23,6 +23,7 @@ export function buildMachineDisplayRenderableFromCacheEntry(entry: MachineDispla
         } : {}),
         metadataVersion: entry.metadataVersion,
         metadata: {
+            ...(entry.agentInventory ? { agentInventory: entry.agentInventory } : {}),
             displayName: entry.displayName ?? null,
             host: entry.host ?? null,
             homeDir: entry.homeDir ?? null,
@@ -42,6 +43,7 @@ export function buildMachineDisplayCacheEntryFromRenderable(
     previousEntry?: MachineDisplayCacheEntryV1,
 ): MachineDisplayCacheEntryV1 {
     const preserveMetadata = shouldPreserveMachineDisplayMetadataFromPreviousEntry(machine, previousEntry);
+    const agentInventory = preserveMetadata ? previousEntry.agentInventory : machine.metadata?.agentInventory;
     const nextEntry: MachineDisplayCacheEntryV1 = {
         machineId: machine.id,
         kind: MachineKindFromLegacyProjectionSchema.parse(machine.kind),
@@ -59,6 +61,7 @@ export function buildMachineDisplayCacheEntryFromRenderable(
         displayName: preserveMetadata ? previousEntry.displayName ?? null : machine.metadata?.displayName ?? null,
         host: preserveMetadata ? previousEntry.host ?? null : machine.metadata?.host ?? null,
         homeDir: preserveMetadata ? previousEntry.homeDir ?? null : machine.metadata?.homeDir ?? null,
+        ...(agentInventory ? { agentInventory } : {}),
     };
 
     return previousEntry && areMachineDisplayCacheEntriesEqual(nextEntry, previousEntry) ? previousEntry : nextEntry;
@@ -84,6 +87,7 @@ function areMachineDisplayCacheEntriesEqual(
         && nextEntry.displayName === previousEntry.displayName
         && nextEntry.host === previousEntry.host
         && nextEntry.homeDir === previousEntry.homeDir
+        && JSON.stringify(nextEntry.agentInventory ?? null) === JSON.stringify(previousEntry.agentInventory ?? null)
     );
 }
 

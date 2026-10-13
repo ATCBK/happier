@@ -7,6 +7,10 @@ import type { SessionListRenderableSession } from './sessionListRenderable';
 import { computeVisibleSessionListIndex } from './computeVisibleSessionListIndex';
 import { buildSessionListFolderOrderItemKey } from '@/sync/domains/session/listing/sessionListOrderingStateV1';
 import { buildSessionWorkspaceOrderScopeKey } from '@/sync/domains/session/listing/sessionWorkspaceOrderStateV1';
+import { filterCollapsedSessionListItems } from '@/components/sessions/shell/filterCollapsedSessionListItems';
+import { buildVisibleSessionNavigationEntries } from '@/sync/domains/session/navigation/sessionNavigationOrder';
+import { buildSessionListIndexNodeId } from '@/sync/domains/sessionList/sessionListIndex';
+import { resolveVisibleSessionListIndexSummary } from './sessionListIndexPresentation';
 
 function folderOrderKey(folderId: string): string {
     return buildSessionListFolderOrderItemKey({ serverId: 's1', folderId })!;
@@ -67,6 +71,33 @@ function describeItems(items: ReadonlyArray<SessionListIndexItem>): string[] {
 }
 
 describe('computeVisibleSessionListIndex', () => {
+    it.each([false, true])('nests cross-date reports with correct headers and collapse/navigation order (workflow branch: %s)', (workflowBranch) => {
+        const source: SessionListIndexItem[] = [
+            { type: 'header', headerKind: 'date', title: 'Today', groupKey: 'today' },
+            { type: 'session', sessionId: 'lead', serverId: 's1', groupKey: 'today', groupKind: 'date' },
+            { type: 'header', headerKind: 'date', title: 'Yesterday', groupKey: 'yesterday' },
+            { type: 'session', sessionId: 'worker', serverId: 's1', groupKey: 'yesterday', groupKind: 'date' },
+            { type: 'header', headerKind: 'date', title: 'Older', groupKey: 'older' },
+            { type: 'session', sessionId: 'grandchild', serverId: 's1', groupKey: 'older', groupKind: 'date' },
+        ];
+        const visible = computeVisibleSessionListIndex({ source,
+            resolveSessionRow: makeResolver({ 's1:lead': makeSessionRow('lead'),
+                's1:worker': makeSessionRow('worker', { reportsTo: { sessionId: 'lead' } }),
+                's1:grandchild': makeSessionRow('grandchild', { reportsTo: { sessionId: 'worker' } }) }),
+            hideInactiveSessions: false, pinnedSessionKeysV1: [], sessionListGroupOrderV1: {},
+            presentation: { enabled: false, presentation: 'grouped' },
+            ...(workflowBranch ? { workflowRuns: [] } : {}),
+        })!;
+        expect(visible.filter(item => item.type === 'header').map(item => item.title)).toEqual(['Today']);
+        expect(visible.filter(item => item.type === 'session').map(item => [item.sessionId, item.groupKey, item.reportsDepth ?? 0]))
+            .toEqual([['lead', 'today', 0], ['worker', 'today', 1], ['grandchild', 'today', 2]]);
+        expect(resolveVisibleSessionListIndexSummary({ enabled: false, activeServerId: 's1', activeIndex: visible })).toMatchObject({ sessionCount: 3 });
+        expect(buildVisibleSessionNavigationEntries(visible).map(item => item.sessionId)).toEqual(['lead', 'worker', 'grandchild']);
+        const lead = visible.find(item => item.type === 'session' && item.sessionId === 'lead')!;
+        const collapsed = filterCollapsedSessionListItems(visible, { [buildSessionListIndexNodeId(lead)]: true });
+        expect(collapsed.filter(item => item.type === 'session').map(item => item.sessionId)).toEqual(['lead']);
+        expect(filterCollapsedSessionListItems(visible, { yesterday: true })).toBe(visible);
+    });
     afterEach(() => {
         syncPerformanceTelemetry.configure({ enabled: false });
         syncPerformanceTelemetry.reset();

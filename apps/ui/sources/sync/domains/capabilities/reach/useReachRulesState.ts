@@ -25,6 +25,7 @@ type PendingChange = {
 type State = {
     key: string; rules: ReachRulesV1; written: ReachRulesV1; revision: number | 'absent';
     previous: ReachRulesV1 | null; pending: PendingChange[]; running: boolean; mounted: boolean;
+    publishOptimistic?: (rules: ReachRulesV1 | null) => void;
 };
 
 function project(state: State): ReachRulesV1 {
@@ -39,23 +40,25 @@ function project(state: State): ReachRulesV1 {
 }
 
 /** One optimistic owner; reads never replace a newer acknowledged write with an older projection. */
-export function useReachRulesState(source: ReachRulesSource, execute: ExecuteReachRules) {
+export function useReachRulesState(source: ReachRulesSource, execute: ExecuteReachRules,
+    publishOptimistic?: (rules: ReachRulesV1 | null) => void) {
     const [, render] = React.useState(0);
     const latest = React.useRef(source);
     latest.current = source;
     const owner = React.useRef<State | null>(null);
     if (!owner.current || owner.current.key !== source.key) owner.current = { key: source.key, rules: source.rules,
-        written: source.rules, revision: source.revision, previous: null, pending: [], running: false, mounted: true };
+        written: source.rules, revision: source.revision, previous: null, pending: [], running: false, mounted: true, publishOptimistic };
     const state = owner.current;
-    const publish = React.useCallback((current: State) => {
+    const publish = React.useCallback((current: State, operation = false) => {
         const next = project(current);
+        if (operation) current.publishOptimistic?.(current.pending.length ? next : null);
         if (JSON.stringify(next) === JSON.stringify(current.rules)) return;
         current.rules = next;
         if (owner.current === current && current.mounted) render(value => value + 1);
     }, []);
     React.useEffect(() => {
         state.mounted = true;
-        return () => { state.mounted = false; };
+        return () => { state.mounted = false; if (state.pending.length) state.publishOptimistic?.(null); };
     }, [state]);
     React.useLayoutEffect(() => {
         if (source.status !== 'ready' || source.revision === 'absent') return;
@@ -102,7 +105,7 @@ export function useReachRulesState(source: ReachRulesSource, execute: ExecuteRea
                 }
             }
             current.pending.shift();
-            publish(current);
+            publish(current, true);
             operation.resolve(result);
         }
         current.running = false;
@@ -115,8 +118,9 @@ export function useReachRulesState(source: ReachRulesSource, execute: ExecuteRea
         if (!parsed.success) return Promise.resolve({ ok: false, message: 'invalid_action_input' });
         return new Promise(resolve => {
             const operation: PendingChange = { change: parsed.data, nowMs: Date.now(), ids: [], execute, resolve };
+            state.previous = state.rules;
             state.pending.push(operation);
-            try { publish(state); }
+            try { publish(state, true); }
             catch (error) {
                 state.pending.pop();
                 resolve({ ok: false, message: error instanceof Error ? error.message : 'invalid_action_input' });
@@ -127,5 +131,5 @@ export function useReachRulesState(source: ReachRulesSource, execute: ExecuteRea
     }, [state, execute, publish, drain]);
     const undoLast = React.useCallback(() => state.previous ? change({ kind: 'replace', rules: reachRulesToDraftsV1(state.previous) })
         : Promise.resolve<ReachRulesWriteResult>({ ok: true }), [state, change]);
-    return { rules: source.valueAvailable ? state.rules : source.rules, status: source.status, change, undoLast };
+    return { rules: source.valueAvailable ? state.rules : source.rules, revision: state.revision, status: source.status, change, undoLast };
 }

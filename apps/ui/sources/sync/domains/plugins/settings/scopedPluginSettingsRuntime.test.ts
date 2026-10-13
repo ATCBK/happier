@@ -1,16 +1,12 @@
-import { beforeEach, describe, expect, it, vi } from 'vitest';
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
+import { createAccountTokenForTests } from '@/dev/testkit/harness/homeGovernanceHarness';
+import { installDisconnectedServerSocketBoundary, restoreServerAccountForTest } from '@/dev/testkit/harness/serverAccountConnectionHarness';
+import { retireActiveServerAccountScopeLifetime } from '@/sync/domains/scope/activeServerAccountScope';
 
 const runtime = vi.hoisted(() => ({
-    current: true,
     token: 'token-a',
     serverFetch: vi.fn(),
     daemonSettingsWatch: vi.fn(),
-}));
-
-const lifetime = vi.hoisted(() => Object.freeze({
-    scope: Object.freeze({ serverId: 'server-a', accountId: 'account-a' }),
-    isCurrent: () => runtime.current,
-    onRetire: () => Object.freeze({ dispose(): void {} }),
 }));
 
 vi.mock('@/platform/cryptoRandom', () => ({
@@ -19,42 +15,20 @@ vi.mock('@/platform/cryptoRandom', () => ({
 
 vi.mock('@/platform/randomUUID', () => ({ randomUUID: () => 'test-id' }));
 
-vi.mock('@/sync/domains/settings/scope/accountSettingsScope', () => ({
-    areAccountSettingsScopesEqual: () => false,
-}));
+vi.mock('@/sync/http/client', async (importOriginal) => {
+    const original = await importOriginal<typeof import('@/sync/http/client')>();
+    return {
+        ...original,
+        serverFetch: (path: string, ...args: Parameters<typeof original.serverFetch> extends [unknown, ...infer Rest] ? Rest : never) => (
+            path === '/v1/account/encryption' || path.startsWith('/v1/account/plugin-settings/')
+                ? runtime.serverFetch(path, ...args)
+                : original.serverFetch(path, ...args)
+        ),
+    };
+});
 
-vi.mock('@/sync/domains/scope/activeServerAccountScope', () => ({
-    captureActiveServerAccountScopeLifetime: () => lifetime,
-}));
-
-vi.mock('@/sync/domains/state/storage', () => ({
-    storage: {
-        getState: () => ({ settingsScope: null, settingsVersion: -1, settings: {} }),
-        subscribe: () => () => {},
-    },
-}));
-
-vi.mock('@/sync/domains/server/serverRuntime', () => ({
-    getActiveServerSnapshot: () => ({
-        serverId: 'server-a',
-        serverUrl: 'https://server-a.example.test',
-        generation: 1,
-    }),
-}));
-
-vi.mock('@/sync/domains/server/serverProfiles', () => ({
-    areServerProfileIdentifiersEquivalent: (left: string, right: string) => left === right,
-    getServerProfileLegacyServerIds: () => [],
-    getServerProfileById: () => ({ serverIdentityId: 'server-identity-a' }),
-    resolveServerProfileForPortableIdentity: () => ({
-        kind: 'resolved',
-        profile: { id: 'server-a' },
-    }),
-}));
-
-vi.mock('@/sync/http/client', () => ({ serverFetch: runtime.serverFetch }));
-
-vi.mock('@/sync/ops/machineContributionRegistryProjection', () => ({
+vi.mock('@/sync/ops/machineContributionRegistryProjection', async (importOriginal) => ({
+    ...(await importOriginal<typeof import('@/sync/ops/machineContributionRegistryProjection')>()),
     machinePluginSecretDelete: vi.fn(),
     machinePluginSecretSet: vi.fn(),
     machinePluginSecretStatus: vi.fn(),
@@ -63,28 +37,20 @@ vi.mock('@/sync/ops/machineContributionRegistryProjection', () => ({
     watchMachinePluginSettingsChanges: runtime.daemonSettingsWatch,
 }));
 
-vi.mock('@/sync/sync', () => ({
-    sync: {
-        encryption: null,
-        getCredentials: () => ({ token: runtime.token }),
-        mutateAccountSettingsOnce: vi.fn(),
-    },
-}));
-
-vi.mock('./scopedPluginSettingsChangeWatch', () => ({
-    watchActiveScopedPluginSettingsChanges: () => ({ dispose(): void {} }),
-}));
-
-import { scopedPluginSettingsAdapter } from './scopedPluginSettingsRuntime';
+installDisconnectedServerSocketBoundary();
+const { scopedPluginSettingsAdapter } = await import('./scopedPluginSettingsRuntime');
+const tokenA = createAccountTokenForTests('account-a');
+const tokenB = createAccountTokenForTests('account-b');
+let connection: Awaited<ReturnType<typeof restoreServerAccountForTest>> | null = null;
 
 const ACCOUNT_TARGET = Object.freeze({
     kind: 'account' as const,
-    serverIdentityId: 'server-identity-a',
+    serverIdentityId: 'srv_plugin_settings_runtime',
 });
 
 const DAEMON_TARGET = Object.freeze({
     kind: 'daemon' as const,
-    serverIdentityId: 'server-identity-a',
+    serverIdentityId: 'srv_plugin_settings_runtime',
     machineId: 'machine-a',
     serverId: 'server-a',
 });
@@ -101,11 +67,23 @@ function jsonResponse(body: () => Promise<unknown>, status = 200) {
     return Object.freeze({ ok: status >= 200 && status < 300, status, json: body });
 }
 
-beforeEach(() => {
-    runtime.current = true;
-    runtime.token = 'token-a';
+beforeEach(async () => {
+    runtime.token = tokenA;
+    runtime.serverFetch.mockResolvedValue(Response.json({ mode: 'plain', updatedAt: 1 }));
+    connection = await restoreServerAccountForTest({
+        serverUrl: 'https://server-a.example.test',
+        serverIdentityId: ACCOUNT_TARGET.serverIdentityId,
+        credentials: { get token() { return runtime.token; } },
+        request: async (url) => new URL(String(url)).pathname === '/v1/account/encryption'
+            ? Response.json({ mode: 'plain', updatedAt: 1 }) : null,
+    });
     runtime.serverFetch.mockReset();
     runtime.daemonSettingsWatch.mockReset();
+});
+
+afterEach(async () => {
+    await connection?.dispose();
+    connection = null;
 });
 
 describe('scopedPluginSettingsAdapter Account currentness', () => {
@@ -153,7 +131,7 @@ describe('scopedPluginSettingsAdapter Account currentness', () => {
         const mutation = {
             kind: 'set' as const,
             get value() {
-                runtime.token = 'token-b';
+                runtime.token = tokenB;
                 return 'new endpoint';
             },
         };
@@ -170,7 +148,7 @@ describe('scopedPluginSettingsAdapter Account currentness', () => {
         runtime.serverFetch.mockImplementation(async (path: string, init?: RequestInit) => {
             if (path === '/v1/account/encryption') return jsonResponse(async () => ({ mode: 'plain', updatedAt: 1 }));
             if (init?.method === 'POST') {
-                runtime.token = 'token-b';
+                runtime.token = tokenB;
                 if (settlement === 'lost') throw new Error('Response lost after dispatch');
                 return jsonResponse(async () => ({ status: 'conflict', revision: 5 }));
             }
@@ -182,7 +160,7 @@ describe('scopedPluginSettingsAdapter Account currentness', () => {
             fields: ACCOUNT_FIELDS, fieldId: 'endpoint', mutation: { kind: 'set', value: 'new endpoint' },
             expectedRevision: { kind: 'account', value: 'absent' },
         })).resolves.toEqual({ status: settlement === 'lost' ? 'outcomeUnknown' : 'conflict' });
-        expect(readTokens).toEqual(['Bearer token-a']);
+        expect(readTokens).toEqual([`Bearer ${tokenA}`]);
     });
 
     it('binds an exact daemon Settings record to the machine invalidation transport', () => {
@@ -202,7 +180,7 @@ describe('scopedPluginSettingsAdapter Account currentness', () => {
 
         expect(runtime.daemonSettingsWatch).toHaveBeenCalledWith('machine-a', {
             serverId: 'server-a',
-            serverIdentityId: 'server-identity-a',
+            serverIdentityId: 'srv_plugin_settings_runtime',
             pluginId: 'acme.settings',
             onInvalidated,
         });
@@ -277,7 +255,7 @@ describe('scopedPluginSettingsAdapter Account currentness', () => {
         });
         await vi.waitFor(() => expect(runtime.serverFetch).toHaveBeenCalledTimes(2));
 
-        runtime.current = false;
+        retireActiveServerAccountScopeLifetime();
         delayedRecord.resolve({
             status: 'present',
             revision: 4,
@@ -306,7 +284,7 @@ describe('scopedPluginSettingsAdapter Account currentness', () => {
         });
         await vi.waitFor(() => expect(runtime.serverFetch).toHaveBeenCalledTimes(4));
 
-        runtime.current = false;
+        retireActiveServerAccountScopeLifetime();
         delayedMutation.resolve({ status: 'updated', revision: 1 });
 
         await expect(write).resolves.toEqual({ status: 'applied', revision: { kind: 'account', value: 1 } });

@@ -22,9 +22,9 @@ import {
 installApprovalCommonModuleMocks({ storage: (importOriginal) => importOriginal() });
 const initialStorageState = getStorage().getState();
 
-let dispose: (() => void) | null = null;
-afterEach(() => {
-    dispose?.();
+let dispose: (() => Promise<void>) | null = null;
+afterEach(async () => {
+    await dispose?.();
     dispose = null;
     resetReviewRunCommentsForTests();
     retireActiveServerAccountScopeLifetime();
@@ -188,7 +188,7 @@ describe('review run comments (one cache, bound to its Home and Account)', () =>
         const before = { serverId: served.homes.other!.id, accountId: 'account-b' };
         await loadReviewRunComments({ scope: before, sessionId: 'sess_1', runId: 'run_1' });
 
-        served.switchAccount('other', 'account-c');
+        await served.switchAccount('other', 'account-c');
         const saved = await decideReviewRunFinding({ scope: before, sessionId: 'sess_1', runId: 'run_1', commentId: 'comment-f1', decision: 'accept' });
 
         expect(saved).toBe(false);

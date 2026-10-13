@@ -9,6 +9,7 @@ import {
 } from '@happier-dev/protocol';
 import { RPC_METHODS } from '@happier-dev/protocol/rpc';
 import { readRpcRequestDisposition } from '@happier-dev/sync-client';
+import { clearMachineRequestReachabilityForTest } from '@/sync/domains/machines/reachability/machineReachability';
 
 const getReadyServerFeaturesSpy = vi.hoisted(() => vi.fn());
 const TOKEN_A = 'header.eyJzdWIiOiJhY2NvdW50LTEifQ.signature';
@@ -160,6 +161,7 @@ async function importProductionRoute() {
 
 describe('production peer mediation machine RPC route adapter', () => {
     beforeEach(() => {
+        clearMachineRequestReachabilityForTest();
         getReadyServerFeaturesSpy.mockReset();
         getCredentialsForServerUrlSpy.mockReset();
         storageGetStateSpy.mockReset();
@@ -254,6 +256,7 @@ describe('production peer mediation machine RPC route adapter', () => {
             },
         });
         const fetchSpy = vi.fn(async (_url: RequestInfo | URL, init?: RequestInit) => {
+            if (init?.method === 'OPTIONS') return new Response(null, { status: 204 });
             const body = JSON.parse(String(init?.body)) as { ephemeralPublicKeyBase64Url: string };
             return responseJson({
                 ok: true,
@@ -297,9 +300,8 @@ describe('production peer mediation machine RPC route adapter', () => {
             grant: { payload: { v: 2, proofKind: 'ephemeral_ed25519' } },
             proof: { v: 2, kind: 'ephemeral_ed25519' },
         });
-        const mintBody = JSON.parse(String((fetchSpy.mock.calls[0]?.[1] as RequestInit).body));
+        const mintBody = JSON.parse(String(fetchSpy.mock.calls.find(([, init]) => init?.method === 'POST')?.[1]?.body));
         expect(mintBody).toMatchObject({ v: 2, kind: 'ephemeral_ed25519' });
-        expect(fetchSpy).toHaveBeenCalledTimes(1);
     });
 
 
@@ -378,7 +380,8 @@ describe('production peer mediation machine RPC route adapter', () => {
             },
             machineListByServerId: {},
         };
-        vi.stubGlobal('fetch', vi.fn(async () => {
+        vi.stubGlobal('fetch', vi.fn(async (_url: RequestInfo | URL, init?: RequestInit) => {
+            if (init?.method === 'OPTIONS') return new Response(null, { status: 204 });
             throw new Error('route grant network unavailable');
         }));
 

@@ -2,6 +2,8 @@ import { act } from 'react-test-renderer';
 import { afterEach, expect, it, vi } from 'vitest';
 import { RPC_METHODS } from '@happier-dev/protocol/rpc';
 import { MachineResourcesPolicyV1Schema } from '@happier-dev/protocol/machines/resources/machineResourcesPolicyV1';
+import { RPC_ERROR_CODES, RpcError } from '@happier-dev/protocol/rpcErrors';
+import { MachineGuardViewV1Schema } from '@happier-dev/protocol/machines/guard/guardRpcV1';
 
 import { createDeferred } from '@/dev/testkit/hooks/createDeferred';
 import { standardCleanup } from '@/dev/testkit/cleanup/standardCleanup';
@@ -24,9 +26,42 @@ installHomeGovernanceBoundaries(home);
 const { storage } = await import('@/sync/domains/state/storageStore');
 const { machineGuardStore } = await import('./machineGuardStore');
 const { useMachineGuardView } = await import('./useMachineGuardView');
+const guardRpc = await import('./machineGuardRpc');
 const before = storage.getState();
 afterEach(async () => {
     standardCleanup(); machineGuardStore.reset(); network.rpc.mockReset(); storage.setState(before); await home.reset();
+});
+
+it('decodes the registered Guard Action answer without admitting an unknown result', async () => {
+    const serverId = await home.addHome({ name: 'Guard contract', serverUrl: 'https://guard-contract.test',
+        serverIdentityId: 'srv_guard_contract', accountId: 'owner', currentAccount: true });
+    const input = { serverId, machineId: 'machine', expectedAccountId: 'owner' };
+    const view = MachineGuardViewV1Schema.parse(createMachineGuardViewFixture());
+    network.rpc.mockImplementation(async ({ method, accountId }: { method: string; accountId?: string }) => {
+        expect({ method, accountId }).toEqual({ method: RPC_METHODS.MACHINES_GUARD_GET, accountId: 'owner' });
+        return view;
+    });
+    expect(await guardRpc.fetchMachineGuardViewViaAction(input)).toEqual({ ok: true, value: view });
+    network.rpc.mockResolvedValue({ ...view, policyRevision: 'unproven' });
+    expect(await guardRpc.fetchMachineGuardViewViaAction(input)).toEqual({ ok: false, reason: 'invalid_response' });
+});
+
+it('distinguishes unavailable Guard operations from access refusal across reads, watches and Keep running', async () => {
+    const serverId = await home.addHome({ name: 'Guard predecessor', serverUrl: 'https://guard-predecessor.test',
+        serverIdentityId: 'srv_guard_predecessor', accountId: 'owner', currentAccount: true });
+    const input = { serverId, machineId: 'machine', expectedAccountId: 'owner' };
+    for (const errorCode of [RPC_ERROR_CODES.METHOD_NOT_FOUND, RPC_ERROR_CODES.METHOD_NOT_AVAILABLE]) {
+        network.rpc.mockRejectedValue(new RpcError('Unavailable operation', errorCode));
+        expect(await guardRpc.fetchMachineGuardViewViaAction(input)).toEqual({ ok: false, reason: 'older_happier' });
+        expect(await guardRpc.fetchMachineGuardActivityViaAction({ ...input, range: 'today', filter: 'all' }))
+            .toEqual({ ok: false, reason: 'older_happier' });
+        expect(await guardRpc.watchMachineGuardViaMachineRpc(input)).toEqual({ ok: false, reason: 'older_happier' });
+        expect(await guardRpc.keepMachineGuardWorkRunningViaAction({ ...input, terminalKey: 'terminal' }))
+            .toEqual({ ok: false, reason: 'older_happier' });
+    }
+    network.rpc.mockRejectedValue(new RpcError('Forbidden', RPC_ERROR_CODES.FORBIDDEN));
+    expect(await guardRpc.fetchMachineGuardViewViaAction(input)).toEqual({ ok: false, reason: 'request_failed' });
+    expect(await guardRpc.watchMachineGuardViaMachineRpc(input)).toEqual({ ok: false, reason: 'request_failed' });
 });
 
 it('distinguishes an empty or held pending read, failure and offline without losing the last good answer', async () => {

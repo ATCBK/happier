@@ -1,4 +1,7 @@
 import { describe, expect, it } from 'vitest';
+import { ConnectedServiceBindingsV2Schema } from '@happier-dev/protocol/connect/connected-service-bindings';
+import { createSessionFixture } from '@/dev/testkit';
+import { buildNewSessionTempDataFromSessionConfiguration } from '@/components/sessions/authoring/draft/sessionConfigurationSeed';
 
 import {
     CONNECTED_SERVICES_BINDINGS_KEY,
@@ -9,13 +12,21 @@ import {
 describe('retained Agent-option Team bindings', () => {
     it('recovers a configuration seed envelope and lets a newer explicit editor selection win', () => {
         const serviceId = 'happier.agent.claude/claude-subscription';
-        const connectedServices = { v: 2, bindingsByServiceId: {
+        const connectedServices = ConnectedServiceBindingsV2Schema.parse({ v: 2, bindingsByServiceId: {
             [serviceId]: { source: 'connected', selection: 'profile', profileId: 'work' },
-        } };
+        } });
+        const seed = buildNewSessionTempDataFromSessionConfiguration({
+            session: createSessionFixture({ metadata: { path: '/repo', host: 'test',
+                flavor: 'claude', connectedServices } }),
+            machineId: 'machine-target',
+        });
+        const seededOptions = seed.backendNewSessionOptionStateByTargetKey?.['agent:happier.agent.claude/claude'];
+        expect(seededOptions).toBeDefined();
+        expect(ConnectedServiceBindingsV2Schema.parse(seededOptions?.connectedServices)).toEqual(connectedServices);
         const read = (agentOptionState: Record<string, unknown>) =>
             parseConnectedServicesBindingsByServiceIdFromAgentOptionState({ agentOptionState });
-        expect(read({ connectedServices })).toEqual({ [serviceId]: { source: 'connected', profileId: 'work' } });
-        expect(read({ connectedServices, [CONNECTED_SERVICES_BINDINGS_KEY]: { [serviceId]: { source: 'native' } } }))
+        expect(read(seededOptions!)).toEqual({ [serviceId]: { source: 'connected', profileId: 'work' } });
+        expect(read({ ...seededOptions, [CONNECTED_SERVICES_BINDINGS_KEY]: { [serviceId]: { source: 'native' } } }))
             .toEqual({ [serviceId]: { source: 'native' } });
         expect(read({ connectedServices, [CONNECTED_SERVICES_BINDINGS_KEY]: null })).toEqual({});
         expect(read({ connectedServices: { ...connectedServices, v: 99 } })).toEqual({});

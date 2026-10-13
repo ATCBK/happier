@@ -1,10 +1,11 @@
 import { RPC_ERROR_CODES } from '@happier-dev/protocol/rpc';
+import { RegistrySkillFilesPayloadV1Schema } from '@happier-dev/protocol/registries';
 import { RpcError } from '@happier-dev/protocol/rpcErrors';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 
 import { createEncryptedTransferChunkEnvelope } from './transferChunkEncryption';
 import { createBufferedTransferDestination } from '../carriers/createBufferedTransferDestination';
-import { downloadBulkPayloadViaDirectExportToDestination as downloadAdmittedBytes } from './directTransferExportDownload';
+import { downloadBulkPayloadViaDirectExportToDestination as downloadAdmittedBytes, downloadBulkJsonPayloadViaDirectExport } from './directTransferExportDownload';
 import { copyPreparedFilesystemFile as copyAdmittedBytes } from './preparedFilesystemCopy';
 import { callAdmittedFilesystemTransferActionRpc } from './filesystemTransferActionClient';
 import { createTransferRecipientKeyPair } from './transferChunkEncryption';
@@ -55,6 +56,12 @@ async function createManifestHash(payloadBytes: Uint8Array): Promise<string> {
 }
 
 describe('directTransferExportDownload', () => {
+    it('retains a typed Found source rejection through the existing prepare transport', async () => {
+        callGuardedMachineRpcWithPolicyMock.mockResolvedValue({ success: false, error: 'Skill no longer found', code: 'not_found' });
+        expect(await downloadBulkJsonPayloadViaDirectExport({ machineId: 'machine', request: {
+            t: 'prompt_asset_download_v1', path: '/native/skills/removed',
+        }, parsePayload: value => value })).toEqual({ ok: false, error: 'Skill no longer found', errorCode: 'not_found' });
+    });
     it('reopens only the original file capabilities for cleanup after cancellation retires the byte leases', async () => {
         const cancellation = new AbortController();
         const bytes = new Uint8Array([0, 255, 128, 10]);
@@ -290,9 +297,7 @@ describe('directTransferExportDownload', () => {
             serverId: 'server-a',
             request: {
                 t: 'prompt_asset_download_v1',
-                assetTypeId: 'agents.skill',
-                scope: 'user',
-                externalRef: { skillName: 'reviewer' },
+                path: '/native/skills/reviewer',
             },
             parsePayload: (value) => value as typeof payload,
             httpOriginOverride: 'http://127.0.0.1:48126',
@@ -360,9 +365,7 @@ describe('directTransferExportDownload', () => {
             serverId: 'server-a',
             request: {
                 t: 'prompt_asset_download_v1',
-                assetTypeId: 'agents.skill',
-                scope: 'user',
-                externalRef: { browser: true },
+                path: '/native/skills/browser',
             },
             parsePayload: (value) => value as typeof payload,
             acquirePreparedCarrier: async () => ({ kind: 'browser_stream', request, release }),
@@ -485,9 +488,7 @@ describe('directTransferExportDownload', () => {
             serverId: 'server-a',
             request: {
                 t: 'prompt_asset_download_v1',
-                assetTypeId: 'agents.skill',
-                scope: 'user',
-                externalRef: { name: 'failed' },
+                path: '/native/skills/failed',
             },
             parsePayload: (value) => value,
             acquirePreparedCarrier: async () => ({
@@ -556,9 +557,7 @@ describe('directTransferExportDownload', () => {
             serverId: 'server-a',
             request: {
                 t: 'prompt_asset_download_v1',
-                assetTypeId: 'agents.skill',
-                scope: 'user',
-                externalRef: { skillName: 'reviewer' },
+                path: '/native/skills/reviewer',
             },
             parsePayload: (value) => value as typeof payload,
             acquirePreparedCarrier: async () => ({
@@ -575,7 +574,8 @@ describe('directTransferExportDownload', () => {
     });
 
     it('accepts https direct-export endpoint candidates with a Serve path prefix', async () => {
-        const payload = { ok: true };
+        const payload = RegistrySkillFilesPayloadV1Schema.parse([{ path: 'SKILL.md', unixMode: 0o644,
+            contentBase64: Buffer.from('# Review').toString('base64') }]);
         const payloadBytes = new TextEncoder().encode(JSON.stringify(payload));
         const manifestHash = await createManifestHash(payloadBytes);
 
@@ -642,11 +642,12 @@ describe('directTransferExportDownload', () => {
             serverId: 'server-a',
             request: {
                 t: 'prompt_registry_download_v1',
+                kind: 'skill',
                 sourceId: 'skills_sh:featured',
                 itemId: 'skills_sh:featured:item-1',
-                configuredSources: [],
+                version: 'a'.repeat(40),
             },
-            parsePayload: (value) => value as typeof payload,
+            parsePayload: value => { const parsed = RegistrySkillFilesPayloadV1Schema.safeParse(value); return parsed.success ? parsed.data : null; },
         });
 
         expect(result).toEqual({
@@ -711,9 +712,7 @@ describe('directTransferExportDownload', () => {
             machineId: 'machine-1',
             request: {
                 t: 'prompt_asset_download_v1',
-                assetTypeId: 'agents.skill',
-                scope: 'user',
-                externalRef: { skillName: 'safe' },
+                path: '/native/skills/safe',
             },
             parsePayload: (value) => value as typeof payload,
         });
@@ -1147,9 +1146,7 @@ describe('directTransferExportDownload', () => {
             serverId: 'server-a',
             request: {
                 t: 'prompt_asset_download_v1',
-                assetTypeId: 'agents.skill',
-                scope: 'user',
-                externalRef: { skillName: 'reviewer' },
+                path: '/native/skills/reviewer',
             },
             parsePayload: (value) => value as { ok: true } | null,
         });
@@ -1618,9 +1615,7 @@ describe('directTransferExportDownload', () => {
             machineId: 'machine-1',
             request: {
                 t: 'prompt_asset_download_v1',
-                assetTypeId: 'agents.skill',
-                scope: 'user',
-                externalRef: { skillName: 'auth-terminal' },
+                path: '/native/skills/auth-terminal',
             },
             parsePayload: (value) => value,
         })).resolves.toEqual({ ok: false, error: 'Direct export download unavailable' });
@@ -1713,9 +1708,7 @@ describe('directTransferExportDownload', () => {
             machineId: 'machine-1',
             request: {
                 t: 'prompt_asset_download_v1',
-                assetTypeId: 'agents.skill',
-                scope: 'user',
-                externalRef: { skillName: 'oversized-open' },
+                path: '/native/skills/oversized-open',
             },
             parsePayload: (value) => value,
         });
@@ -1833,9 +1826,7 @@ describe('directTransferExportDownload', () => {
                 machineId: 'machine-1',
                 request: {
                     t: 'prompt_asset_download_v1',
-                    assetTypeId: 'agents.skill',
-                    scope: 'user',
-                    externalRef: { skillName: 'slow-body' },
+                    path: '/native/skills/slow-body',
                 },
                 timeoutMs: 10,
                 parsePayload: (value) => value,
@@ -1949,9 +1940,7 @@ describe('directTransferExportDownload', () => {
                 machineId: 'machine-1',
                 request: {
                     t: 'prompt_asset_download_v1',
-                    assetTypeId: 'agents.skill',
-                    scope: 'user',
-                    externalRef: { skillName: 'aggregate' },
+                    path: '/native/skills/aggregate',
                 },
                 parsePayload: (value) => value,
             });
@@ -2000,9 +1989,7 @@ describe('directTransferExportDownload', () => {
             machineId: 'machine-1',
             request: {
                 t: 'prompt_asset_download_v1',
-                assetTypeId: 'agents.skill',
-                scope: 'user',
-                externalRef: { skillName: 'max-count' },
+                path: '/native/skills/max-count',
             },
             parsePayload: (value) => value,
         });

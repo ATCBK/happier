@@ -5,7 +5,7 @@ import { createSessionFixture, createSessionAccessFixture } from '@/dev/testkit/
 import { buildUsageCoachRemedies } from './buildUsageCoachRemedies';
 import { evaluateUsageCoach } from '@happier-dev/protocol/usage/coach/evaluateUsageCoach';
 import { UsageMcpBindingUsageSchema } from '@happier-dev/protocol/usage/coach/usageMcpBindingUsage';
-import type { McpServerCatalogSnapshotV1 } from '@happier-dev/protocol/mcp/servers/catalogSchemasV1';
+import type { McpServerCatalogSnapshotV1 } from '@happier-dev/protocol/mcp/servers/serverCatalogV1';
 
 const composition = UsagePromptCompositionSchema.parse({ v: 1, evidenceId: 'composition', sessionId: 'session', turnId: 'turn',
     inputId: 'input', observedAtMs: 150, boundary: 'host_pre_dispatch', deliveryKind: 'newTurn', coverage: 'host_only',

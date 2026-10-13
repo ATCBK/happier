@@ -61,7 +61,9 @@ export async function openSessionSystemRecord<T>(params: Readonly<{
 
 /** One stored item decoder for Board placements and addressed Session replies. */
 export function openSessionSurfaceItemRecord(record: SessionSystemRecordStored, context: SessionStoredContentContext | null): Promise<OpenSessionSystemRecordResult<SessionSurfaceItemV1>> {
-    return openSessionSystemRecord({ record, address: record.address, context, decode: value => {
+    const address = record.address;
+    if (address.owner !== 'host') return Promise.resolve({ status: 'malformed' });
+    return openSessionSystemRecord<SessionSurfaceItemV1>({ record, address, context, decode: value => {
         if (value && typeof value === 'object' && 'v' in value && typeof value.v === 'number' && value.v !== 1) {
             return { status: 'unsupported_version', version: value.v };
         }

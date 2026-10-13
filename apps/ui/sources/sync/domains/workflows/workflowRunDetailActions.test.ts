@@ -1,166 +1,120 @@
-import { describe, expect, it, vi } from 'vitest';
+import { afterEach, beforeAll, beforeEach, describe, expect, it, vi } from 'vitest';
+import { TargetedActionRpcRequestV1Schema } from '@happier-dev/protocol/actions';
+import { normalizeActionsSettingsV1 } from '@happier-dev/protocol/actions/actionSettings';
+import { createHomeGovernanceHarness, installHomeGovernanceBoundaries } from '@/dev/testkit/harness/homeGovernanceHarness';
+import { createWorkflowDefinitionFixture, createWorkflowInvocationIndexFixture, createWorkflowRunSummaryFixture } from '@/dev/testkit/fixtures/workflowRunFixtures';
+import { createPlainAccountEncryptionCurrentnessFixture } from '@/dev/testkit/fixtures/accountEncryptionCurrentness';
+import { materializeWorkflowAcceptedSnapshotV1 } from '@happier-dev/protocol/workflows/materializeWorkflowAcceptedSnapshotV1';
+import { sealWorkflowAcceptedSnapshotStoredEnvelopeV1, serializeWorkflowStoredContentEnvelopeV1 } from '@happier-dev/protocol/workflows/workflowStoredContentV1';
+import { WorkflowRunRecipientCensusResponseV1Schema } from '@happier-dev/protocol/workflows/workflowRunKeyV1';
+import { installDisconnectedServerSocketBoundary } from '@/dev/testkit/harness/serverAccountConnectionHarness';
+import { loadSyncSingletonForTests } from '@/dev/testkit/harness/syncSingletonLoader';
 
-import {
-    createWorkflowDefinitionFixture,
-    createWorkflowInvocationIndexFixture,
-    createWorkflowRunSummaryFixture,
-} from '@/dev/testkit/fixtures/workflowRunFixtures';
+// Native Machine RPC and Home HTTP are the only replaced execution boundaries.
+const machineRpc = vi.hoisted(() => vi.fn());
+vi.mock('@/sync/runtime/orchestration/serverScopedRpc/serverScopedMachineRpc', () => ({ machineRpcWithServerScope: machineRpc }));
+const home = createHomeGovernanceHarness();
+installHomeGovernanceBoundaries(home);
+installDisconnectedServerSocketBoundary();
+beforeAll(loadSyncSingletonForTests);
+const { storage } = await import('@/sync/domains/state/storageStore');
+const { getActiveServerSnapshot } = await import('@/sync/domains/server/serverRuntime');
+const { getAppliedActiveServerSnapshot, isAppliedActiveServerRuntimeAvailable, publishAppliedActiveServerSnapshot } = await import('@/sync/runtime/orchestration/appliedActiveServerRuntime');
+const { workflowRunDetailActions: actions } = await import('./workflowRunDetailActions');
+const { WorkflowActionError } = await import('./workflowActionError');
+const route = '/v3/automations/runs/workflow-storage';
+let serverId: string;
+let previous = storage.getState();
+let applied = getAppliedActiveServerSnapshot();
+let available = isAppliedActiveServerRuntimeAvailable();
+beforeEach(async () => {
+    previous = storage.getState(); applied = getAppliedActiveServerSnapshot(); available = isAppliedActiveServerRuntimeAvailable();
+    await home.reset();
+    serverId = await home.addHome({ name: 'Run detail Home', serverUrl: 'https://workflow-run-detail.test', accountId: 'detail-owner' });
+    publishAppliedActiveServerSnapshot(getActiveServerSnapshot());
+    storage.setState({ profileScope: { serverId, accountId: 'detail-owner' } });
+    home.answer(serverId, '/v1/account/encryption/currentness', { body: createPlainAccountEncryptionCurrentnessFixture() });
+    machineRpc.mockReset();
+});
+afterEach(async () => { await home.reset(); storage.setState(previous); publishAppliedActiveServerSnapshot(applied, available); });
 
-import { WorkflowActionError } from './workflowActionError';
-import { createWorkflowRunDetailActions } from './workflowRunDetailActions';
-
-function ok(result: unknown) {
-    return vi.fn(async () => ({ ok: true as const, result }));
-}
-
-describe('workflow Run detail actions', () => {
-    it('reads one exact Run through the canonical Action id', async () => {
-        const execute = ok({
-            run: createWorkflowRunSummaryFixture({ id: 'run-1' }),
-            callerAccess: { canEdit: true },
-            definition: createWorkflowDefinitionFixture(),
-            authoredDefinition: createWorkflowDefinitionFixture(),
-            acceptedContext: {
-                source: { kind: 'inline' },
-                inputs: {},
-                machineId: 'machine-1',
-                // One Run executes under exactly one runtime, and the canonical
-                // accepted snapshot records that frozen choice. Omitting it
-                // described a Run the Protocol cannot admit.
-                executionTarget: { kind: 'session' },
-                materializedLeaves: [],
-                frozenChildren: {},
-                workspaceTarget: {
-                    project: {
-                        machineId: 'machine-1',
-                        directory: '/repo',
-                        checkoutRootPath: '/repo',
-                    },
-                },
-                origin: { kind: 'direct' },
-                startedBy: 'user',
-            },
-            checkpoint: null,
-        });
-        const actions = createWorkflowRunDetailActions({ execute: execute as never });
-
-        const result = await actions.getRun('run-1');
-
-        expect(execute).toHaveBeenCalledWith(
-            'workflow.run.get',
-            { runId: 'run-1' },
-            expect.objectContaining({ surface: 'ui' }),
-        );
-        expect(result.run.id).toBe('run-1');
+describe('workflow Run detail Actions through Account HTTP and native RPC', () => {
+    it('opens one exact Run with its producer-frozen definition and context through Account storage', async () => {
+        const run = createWorkflowRunSummaryFixture({ id: 'run-1', ownerAccountId: 'detail-owner', origin: { kind: 'direct' } });
+        const definition = createWorkflowDefinitionFixture({ blocks: [{ kind: 'wait', id: 'wait', document: { text: 'Continue', references: [], attachments: [] } }] });
+        const accepted = await materializeWorkflowAcceptedSnapshotV1({ definition, admission: { kind: 'user' },
+            effects: { resolveTargetAvailability: async () => true }, context: { source: { kind: 'inline' }, inputs: {}, machineId: run.machineId,
+                executionTarget: { kind: 'session' }, workspaceTarget: { project: { machineId: run.machineId, directory: '/repo', checkoutRootPath: '/repo' } },
+                origin: { kind: 'direct' }, authorization: { principal: { kind: 'host' } } } });
+        if (!accepted.ok) throw new Error(`fixture_materialization_failed:${accepted.error.code}`);
+        const acceptedEnvelope = serializeWorkflowStoredContentEnvelopeV1(sealWorkflowAcceptedSnapshotStoredEnvelopeV1({ mode: 'plain',
+            binding: { v: 1, purpose: 'accepted_snapshot', accountId: run.ownerAccountId, runId: run.id }, acceptedSnapshot: accepted.snapshot }));
+        const keyCensus = WorkflowRunRecipientCensusResponseV1Schema.parse({ runId: run.id, ownerAccountId: run.ownerAccountId,
+            access: 'owner', encryptionMode: 'plain', dataEncryptionKey: null, callerDataEncryptionKey: null, recipients: [], visibleTeamId: null,
+            ownerAccountCurrentness: { mode: 'plain', version: 1, contentKeyFingerprint: null } });
+        home.answer(serverId, route, { select: input => {
+            if (!input || typeof input !== 'object' || !('operation' in input)) throw new Error('Expected the real storage request');
+            if (input.operation === 'get') return { body: { run, acceptedEnvelope, checkpointEnvelope: null, resultEnvelope: null, keyCensus } };
+            if (input.operation === 'invocations.list') return { body: { invocations: [], parentRevision: run.revision, keyCensus, progressEnvelopesByInvocationId: {} } };
+            if (input.operation === 'run-key.census') return { body: keyCensus };
+            throw new Error(`Unexpected storage operation:${input.operation}`);
+        } });
+        const result = await actions.getRun(run.id);
+        expect(result.run).toMatchObject(run);
+        expect(result.definition).toEqual(accepted.snapshot.definition);
+        expect(result.authoredDefinition).toEqual(definition);
+        expect(result.acceptedContext).toMatchObject({ source: { kind: 'inline' }, machineId: run.machineId, executionTarget: { kind: 'session' }, startedBy: 'user' });
+        expect(result.callerAccess).toEqual({ canEdit: true });
+        expect(home.requestsFor(route)[0]?.input).toEqual({ operation: 'get', runId: run.id });
     });
 
-    it('asks the server index for the actionable invocations rather than paging history', async () => {
-        const execute = ok({
-            invocations: [createWorkflowInvocationIndexFixture({ id: 'inv-1', lifecycle: 'waiting_for_approval' })],
-            nextCursor: 'page-2',
-            parentRevision: 7,
-        });
-        const actions = createWorkflowRunDetailActions({ execute: execute as never });
-
-        const result = await actions.listInvocations({
-            runId: 'run-1',
-            lifecycles: ['waiting_for_approval', 'needs_attention'],
-            cursor: 'page-1',
-        });
-
-        expect(execute).toHaveBeenCalledWith(
-            'workflow.run.invocations.list',
-            {
-                runId: 'run-1',
-                cursor: 'page-1',
-                lifecycles: ['waiting_for_approval', 'needs_attention'],
-            },
-            expect.objectContaining({ surface: 'ui' }),
-        );
+    it('asks the server index for actionable invocations without paging full detail history', async () => {
+        home.answer(serverId, route, { body: { invocations: [createWorkflowInvocationIndexFixture({ id: 'inv-1', lifecycle: 'waiting_for_approval' })],
+            nextCursor: 'page-2', parentRevision: 7 } });
+        const result = await actions.listInvocations({ runId: 'run-1', lifecycles: ['waiting_for_approval', 'needs_attention'], cursor: 'page-1' });
+        expect(home.requestsFor(route).map(request => request.input)).toEqual([expect.objectContaining({ operation: 'invocations.list',
+            runId: 'run-1', cursor: 'page-1', lifecycles: ['waiting_for_approval', 'needs_attention'] })]);
         expect(result.invocations[0]?.lifecycle).toBe('waiting_for_approval');
         expect(result.parentRevision).toBe(7);
     });
 
-    it('rejects a response the canonical result schema does not accept', async () => {
-        const actions = createWorkflowRunDetailActions({
-            execute: ok({ invocations: [{ id: 'inv-1' }], parentRevision: 1 }) as never,
-        });
-
+    it('rejects a response the canonical result schema cannot accept', async () => {
+        home.answer(serverId, route, { body: { invocations: [{ id: 'inv-1' }], parentRevision: 1 } });
         await expect(actions.listInvocations({ runId: 'run-1' })).rejects.toThrow();
     });
 
-    it('surfaces a closed workflow error code a control caller can branch on', async () => {
-        const actions = createWorkflowRunDetailActions({
-            execute: vi.fn(async () => ({
-                ok: false as const,
-                errorCode: 'currentness_conflict',
-                error: 'Run revision moved on',
-            })) as never,
-        });
-
-        const error = await actions.pauseRun({ runId: 'run-1', expectedRevision: 3 }).catch((value) => value);
-
-        expect(error).toBeInstanceOf(WorkflowActionError);
-        expect((error as WorkflowActionError).code).toBe('currentness_conflict');
+    it('surfaces a closed currentness error a control caller can branch on', async () => {
+        home.answer(serverId, route, { status: 409, body: { error: 'currentness_conflict' } });
+        const failure = await actions.pauseRun({ runId: 'run-1', expectedRevision: 3 }).catch((value: unknown) => value);
+        expect(failure).toBeInstanceOf(WorkflowActionError);
+        expect((failure as InstanceType<typeof WorkflowActionError>).code).toBe('currentness_conflict');
     });
 
-    it('does not invent a workflow error code for an unrelated transport failure', async () => {
-        const actions = createWorkflowRunDetailActions({
-            execute: vi.fn(async () => ({
-                ok: false as const,
-                errorCode: 'rate_limited',
-                error: 'Too many requests',
-            })) as never,
-        });
-
-        const error = await actions.getRun('run-1').catch((value) => value) as WorkflowActionError;
-
-        expect(error.code).toBeNull();
-        expect(error.rawCode).toBe('rate_limited');
+    it('does not invent a Workflow error code for a front-door policy refusal', async () => {
+        const actionsSettingsV1 = normalizeActionsSettingsV1({ v: 1, actions: { 'workflow.run.get': { enabled: false } } });
+        home.answer(serverId, '/v2/account/settings', { body: { content: { t: 'plain', v: { actionsSettingsV1 } }, version: 1 } });
+        const failure = await actions.getRun('run-1').catch((value: unknown) => value);
+        expect(failure).toBeInstanceOf(WorkflowActionError);
+        expect((failure as InstanceType<typeof WorkflowActionError>).code).toBeNull();
+        expect((failure as InstanceType<typeof WorkflowActionError>).rawCode).toBe('action_disabled');
     });
 
-    it('sends the expected revision with every control so a stale request is refused', async () => {
+    it('sends the expected control revision and returns durable intent rather than a stop receipt', async () => {
         const run = createWorkflowRunSummaryFixture({ id: 'run-1' });
-        const execute = ok({ run, intent: 'cancel_requested' });
-        const actions = createWorkflowRunDetailActions({ execute: execute as never });
-
+        home.answer(serverId, route, { body: { run, intent: 'cancel_requested' } });
         const result = await actions.cancelRun({ runId: 'run-1', expectedRevision: 4 });
-
-        expect(execute).toHaveBeenCalledWith(
-            'workflow.run.cancel',
-            { runId: 'run-1', expectedRevision: 4 },
-            expect.objectContaining({ surface: 'ui' }),
-        );
-        // A control returns a durable intent, never a physical stop receipt.
+        expect(home.requestsFor(route).map(request => request.input)).toEqual([{ operation: 'cancel', runId: 'run-1', expectedRevision: 4 }]);
         expect(result.intent).toBe('cancel_requested');
     });
 
-    it('targets workspace restoration at the exact Run Machine through the Action context', async () => {
-        const run = createWorkflowRunSummaryFixture({ id: 'run-1', state: 'running', revision: 5 });
-        const execute = ok({ run, intent: 'resumed' });
-        const actions = createWorkflowRunDetailActions({ execute: execute as never });
-        const input = {
-            mode: 'recover' as const,
-            runId: 'run-1',
-            expectedRevision: 4,
-            invocations: [{
-                kind: 'restore_workspace' as const,
-                invocation: { recordId: 'inv-1' },
-                conversation: 'fresh_agent' as const,
-                input: { kind: 'original' as const },
-            }],
-        };
-
+    it('targets workspace restoration at the exact Run Machine over the native relay', async () => {
+        machineRpc.mockResolvedValue({ run: createWorkflowRunSummaryFixture({ id: 'run-1', state: 'running', revision: 5 }), intent: 'resumed' });
+        const input = { mode: 'recover' as const, runId: 'run-1', expectedRevision: 4, invocations: [{ kind: 'restore_workspace' as const,
+            invocation: { recordId: 'inv-1' }, conversation: 'fresh_agent' as const, input: { kind: 'original' as const } }] };
         await actions.restoreWorkspace(input, 'machine-1');
-
-        expect(execute).toHaveBeenCalledWith(
-            'workflow.run.resume',
-            input,
-            expect.objectContaining({
-                surface: 'ui',
-                externalActionTarget: { kind: 'machine', machineId: 'machine-1' },
-            }),
-        );
+        const request = machineRpc.mock.calls[0]?.[0];
+        expect(request).toMatchObject({ serverId, accountId: 'detail-owner', machineId: 'machine-1' });
+        expect(TargetedActionRpcRequestV1Schema.parse(request?.payload)).toMatchObject({ input, target: { kind: 'machine', machineId: 'machine-1' } });
+        expect(home.requestsFor(route)).toEqual([]);
     });
-
 });

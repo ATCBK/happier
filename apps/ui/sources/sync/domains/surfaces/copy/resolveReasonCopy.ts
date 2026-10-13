@@ -299,6 +299,7 @@ const PLUGIN_RUNTIME_KEYS = {
     crash_threshold_reached: 'pluginRuntime.crashLoop',
     feature_disabled: 'pluginRuntime.disabledByPolicy',
     disabled: 'pluginRuntime.disabledByPolicy',
+    plugin_disabled: 'pluginRuntime.disabledByPolicy',
     feature_gate_disabled: 'pluginRuntime.disabledByPolicy',
     required_feature_disabled: 'pluginRuntime.disabledByPolicy',
     channel_policy_denied: 'pluginRuntime.disabledByPolicy',
@@ -311,6 +312,7 @@ const PLUGIN_RUNTIME_KEYS = {
     hosted_web_policy_denied: 'pluginRuntime.hostedWebPolicyDenied',
     hosted_web_sandbox_unavailable: 'pluginRuntime.hostedWebSandboxUnavailable',
     hosted_web_security_unavailable: 'pluginRuntime.hostedWebSecurityUnavailable',
+    hosted_web_profile_isolation_unavailable: 'pluginRuntime.hostedWebSecurityUnavailable',
     hosted_web_frame_origin_unavailable: 'pluginRuntime.hostedWebFrameOriginUnavailable',
     hosted_web_bridge_nonce_unavailable: 'pluginRuntime.hostedWebBridgeNonceUnavailable',
     hosted_web_bridge_timeout: 'pluginRuntime.hostedWebBridgeTimeout',
@@ -320,12 +322,16 @@ const PLUGIN_RUNTIME_KEYS = {
     artifact_hosting_unsupported: 'pluginRuntime.missingRequirement',
     hosted_web_static_artifact_missing: 'pluginRuntime.missingRequirement',
     hosted_web_frame_adapter_unavailable: 'pluginRuntime.missingRequirement',
+    native_artifact_store_unavailable: 'pluginRuntime.missingRequirement',
     missing_native_capability: 'pluginRuntime.missingRequirement',
     required_permission_missing: 'pluginRuntime.missingRequirement',
     entry_missing: 'pluginRuntime.missingRequirement',
     plugin_machine_unreachable: 'pluginSurfaces.state.offline.reason',
     runtime_mismatch: 'pluginRuntime.missingRequirement',
     artifact_source_integrity_invalid: 'pluginRuntime.integrityFailed',
+    artifact_graph_mismatch: 'pluginRuntime.integrityFailed',
+    artifact_slot_ambiguous: 'pluginRuntime.integrityFailed',
+    artifact_source_ambiguous: 'pluginRuntime.integrityFailed',
     artifact_integrity_invalid: 'pluginRuntime.integrityFailed',
     integrity_failed: 'pluginRuntime.integrityFailed',
     // The page's machines carry different plugin versions and none is chosen yet.
@@ -337,6 +343,9 @@ const PLUGIN_RUNTIME_KEYS = {
     unknown_host_module: 'pluginRuntime.authorFailure',
     invalid_executable_export: 'pluginRuntime.authorFailure',
     invalid_surface_module: 'pluginRuntime.authorFailure',
+    artifact_graph_invalid: 'pluginRuntime.authorFailure',
+    hosted_web_artifact_tier_invalid: 'pluginRuntime.authorFailure',
+    native_artifact_response_table_invalid: 'pluginRuntime.authorFailure',
     plugin_revoked: 'pluginRuntime.retired',
     plugin_uninstalled: 'pluginRuntime.retired',
     revoked: 'pluginRuntime.retired',
@@ -405,6 +414,9 @@ function resolvePluginSurfaceRecoveryAction(
         case 'hosted_web_artifact_load_failed':
             return Object.freeze({ kind: 'retry', label: t('common.retry') });
         case 'artifact_source_integrity_invalid':
+        case 'artifact_graph_mismatch':
+        case 'artifact_slot_ambiguous':
+        case 'artifact_source_ambiguous':
         case 'artifact_integrity_invalid':
         case 'integrity_failed':
             return Object.freeze({ kind: 'repair', label: t('settingsPlugins.managePlugin') });
@@ -418,6 +430,9 @@ function resolvePluginSurfaceRecoveryAction(
         case 'unknown_host_module':
         case 'invalid_executable_export':
         case 'invalid_surface_module':
+        case 'artifact_graph_invalid':
+        case 'hosted_web_artifact_tier_invalid':
+        case 'native_artifact_response_table_invalid':
             return Object.freeze({ kind: 'managePlugin', label: t('settingsPlugins.managePlugin') });
         case 'feature_disabled':
         case 'disabled':

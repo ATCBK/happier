@@ -15,6 +15,9 @@ import { PendingActivationAuthorizationV1Schema } from '@happier-dev/protocol/se
 import { PluginUiTargetedContributionsV1Schema } from '@happier-dev/protocol/plugins/ui';
 import { z } from 'zod';
 import { createStoredReadSchema } from '@happier-dev/protocol/json/storedReadSchema';
+import { MachinePublishedAgentInventoryV1Schema } from '@happier-dev/protocol/machines/machinePublishedContentV1';
+import { SkillFoundListResultV1Schema } from '@happier-dev/protocol/prompts/library/skills/skillActionSchemasV1';
+import { DaemonMcpServersDetectResponseSchema } from '@happier-dev/protocol/mcp/servers/daemonRpcV1';
 
 import { readStorageScopeFromEnv, scopedStorageId } from '@/utils/system/storageScope';
 import { prepareWarmCacheEncryptionKey, readResolvedWarmCacheEncryptionKey } from './warmCacheEncryptionKey';
@@ -327,6 +330,7 @@ export const SessionListCacheEntryV1Schema = z.object({
 export type SessionListCacheEntryV1 = z.infer<typeof SessionListCacheEntryV1Schema>;
 
 export const MachineDisplayCacheEntryV1Schema = z.object({
+    agentInventory: createStoredReadSchema(MachinePublishedAgentInventoryV1Schema).optional().catch(undefined),
     machineId: z.string().min(1),
     kind: MachineKindFromLegacyProjectionSchema.optional(),
     metadataVersion: z.number().int().nonnegative(),
@@ -409,6 +413,40 @@ export const UsageSummaryCacheV1Schema = z.object({
 });
 
 export type UsageSummaryCacheV1 = z.infer<typeof UsageSummaryCacheV1Schema>;
+
+/** Kind-keyed Found metadata, never bytes or reachability authority. */
+export const FoundCacheEntryV1Schema = z.discriminatedUnion('kind', [z.object({
+    kind: z.literal('skill'), machineId: z.string().min(1), observedAt: z.number().int().nonnegative(),
+    result: SkillFoundListResultV1Schema,
+}).strict(), z.object({
+    kind: z.literal('mcp_server'), machineId: z.string().min(1), observedAt: z.number().int().nonnegative(),
+    result: DaemonMcpServersDetectResponseSchema,
+}).strict()]);
+export type FoundCacheEntryV1 = z.infer<typeof FoundCacheEntryV1Schema>;
+const foundCacheListeners = new Set<Readonly<{ key: string | null; listener: () => void }>>();
+function foundCacheKey(serverId: string | null | undefined, accountId: string | null | undefined,
+    kind: FoundCacheEntryV1['kind'], machineId: string) {
+    return buildScopedKey(`found-warm-cache-v1:${kind}:${encodeURIComponent(machineId)}`, serverId, accountId);
+}
+export function loadFoundWarmCacheEntry(serverId: string | null | undefined, accountId: string | null | undefined,
+    kind: FoundCacheEntryV1['kind'], machineId: string): FoundCacheEntryV1 | null {
+    const entry = loadScopedRecord(foundCacheKey(serverId, accountId, kind, machineId), FoundCacheEntryV1Schema);
+    return entry?.kind === kind && entry.machineId === machineId ? entry : null;
+}
+export function saveFoundWarmCacheEntry(serverId: string | null | undefined, accountId: string | null | undefined,
+    value: FoundCacheEntryV1): void {
+    const parsed = FoundCacheEntryV1Schema.parse(value), key = foundCacheKey(serverId, accountId, parsed.kind, parsed.machineId);
+    const previous = loadScopedRecord(key, FoundCacheEntryV1Schema);
+    if (JSON.stringify(previous) === JSON.stringify(parsed)) return;
+    saveScopedRecord(key, parsed);
+    for (const subscription of foundCacheListeners) if (subscription.key === key) subscription.listener();
+}
+export function subscribeFoundWarmCacheEntry(serverId: string | null | undefined, accountId: string | null | undefined,
+    kind: FoundCacheEntryV1['kind'], machineId: string, listener: () => void): () => void {
+    const subscription = { key: foundCacheKey(serverId, accountId, kind, machineId), listener };
+    foundCacheListeners.add(subscription);
+    return () => { foundCacheListeners.delete(subscription); };
+}
 
 const USAGE_SUMMARY_WARM_CACHE_PREFIX = 'usage-summary-warm-cache-v1';
 

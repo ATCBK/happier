@@ -12,11 +12,13 @@ export type MachineResourceAvailability =
         /** Canonical attention is separate from transient metric values; absence is unknown. */
         attention?: MachineResourceAttentionV1 | null }>
     | Readonly<{ kind: 'never_sampled' }>
+    | Readonly<{ kind: 'unavailable'; errorCode?: string }>
     | Readonly<{ kind: 'not_reported'; reason: 'older_happier' | 'unsupported' }>;
 
 const NEVER_SAMPLED: MachineResourceAvailability = { kind: 'never_sampled' };
 const OLDER_HAPPIER: MachineResourceAvailability = { kind: 'not_reported', reason: 'older_happier' };
 const UNSUPPORTED: MachineResourceAvailability = { kind: 'not_reported', reason: 'unsupported' };
+const UNAVAILABLE: MachineResourceAvailability = { kind: 'unavailable' };
 const isRecord = (value: unknown): value is Record<string, unknown> => typeof value === 'object' && value !== null && !Array.isArray(value);
 
 /** Row-local read of already demanded/warmed state; this hook is deliberately passive. */
@@ -53,8 +55,10 @@ export function useMachineResourceSummary(input: MachineResourceKey): MachineRes
     return React.useMemo<MachineResourceAvailability | null>(() => {
         if (state.status === 'not_reported') return OLDER_HAPPIER;
         if (publication?.reason === 'helper_missing' || state.snapshot?.reason === 'helper_missing') return UNSUPPORTED;
+        if (state.status === 'error' && !state.summary) return state.errorCode ? { kind: 'unavailable', errorCode: state.errorCode } : UNAVAILABLE;
         if (state.snapshot?.state === 'reporting' && !state.snapshot.sample) return NEVER_SAMPLED;
-        if (!state.snapshot && !publication) return machine ? OLDER_HAPPIER : null;
+        // An unanswered read (including metadata hydration) establishes no support fact.
+        if (!state.snapshot && !publication) return null;
         // A publication can lag recovery; an authorized reporting answer is the live-value owner.
         const reportingAt = state.status === 'ready' && state.snapshot?.state === 'reporting'
             ? state.snapshot.sample?.sampledAt ?? null : null;

@@ -1,151 +1,167 @@
 import { act } from 'react-test-renderer';
-import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
-import { createDeferred } from '@/dev/testkit/hooks/createDeferred';
-import { renderHook } from '@/dev/testkit/hooks/renderHook';
-import { standardCleanup } from '@/dev/testkit/cleanup/standardCleanup';
-import { storage } from '@/sync/domains/state/storageStore';
-import { getAppliedActiveServerSnapshot, isAppliedActiveServerRuntimeAvailable, publishAppliedActiveServerSnapshot } from '@/sync/runtime/orchestration/appliedActiveServerRuntime';
-import { listWorkflowTriggerSets, removeWorkflowTrigger, updateWorkflowTrigger } from './workflowTriggerActions';
-import { useWorkflowTriggerSets } from '@/components/workflows/triggers/useWorkflowTriggerSets';
-import { useSessionTriggerLastRuns } from '@/components/workflows/triggers/useSessionTriggerLastRuns';
-import { createWorkflowRunSummaryFixture } from '@/dev/testkit/fixtures/workflowRunFixtures';
-import { TokenStorage } from '@/auth/storage/tokenStorage';
-import { createAccountTokenForTests } from '@/dev/testkit/harness/homeGovernanceHarness';
-import { useServerCredentialAccountScopeStates } from '@/sync/domains/scope/useServerCredentialAccountScopes';
-import { resolveServerProfileScopeIdForIdentifier } from '@/sync/domains/server/serverProfiles';
-import { publishHomeAccountChange } from '@/sync/runtime/orchestration/homeAccountChange';
-import { WorkflowTriggerSetV1Schema } from '@happier-dev/protocol/workflows/triggers/workflowTriggerActionsV1';
-import { workflowRunRowFromSummary } from '@/sync/store/domains/workflowRuns';
+import { afterEach, beforeAll, beforeEach, describe, expect, it } from 'vitest';
+import { createDeferred, renderHook, standardCleanup } from '@/dev/testkit';
+import { createHomeGovernanceHarness, installHomeGovernanceBoundaries, waitForHomeGovernance } from '@/dev/testkit/harness/homeGovernanceHarness';
+import { installDisconnectedServerSocketBoundary } from '@/dev/testkit/harness/serverAccountConnectionHarness';
+import { loadSyncSingletonForTests } from '@/dev/testkit/harness/syncSingletonLoader';
+import { createPlainAccountEncryptionCurrentnessFixture } from '@/dev/testkit/fixtures/accountEncryptionCurrentness';
+import { createWorkflowDefinitionFixture, createWorkflowRunSummaryFixture } from '@/dev/testkit/fixtures/workflowRunFixtures';
+import { AutomationDefinitionDetailSchema, AutomationDefinitionListItemSchema } from '@happier-dev/protocol/automations/automationApiV3';
+import { AutomationStoredWorkflowDefinitionRecipeV2Schema, AutomationStoredWorkflowDefinitionV2Schema } from '@happier-dev/protocol/automations/automationWorkflowRecipeV2';
 
-const execute = vi.hoisted(() => vi.fn());
-// Action transport boundary: schemas, Account lifecycle, selectors and store remain real.
-vi.mock('@/sync/ops/actions/frontDoorRuntimeActionExecutor', () => ({ createFrontDoorActionExecute: () => execute }));
-let previousState = storage.getState();
-let previousSnapshot = getAppliedActiveServerSnapshot();
-let previousAvailable = isAppliedActiveServerRuntimeAvailable();
-
+const home = createHomeGovernanceHarness();
+installHomeGovernanceBoundaries(home); installDisconnectedServerSocketBoundary();
+beforeAll(loadSyncSingletonForTests);
+const { storage } = await import('@/sync/domains/state/storageStore');
+const { getActiveServerSnapshot } = await import('@/sync/domains/server/serverRuntime');
+const { getAppliedActiveServerSnapshot, isAppliedActiveServerRuntimeAvailable, publishAppliedActiveServerSnapshot } = await import('@/sync/runtime/orchestration/appliedActiveServerRuntime');
+const { publishHomeAccountChange } = await import('@/sync/runtime/orchestration/homeAccountChange');
+const { retireActiveServerAccountScopeLifetime } = await import('@/sync/domains/scope/activeServerAccountScope');
+const { listWorkflowTriggerSets, removeWorkflowTrigger, updateWorkflowTrigger } = await import('./workflowTriggerActions');
+const { useWorkflowTriggerSets } = await import('@/components/workflows/triggers/useWorkflowTriggerSets');
+const { useSessionTriggerLastRuns } = await import('@/components/workflows/triggers/useSessionTriggerLastRuns');
+const { useServerCredentialAccountScopeStates } = await import('@/sync/domains/scope/useServerCredentialAccountScopes');
+const { resolveServerProfileScopeIdForIdentifier } = await import('@/sync/domains/server/serverProfiles');
+const { workflowRunRowFromSummary } = await import('@/sync/store/domains/workflowRuns');
+const { resetWorkflowLibraryReadsForTests } = await import('@/components/workflows/library/workflowLibraryReads');
+let serverId: string;
+let previous = storage.getState();
+let applied = getAppliedActiveServerSnapshot();
+let available = isAppliedActiveServerRuntimeAvailable();
 beforeEach(async () => {
-    previousState = storage.getState();
-    previousSnapshot = getAppliedActiveServerSnapshot();
-    previousAvailable = isAppliedActiveServerRuntimeAvailable();
-    const runtime = await import('@/sync/domains/server/serverRuntime');
-    const profile = await runtime.upsertAndActivateServer({ serverUrl: 'http://trigger-read.test', name: 'Trigger Home' });
-    publishAppliedActiveServerSnapshot(runtime.getActiveServerSnapshot());
-    storage.setState({ profileScope: { serverId: profile.id, accountId: 'account-one' } });
+    previous = storage.getState(); applied = getAppliedActiveServerSnapshot(); available = isAppliedActiveServerRuntimeAvailable();
+    await home.reset();
+    serverId = await home.addHome({ name: 'Trigger Home', serverUrl: 'https://trigger-read.test', accountId: 'account-one' });
+    publishAppliedActiveServerSnapshot(getActiveServerSnapshot());
+    storage.setState({ profileScope: { serverId, accountId: 'account-one' }, workflowTriggerSetsById: {}, workflowTriggerSetIdsByQuery: {}, workflowRunsById: {}, workflowRunListWindows: {} });
+    home.answer(serverId, '/v1/account/encryption/currentness', { body: createPlainAccountEncryptionCurrentnessFixture() });
 });
 afterEach(async () => {
-    standardCleanup();
-    (await import('@/components/workflows/library/workflowLibraryReads')).resetWorkflowLibraryReadsForTests();
-    (await import('@/sync/domains/scope/activeServerAccountScope')).retireActiveServerAccountScopeLifetime();
-    storage.setState(previousState);
-    publishAppliedActiveServerSnapshot(previousSnapshot, previousAvailable);
-    execute.mockReset();
-    vi.restoreAllMocks();
+    await standardCleanup(); resetWorkflowLibraryReadsForTests(); retireActiveServerAccountScopeLifetime();
+    await home.reset(); storage.setState(previous); publishAppliedActiveServerSnapshot(applied, available);
 });
 
-describe('Account schedule read ownership', () => {
-    it('retains the delete receipt revision when an unseen update ACK arrives afterwards', async () => {
-        storage.setState({ workflowTriggerSetsById: {}, workflowTriggerSetIdsByQuery: {} });
-        const set = WorkflowTriggerSetV1Schema.parse({ automationId: 'delayed-ack', revision: 10,
-            enabled: true, health: 'available', triggers: [] });
-        storage.getState().applyWorkflowTriggerSetPage({ queryKey: 'account_inline', sets: [set] });
-        const pendingUpdate = createDeferred<unknown>();
-        execute.mockReturnValueOnce(pendingUpdate.promise);
-        const updated = updateWorkflowTrigger({ automationId: set.automationId, expectedRevision: 10, patch: { enabled: false } });
-        execute.mockResolvedValueOnce({ ok: true, result: { automationId: set.automationId, deleted: true, removedRevision: 11 } });
-        await removeWorkflowTrigger({ automationId: set.automationId });
+function automation(id: string, revision = 1, enabled = true) {
+    const inlineDefinition = createWorkflowDefinitionFixture({ blocks: [{ kind: 'wait', id: 'wait', document: { text: 'Continue', references: [], attachments: [] } }] });
+    return AutomationDefinitionDetailSchema.parse({ id, name: 'Inline trigger', description: null, enabled,
+        workflowDefinitionId: null, scopeSessionId: null, targetType: null, existingSessionId: null, templateVersion: revision,
+        lastRunAt: null, createdAt: 1, updatedAt: revision, assignments: [{ machineId: 'machine-a', enabled: true, priority: 0, updatedAt: 1 }], triggers: [],
+        executionRecipe: AutomationStoredWorkflowDefinitionRecipeV2Schema.parse({ v: 2, templateVersion: revision,
+            workflow: { t: 'plain', v: { workspace: { directory: '/repo' }, executionTarget: { kind: 'session' }, inlineDefinition } }, triggerEvidence: null }),
+    });
+}
+
+function listed(row: ReturnType<typeof automation>) {
+    const { executionRecipe: _recipe, ...publicRow } = row;
+    return AutomationDefinitionListItemSchema.parse(publicRow);
+}
+
+describe('Account trigger reads through real Action and Automation owners', () => {
+    it('retains the authoritative delete revision when an already-committed update ACK arrives late', async () => {
+        let row: ReturnType<typeof automation> | null = automation('delayed-ack', 10);
+        home.answer(serverId, '/v3/automations', { body: { automations: [listed(row)], nextCursor: null } });
+        home.answer(serverId, 'GET /v3/automations/delayed-ack', { select: () => row ? { body: row } : { status: 404, body: { error: 'automation_not_found' } } });
+        const [set] = await listWorkflowTriggerSets({ scope: 'account_inline' });
+        expect(set?.revision).toBe(10);
+        const pending = createDeferred<void>();
+        home.answer(serverId, 'PUT /v3/automations/delayed-ack', { select: input => {
+            if (!input || typeof input !== 'object' || !('executionRecipe' in input)) throw new Error('Expected the real reconcile request');
+            row = AutomationDefinitionDetailSchema.parse({ ...automation('delayed-ack', 11, false), executionRecipe: input.executionRecipe });
+            return { body: row, respondAfter: pending.promise };
+        } });
+        const updated = updateWorkflowTrigger({ automationId: 'delayed-ack', expectedRevision: 10, patch: { enabled: false } });
+        await waitForHomeGovernance(() => expect(row?.templateVersion).toBe(11));
+        home.answer(serverId, 'DELETE /v3/automations/delayed-ack', { select: () => { row = null; return { body: { ok: true, removedRevision: 11 } }; } });
+        await removeWorkflowTrigger({ automationId: 'delayed-ack' });
         storage.getState().applyWorkflowTriggerSetPage({ queryKey: 'account_inline', sets: [] });
-        pendingUpdate.resolve({ ok: true, result: { set: { ...set, revision: 11, enabled: false } } });
-        await updated;
-        expect(storage.getState().workflowTriggerSetsById[set.automationId]).toBeUndefined();
+        await act(async () => pending.resolve()); await updated;
+        expect(storage.getState().workflowTriggerSetsById['delayed-ack']).toBeUndefined();
         expect(storage.getState().workflowTriggerSetIdsByQuery.account_inline).toEqual([]);
     });
-    it('removes a deleted Manual set from all cached memberships while preserving other sets and Run history', async () => {
-        const manual = WorkflowTriggerSetV1Schema.parse({ automationId: 'retained-manual', revision: 3,
-            enabled: false, health: 'available', triggers: [] });
-        const other = WorkflowTriggerSetV1Schema.parse({ ...manual, automationId: 'unrelated' });
-        const history = { 'past-run': workflowRunRowFromSummary(createWorkflowRunSummaryFixture({ id: 'past-run',
-            state: 'succeeded', origin: { kind: 'automation', automationId: manual.automationId } })) };
-        storage.setState({ workflowTriggerSetsById: {}, workflowTriggerSetIdsByQuery: {}, workflowRunsById: history });
-        storage.getState().applyWorkflowTriggerSetPage({ queryKey: 'account_inline', sets: [manual, other] });
-        storage.getState().applyWorkflowTriggerSetPage({ queryKey: 'account_all', sets: [manual, other] });
-        execute.mockResolvedValue({ ok: true, result: { automationId: manual.automationId, deleted: true } });
-        expect(await removeWorkflowTrigger({ automationId: manual.automationId }))
-            .toEqual({ automationId: manual.automationId, deleted: true });
-        expect(storage.getState().workflowTriggerSetsById).toEqual({ unrelated: other });
-        expect(storage.getState().workflowTriggerSetIdsByQuery)
-            .toEqual({ account_inline: ['unrelated'], account_all: ['unrelated'] });
+
+    it('removes a Manual set from every cached membership without changing other sets or Run history', async () => {
+        const manual = automation('retained-manual', 3, false); const other = automation('unrelated', 3, false);
+        home.answer(serverId, '/v3/automations', { body: { automations: [listed(manual), listed(other)], nextCursor: null } });
+        home.answer(serverId, '/v3/automations/retained-manual', { body: manual });
+        home.answer(serverId, '/v3/automations/unrelated', { body: other });
+        const sets = await listWorkflowTriggerSets({ scope: 'account_inline' });
+        storage.getState().applyWorkflowTriggerSetPage({ queryKey: 'account_all', sets });
+        const unrelated = storage.getState().workflowTriggerSetsById.unrelated;
+        const history = { 'past-run': workflowRunRowFromSummary(createWorkflowRunSummaryFixture({ id: 'past-run', state: 'succeeded', origin: { kind: 'automation', automationId: manual.id } })) };
+        storage.setState({ workflowRunsById: history });
+        home.answer(serverId, 'DELETE /v3/automations/retained-manual', { body: { ok: true } });
+        expect(await removeWorkflowTrigger({ automationId: manual.id })).toEqual({ automationId: manual.id, deleted: true });
+        expect(storage.getState().workflowTriggerSetsById).toEqual({ unrelated });
+        expect(storage.getState().workflowTriggerSetIdsByQuery).toEqual({ account_inline: ['unrelated'], account_all: ['unrelated'] });
         expect(storage.getState().workflowRunsById).toBe(history);
     });
-    it('reads addressed FIN sets without reading or overwriting the focused Home, and keeps its facts after a failed refresh', async () => {
-        const targetId = storage.getState().profileScope!.serverId;
-        const serverIds = [targetId];
-        const runtime = await import('@/sync/domains/server/serverRuntime');
-        const focused = await runtime.upsertAndActivateServer({ serverUrl: 'http://trigger-read-focused.test' });
-        publishAppliedActiveServerSnapshot(runtime.getActiveServerSnapshot());
-        storage.setState({ profileScope: { serverId: focused.id, accountId: 'focused-owner' },
-            workflowTriggerSetsById: {}, workflowTriggerSetIdsByQuery: {} });
-        vi.spyOn(TokenStorage, 'getCredentialsForServerUrl').mockResolvedValue({ token: createAccountTokenForTests('account-one', { currentAccount: true }) });
-        const set = WorkflowTriggerSetV1Schema.parse({ automationId: 'addressed-rule', revision: 1, enabled: true, health: 'available',
-            triggers: [{ id: 'archive', revision: 1, enabled: true, createdAt: 1, updatedAt: 1, kind: 'sessionLifecycle',
-                sourceSessionId: 'source-session', events: ['sessionArchived'], policy: { kind: 'everyMatch' },
-                remainingOccurrences: null, status: { state: 'waiting', runId: null }, triggerDefinitionEnvelope: null }] });
-        execute.mockResolvedValue({ ok: true, result: { sets: [set] } });
+
+    it('reads the addressed Home and retains its facts on failed refresh without publishing into the focused Home', async () => {
+        const targetId = serverId; const serverIds = [targetId]; const row = automation('addressed-rule');
+        home.answer(targetId, '/v3/automations', { body: { automations: [listed(row)], nextCursor: null } });
+        home.answer(targetId, '/v3/automations/addressed-rule', { body: row });
+        const focused = await home.addHome({ name: 'Focused Home', serverUrl: 'https://trigger-read-focused.test', accountId: 'focused-owner' });
+        publishAppliedActiveServerSnapshot(getActiveServerSnapshot());
+        storage.setState({ profileScope: { serverId: focused, accountId: 'focused-owner' }, workflowTriggerSetsById: {}, workflowTriggerSetIdsByQuery: {} });
         const hook = await renderHook(() => {
             const scopes = useServerCredentialAccountScopeStates(serverIds);
             const binding = scopes.get(resolveServerProfileScopeIdForIdentifier(targetId))?.binding ?? null;
             return useWorkflowTriggerSets({ scope: 'account_all' }, binding);
         });
-        await vi.waitFor(() => expect(hook.getCurrent().status).toBe('ready'));
-        expect(hook.getCurrent().sets).toEqual([set]);
-        expect(execute.mock.calls.every(([, , context]) => context.serverId === resolveServerProfileScopeIdForIdentifier(targetId)
-            && context.runtimeAccountId === 'account-one')).toBe(true);
+        await waitForHomeGovernance(() => expect(hook.getCurrent().status).toBe('ready'));
+        const recipe = AutomationStoredWorkflowDefinitionRecipeV2Schema.parse(row.executionRecipe);
+        if (recipe.workflow.t !== 'plain') throw new Error('Expected plain fixture content');
+        const context = AutomationStoredWorkflowDefinitionV2Schema.parse(recipe.workflow.v);
+        expect(hook.getCurrent().sets).toMatchObject([{ automationId: row.id, revision: row.templateVersion, enabled: row.enabled,
+            scopeSessionId: null, health: 'available', target: { kind: 'inline', definition: context.inlineDefinition }, context,
+            placements: [{ machineId: 'machine-a', directory: '/repo' }], project: { machineId: 'machine-a', directory: '/repo' }, triggers: [] }]);
+        const known = hook.getCurrent().sets;
+        expect(home.requests.filter(request => request.path.startsWith('/v3/automations')).every(request => request.serverId === targetId)).toBe(true);
         expect(storage.getState().workflowTriggerSetsById).toEqual({});
-        execute.mockResolvedValue({ ok: false, errorCode: 'temporarily_unavailable', error: 'Unavailable' });
+        home.answer(targetId, '/v3/automations', { status: 503, body: { error: 'storage_unavailable' } });
         await act(async () => publishHomeAccountChange(targetId));
-        await vi.waitFor(() => expect(hook.getCurrent().status).toBe('failed'));
-        expect(hook.getCurrent().sets).toEqual([set]);
-        const retry = createDeferred<unknown>();
-        execute.mockReturnValue(retry.promise);
-        await act(async () => hook.getCurrent().retry());
-        expect(hook.getCurrent().sets).toEqual([set]);
-        await act(async () => retry.resolve({ ok: true, result: { sets: [set] } }));
-        await vi.waitFor(() => expect(hook.getCurrent().status).toBe('ready'));
+        await waitForHomeGovernance(() => expect(hook.getCurrent().status).toBe('failed')); expect(hook.getCurrent().sets).toBe(known);
+        const retry = createDeferred<void>();
+        home.answer(targetId, '/v3/automations', { body: { automations: [listed(row)], nextCursor: null }, respondAfter: retry.promise });
+        await act(async () => hook.getCurrent().retry()); expect(hook.getCurrent().sets).toBe(known);
+        await act(async () => retry.resolve()); await waitForHomeGovernance(() => expect(hook.getCurrent().status).toBe('ready'));
         expect(storage.getState().profileScope?.accountId).toBe('focused-owner');
-        await hook.unmount();
     });
-    it('pages the shared Account Run window until every relevant habit has its true latest result', async () => {
-        execute.mockImplementation(async (_actionId: string, input: { cursor?: string }) => ({ ok: true, result: {
-            runs: [createWorkflowRunSummaryFixture(input.cursor
-                ? { id: 'habit-run', state: 'failed', origin: { kind: 'automation', automationId: 'habit' } }
-                : { id: 'other-run', origin: { kind: 'automation', automationId: 'other' } })], metadataByRunId: {},
-            ...(input.cursor ? {} : { nextCursor: 'next' }),
-        } }));
-        const ids = ['habit'];
-        const hook = await renderHook(() => useSessionTriggerLastRuns(ids));
-        await vi.waitFor(() => expect(hook.getCurrent().lastRunsByAutomationId.habit?.state).toBe('failed'));
-        expect(execute.mock.calls.map((call) => call[1])).toEqual([{}, { cursor: 'next' }]);
+
+    it('pages the shared Run window until a habit has its true latest result', async () => {
+        // Unopened content is explicit here; the last-result consumer needs the
+        // public index, not a fabricated private accepted snapshot.
+        const route = '/v3/automations/runs/workflow-storage';
+        const page = (id: string, automationId: string, nextCursor?: string) => ({ runs: [createWorkflowRunSummaryFixture({ id,
+            ownerAccountId: 'account-one', state: 'failed', origin: { kind: 'automation', automationId } })],
+            acceptedEnvelopesByRunId: {}, keyCensusByRunId: {}, ...(nextCursor ? { nextCursor } : {}) });
+        let reads = 0;
+        home.answer(serverId, route, { select: () => ({ body: ++reads === 1 ? page('other-run', 'other', 'next') : page('habit-run', 'habit') }) });
+        const ids = ['habit']; const hook = await renderHook(() => useSessionTriggerLastRuns(ids));
+        await waitForHomeGovernance(() => expect(hook.getCurrent().lastRunsByAutomationId.habit?.state).toBe('failed'));
+        expect(home.requestsFor(route).map(request => request.input)).toEqual([
+            expect.objectContaining({ request: {} }), expect.objectContaining({ request: { cursor: 'next' } }),
+        ]);
     });
-    it('shares one read between rail and sidebar without letting one consumer abort the other', async () => {
-        const pending = createDeferred<unknown>();
-        execute.mockReturnValue(pending.promise);
+
+    it('shares one real HTTP read without letting a cancelled consumer abort another', async () => {
+        const pending = createDeferred<void>();
+        home.answer(serverId, '/v3/automations', { body: { automations: [], nextCursor: null }, respondAfter: pending.promise });
         const controller = new AbortController();
-        const retiredConsumer = listWorkflowTriggerSets({ scope: 'account_all' }, { signal: controller.signal }).catch(() => 'aborted');
-        const liveConsumer = listWorkflowTriggerSets({ scope: 'account_all' });
-        controller.abort();
-        await act(async () => { pending.resolve({ ok: true, result: { sets: [] } }); });
-        expect(await retiredConsumer).toBe('aborted');
-        expect(await liveConsumer).toEqual([]);
-        expect(execute).toHaveBeenCalledTimes(1);
+        const retired = listWorkflowTriggerSets({ scope: 'account_all' }, { signal: controller.signal }).catch(() => 'aborted');
+        const live = listWorkflowTriggerSets({ scope: 'account_all' });
+        await waitForHomeGovernance(() => expect(home.requests.filter(request => request.path.startsWith('/v3/automations'))).toHaveLength(1));
+        controller.abort(); await act(async () => pending.resolve());
+        expect(await retired).toBe('aborted'); expect(await live).toEqual([]);
     });
-    it('does not re-render or refetch an open Scheduled section for unrelated Run and invocation facts', async () => {
-        execute.mockResolvedValue({ ok: true, result: { sets: [] } });
+
+    it('does not rerender or refetch a Scheduled section for unrelated Run and invocation facts', async () => {
+        home.answer(serverId, '/v3/automations', { body: { automations: [], nextCursor: null } });
         let renders = 0;
         const hook = await renderHook(() => { renders++; return useWorkflowTriggerSets({ scope: 'account_all' }); });
-        expect(hook.getCurrent().status).toBe('ready');
-        const before = renders;
-        await act(async () => { storage.setState({ workflowRunsById: {}, workflowRunInvocationsByRunId: {} }); });
-        expect(renders - before).toBe(0);
-        expect(execute).toHaveBeenCalledTimes(1);
+        await waitForHomeGovernance(() => expect(hook.getCurrent().status).toBe('ready'));
+        const before = renders; const reads = home.requests.filter(request => request.path.startsWith('/v3/automations')).length;
+        await act(async () => storage.setState({ workflowRunsById: {}, workflowRunInvocationsByRunId: {} }));
+        expect(renders).toBe(before); expect(home.requests.filter(request => request.path.startsWith('/v3/automations'))).toHaveLength(reads);
     });
 });

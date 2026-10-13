@@ -4,6 +4,7 @@ import {
     buildMachineDisplayCacheEntryFromRenderable,
     buildMachineDisplayRenderableFromCacheEntry,
 } from './machineDisplayWarmCacheAdapters';
+import { MachineDisplayCacheEntryV1Schema } from './warmCachePersistence';
 
 describe('machineDisplayWarmCacheAdapters', () => {
     it('roundtrips replacement and locked tombstone facts through the machine display cache', () => {
@@ -20,10 +21,10 @@ describe('machineDisplayWarmCacheAdapters', () => {
             replacementActorUserId: 'user-1',
             availability: { kind: 'locked', reason: 'decryption_failed' },
             metadataVersion: 3,
-            metadata: { displayName: 'Old machine' },
+            metadata: { displayName: 'Old machine', agentInventory: { checkedAt: 12, installedAgentIds: ['codex'] } },
         });
 
-        expect(buildMachineDisplayRenderableFromCacheEntry(entry)).toEqual(expect.objectContaining({
+        expect(buildMachineDisplayRenderableFromCacheEntry(MachineDisplayCacheEntryV1Schema.parse(entry))).toEqual(expect.objectContaining({
             id: 'm1',
             replacedByMachineId: 'm2',
             replacedAt: 19,
@@ -31,6 +32,7 @@ describe('machineDisplayWarmCacheAdapters', () => {
             replacementSource: 'automatic',
             replacementActorUserId: 'user-1',
             availability: { kind: 'locked', reason: 'decryption_failed' },
+            metadata: expect.objectContaining({ agentInventory: { checkedAt: 12, installedAgentIds: ['codex'] } }),
         }));
     });
 });

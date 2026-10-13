@@ -1,6 +1,6 @@
 import { isSafeDirectTransferEndpointCandidate, normalizeDirectPeerTransferEndpointBaseUrl } from '@happier-dev/protocol/machines/transfer/directPeerUrls';
 import { TransferChunkEnvelopeSchema, TransferEndpointCandidateSchema, type TransferEndpointCandidate } from '@happier-dev/protocol/machines/transfer/transferStream';
-import type { PromptRegistryConfiguredSourceV1 } from '@happier-dev/protocol/prompts/library/promptRegistriesV1';
+import type { RegistryDownloadRequestV1 } from '@happier-dev/protocol/registries';
 import { RPC_METHODS } from '@happier-dev/protocol/rpc';
 import { FilesystemDownloadOutputSchema, type FilesystemDownloadOutput } from '@happier-dev/protocol/actions/filesystemActionFamily';
 import { randomUUID } from '@/platform/randomUUID';
@@ -36,15 +36,14 @@ import {
 type DirectTransferExportPrepareRequest =
     | Readonly<{
         t: 'prompt_asset_download_v1';
-        assetTypeId: string;
-        scope: 'user' | 'project';
-        externalRef: Record<string, unknown>;
+        path: string;
     }>
     | Readonly<{
         t: 'prompt_registry_download_v1';
-        sourceId: string;
-        itemId: string;
-        configuredSources: readonly PromptRegistryConfiguredSourceV1[];
+        sourceId: RegistryDownloadRequestV1['sourceId'];
+        itemId: RegistryDownloadRequestV1['itemId'];
+        version: RegistryDownloadRequestV1['version'];
+        kind: 'skill';
     }>
     | Readonly<{
         t: 'workspace_file_download_v1';
@@ -74,7 +73,7 @@ type DirectTransferExportPrepareResponse =
     | Readonly<{
         success: false;
         error: string;
-        errorCode?: string;
+        code?: string;
     }>;
 
 type DirectTransferOpenResponse = Readonly<{
@@ -238,6 +237,7 @@ async function prepareDirectTransferExport(params: Readonly<{
             return {
                 ok: false,
                 error: prepare.error,
+                ...(typeof prepare.code === 'string' ? { errorCode: prepare.code } : {}),
             };
         }
         if (typeof prepare.transferId === 'string' && prepare.transferId.length > 0) {

@@ -18,6 +18,7 @@ import type { PluginCollectionContractRefV1 } from '@happier-dev/protocol';
 import { PluginDeclaredUiEntriesV1Schema } from '@happier-dev/protocol/daemon/contributionRegistryProjection';
 import { projectPluginPortableUiDeclarationsV1 } from '@happier-dev/protocol/plugins/contributions/ui';
 import { normalizePluginInstalledUiDeclarations, type PluginUiProjectionModel } from '@/sync/domains/plugins/ui/projection';
+import { projectPluginRegistrySourceDeclarationV1 } from '@happier-dev/protocol/registries';
 
 import {
     areServerAccountScopesEqual,
@@ -704,6 +705,9 @@ function readInstalledPluginsAdmission(
         const declaration = release?.normalizedManifest ?? materialization.declaredManifest ?? null;
         const declaredUiEntries = materialization.declaredUiEntries
             ?? (release ? projectPluginPortableUiDeclarationsV1(release.normalizedManifest) : undefined);
+        const registrySources = declaration ? (declaration.contributes?.registrySources ?? []).map(definition =>
+            projectPluginRegistrySourceDeclarationV1({ pluginId: materialization.pluginId,
+                pluginVersion: declaration.version, definition })) : [];
         const installations = byPluginId.get(materialization.pluginId) ?? [];
         installations.push(Object.freeze({
             materialization,
@@ -720,7 +724,7 @@ function readInstalledPluginsAdmission(
                 enabled: materialization.enabled,
                 source: { kind: materialization.sourceClass, locator: materialization.materializationId },
                 ...(declaration?.executionTarget ? { executionTarget: declaration.executionTarget } : {}),
-            }),
+            }, registrySources),
         }));
         byPluginId.set(materialization.pluginId, installations);
     }

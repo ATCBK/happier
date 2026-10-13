@@ -1,6 +1,9 @@
-import { describe, expect, it, vi } from 'vitest';
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
 import type { ActiveServerAccountScopeLifetime } from '@/sync/domains/scope/activeServerAccountScope';
+import { captureActiveServerAccountScopeLifetime, retireActiveServerAccountScopeLifetime } from '@/sync/domains/scope/activeServerAccountScope';
+import { storage } from '@/sync/domains/state/storageStore';
+import { getAppliedActiveServerSnapshot, isAppliedActiveServerRuntimeAvailable, publishAppliedActiveServerSnapshot } from '@/sync/runtime/orchestration/appliedActiveServerRuntime';
 import { publishHomeAccountChange } from '@/sync/runtime/orchestration/homeAccountChange';
 
 import { subscribeVisibleWorkflowRunListInvalidation } from './workflowRunListInvalidation';
@@ -9,15 +12,24 @@ function buildLifetime(params: Readonly<{
     serverId?: string;
     current?: boolean;
 }> = {}): ActiveServerAccountScopeLifetime {
-    return {
-        scope: {
-            serverId: params.serverId ?? 'server-a',
-            accountId: 'account-a',
-        },
-        isCurrent: () => params.current ?? true,
-        onRetire: () => ({ dispose() {} }),
-    };
+    const serverId = params.serverId ?? 'server-a';
+    publishAppliedActiveServerSnapshot({ serverId, serverUrl: 'https://workflow-invalidation.test', generation: 1 });
+    storage.setState({ profileScope: { serverId, accountId: 'account-a' } });
+    const lifetime = captureActiveServerAccountScopeLifetime();
+    if (!lifetime) throw new Error('Expected a real applied Account lifetime');
+    if (params.current === false) retireActiveServerAccountScopeLifetime();
+    return lifetime;
 }
+
+let previous = storage.getState();
+let applied = getAppliedActiveServerSnapshot();
+let available = isAppliedActiveServerRuntimeAvailable();
+beforeEach(() => {
+    previous = storage.getState(); applied = getAppliedActiveServerSnapshot(); available = isAppliedActiveServerRuntimeAvailable();
+});
+afterEach(() => {
+    retireActiveServerAccountScopeLifetime(); storage.setState(previous); publishAppliedActiveServerSnapshot(applied, available);
+});
 
 describe('subscribeVisibleWorkflowRunListInvalidation', () => {
     it('uses Account Automation changes for the Automation attention window only', () => {
@@ -73,19 +85,21 @@ describe('subscribeVisibleWorkflowRunListInvalidation', () => {
 
     it('ignores unrelated, unloaded, and retired Account wakes', () => {
         const invalidate = vi.fn();
+        const retired = buildLifetime({ current: false });
+        const current = buildLifetime();
         const subscriptions = [
             subscribeVisibleWorkflowRunListInvalidation({
-                lifetime: buildLifetime(),
+                lifetime: current,
                 isVisibleWindowLoaded: () => true,
                 invalidate,
             }),
             subscribeVisibleWorkflowRunListInvalidation({
-                lifetime: buildLifetime(),
+                lifetime: current,
                 isVisibleWindowLoaded: () => false,
                 invalidate,
             }),
             subscribeVisibleWorkflowRunListInvalidation({
-                lifetime: buildLifetime({ current: false }),
+                lifetime: retired,
                 isVisibleWindowLoaded: () => true,
                 invalidate,
             }),

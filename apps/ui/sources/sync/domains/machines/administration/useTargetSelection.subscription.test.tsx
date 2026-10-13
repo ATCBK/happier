@@ -27,7 +27,7 @@ let network: SessionOpsNetworkBoundary;
 beforeEach(async () => { network = await installSessionOpsNetworkBoundary(); });
 afterEach(async () => {
     standardCleanup();
-    network.dispose();
+    await network.dispose();
     publishAppliedActiveServerRuntimeAvailability(false);
 });
 

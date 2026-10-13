@@ -33,6 +33,7 @@ export function projectAiLaunchProfileForLegacyUi(profile: AiLaunchProfile): AIB
         ...(profile.revision ? { revision: profile.revision } : {}),
         ...(profile.enabled === undefined ? {} : { enabled: profile.enabled }),
         ...(profile.promptStack === undefined ? {} : { promptStack: profile.promptStack }),
+        ...(profile.skillSeeds === undefined ? {} : { skillSeeds: profile.skillSeeds }),
         ...(profile.profileRecordRevision === undefined ? {} : { profileRecordRevision: profile.profileRecordRevision }) };
 }
 

@@ -46,9 +46,18 @@ export function useProjectSessions(project: QualifiedProjectKeyV1 | null, filter
     }, [query.source, filters, rows, homeIds]);
     const roster = React.useMemo(() => project ? projectSessionList({ project, viewer, source, rows, workspaceRefs: refs })
         : { items: [], unavailableCount: 0 }, [project?.serverId, project?.projectKey, viewer, source, rows, refs]);
-    const presentation = React.useMemo(() => resolveSessionListQueryPresentation({ selectedServerIds: homeIds,
+    // Account cursors describe candidates, not Project matches. Advance at the
+    // roster owner so an empty candidate page never asks the viewer to page it.
+    const seekingMatches = viewer !== null && roster.items.length === 0
+        && Object.values(query.statesByServerId).some(state => state?.phase === 'ready'
+            && (state.hasNext || state.attentionHasNext));
+    React.useEffect(() => {
+        if (seekingMatches) void query.loadNext();
+    }, [seekingMatches, query.loadNext, query.statesByServerId]);
+    const presentation = React.useMemo(() => seekingMatches ? { kind: 'initial_loading' as const }
+        : resolveSessionListQueryPresentation({ selectedServerIds: homeIds,
         statesByServerId: query.statesByServerId, coverageComplete: query.coverageComplete && roster.unavailableCount === 0,
-        retainedRowCount: roster.items.length }), [homeIds, query.statesByServerId, query.coverageComplete, roster]);
+        retainedRowCount: roster.items.length }), [seekingMatches, homeIds, query.statesByServerId, query.coverageComplete, roster]);
     return React.useMemo(() => ({ ...roster, filters, presentation, query,
         access: viewer && project ? 'available' as const : 'unavailable' as const }), [roster, filters, presentation, query, viewer, project?.serverId, project?.projectKey]);
 }

@@ -7,6 +7,7 @@ export function buildUsageCoachRemedies(input: Omit<Parameters<typeof buildOpene
     sessions: readonly Pick<Session, 'id' | 'serverId' | 'active' | 'access' | 'metadata' | 'metadataLayoutVersion' | 'ownerMetadataView'>[];
 }>) {
     return buildOpenedUsageCoachRemedies({ ...input, sessions: input.sessions.map(session => ({ ...session,
+        access: session.access ?? undefined,
         ownerMetadata: readSessionOwnerMetadataView(session),
         agentTarget: resolveSessionActionDefaultBackend({ session })?.agentTarget ?? null,
     })) });

@@ -1,11 +1,18 @@
-import { afterEach, describe, expect, it, vi } from 'vitest';
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
+import { LocalServicePreviewResourceV1Schema, DaemonLocalServicePreviewSnapshotResponseV1Schema } from '@happier-dev/protocol/local/services/preview/v1';
+import { RPC_METHODS } from '@happier-dev/protocol/rpc';
+import { flushHookEffects } from '@/dev/testkit';
+
+const rpc = vi.hoisted(() => ({ machine: vi.fn() }));
+// Daemon transport is the boundary; subscription lifecycle and snapshot normalization stay real.
+vi.mock('@/sync/runtime/orchestration/serverScopedRpc/serverScopedMachineRpc', async () => {
+    const { createServerScopedMachineRpcBoundaryMock } = await import('@/dev/testkit/mocks/serverScopedRpc');
+    return createServerScopedMachineRpcBoundaryMock(rpc.machine);
+});
 
 import type { LocalServicePreviewResourceV1 } from '@happier-dev/protocol';
 
 import { expectNoWallClockPolling } from '../noPollingTestHelpers';
-import {
-    type LocalServicePreviewSnapshotClientResult,
-} from './api';
 import {
     getLocalServicePreviewState,
     invalidateLocalServicePreviewStore,
@@ -16,7 +23,7 @@ import {
 import { selectLocalServicePreviewRows, type LocalServicePreviewSnapshot } from './store';
 
 function previewResource(previewId: string): LocalServicePreviewResourceV1 {
-    return {
+    return LocalServicePreviewResourceV1Schema.parse({
         previewId,
         sessionId: 'session_1',
         machineId: 'machine_1',
@@ -32,7 +39,7 @@ function previewResource(previewId: string): LocalServicePreviewResourceV1 {
             machineId: 'machine_1',
             display: { title: 'Vite', addressLabel: 'localhost:5173' },
         },
-    };
+    });
 }
 
 function snapshotWith(previewId: string): LocalServicePreviewSnapshot {
@@ -51,28 +58,35 @@ function snapshotWith(previewId: string): LocalServicePreviewSnapshot {
 }
 
 async function flushMicrotasks(): Promise<void> {
-    await Promise.resolve();
-    await Promise.resolve();
+    await flushHookEffects();
+}
+
+function snapshotResponse(snapshot: LocalServicePreviewSnapshot) {
+    return DaemonLocalServicePreviewSnapshotResponseV1Schema.parse({ protocolVersion: 1,
+        snapshot: { ...snapshot, v: 1, machineId: 'machine_1', resources: snapshot.previews.map(row => row.resource) },
+    });
 }
 
 describe('shared local-service preview store (PRV-4)', () => {
+    beforeEach(() => rpc.machine.mockReset());
     afterEach(() => {
         resetLocalServicePreviewStoreForTests();
     });
 
     it('fetches once for a key regardless of how many panes subscribe', async () => {
-        const snapshotClient = vi.fn(async (): Promise<LocalServicePreviewSnapshotClientResult> => ({
-            ok: true,
-            snapshot: snapshotWith('preview_1'),
-        }));
+        const snapshotClient = rpc.machine.mockResolvedValue(snapshotResponse(snapshotWith('preview_1')));
         const key = { machineId: 'machine_1', serverId: 'server_1' };
 
-        const unsubA = subscribeLocalServicePreviewStore(key, () => {}, { snapshotClient });
-        const unsubB = subscribeLocalServicePreviewStore(key, () => {}, { snapshotClient });
+        const unsubA = subscribeLocalServicePreviewStore(key, () => {});
+        const unsubB = subscribeLocalServicePreviewStore(key, () => {});
         await flushMicrotasks();
 
         // One backing model, one fetch — not one timer/fetch per mount.
         expect(snapshotClient).toHaveBeenCalledTimes(1);
+        expect(snapshotClient).toHaveBeenCalledWith(expect.objectContaining({
+            method: RPC_METHODS.DAEMON_LOCAL_SERVICES_PREVIEW_SNAPSHOT,
+            serverId: 'server_1', payload: { machineId: 'machine_1' },
+        }));
         expect(selectLocalServicePreviewRows(getLocalServicePreviewState(key))).toHaveLength(1);
 
         unsubA();
@@ -80,14 +94,11 @@ describe('shared local-service preview store (PRV-4)', () => {
     });
 
     it('refreshes an open pane when an action publishes a snapshot (no polling)', async () => {
-        const snapshotClient = vi.fn(async (): Promise<LocalServicePreviewSnapshotClientResult> => ({
-            ok: true,
-            snapshot: { generatedAt: 1_000, refreshState: 'idle', previews: [], diagnostics: [] },
-        }));
+        const snapshotClient = rpc.machine.mockResolvedValue(snapshotResponse({ generatedAt: 1_000, refreshState: 'idle', previews: [], diagnostics: [] }));
         const key = { machineId: 'machine_1' };
         const listener = vi.fn();
 
-        const unsub = subscribeLocalServicePreviewStore(key, listener, { snapshotClient });
+        const unsub = subscribeLocalServicePreviewStore(key, listener);
         await flushMicrotasks();
         expect(selectLocalServicePreviewRows(getLocalServicePreviewState(key))).toHaveLength(0);
         listener.mockClear();
@@ -106,13 +117,10 @@ describe('shared local-service preview store (PRV-4)', () => {
     });
 
     it('drops the keyed entry once the last subscriber leaves', async () => {
-        const snapshotClient = vi.fn(async (): Promise<LocalServicePreviewSnapshotClientResult> => ({
-            ok: true,
-            snapshot: snapshotWith('preview_1'),
-        }));
+        const snapshotClient = rpc.machine.mockResolvedValue(snapshotResponse(snapshotWith('preview_1')));
         const key = { machineId: 'machine_1' };
 
-        const unsub = subscribeLocalServicePreviewStore(key, () => {}, { snapshotClient });
+        const unsub = subscribeLocalServicePreviewStore(key, () => {});
         await flushMicrotasks();
         expect(selectLocalServicePreviewRows(getLocalServicePreviewState(key))).toHaveLength(1);
 
@@ -123,17 +131,14 @@ describe('shared local-service preview store (PRV-4)', () => {
     });
 
     it('invalidation re-fetches for a live key only', async () => {
-        const snapshotClient = vi.fn(async (): Promise<LocalServicePreviewSnapshotClientResult> => ({
-            ok: true,
-            snapshot: snapshotWith('preview_1'),
-        }));
+        const snapshotClient = rpc.machine.mockResolvedValue(snapshotResponse(snapshotWith('preview_1')));
         const key = { machineId: 'machine_1' };
 
         // No subscriber → invalidation is a no-op.
         invalidateLocalServicePreviewStore(key);
         expect(snapshotClient).not.toHaveBeenCalled();
 
-        const unsub = subscribeLocalServicePreviewStore(key, () => {}, { snapshotClient });
+        const unsub = subscribeLocalServicePreviewStore(key, () => {});
         await flushMicrotasks();
         expect(snapshotClient).toHaveBeenCalledTimes(1);
 
@@ -144,13 +149,13 @@ describe('shared local-service preview store (PRV-4)', () => {
         unsub();
     });
 
-    it('a rejecting snapshot client marks the refresh failed and does not wedge later refreshes', async () => {
-        const snapshotClient = vi.fn<() => Promise<LocalServicePreviewSnapshotClientResult>>()
+    it('a rejecting daemon transport marks the refresh failed and does not wedge later refreshes', async () => {
+        const snapshotClient = rpc.machine
             .mockRejectedValueOnce(new Error('machine rpc transport failure'))
-            .mockResolvedValue({ ok: true, snapshot: snapshotWith('preview_recovered') });
+            .mockResolvedValue(snapshotResponse(snapshotWith('preview_recovered')));
         const key = { machineId: 'machine_1' };
 
-        const unsub = subscribeLocalServicePreviewStore(key, () => {}, { snapshotClient, nowMs: () => 5_000 });
+        const unsub = subscribeLocalServicePreviewStore(key, () => {}, { nowMs: () => 5_000 });
         await flushMicrotasks();
 
         // A thrown transport error must surface as a failed refresh, not leave the key stuck
@@ -168,14 +173,11 @@ describe('shared local-service preview store (PRV-4)', () => {
     });
 
     it('does not re-fetch previews on a wall clock while subscribed (PRV-4 DONE gate)', async () => {
-        const snapshotClient = vi.fn(async (): Promise<LocalServicePreviewSnapshotClientResult> => ({
-            ok: true,
-            snapshot: snapshotWith('preview_1'),
-        }));
+        const snapshotClient = rpc.machine.mockResolvedValue(snapshotResponse(snapshotWith('preview_1')));
         const key = { machineId: 'machine_1', serverId: 'server_1' };
 
         await expectNoWallClockPolling({
-            subscribe: () => subscribeLocalServicePreviewStore(key, () => {}, { snapshotClient }),
+            subscribe: () => subscribeLocalServicePreviewStore(key, () => {}),
             fetchSpy: snapshotClient,
         });
     });

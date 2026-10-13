@@ -1,8 +1,10 @@
 import { describe, expect, it, vi } from 'vitest';
+import { PluginProjectionV2Schema } from '@happier-dev/protocol';
 import { PluginMachineExecutionOriginV1Schema } from '@happier-dev/protocol/machines/administration/pluginMachineExecutionOriginV1';
 import { PluginSourceCustodyV1Schema } from '@happier-dev/protocol/plugins/runtime/sourceCustody';
 import {
     normalizePluginUiDestinationBindingV1,
+    normalizePluginUiSettingsPageBindingV1,
     type PluginUiDestinationBindingInputV1,
 } from '@happier-dev/protocol/plugins/ui';
 import type { PluginMachineExecutionOriginV1 } from '@happier-dev/protocol';
@@ -11,6 +13,8 @@ import type { PluginMachineMaterializationV1 } from '@happier-dev/protocol/plugi
 import { normalizePluginUiProjection, EMPTY_PLUGIN_UI_PROJECTION } from './projection';
 import { selectPluginSurfacePlacementsForBinding } from './surfacePlacementSelectors';
 import { readPluginUiDaemonProjectionSelection } from './artifactAdoption';
+import { resolveAdmittedPluginSettingsPage } from '@/components/settings/catalog/runtime/pluginSettingsPageCatalog';
+import { resolvePluginAppPages, selectPluginAppPagePlacements } from '@/components/appShell/plugins/pluginAppPages';
 import {
     arePluginUiProjectionUnionMembersEquivalent,
     readPluginUiContributionOrigin,
@@ -150,6 +154,46 @@ it('projects only a real current source occurrence for execution and retains its
         portableRelease: false, uiArtifacts: [], enabled: false, trustState: 'revoked', observedAt: 2 };
     expect(read({ ...source, materializationsByPluginId: { [pluginId]: revoked } }).sourceCandidates[0]?.validation.kind)
         .toBe('rejected');
+});
+
+it('admits package occurrences without UI while preserving source trust and portable release admission', () => {
+    const pluginId = 'acme.native-only';
+    const source: PluginUiProjectionUnionMember = { machineId: 'machine-a', serverId: 'server-1', serverIdentityId: 'srv_test',
+        phase: 'current', interactionEnabled: true, projection: machineProjection({ generation: 7, entriesById: {},
+            installedPackagesById: { [pluginId]: { id: pluginId, displayName: 'Native only', version: '1.0.0', enabled: true,
+                source: { kind: 'localPath' }, occurrenceId: `${pluginId}:occurrence`,
+                sourceCustody: { kind: 'development', registeredRootId: 'native-only-root' } } } }) };
+    const read = (input: PluginUiProjectionUnionMember) => readPluginUiExecutionOriginCandidates({ projection: null, pluginId, members: [input] });
+    expect(read(source).sourceCandidates).toEqual([expect.objectContaining({ validation: { kind: 'admitted' } })]);
+    const observed: PluginMachineMaterializationV1 = { serverIdentityId: 'srv_test', machineId: 'machine-a',
+        materializationId: 'observed-source', pluginId, version: '1.0.0', sourceClass: 'localPath', portableRelease: false,
+        uiArtifacts: [], enabled: false, trustState: 'revoked', observedAt: 2 };
+    expect(read({ ...source, materializationsByPluginId: { [pluginId]: observed } }).sourceCandidates[0]?.validation.kind).toBe('rejected');
+    expect(read({ ...source, materializationsByPluginId: { [pluginId]: {
+        ...observed, enabled: true, trustState: 'trusted', portableRelease: true, sourceClass: 'registryPackage',
+    } } }).sourceCandidates).toEqual([]);
+});
+
+it('does not recreate a conflicted declaration default through package supplies', () => {
+    const pluginId = 'acme.source-conflict';
+    const entry = placementEntry({ pluginId, localId: 'settings', container: 'appPage' });
+    const source = (machineId: string, declaringDefault: boolean): PluginUiProjectionUnionMember => ({
+        machineId, serverId: 'server-1', serverIdentityId: 'srv_test', phase: 'current', interactionEnabled: true,
+        selectableExecutionOrigins: [{ serverIdentityId: 'srv_test', sourceRef: { machineId, pluginId,
+            sourceCustody: { kind: 'development', registeredRootId: `root-${machineId}` } } }],
+        projection: machineProjection({ generation: 7, entriesById: { [entry.id]: entry },
+            installedPackagesById: { [pluginId]: { id: pluginId, displayName: 'Source', version: declaringDefault ? '1.0.0' : '2.0.0', enabled: true,
+                source: { kind: 'localPath' }, occurrenceId: entry.occurrenceId,
+                sourceCustody: { kind: 'development', registeredRootId: `root-${machineId}` },
+                ...(declaringDefault ? { executionTarget: { default: 'installation' } } : {}) } } }),
+    });
+    const members = [source('machine-a', true), source('machine-b', false)];
+    const projection = unionPluginUiProjections(members).pluginUiProjection;
+    const conflicted = projection?.surfacePlacementsById[entry.id];
+    expect(conflicted?.hostCompatibility).toBe('conflict');
+    const candidates = readPluginUiExecutionOriginCandidates({ projection, pluginId, entry: conflicted, members });
+    expect(candidates.sourceCandidates).toHaveLength(2);
+    expect(candidates.declaredDefaultOrigins).toEqual([]);
 });
 
 function machineProjection(input: Readonly<{
@@ -363,6 +407,76 @@ function selectedOrigins(...origins: readonly PluginMachineExecutionOriginV1[]):
 }
 
 describe('unionPluginUiProjections', () => {
+    it('carries strict daemon declarations through the union to settings and app-page catalogs', () => {
+        const pageId = 'overview';
+        const appBinding = normalizePluginUiDestinationBindingV1({
+            pluginId: 'acme.notes', destinationId: pageId, rendererId: 'app-renderer',
+            container: 'appPage', target: { kind: 'app' },
+        });
+        const settingsBinding = normalizePluginUiSettingsPageBindingV1({
+            pluginId: 'acme.preferences', pageId, rendererId: 'settings-renderer',
+        });
+        if (!appBinding || !settingsBinding) throw new Error('The Registry must admit both fixture bindings');
+        const appEntry = {
+            id: 'surfacePlacement:acme.notes:overview', pluginId: 'acme.notes',
+            occurrenceId: 'acme.notes:overview:occurrence',
+            contributionKind: 'surfacePlacement', descriptorId: pageId,
+            binding: appBinding, target: appBinding.target,
+            renderer: { kind: 'declarative', contributionId: 'app-renderer' },
+            display: { developerFallback: 'Notes' },
+            availability: { state: 'available', reason: 'available', diagnostics: [] },
+        };
+        const settingsEntry = {
+            id: 'settingsPage:acme.preferences:overview', pluginId: 'acme.preferences',
+            occurrenceId: 'acme.preferences:overview:occurrence',
+            contributionKind: 'settingsPage', descriptorId: pageId,
+            page: {
+                id: { pluginId: 'acme.preferences', localId: pageId },
+                group: { kind: 'plugin', id: { pluginId: 'acme.preferences', localId: 'general' } },
+                title: 'Preferences',
+            },
+            binding: settingsBinding,
+            renderer: { kind: 'declarative', contributionId: 'settings-renderer' },
+            availability: { state: 'available', reason: 'available', diagnostics: [] },
+        };
+        const strictMember = (machineId: string, entry: object) => {
+            const output = PluginProjectionV2Schema.parse({
+                v: 2, generation: 4, installedPackagesById: {}, agentsById: {}, actionsById: {},
+                toolsById: {}, commandsById: {}, resourcesById: {}, settingsById: {},
+                familiesById: { pluginUi: { family: 'pluginUi', entriesById: { page: entry } } },
+                diagnostics: [],
+            });
+            return {
+                machineId, serverId: 'server-1', serverIdentityId: 'srv_test',
+                phase: 'current' as const, interactionEnabled: true,
+                projection: normalizePluginUiProjection(output),
+            };
+        };
+        const union = unionPluginUiProjections([
+            strictMember('machine-notes', appEntry),
+            strictMember('machine-preferences', settingsEntry),
+        ]).pluginUiProjection;
+        expect(resolvePluginAppPages({ placements: selectPluginAppPagePlacements(union) })
+            .map(page => page.routePath)).toEqual(['/plugins/acme.notes/overview']);
+        expect(resolveAdmittedPluginSettingsPage({
+            projection: union, pluginId: 'acme.preferences', pageId, locale: 'en',
+        })?.title).toBe('Preferences');
+        expect(resolveAdmittedPluginSettingsPage({
+            projection: union, pluginId: 'acme.notes', pageId, locale: 'en',
+        })).toBeNull();
+
+        const malformedSettings = { ...settingsEntry, binding: appBinding };
+        const malformedUnion = unionPluginUiProjections([
+            strictMember('machine-notes', appEntry),
+            strictMember('machine-preferences', malformedSettings),
+        ]).pluginUiProjection;
+        expect(resolveAdmittedPluginSettingsPage({
+            projection: malformedUnion, pluginId: 'acme.preferences', pageId, locale: 'en',
+        })).toBeNull();
+        expect(resolvePluginAppPages({ placements: selectPluginAppPagePlacements(malformedUnion) })
+            .map(page => page.routePath)).toEqual(['/plugins/acme.notes/overview']);
+    });
+
     it('shows Channels on A and Triage on B before any execution or administration selection', () => {
         const union = unionPluginUiProjections([
             member({ machineId: 'machine-a', generation: 1, entriesById: {

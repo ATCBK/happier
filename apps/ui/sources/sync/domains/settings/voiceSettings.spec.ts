@@ -704,7 +704,7 @@ describe('voiceSettings', () => {
     });
 
     expect(parsed.providers[providerId]).toEqual({ schemaVersion: 4, config: { preserved: true } });
-    expect((parsed.providers.local_direct.config as any).networkTimeoutMs).toBe(32_000);
+    expect(parsed.providers.local_direct.config).toHaveProperty('networkTimeoutMs', 32_000);
   });
 
   it('does not classify a legacy provider block with unknown customization as the untouched hosted default', () => {
@@ -784,42 +784,42 @@ describe('voiceSettings', () => {
   });
 
   it('defaults include ui activity feed + scope settings', () => {
-    expect((voiceSettingsDefaults as any).ui?.activityFeedEnabled).toBe(false);
-    expect((voiceSettingsDefaults as any).ui?.activityFeedAutoExpandOnStart).toBe(false);
-    expect((voiceSettingsDefaults as any).ui?.scopeDefault).toBeTypeOf('string');
+    expect(voiceSettingsDefaults.ui.activityFeedEnabled).toBe(false);
+    expect(voiceSettingsDefaults.ui.activityFeedAutoExpandOnStart).toBe(false);
+    expect(voiceSettingsDefaults.ui.scopeDefault).toBeTypeOf('string');
   });
 
   it('defaults include opt-out privacy settings', () => {
-    expect((voiceSettingsDefaults as any).privacy?.shareToolNames).toBe(true);
-    expect((voiceSettingsDefaults as any).privacy?.sharePermissionRequests).toBe(true);
-    expect((voiceSettingsDefaults as any).privacy?.shareDeviceInventory).toBe(true);
-    expect((voiceSettingsDefaults as any).privacy?.shareFilePaths).toBe(false);
-    expect((voiceSettingsDefaults as any).privacy?.shareToolArgs).toBe(false);
+    expect(voiceSettingsDefaults.privacy.shareToolNames).toBe(true);
+    expect(voiceSettingsDefaults.privacy.sharePermissionRequests).toBe(true);
+    expect(voiceSettingsDefaults.privacy.shareDeviceInventory).toBe(true);
+    expect(voiceSettingsDefaults.privacy.shareFilePaths).toBe(false);
+    expect(voiceSettingsDefaults.privacy.shareToolArgs).toBe(false);
   });
 
   it('parses ui activityFeedEnabled and keeps defaults for missing fields', () => {
     const parsed = voiceSettingsParse({ ui: { activityFeedEnabled: true } });
-    expect((parsed as any).ui?.activityFeedEnabled).toBe(true);
-    expect((parsed as any).ui?.activityFeedAutoExpandOnStart).toBe(false);
+    expect(parsed.ui.activityFeedEnabled).toBe(true);
+    expect(parsed.ui.activityFeedAutoExpandOnStart).toBe(false);
   });
 
   it('does not throw when ui fields are invalid', () => {
     const parsed = voiceSettingsParse({ ui: { activityFeedEnabled: 'yes' } });
-    expect((parsed as any).ui?.activityFeedEnabled).toBe(false);
+    expect(parsed.ui.activityFeedEnabled).toBe(false);
   });
 
   it('parses privacy booleans (including shareToolArgs)', () => {
     const parsed = voiceSettingsParse({ privacy: { shareToolArgs: false, shareFilePaths: false } });
-    expect((parsed as any).privacy?.shareToolArgs).toBe(false);
-    expect((parsed as any).privacy?.shareFilePaths).toBe(false);
+    expect(parsed.privacy.shareToolArgs).toBe(false);
+    expect(parsed.privacy.shareFilePaths).toBe(false);
   });
 
   it('defaults include ElevenLabs TTS voice selection', () => {
-    const elevenLabs = readVoiceProviderSettingsConfig(voiceSettingsDefaults, elevenLabsProviderId) as any;
-    expect(elevenLabs?.tts?.voiceId).toBeTypeOf('string');
+    const elevenLabs = readVoiceProviderSettingsConfig(voiceSettingsDefaults, elevenLabsProviderId);
+    expect(elevenLabs).toHaveProperty('tts.voiceId', expect.any(String));
     // The plugin manifest is the sole authority for the shipped default; a
     // literal here would be a second copy that silently drifts from it.
-    expect(String(elevenLabs?.tts?.voiceId)).toBe(DEFAULT_ELEVENLABS_VOICE_ID);
+    expect(elevenLabs).toHaveProperty('tts.voiceId', DEFAULT_ELEVENLABS_VOICE_ID);
     expect(voiceSettingsDefaults.welcome.enabled).toBe(false);
     expect(voiceSettingsDefaults.welcome.mode).toBe('immediate');
   });
@@ -1078,12 +1078,13 @@ describe('voiceSettings', () => {
       },
     });
 
-    expect((parsed.providers.local_conversation.config as any).stt).not.toHaveProperty('openaiCompat');
+    expect(parsed.providers.local_conversation.config).toHaveProperty('stt');
+    expect(parsed.providers.local_conversation.config).not.toHaveProperty('stt.openaiCompat');
     expect(readVoiceProviderSettingsConfig(
       parsed,
       'happier.voice.openai-compat/stt',
     )).toMatchObject({ baseUrl: '' });
-    expect((parsed.providers.local_conversation.config as any).streaming.enabled).toBe(false);
+    expect(parsed.providers.local_conversation.config).toHaveProperty('streaming.enabled', false);
   });
 
   it('strips retired direct Chat aliases instead of retaining a parallel runtime configuration', () => {
@@ -1103,9 +1104,9 @@ describe('voiceSettings', () => {
       },
     });
 
-    const agent = (parsed.providers.local_conversation.config as any).agent;
-    expect(agent).not.toHaveProperty('backend');
-    expect(agent).not.toHaveProperty('openaiCompat');
+    expect(parsed.providers.local_conversation.config).toHaveProperty('agent');
+    expect(parsed.providers.local_conversation.config).not.toHaveProperty('agent.backend');
+    expect(parsed.providers.local_conversation.config).not.toHaveProperty('agent.openaiCompat');
     expect(readLocalConversationVoiceSettings(parsed).agent.providerChat).toBeNull();
   });
 

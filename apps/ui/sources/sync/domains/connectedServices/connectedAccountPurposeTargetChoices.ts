@@ -33,6 +33,7 @@ function withEligibilityReason(presentation: QualifiedConnectedAccountTargetPres
   const reason = t(`connectedServices.purposeTargets.${result.reason}`);
   return { ...presentation,
     unavailableReason: reason,
+    unavailableReasonCode: result.reason,
     secondaryLabel: [presentation.secondaryLabel, reason].filter(Boolean).join(' · '),
     accessibilityLabel: `${presentation.accessibilityLabel} · ${reason}` };
 }

@@ -1,13 +1,31 @@
-import { beforeEach, describe, expect, it, vi } from 'vitest';
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { RPC_METHODS } from '@happier-dev/protocol/rpc/methods';
 import { DEFAULT_MEMORY_SETTINGS } from '@happier-dev/protocol/memory/memorySettings';
 import type { MemorySearchHitV1 } from '@happier-dev/protocol/memory/memorySearch';
-import { searchConversations, hasConversationSearchScanFallback } from './searchConversations';
+import { createPlainMachineRowFixture } from '@/dev/testkit/fixtures/machineFixtures';
+import { createHomeGovernanceHarness, installHomeGovernanceBoundaries } from '@/dev/testkit/harness/homeGovernanceHarness';
+import { installSessionActionRpcBoundary } from '@/dev/testkit/harness/sessionActionRpcBoundary';
+import { restoreServerAccountForTest } from '@/dev/testkit/harness/serverAccountConnectionHarness';
+import { loadSyncSingletonForTests } from '@/dev/testkit/harness/syncSingletonLoader';
 
-const rpc = vi.hoisted(() => vi.fn());
-const list = vi.hoisted(() => vi.fn());
-vi.mock('@/sync/runtime/orchestration/serverScopedRpc/serverScopedMachineRpc', () => ({ machineRpcWithServerScope: rpc }));
-vi.mock('@/sync/ops/machineExternalSessions', () => ({ machineExternalSessionsCandidatesList: list }));
+const homes = createHomeGovernanceHarness();
+installHomeGovernanceBoundaries(homes);
+// Substitute only the serialized daemon response. Account routing, transport,
+// memory/source adapters and request/response validation run in production code.
+const rpc = vi.fn<(call: { method: string; machineId: string; payload: unknown }) => Promise<unknown>>();
+const list = vi.fn();
+const requests = installSessionActionRpcBoundary(request => {
+    const separator = request.method.indexOf(':');
+    const machineId = request.method.slice(0, separator);
+    const method = request.method.slice(separator + 1);
+    if (method === RPC_METHODS.DAEMON_EXTERNAL_SESSIONS_CANDIDATES_LIST) {
+        return list({ ...(request.params as Record<string, unknown>), machineId });
+    }
+    return rpc({ machineId, method, payload: request.params });
+});
+await loadSyncSingletonForTests();
+const { searchConversations, hasConversationSearchScanFallback } = await import('./searchConversations');
+let connection: Awaited<ReturnType<typeof restoreServerAccountForTest>> | undefined;
 const hit = (sessionId: string, time: number, score = 0.5): MemorySearchHitV1 => ({
     sessionId, seqFrom: 1, seqTo: 2, createdAtFromMs: time, createdAtToMs: time, summary: 'quartz match', score,
 });
@@ -21,7 +39,15 @@ const status = { v: 1, enabled: true, indexMode: 'deep', hintsIndexReady: true, 
     embeddingsPresetId: null, embeddingsProviderKind: null, embeddingsModelId: null,
     embeddingsRuntimeState: 'unavailable', embeddingsUsingFallback: false, tier1DbPath: null, deepDbPath: null,
     tier1DbBytes: null, deepDbBytes: null };
-beforeEach(() => {
+beforeEach(async () => {
+    await homes.reset();
+    requests.length = 0;
+    input.serverId = await homes.addHome({ name: 'Search owner Home', serverUrl: 'https://search-owner.test', accountId: 'account' });
+    const machines = input.machines.map(machine => createPlainMachineRowFixture({ id: machine.id, accountId: 'account' }));
+    homes.answer(input.serverId, '/v1/machines', { body: machines });
+    for (const machine of machines) homes.answer(input.serverId, `/v1/machines/${machine.id}`, { body: { machine } });
+    connection = await restoreServerAccountForTest({ serverUrl: 'https://search-owner.test', accountId: 'account', request: homes.request });
+    installHomeGovernanceBoundaries(homes);
     rpc.mockReset();
     list.mockReset().mockResolvedValue({ ok: true, candidates: [], contentCoverage: 'complete' });
     rpc.mockImplementation(async (call) => call.method === RPC_METHODS.DAEMON_MEMORY_SETTINGS_GET
@@ -29,7 +55,28 @@ beforeEach(() => {
         : call.method === RPC_METHODS.DAEMON_MEMORY_STATUS ? status
             : { v: 1, ok: true, hits: [hit(call.machineId, call.machineId === 'one' ? 10 : 30, call.machineId === 'one' ? 1 : 0.1)] });
 });
+afterEach(async () => { await connection?.dispose(); connection = undefined; });
 describe('conversation search fan-out', () => {
+    it('keeps an explicit native scan reachable when the ready memory index fails', async () => {
+        rpc.mockImplementation(async call => {
+            if (call.method === RPC_METHODS.DAEMON_MEMORY_SETTINGS_GET) return { ...DEFAULT_MEMORY_SETTINGS, enabled: true,
+                conversationSearch: { ...DEFAULT_MEMORY_SETTINGS.conversationSearch,
+                    indexExternal: { ...DEFAULT_MEMORY_SETTINGS.conversationSearch.indexExternal, enabled: true, agents: ['claude'] } } };
+            if (call.method === RPC_METHODS.DAEMON_MEMORY_STATUS) return { ...status, sources: [{
+                source: { type: 'external_transcript', agentId: 'claude', sourceKey: 'native' }, state: 'ready',
+            }] };
+            throw new Error('Memory index read failed');
+        });
+        list.mockResolvedValue({ ok: true, candidates: [{ remoteSessionId: 'native-session', updatedAtMs: 1,
+            match: { snippet: 'amber orchard', sourceItemId: 'message', messageIndex: 0 } }], contentCoverage: 'complete' });
+        const result = await searchConversations({ ...input, machines: [input.machines[0]], mode: 'auto',
+            query: { ...input.query, query: 'amber orchard', corpora: ['external_transcripts'] },
+            readSources: async () => [{ agentId: 'claude', sourceKey: 'native', source: { kind: 'claudeConfig' }, contentSearch: true }] });
+        expect(result.hits).toMatchObject([{ mode: 'standard', agentId: 'claude', candidate: { remoteSessionId: 'native-session' } }]);
+        expect(result.sources).toMatchObject([{ indexReady: false }]);
+        // A successful native page does not claim the failed index was searched.
+        expect(result.machines).toMatchObject([{ machineId: 'one', status: 'partial', standardSearchEnabled: true }]);
+    });
     it('issues an explicit retry to an unreachable machine and returns its recovered results', async () => {
         const result = await searchConversations({ ...input, machines: [{ id: 'one', online: false }],
             retryUnreachableMachines: true });
@@ -209,7 +256,10 @@ describe('conversation search fan-out', () => {
             { machineId: 'two', status: 'ok', standardSearchEnabled: true },
             { machineId: 'offline', status: 'offline', standardSearchEnabled: false },
         ]);
-        expect(rpc.mock.calls.every(([call]) => call.machineId !== 'offline' && call.accountId === 'account')).toBe(true);
+        expect(requests.every(request => !request.method.startsWith('offline:'))).toBe(true);
+        const admissions = homes.requests.filter(request => request.path.startsWith('/v1/machines/'));
+        expect(admissions.length).toBeGreaterThan(0);
+        expect(admissions.every(request => request.serverId === input.serverId && request.token !== null)).toBe(true);
     });
     it('drops a late response after query cancellation', async () => {
         const controller = new AbortController();

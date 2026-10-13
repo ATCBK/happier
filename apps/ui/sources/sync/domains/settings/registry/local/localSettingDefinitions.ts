@@ -170,6 +170,12 @@ const localSettingInputs = {
         description: 'Timestamp in ms since epoch when Home first played its Welcome planet on this device',
         storageScope: 'local',
     },
+    skillsFirstRunDecidedAt: {
+        schema: z.number().nullable().catch(null),
+        default: null,
+        description: 'When this device chose or dismissed the initial Skills checklist',
+        storageScope: 'local',
+    },
     hasCompletedAuthOnce: {
         schema: z.boolean().catch(false),
         default: false,

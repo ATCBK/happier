@@ -3,7 +3,7 @@ import type {
     ManagedMcpPreviewEntryV1,
 } from '@happier-dev/protocol';
 import { SessionMcpSelectionV1Schema } from '@happier-dev/protocol/mcp/servers/sessionSelectionV1';
-import { SessionCapabilitySelectionAuthoringV1Schema, SessionSkillSelectionV1Schema,
+import { SessionCapabilitySelectionAuthoringV1Schema, setSessionCapabilitySelectionItemV1,
     type SessionCapabilitySelectionV1 } from '@happier-dev/protocol/reach/sessionCapabilitySelectionV1';
 
 type PreviewSuccess = Extract<DaemonMcpServersPreviewResponse, { ok: true }>;
@@ -42,49 +42,8 @@ export function toggleManagedSessionMcpSelection(
 ): SessionCapabilitySelectionV1 {
     const normalized = normalizeSelection(selection);
     if (!entry.selectable) return normalized;
-    const mcp = SessionMcpSelectionV1Schema.parse(normalized.mcp ?? {});
-    const forceIncludeServerIds = new Set(mcp.forceIncludeServerIds);
-    const forceExcludeServerIds = new Set(mcp.forceExcludeServerIds);
-
-    if (entry.selected) {
-        forceIncludeServerIds.delete(entry.serverId);
-        if (entry.defaultSelected) {
-            forceExcludeServerIds.add(entry.serverId);
-        } else {
-            forceExcludeServerIds.delete(entry.serverId);
-        }
-    } else {
-        forceExcludeServerIds.delete(entry.serverId);
-        if (!entry.defaultSelected) {
-            forceIncludeServerIds.add(entry.serverId);
-        }
-    }
-
-    return normalizeSelection({
-        ...normalized,
-        mcp: { ...mcp, forceIncludeServerIds: Array.from(forceIncludeServerIds), forceExcludeServerIds: Array.from(forceExcludeServerIds) },
-    });
+    const state = entry.selected ? (entry.defaultSelected ? 'off' : 'inherit') : (entry.defaultSelected ? 'inherit' : 'on');
+    return setSessionCapabilitySelectionItemV1(normalized, 'mcp_server', entry.serverId, state);
 }
 
-export function setSessionCapabilitySelectionItem(selection: SessionCapabilitySelectionV1,
-    kind: 'mcp_server' | 'skill' | 'native_skill', id: string, state: 'on' | 'off' | 'inherit'): SessionCapabilitySelectionV1 {
-    const normalized = normalizeSelection(selection);
-    if (kind === 'native_skill') {
-        const skills = SessionSkillSelectionV1Schema.parse(normalized.skills ?? {});
-        const excludes = new Set(skills.excludeNativeSkillNames);
-        if (state === 'off') excludes.add(id); else excludes.delete(id);
-        return normalizeSelection({ ...normalized, skills: { ...skills, excludeNativeSkillNames: [...excludes] } });
-    }
-    if (kind === 'mcp_server') {
-        const mcp = SessionMcpSelectionV1Schema.parse(normalized.mcp ?? {});
-        const includes = new Set(mcp.forceIncludeServerIds), excludes = new Set(mcp.forceExcludeServerIds);
-        includes.delete(id); excludes.delete(id);
-        if (state === 'on') includes.add(id); else if (state === 'off') excludes.add(id);
-        return normalizeSelection({ ...normalized, mcp: { ...mcp, forceIncludeServerIds: [...includes], forceExcludeServerIds: [...excludes] } });
-    }
-    const skills = SessionSkillSelectionV1Schema.parse(normalized.skills ?? {});
-    const includes = new Set(skills.forceIncludeSkillIds), excludes = new Set(skills.forceExcludeSkillIds);
-    includes.delete(id); excludes.delete(id);
-    if (state === 'on') includes.add(id); else if (state === 'off') excludes.add(id);
-    return normalizeSelection({ ...normalized, skills: { ...skills, forceIncludeSkillIds: [...includes], forceExcludeSkillIds: [...excludes] } });
-}
+export { setSessionCapabilitySelectionItemV1 as setSessionCapabilitySelectionItem };

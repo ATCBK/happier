@@ -1,4 +1,8 @@
-import { describe, expect, it, vi } from 'vitest';
+import { describe, expect, it } from 'vitest';
+import { buildProviderAccountUsageRecordId, ProviderAccountUsageSnapshotV1Schema,
+    sealProviderAccountUsageSnapshot } from '@happier-dev/protocol';
+import { encodeBase64 } from '@/encryption/base64';
+import { openProviderAccountUsageSnapshot } from './openProviderAccountUsageSnapshot';
 
 import {
     buildProviderAccountUsageScopeKey,
@@ -7,37 +11,34 @@ import {
 
 describe('providerAccountUsageLoadRoute', () => {
     it('uses the plaintext route exclusively when the selected mode returns no snapshot', async () => {
-        const readPlain = vi.fn(async () => null);
-        const readSealed = vi.fn(async () => ({ ciphertext: 'sealed' }));
-
         await expect(readProviderAccountUsageSnapshotForMode({
             mode: 'plain',
-            readPlain,
-            readSealed,
-            openSealed: vi.fn(() => ({ id: 'opened' })),
+            readPlain: async () => null,
+            readSealed: async () => { throw new Error('A plaintext miss must not request encrypted content'); },
+            openSealed: () => { throw new Error('A plaintext miss must not invoke encrypted opening'); },
         })).resolves.toBeNull();
-
-        expect(readPlain).toHaveBeenCalledOnce();
-        expect(readSealed).not.toHaveBeenCalled();
     });
 
     it('uses only the sealed route for an e2ee account', async () => {
-        const readPlain = vi.fn(async () => ({ id: 'plain' }));
-        const sealed = { ciphertext: 'sealed' };
-        const opened = { id: 'opened' };
-        const readSealed = vi.fn(async () => sealed);
-        const openSealed = vi.fn(() => opened);
+        const secret = new Uint8Array(32).fill(7);
+        const recordKey = { providerId: 'codex', accountSubjectId: 'account',
+            subjectKind: 'account', quotaScope: 'account' } as const;
+        const snapshot = ProviderAccountUsageSnapshotV1Schema.parse({
+            v: 1, recordId: buildProviderAccountUsageRecordId(recordKey), recordKey,
+            providerId: 'codex', accountSubject: { kind: 'providerSubject', id: 'account' },
+            observedAtMs: 1000, fetchedAtMs: 1000, staleAfterMs: 60_000,
+            source: 'providerHttp', confidence: 'confirmed', state: 'loaded_empty', meters: [],
+        });
+        const sealed = sealProviderAccountUsageSnapshot({ material: { type: 'legacy', secret }, snapshot,
+            randomBytes: length => new Uint8Array(length).fill(3) });
+        const credentials = { token: 'synthetic', secret: encodeBase64(secret, 'base64url') };
 
         await expect(readProviderAccountUsageSnapshotForMode({
             mode: 'e2ee',
-            readPlain,
-            readSealed,
-            openSealed,
-        })).resolves.toBe(opened);
-
-        expect(readPlain).not.toHaveBeenCalled();
-        expect(readSealed).toHaveBeenCalledOnce();
-        expect(openSealed).toHaveBeenCalledWith(sealed);
+            readPlain: async () => { throw new Error('An E2EE Account must not request plaintext content'); },
+            readSealed: async () => sealed,
+            openSealed: content => openProviderAccountUsageSnapshot(credentials, content),
+        })).resolves.toEqual(snapshot);
     });
 
     it('separates identical credentials across active servers', () => {

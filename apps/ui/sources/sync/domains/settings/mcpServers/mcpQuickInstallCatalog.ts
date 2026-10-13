@@ -1,4 +1,4 @@
-import type { ImportedMcpInputDefinitionV1, ImportedMcpServerDraftV1 } from './parseImportedMcpServerJson';
+import type { ImportedMcpInputDefinitionV1, ImportedMcpServerDraftV1 } from '@happier-dev/protocol/mcp/servers/import/parseMcpServerImportV1';
 
 export type McpQuickInstallPresetId =
     | 'playwright'

@@ -1,44 +1,10 @@
-import { z } from 'zod';
-import { SpawnSessionTerminalSchema } from '@happier-dev/protocol/spawnSession';
 import { AgentExecutionTargetV1Schema, type AgentExecutionTargetV1 } from '@happier-dev/protocol/agents/executionTargetV1';
-import { BackendTargetRefV2Schema, buildBackendTargetKeyV2, normalizeBackendTargetRefV2InputToV2, readBackendTargetRefV2, type BackendTargetRefV2, type BackendTargetRefV2Input } from '@happier-dev/protocol/backends/targets/backendTargetRefV2';
-import { RuntimeDescriptorV1Schema, type RuntimeDescriptorV1 } from '@happier-dev/protocol/sessions/metadata/runtime-descriptor';
-import { SessionModelSelectionV1Schema, type SessionModelSelectionV1 } from '@happier-dev/protocol/providers/model-selection';
-import { SessionAttachMetadataIdentityPolicySchema, type SessionAttachMetadataIdentityPolicy } from '@happier-dev/protocol/sessions/attach/metadataIdentityPolicy';
-import { SessionAuthoringValueV1Schema, type SessionAuthoringValueV1 } from '@happier-dev/protocol/sessions/authoring/index';
-import { SessionInitialGoalRequestV1Schema, type SessionInitialGoalRequestV1 } from '@happier-dev/protocol/sessions/work/state/sessionWorkStateRpc';
-import { SpawnSessionExecutionAuthorizationSchema } from '@happier-dev/protocol/spawnSession';
+import { buildBackendTargetKeyV2, readBackendTargetRefV2, type BackendTargetRefV2Input } from '@happier-dev/protocol/backends/targets/backendTargetRefV2';
+import { SessionModelSelectionV1Schema } from '@happier-dev/protocol/providers/model-selection';
+import { SessionResumeRequestV1Schema, type SessionResumeRequestV1 } from '@happier-dev/protocol/sessions/control/sessionResumeRequestV1';
 import { resolveBundledAgentIdFromContributionIdentity } from '@/agents/catalog/resolveBundledAgentIdFromContributionIdentity';
-import { isPermissionMode, type PermissionMode } from '../../permissions/permissionTypes';
 
-export type ResumeHappySessionRpcParams = {
-    type: 'resume-session';
-    sessionId: string;
-    directory: string;
-    agentTarget?: AgentExecutionTargetV1;
-    backendTarget?: BackendTargetRefV2;
-    resume?: string;
-    runtimeDescriptorV1?: RuntimeDescriptorV1;
-    environmentVariables?: Record<string, string>;
-    terminal?: z.infer<typeof SpawnSessionTerminalSchema>;
-    connectedServices?: SessionAuthoringValueV1['connectedServices'];
-    connectedServicesUpdatedAt?: number;
-    transcriptStorage?: 'direct' | 'persisted';
-    attachMetadataIdentityPolicy?: SessionAttachMetadataIdentityPolicy;
-    permissionMode?: PermissionMode;
-    permissionModeUpdatedAt?: number;
-    modelSelection?: SessionModelSelectionV1;
-    accountSettingsVersionHint?: number;
-    initialTranscriptAfterSeq?: number;
-    executionAuthorization?: Readonly<{
-        provenance: 'user_request';
-        requestId: string;
-    }>;
-    approvedNewDirectoryCreation?: boolean;
-    initialGoal?: SessionInitialGoalRequestV1;
-    /** Stable correlation for callers that must observe the resumed runtime before continuing. */
-    spawnNonce?: string;
-};
+export type ResumeHappySessionRpcParams = SessionResumeRequestV1;
 
 type BuildResumeHappySessionRpcInput = Omit<ResumeHappySessionRpcParams, 'type' | 'agentTarget' | 'backendTarget'> & {
     /** Builder-only target identity; daemon wire payloads never carry it. */
@@ -46,39 +12,6 @@ type BuildResumeHappySessionRpcInput = Omit<ResumeHappySessionRpcParams, 'type' 
     agentTarget?: AgentExecutionTargetV1;
     backendTarget?: BackendTargetRefV2Input;
 };
-
-const ResumeHappySessionRpcParamsSchema = z.object({
-    type: z.literal('resume-session'),
-    sessionId: z.string().min(1),
-    directory: z.string().min(1),
-    agentTarget: AgentExecutionTargetV1Schema.optional(),
-    backendTarget: z.preprocess(normalizeBackendTargetRefV2InputToV2, BackendTargetRefV2Schema.optional()),
-    resume: z.string().min(1).optional(),
-    runtimeDescriptorV1: RuntimeDescriptorV1Schema.optional(),
-    environmentVariables: z.record(z.string(), z.string()).optional(),
-    terminal: SpawnSessionTerminalSchema.optional(),
-    connectedServices: SessionAuthoringValueV1Schema.shape.connectedServices.optional(),
-    connectedServicesUpdatedAt: z.number().optional(),
-    transcriptStorage: z.enum(['direct', 'persisted']).optional(),
-    attachMetadataIdentityPolicy: SessionAttachMetadataIdentityPolicySchema.optional(),
-    permissionMode: z.string().refine((value) => isPermissionMode(value)).optional(),
-    permissionModeUpdatedAt: z.number().optional(),
-    modelSelection: SessionModelSelectionV1Schema.optional(),
-    accountSettingsVersionHint: z.number().int().nonnegative().optional(),
-    initialTranscriptAfterSeq: z.number().int().nonnegative().optional(),
-    executionAuthorization: SpawnSessionExecutionAuthorizationSchema.optional(),
-    approvedNewDirectoryCreation: z.boolean().optional(),
-    initialGoal: SessionInitialGoalRequestV1Schema.optional(),
-    spawnNonce: z.string().min(1).optional(),
-}).superRefine((value, context) => {
-    if (!value.agentTarget && !value.backendTarget) {
-        context.addIssue({
-            code: z.ZodIssueCode.custom,
-            path: ['agentTarget'],
-            message: 'agentTarget or configured backendTarget is required',
-        });
-    }
-});
 
 export function buildResumeHappySessionRpcParams(input: BuildResumeHappySessionRpcInput): ResumeHappySessionRpcParams {
     const {
@@ -146,5 +79,5 @@ export function buildResumeHappySessionRpcParams(input: BuildResumeHappySessionR
         ...(canonicalModelSelection ? { modelSelection: canonicalModelSelection } : {}),
     };
     // Validate shape early to avoid accidentally sending secrets in wrong fields.
-    return ResumeHappySessionRpcParamsSchema.parse(params);
+    return SessionResumeRequestV1Schema.parse(params);
 }

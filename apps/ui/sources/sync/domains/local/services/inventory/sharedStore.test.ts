@@ -1,7 +1,16 @@
-import { afterEach, describe, expect, it, vi } from 'vitest';
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
+import { LocalServiceInventorySnapshotV1Schema } from '@happier-dev/protocol/local/services/inventory/v1';
+import { RPC_METHODS, RPC_ERROR_CODES } from '@happier-dev/protocol/rpc';
+import { flushHookEffects } from '@/dev/testkit';
+
+const rpc = vi.hoisted(() => ({ machine: vi.fn(), snapshot: vi.fn() }));
+// Snapshot/watch RPCs are the genuine daemon transport; internal clients and stores stay real.
+vi.mock('@/sync/runtime/orchestration/serverScopedRpc/serverScopedMachineRpc', async () => {
+    const { createServerScopedMachineRpcBoundaryMock } = await import('@/dev/testkit/mocks/serverScopedRpc');
+    return createServerScopedMachineRpcBoundaryMock(rpc.machine);
+});
 
 import { expectNoWallClockPolling } from '../noPollingTestHelpers';
-import type { LocalServiceInventorySnapshotClientResult } from './api';
 import {
     getLocalServiceInventoryState,
     invalidateLocalServiceInventoryStore,
@@ -9,9 +18,9 @@ import {
     resetLocalServiceInventoryStoreForTests,
     subscribeLocalServiceInventoryStore,
 } from './sharedStore';
-import { selectLocalServiceInventoryRows, selectLocalServiceInventoryPresentationRows, type LocalServiceInventorySnapshot } from './store';
+import { selectLocalServiceInventoryRows, selectLocalServiceInventoryPresentationRows } from './store';
 
-const snapshot = {
+const snapshot = LocalServiceInventorySnapshotV1Schema.parse({
     v: 1,
     machineId: 'machine-a',
     generatedAt: 1_000,
@@ -33,30 +42,44 @@ const snapshot = {
         diagnostics: [],
     }],
     diagnostics: [],
-} satisfies LocalServiceInventorySnapshot;
+});
 
 async function flushMicrotasks(): Promise<void> {
-    await Promise.resolve();
-    await Promise.resolve();
+    await flushHookEffects();
 }
 
 describe('shared local-service inventory store', () => {
+    beforeEach(() => {
+        rpc.snapshot.mockReset();
+        rpc.machine.mockReset().mockImplementation(async (request: { method: string }) => {
+            if (request.method === RPC_METHODS.DAEMON_LOCAL_SERVICES_INVENTORY_WATCH) {
+                return { ok: false, errorCode: RPC_ERROR_CODES.METHOD_NOT_FOUND };
+            }
+            expect([RPC_METHODS.DAEMON_LOCAL_SERVICES_INVENTORY_SNAPSHOT,
+                RPC_METHODS.DAEMON_LOCAL_SERVICES_INVENTORY_REFRESH]).toContain(request.method);
+            return rpc.snapshot(request);
+        });
+    });
     afterEach(() => {
         resetLocalServiceInventoryStoreForTests();
     });
 
     it('fetches once for a key regardless of how many consumers subscribe', async () => {
-        const snapshotClient = vi.fn(async (): Promise<LocalServiceInventorySnapshotClientResult> => ({
-            ok: true,
+        const snapshotClient = rpc.snapshot.mockResolvedValue({
+            protocolVersion: 1,
             snapshot,
-        }));
+        });
         const key = { machineId: 'machine-a', serverId: 'server-a', sessionId: 'session-a' };
 
-        const unsubA = subscribeLocalServiceInventoryStore(key, () => {}, { snapshotClient });
-        const unsubB = subscribeLocalServiceInventoryStore(key, () => {}, { snapshotClient });
+        const unsubA = subscribeLocalServiceInventoryStore(key, () => {});
+        const unsubB = subscribeLocalServiceInventoryStore(key, () => {});
         await flushMicrotasks();
 
         expect(snapshotClient).toHaveBeenCalledTimes(1);
+        expect(snapshotClient).toHaveBeenCalledWith(expect.objectContaining({
+            method: RPC_METHODS.DAEMON_LOCAL_SERVICES_INVENTORY_REFRESH,
+            serverId: 'server-a', payload: { machineId: 'machine-a' },
+        }));
         expect(selectLocalServiceInventoryRows(getLocalServiceInventoryState(key))).toEqual(snapshot.entries);
 
         unsubA();
@@ -64,14 +87,14 @@ describe('shared local-service inventory store', () => {
     });
 
     it('publishes action-read snapshots into the same backing model without polling', async () => {
-        const snapshotClient = vi.fn(async (): Promise<LocalServiceInventorySnapshotClientResult> => ({
-            ok: true,
+        const snapshotClient = rpc.snapshot.mockResolvedValue({
+            protocolVersion: 1,
             snapshot: { ...snapshot, entries: [] },
-        }));
+        });
         const key = { machineId: 'machine-a', serverId: 'server-a', sessionId: 'session-a' };
         const listener = vi.fn();
 
-        const unsub = subscribeLocalServiceInventoryStore(key, listener, { snapshotClient });
+        const unsub = subscribeLocalServiceInventoryStore(key, listener);
         await flushMicrotasks();
         listener.mockClear();
 
@@ -87,10 +110,8 @@ describe('shared local-service inventory store', () => {
     it('suppresses identical publications while retaining observable scan freshness', async () => {
         const key = { machineId: 'machine-a', serverId: 'server-a', sessionId: 'session-a' };
         const listener = vi.fn();
-        const unsub = subscribeLocalServiceInventoryStore(key, listener, {
-            snapshotClient: async () => ({ ok: true, snapshot }),
-            watchClient: async () => ({ ok: false, reason: 'unavailable' }),
-        });
+        rpc.snapshot.mockResolvedValue({ protocolVersion: 1, snapshot });
+        const unsub = subscribeLocalServiceInventoryStore(key, listener);
         await flushMicrotasks();
         listener.mockClear();
         const presentation = selectLocalServiceInventoryPresentationRows(getLocalServiceInventoryState(key));
@@ -111,12 +132,13 @@ describe('shared local-service inventory store', () => {
         // a phantom "the daemon rescanned" and re-reads the launcher feed, and the watch's
         // `sinceGeneratedAt` cursor becomes a client clock reading the daemon cannot compare.
         let succeed = true;
-        const snapshotClient = vi.fn(async (): Promise<LocalServiceInventorySnapshotClientResult> => (
-            succeed ? { ok: true, snapshot } : { ok: false, reason: 'unavailable' }
-        ));
+        rpc.snapshot.mockImplementation(async () => {
+            if (!succeed) throw new Error('daemon snapshot transport unavailable');
+            return { protocolVersion: 1, snapshot };
+        });
         const key = { machineId: 'machine-a', serverId: 'server-a', sessionId: 'session-a' };
 
-        const unsub = subscribeLocalServiceInventoryStore(key, () => {}, { snapshotClient });
+        const unsub = subscribeLocalServiceInventoryStore(key, () => {});
         await flushMicrotasks();
         expect(getLocalServiceInventoryState(key).generatedAt).toBe(1_000);
 
@@ -134,14 +156,14 @@ describe('shared local-service inventory store', () => {
     });
 
     it('does not re-fetch the inventory on a wall clock while subscribed', async () => {
-        const snapshotClient = vi.fn(async (): Promise<LocalServiceInventorySnapshotClientResult> => ({
-            ok: true,
+        const snapshotClient = rpc.snapshot.mockResolvedValue({
+            protocolVersion: 1,
             snapshot,
-        }));
+        });
         const key = { machineId: 'machine-a', serverId: 'server-a', sessionId: 'session-a' };
 
         await expectNoWallClockPolling({
-            subscribe: () => subscribeLocalServiceInventoryStore(key, () => {}, { snapshotClient }),
+            subscribe: () => subscribeLocalServiceInventoryStore(key, () => {}),
             fetchSpy: snapshotClient,
         });
     });

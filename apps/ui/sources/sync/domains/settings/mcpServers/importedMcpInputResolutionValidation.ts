@@ -1,4 +1,4 @@
-import type { ImportedMcpInputResolutionV1 } from './materializeImportedMcpServerDrafts';
+import type { ImportedMcpInputResolutionV1 } from './mcpImportActionInputs';
 
 export type ImportedMcpInputResolutionIssueCode =
     | 'missingSecretName'
@@ -6,7 +6,7 @@ export type ImportedMcpInputResolutionIssueCode =
     | 'missingMachineEnvName';
 
 export function getImportedMcpInputResolutionIssues(mapping: ImportedMcpInputResolutionV1 | undefined): ImportedMcpInputResolutionIssueCode[] {
-    if (!mapping) return [];
+    if (!mapping) return ['missingMachineEnvName'];
 
     if (mapping.mode === 'savedSecret') {
         const issues: ImportedMcpInputResolutionIssueCode[] = [];
@@ -19,7 +19,7 @@ export function getImportedMcpInputResolutionIssues(mapping: ImportedMcpInputRes
         return issues;
     }
 
-    if (!mapping.envVarName.trim()) {
+    if (!/^[A-Za-z_][A-Za-z0-9_]*$/u.test(mapping.envVarName.trim())) {
         return ['missingMachineEnvName'];
     }
 

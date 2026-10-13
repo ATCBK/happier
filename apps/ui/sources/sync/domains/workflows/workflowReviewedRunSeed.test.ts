@@ -1,21 +1,9 @@
-import { beforeEach, describe, expect, it, vi } from 'vitest';
-
-// The applied connection and storage reader are the Account host boundary;
-// lifetime capture and retirement underneath them remain real.
-const accountHost = vi.hoisted(() => ({
-    scope: { serverId: 'server-a', accountId: 'account-a' },
-}));
-vi.mock('@/sync/runtime/orchestration/appliedActiveServerRuntime', () => ({
-    getAppliedActiveServerSnapshot: () => ({ serverId: accountHost.scope.serverId }),
-    isAppliedActiveServerRuntimeAvailable: () => true,
-}));
-vi.mock('@/sync/domains/state/storageStateReaderBridge', () => ({
-    readRegisteredStorageState: () => ({ profileScope: accountHost.scope }),
-}));
-
-import { WorkflowDefinitionV1Schema } from '@happier-dev/protocol/workflows/workflowV1';
-import { WorkflowRunSummaryV1Schema } from '@happier-dev/protocol/workflows/workflowProgressV1';
-import type { WorkflowRunAcceptedContextV1 } from '@happier-dev/protocol';
+import { afterEach, beforeEach, describe, expect, it } from 'vitest';
+import { createWorkflowDefinitionFixture, createWorkflowRunSummaryFixture } from '@/dev/testkit/fixtures/workflowRunFixtures';
+import { storage } from '@/sync/domains/state/storageStore';
+import { getAppliedActiveServerSnapshot, isAppliedActiveServerRuntimeAvailable, publishAppliedActiveServerSnapshot } from '@/sync/runtime/orchestration/appliedActiveServerRuntime';
+import { retireActiveServerAccountScopeLifetime } from '@/sync/domains/scope/activeServerAccountScope';
+import { WorkflowRunAcceptedContextV1Schema } from '@happier-dev/protocol/workflows/actionsV1';
 import { consumeWorkflowEditorDraftSeed } from './workflowEditorDraftSeed';
 import { readWorkflowDefinitionDraftSeed, storeWorkflowDefinitionDraftSeed } from './workflowDefinitionDraftSeed';
 
@@ -25,20 +13,11 @@ import {
     storeWorkflowReviewedRunSeed,
 } from './workflowReviewedRunSeed';
 
-function createWorkflowDefinitionFixture() {
-    return WorkflowDefinitionV1Schema.parse({ version: 1, inputs: [], defaults: {}, blocks: [{ kind: 'step', id: 'step-1', document: { text: 'Analyze the repository', references: [], attachments: [] }, input: [], result: { kind: 'text' } }] });
-}
+let previousState = storage.getState();
+let previousSnapshot = getAppliedActiveServerSnapshot();
+let previousAvailable = isAppliedActiveServerRuntimeAvailable();
 
-function createWorkflowRunSummaryFixture(overrides: Partial<ReturnType<typeof WorkflowRunSummaryV1Schema.parse>> = {}) {
-    return WorkflowRunSummaryV1Schema.parse({ sourceArtifactId: null, ownerAccountId: 'account-1', visibleTeamId: null,
-        id: 'run-1', origin: { kind: 'direct' }, state: 'succeeded', revision: 1,
-        machineId: 'machine-1', workflowCustodyState: 'settled', originDeliveryAckRevision: null,
-        availability: { pause: false, resumeBoundary: false,    restoreWorkspace: false, cancel: false, inspectExecution: true, disabledReasons: [] },
-        createdAt: '2026-09-08T10:00:00.000Z', updatedAt: '2026-09-08T10:00:00.000Z', ...overrides,
-    });
-}
-
-const ACCEPTED_CONTEXT: WorkflowRunAcceptedContextV1 = {
+const ACCEPTED_CONTEXT = WorkflowRunAcceptedContextV1Schema.parse({
     startedBy: 'user',
     source: { kind: 'inline' },
     inputs: { topic: 'release' },
@@ -48,21 +27,30 @@ const ACCEPTED_CONTEXT: WorkflowRunAcceptedContextV1 = {
     frozenChildren: {},
     workspaceTarget: { project: { machineId: 'machine-1', directory: '/Users/me/project', checkoutRootPath: '/Users/me/project' } },
     origin: { kind: 'direct' },
-};
+});
 
 describe('workflow reviewed-run seed', () => {
     it('pins each accepted root step target rather than re-reading the current role runs-as', () => {
         const definition = createWorkflowDefinitionFixture();
         const seed = buildWorkflowReviewedRunSeed({ run: createWorkflowRunSummaryFixture(), definition,
             acceptedContext: { ...ACCEPTED_CONTEXT, executionTarget: { kind: 'session' }, materializedLeaves: [{
-                sourceKey: '$root', blockId: 'step-1', kind: 'step', selection: {}, authoredWorkspace: { kind: 'inherit' },
+                sourceKey: '$root', blockId: 'analyze', kind: 'step', selection: {}, authoredWorkspace: { kind: 'inherit' },
                 executionTarget: { kind: 'detached_run' },
             }] } });
         expect(seed.definition.blocks[0]).toMatchObject({ execution: { executionTarget: { kind: 'detached_run' } } });
         expect(definition.blocks[0]).not.toHaveProperty('execution');
     });
     beforeEach(() => {
-        accountHost.scope = { serverId: 'server-a', accountId: 'account-a' };
+        previousState = storage.getState();
+        previousSnapshot = getAppliedActiveServerSnapshot();
+        previousAvailable = isAppliedActiveServerRuntimeAvailable();
+        publishAppliedActiveServerSnapshot({ serverId: 'server-a', serverUrl: 'https://reviewed-seed.test', generation: 1 });
+        storage.setState({ profileScope: { serverId: 'server-a', accountId: 'account-a' } });
+    });
+    afterEach(() => {
+        retireActiveServerAccountScopeLifetime();
+        storage.setState(previousState);
+        publishAppliedActiveServerSnapshot(previousSnapshot, previousAvailable);
     });
     it('keeps accepted library metadata when opening a run as an unsaved workflow', () => {
         const seed = buildWorkflowReviewedRunSeed({
@@ -125,7 +113,7 @@ describe('workflow reviewed-run seed', () => {
             definition: createWorkflowDefinitionFixture(),
             acceptedContext: ACCEPTED_CONTEXT,
         }));
-        accountHost.scope = { serverId: 'server-a', accountId: 'account-b' };
+        storage.setState({ profileScope: { serverId: 'server-a', accountId: 'account-b' } });
         expect(readWorkflowReviewedRunSeed(seedId)).toBeNull();
     });
 

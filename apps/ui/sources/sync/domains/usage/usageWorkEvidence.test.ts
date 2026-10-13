@@ -158,7 +158,7 @@ describe('opened Session usage work evidence', () => {
             agentState: AgentStateSchema.parse({ requests: {}, completedRequests: {} }),
         }, []))).toMatchObject({ permissions: { requestCount: 0, pairedDecisionCount: 0 }, inputs: { acceptedCount: 0, steeringCount: 0 } });
         expect(compose(projectSessionUsageWorkEvidence({ ...session, agentState: null,
-            metadata: { path: '', host: '', actionConfirmationsV1: { v: 1, requests: {}, completedRequests: {} } },
+            metadata: { actionConfirmationsV1: { v: 1, requests: {}, completedRequests: {} } },
         }))).toMatchObject({ permissions: { requestCount: 0, pairedDecisionCount: 0 }, inputs: null });
     });
     it('admits only the current equal-Account opened subset and applies witnessed filters without broadening unknown dimensions', () => {

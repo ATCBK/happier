@@ -15,6 +15,25 @@ import {
 afterEach(() => clearMachineRequestReachabilityForTest());
 
 describe('machine reachability', () => {
+    it('retains a failed direct route across relay success and clears it at the exact reconnect edge', () => {
+        const scope = { serverId: 'home', accountId: 'account-a' };
+        const route = 'loopback_direct' as const;
+        recordMachineRequestFailed({ ...scope, machineId: 'machine', route, observedAtMs: 20 });
+        recordMachineRequestSucceeded({ ...scope, machineId: 'machine', observedAtMs: 30 });
+        expect(isMachineReachable(scope, { id: 'machine', active: true }, 30)).toBe(true);
+        expect(readMachineRequestReachabilityObservation(scope, 'machine', route)?.outcome).toBe('failed');
+        expect(readMachineRequestReachabilityObservation({ ...scope, accountId: 'account-b' }, 'machine', route)).toBeNull();
+        expect(readMachineRequestReachabilityObservation({ ...scope, serverId: 'other-home' }, 'machine', route)).toBeNull();
+        recordMachineRequestFailed({ ...scope, machineId: 'machine2', route, observedAtMs: 20 });
+        clearMachineRequestReachabilityForMachine(scope, 'machine');
+        expect(readMachineRequestReachabilityObservation(scope, 'machine', route)).toBeNull();
+        expect(readMachineRequestReachabilityObservation(scope, 'machine2', route)?.outcome).toBe('failed');
+        recordMachineRequestSucceeded({ ...scope, machineId: 'machine2', route, observedAtMs: 40 });
+        expect(readMachineRequestReachabilityObservation(scope, 'machine2', route)?.outcome).toBe('succeeded');
+        clearMachineRequestReachabilityForScope(scope);
+        expect(readMachineRequestReachabilityObservation(scope, 'machine2', route)).toBeNull();
+    });
+
     it('publishes admission changes without retriggering readers for repeated successful replies', () => {
         const scope = { serverId: 'home', accountId: 'account-a' };
         const listener = vi.fn();

@@ -23,7 +23,8 @@ describe('opened Session Coach detail', () => {
         const session = { id: 'session', metadata: null, agentState: null,
             sessionTurns: { v: 1 as const, sessionId: 'session', updatedAt: 180,
                 turns: [{ turnId: 'turn', status: 'completed' as const, startedAt: 160, updatedAt: 180, terminalAt: 180 }] } };
-        const read = (messages = [message(record(selected)), input], source = session) =>
+        const read = (messages: Parameters<typeof projectSessionUsageWorkEvidence>[1] = [message(record(selected)), input],
+            source: Parameters<typeof projectSessionUsageWorkEvidence>[0] = session) =>
             projectSessionUsageWorkEvidence(source, messages, { messagesComplete: true });
         expect(read()).toHaveProperty('coach.detail.modelRequests', [{ evidenceId: 'composition', observedAtMs: 180,
             sessionId: 'session', turnId: 'turn', startedAtMs: 160, requestIdentity }]);
@@ -51,11 +52,17 @@ describe('opened Session Coach detail', () => {
         ]);
         expect(JSON.stringify(result)).not.toContain('private agent diagnostics');
     });
-    it('consumes only strict content-free composition records belonging to the opened Session', () => {
+    it('projects content-free stored composition for the opened Session while keeping write admission strict', () => {
         const read = (content: unknown) => projectSessionUsageWorkEvidence({ id: 'session', metadata: null, agentState: null }, [message(content)]);
         expect(read(record(composition))).toHaveProperty('coach.composition', [composition]);
         expect(read(record({ ...composition, sessionId: 'another-session' }))).toHaveProperty('coach.composition', []);
-        expect(read(record({ ...composition, prompt: 'private prompt', path: '/private/repository' }))).toHaveProperty('coach.composition', []);
+        const retained = { ...composition, prompt: 'private prompt', path: '/private/repository' };
+        expect(UsagePromptCompositionSchema.safeParse(retained).success).toBe(false);
+        const projected = read(record(retained));
+        expect(projected).toHaveProperty('coach.composition', [composition]);
+        expect(JSON.stringify(projected)).not.toMatch(/private prompt|private\/repository/);
+        expect(read(record({ ...composition, components: [{ ...composition.components[0], byteLength: -1 }] })))
+            .toHaveProperty('coach.composition', []);
         expect(read({ role: 'agent', content: { type: 'text', text: JSON.stringify(composition) } })).toHaveProperty('coach.composition', []);
     });
 });

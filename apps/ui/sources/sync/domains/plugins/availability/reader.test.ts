@@ -4,6 +4,7 @@ import {
     createPackageAssetArchiveV1,
     PluginAccountAvailabilityIntentReadResponseV1Schema,
     PluginMachineMaterializationV1Schema,
+    PluginPortableReleaseManifestV1Schema,
 } from '@happier-dev/protocol/plugins/availability';
 
 import {
@@ -111,6 +112,29 @@ function snapshot(overrides: Partial<PluginAccountAvailabilitySnapshot> = {}): P
 }
 
 describe('Plugin Account Availability reader', () => {
+    it('projects admitted registry declarations on a cold Account and retires their installation census', () => {
+        const base = snapshot();
+        const declaration = PluginPortableReleaseManifestV1Schema.parse({ ...intentRead().release!.normalizedManifest,
+            contributes: { registrySources: [{ id: 'skills', title: 'Team skills', format: 'git', kinds: ['skill'], url: 'https://github.com/acme/skills' }] },
+        });
+        const materialization = { ...base.materializations[0]!, enabled: true, trustState: 'trusted' as const, declaredManifest: declaration };
+        const store = createPluginAccountAvailabilityReaderStore();
+        store.replace({ scope, snapshot: { ...base, materializations: [materialization], snapshots: [
+            { serverIdentityId: materialization.serverIdentityId, machineId: materialization.machineId, materializations: [materialization] },
+        ] } });
+        const reader = store.bind(scope);
+        const installed = reader.readInstalledPlugins();
+        if (installed.kind !== 'available') throw new Error('Fixture must be admitted');
+        const projection = installed.plugins[0]!.installations[0]!.uiModel;
+        expect(projection.registrySourcesById['com.acme.fixture/skills']).toMatchObject({ pluginId: 'com.acme.fixture',
+            pluginVersion: '1.2.3', definition: { id: 'skills', kinds: ['skill'] } });
+        expect(projection.registrySourcesById['com.acme.fixture/skills']).not.toHaveProperty('occurrenceId');
+        store.replace({ scope, snapshot: { ...base, availabilityCursor: 43, materializations: [], snapshots: [
+            { serverIdentityId: materialization.serverIdentityId, machineId: materialization.machineId, materializations: [] },
+        ] } });
+        expect(reader.readInstalledPlugins()).toMatchObject({ kind: 'available', plugins: [] });
+        expect(store.bind({ ...scope, accountId: 'another-account' }).readInstalledPlugins()).toMatchObject({ kind: 'unavailable' });
+    });
     it('retains one derived catalog per snapshot without retaining authority after clear', () => {
         const store = createPluginAccountAvailabilityReaderStore();
         const reader = store.bind(scope);

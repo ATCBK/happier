@@ -36,6 +36,7 @@ export type PluginUiDragSourceProjection = PluginProjectedDragSourceEntryV1 & Un
 export type PluginUiDropTargetProjection = PluginProjectedDropTargetEntryV1 & UnknownRecord;
 export type PluginUiInputTypeProjection = NonNullable<DaemonContributionRegistryProjection['familiesById']['inputTypes']>['entriesById'][string];
 export type PluginUiAtmospherePictureProjection = NonNullable<DaemonContributionRegistryProjection['familiesById']['atmospherePictures']>['entriesById'][string];
+export type PluginUiRegistrySourceProjection = NonNullable<DaemonContributionRegistryProjection['familiesById']['registrySources']>['entriesById'][string];
 
 /**
  * The OS-level platform every plugin UI projection is normalized for.
@@ -363,6 +364,7 @@ export type PluginUiProjectionModel = Readonly<{
     machineProvisionersById: NonNullable<DaemonContributionRegistryProjection['familiesById']['machineProvisioners']>['entriesById'];
     inputTypesById: Readonly<Record<string, PluginUiInputTypeProjection>>;
     atmospherePicturesById: Readonly<Record<string, PluginUiAtmospherePictureProjection>>;
+    registrySourcesById: Readonly<Record<string, PluginUiRegistrySourceProjection>>;
     voiceProvidersById: Readonly<Record<string, PluginVoiceProviderProjection>>;
     dragSourcesById: Readonly<Record<string, PluginUiDragSourceProjection>>;
     dropTargetsById: Readonly<Record<string, PluginUiDropTargetProjection>>;
@@ -391,6 +393,7 @@ export const EMPTY_PLUGIN_UI_PROJECTION: PluginUiProjectionModel = Object.freeze
     machineProvisionersById: Object.freeze({}),
     inputTypesById: Object.freeze({}),
     atmospherePicturesById: Object.freeze({}),
+    registrySourcesById: Object.freeze({}),
     voiceProvidersById: Object.freeze({}),
     dragSourcesById: Object.freeze({}),
     dropTargetsById: Object.freeze({}),
@@ -816,12 +819,15 @@ export function normalizePluginInstalledUiDeclarations(
     entriesById: PluginDeclaredUiEntriesV1,
     platform?: PluginUiPlatformV1,
     installedPackage?: PluginProjectionInstalledPackageV2,
+    registrySources?: readonly PluginUiRegistrySourceProjection[],
 ): PluginUiProjectionModel {
     return normalizePluginUiProjection({
         v: 2, generation: null,
         installedPackagesById: installedPackage ? { [installedPackage.id]: installedPackage } : {}, agentsById: {}, actionsById: {}, toolsById: {},
         commandsById: {}, resourcesById: {}, settingsById: {},
-        familiesById: { pluginUi: { family: 'pluginUi', entriesById } }, diagnostics: [],
+        familiesById: { pluginUi: { family: 'pluginUi', entriesById }, ...(registrySources ? { registrySources: {
+            family: 'registrySources' as const, entriesById: Object.fromEntries(registrySources.map(entry => [entry.id, entry])),
+        } } : {}) }, diagnostics: [],
     }, platform);
 }
 
@@ -856,6 +862,7 @@ export function normalizePluginUiProjection(
     const machineProvisionersById = Object.freeze({ ...(projection.familiesById.machineProvisioners?.entriesById ?? {}) });
     const inputTypesById = Object.freeze({ ...(projection.familiesById.inputTypes?.entriesById ?? {}) });
     const atmospherePicturesById = Object.freeze({ ...(projection.familiesById.atmospherePictures?.entriesById ?? {}) });
+    const registrySourcesById = Object.freeze({ ...(projection.familiesById.registrySources?.entriesById ?? {}) });
     const dragSourcesById: Record<string, PluginUiDragSourceProjection> = {};
     for (const [id, entry] of Object.entries(projection.familiesById.dragSources?.entriesById ?? {})) {
         const parsed = PluginProjectedDragSourceEntryV1Schema.safeParse(entry);
@@ -931,6 +938,7 @@ export function normalizePluginUiProjection(
             machineProvisionersById,
             inputTypesById,
             atmospherePicturesById,
+            registrySourcesById,
             voiceProvidersById: Object.freeze(voiceProvidersById),
             dragSourcesById: Object.freeze(dragSourcesById),
             dropTargetsById: Object.freeze(dropTargetsById),
@@ -1086,6 +1094,7 @@ export function normalizePluginUiProjection(
         machineProvisionersById,
         inputTypesById,
         atmospherePicturesById,
+        registrySourcesById,
         voiceProvidersById: Object.freeze(voiceProvidersById),
         dragSourcesById: Object.freeze(dragSourcesById),
         dropTargetsById: Object.freeze(dropTargetsById),

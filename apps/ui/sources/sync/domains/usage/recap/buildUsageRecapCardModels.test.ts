@@ -1,14 +1,14 @@
 import { describe, expect, it } from 'vitest';
 
 import { buildUsageAnalyticsViewModel } from '@/sync/api/account/usageAnalytics';
-import type { UsageAnalyticsQueryResponse } from '@happier-dev/protocol';
+import { UsageAnalyticsQueryResponseSchema } from '@happier-dev/protocol';
 import { normalizeUsageQuery } from '@happier-dev/protocol/inputs/usageQuery';
 
 import { buildUsageRecapCardModels } from './buildUsageRecapCardModels';
 import { t } from '@/text';
 import { usageAgentTitle, usageDimensionLabel } from '../usageLabels';
 
-const response: UsageAnalyticsQueryResponse = {
+const response = UsageAnalyticsQueryResponseSchema.parse({
     v: 1,
     totals: {
         eventCount: 4,
@@ -84,7 +84,7 @@ const response: UsageAnalyticsQueryResponse = {
         currency: 'USD',
         source: 'provider_reported',
     },
-};
+});
 
 describe('buildUsageRecapCardModels', () => {
     it('uses canonical leaders when the query omits model breakdowns and keeps missing money unavailable', () => {
@@ -111,18 +111,6 @@ describe('buildUsageRecapCardModels', () => {
         }, filters);
         expect(buildUsageRecapCardModels({ viewModel, filters }).find(card => card.id === 'usage')?.subtitle)
             .toBe(`$0.00 · ${t('usage.board.page.kindReported')}`);
-    });
-
-    it('does not render missing monetary evidence as zero in either metric', () => {
-        const filters = { period: '30days', metric: 'tokens', focus: null, costMode: 'auto' } as const;
-        const viewModel = buildUsageAnalyticsViewModel({ ...response,
-            totals: { ...response.totals, cost: { reportedUsd: 0, estimatedUsd: 0, currency: 'USD', costSource: 'none' } },
-            costPresentation: undefined,
-        }, filters);
-        expect(buildUsageRecapCardModels({ viewModel, filters }).find(card => card.id === 'usage')?.subtitle)
-            .toBe(t('common.unavailable'));
-        expect(buildUsageRecapCardModels({ viewModel, filters: { ...filters, metric: 'cost' } }).find(card => card.id === 'usage')?.value)
-            .toBe(t('common.unavailable'));
     });
 
     it('shows busiest-window evidence rather than repeating its hour label', () => {

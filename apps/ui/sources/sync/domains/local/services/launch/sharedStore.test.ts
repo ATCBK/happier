@@ -1,7 +1,16 @@
-import { afterEach, describe, expect, it, vi } from 'vitest';
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
+import { LocalServiceLauncherSnapshotV1Schema } from '@happier-dev/protocol/local/services/launcher/v1';
+import { RPC_METHODS } from '@happier-dev/protocol/rpc';
+import { flushHookEffects } from '@/dev/testkit';
+
+const rpc = vi.hoisted(() => ({ machine: vi.fn() }));
+// Daemon transport is the boundary; subscription, request and response owners remain real.
+vi.mock('@/sync/runtime/orchestration/serverScopedRpc/serverScopedMachineRpc', async () => {
+    const { createServerScopedMachineRpcBoundaryMock } = await import('@/dev/testkit/mocks/serverScopedRpc');
+    return createServerScopedMachineRpcBoundaryMock(rpc.machine);
+});
 
 import { expectNoWallClockPolling } from '../noPollingTestHelpers';
-import type { LocalServiceLauncherSnapshotClientResult } from './api';
 import {
     getLocalServiceLauncherState,
     publishLocalServiceLauncherSnapshot,
@@ -9,9 +18,8 @@ import {
     subscribeLocalServiceLauncherStore,
 } from './sharedStore';
 import { selectLocalServiceLaunchTargets } from './store';
-import type { LocalServiceLauncherSnapshot } from './types';
 
-const snapshot = {
+const snapshot = LocalServiceLauncherSnapshotV1Schema.parse({
     v: 1,
     machineId: 'machine-a',
     sessionId: 'session-a',
@@ -27,23 +35,23 @@ const snapshot = {
         state: 'available',
         actions: ['start'],
     }],
-} satisfies LocalServiceLauncherSnapshot;
+});
 
 async function flushMicrotasks(): Promise<void> {
-    await Promise.resolve();
-    await Promise.resolve();
+    await flushHookEffects();
 }
 
 describe('shared local-service launcher store', () => {
+    beforeEach(() => rpc.machine.mockReset());
     afterEach(() => {
         resetLocalServiceLauncherStoreForTests();
     });
 
     it('fetches once for a key regardless of how many consumers subscribe', async () => {
-        const snapshotClient = vi.fn(async (): Promise<LocalServiceLauncherSnapshotClientResult> => ({
-            ok: true,
+        const snapshotClient = rpc.machine.mockResolvedValue({
+            protocolVersion: 1,
             snapshot,
-        }));
+        });
         const key = {
             machineId: 'machine-a',
             serverId: 'server-a',
@@ -52,11 +60,15 @@ describe('shared local-service launcher store', () => {
             workspaceRoot: '/repo',
         };
 
-        const unsubA = subscribeLocalServiceLauncherStore(key, () => {}, { snapshotClient });
-        const unsubB = subscribeLocalServiceLauncherStore(key, () => {}, { snapshotClient });
+        const unsubA = subscribeLocalServiceLauncherStore(key, () => {});
+        const unsubB = subscribeLocalServiceLauncherStore(key, () => {});
         await flushMicrotasks();
 
         expect(snapshotClient).toHaveBeenCalledTimes(1);
+        expect(snapshotClient).toHaveBeenCalledWith(expect.objectContaining({
+            method: RPC_METHODS.DAEMON_LOCAL_SERVICES_LAUNCHER_SNAPSHOT,
+            serverId: 'server-a', payload: { machineId: 'machine-a', sessionId: 'session-a', scope: 'workspace', workspaceRoot: '/repo' },
+        }));
         expect(selectLocalServiceLaunchTargets(getLocalServiceLauncherState(key))).toEqual(snapshot.targets);
 
         unsubA();
@@ -64,14 +76,14 @@ describe('shared local-service launcher store', () => {
     });
 
     it('publishes action snapshots into the same backing model without polling', async () => {
-        const snapshotClient = vi.fn(async (): Promise<LocalServiceLauncherSnapshotClientResult> => ({
-            ok: true,
+        const snapshotClient = rpc.machine.mockResolvedValue({
+            protocolVersion: 1,
             snapshot: { ...snapshot, targets: [] },
-        }));
+        });
         const key = { machineId: 'machine-a', serverId: 'server-a', sessionId: 'session-a' };
         const listener = vi.fn();
 
-        const unsub = subscribeLocalServiceLauncherStore(key, listener, { snapshotClient });
+        const unsub = subscribeLocalServiceLauncherStore(key, listener);
         await flushMicrotasks();
         listener.mockClear();
 
@@ -85,10 +97,10 @@ describe('shared local-service launcher store', () => {
     });
 
     it('does not re-fetch launch targets on a wall clock while subscribed', async () => {
-        const snapshotClient = vi.fn(async (): Promise<LocalServiceLauncherSnapshotClientResult> => ({
-            ok: true,
+        const snapshotClient = rpc.machine.mockResolvedValue({
+            protocolVersion: 1,
             snapshot,
-        }));
+        });
         const key = {
             machineId: 'machine-a',
             serverId: 'server-a',
@@ -98,7 +110,7 @@ describe('shared local-service launcher store', () => {
         };
 
         await expectNoWallClockPolling({
-            subscribe: () => subscribeLocalServiceLauncherStore(key, () => {}, { snapshotClient }),
+            subscribe: () => subscribeLocalServiceLauncherStore(key, () => {}),
             fetchSpy: snapshotClient,
         });
     });

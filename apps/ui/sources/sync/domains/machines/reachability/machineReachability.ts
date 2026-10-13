@@ -13,17 +13,19 @@ export type MachineRequestReachabilityObservation = Readonly<{
 type MachineRequestObservationInput = MachineReachabilityScope & Readonly<{
     machineId: string;
     observedAtMs?: number;
+    /** A transport failure does not make a Machine unreachable through another route. */
+    route?: 'loopback_direct';
 }>;
 
 const observations = new Map<string, MachineRequestReachabilityObservation>();
 const listeners = new Set<() => void>();
 let revision = 0;
 
-function observationKey(scope: MachineReachabilityScope | null | undefined, machineId: string | null | undefined): string | null {
+function observationKey(scope: MachineReachabilityScope | null | undefined, machineId: string | null | undefined, route?: MachineRequestObservationInput['route']): string | null {
     const normalizedScope = createServerAccountScope(scope?.serverId, scope?.accountId);
     const normalizedMachineId = String(machineId ?? '').trim();
     return normalizedScope && normalizedMachineId
-        ? serverAccountScopedResourceKey(normalizedScope, normalizedMachineId)
+        ? serverAccountScopedResourceKey(normalizedScope, normalizedMachineId, ...(route ? [route] : []))
         : null;
 }
 
@@ -31,7 +33,7 @@ function recordMachineRequestObservation(
     input: MachineRequestObservationInput,
     outcome: MachineRequestReachabilityObservation['outcome'],
 ): void {
-    const key = observationKey(input, input.machineId);
+    const key = observationKey(input, input.machineId, input.route);
     if (!key) return;
     const observedAtMs = input.observedAtMs ?? Date.now();
     const previous = observations.get(key);
@@ -55,8 +57,9 @@ export function recordMachineRequestSucceeded(input: MachineRequestObservationIn
 export function readMachineRequestReachabilityObservation(
     scope: MachineReachabilityScope | null | undefined,
     machineId: string | null | undefined,
+    route?: MachineRequestObservationInput['route'],
 ): MachineRequestReachabilityObservation | null {
-    const key = observationKey(scope, machineId);
+    const key = observationKey(scope, machineId, route);
     return key ? observations.get(key) ?? null : null;
 }
 
@@ -107,7 +110,11 @@ export function isMachineRequestReachabilityFailure(error: unknown, evidence?: R
 
 export function clearMachineRequestReachabilityForMachine(scope: MachineReachabilityScope, machineId: string): void {
     const key = observationKey(scope, machineId);
-    if (!key || !observations.delete(key)) return;
+    if (!key) return;
+    const changed = observations.delete(key);
+    const directKey = observationKey(scope, machineId, 'loopback_direct');
+    const directChanged = directKey ? observations.delete(directKey) : false;
+    if (!changed && !directChanged) return;
     revision += 1;
     for (const listener of listeners) listener();
 }

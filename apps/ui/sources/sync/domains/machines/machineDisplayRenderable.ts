@@ -5,6 +5,7 @@ export interface MachineDisplayMetadata {
     host?: string | null;
     homeDir?: string | null;
     platform?: string | null;
+    agentInventory?: MachineMetadata['agentInventory'];
 }
 
 export interface MachineDisplayRenderable {
@@ -35,6 +36,7 @@ export function buildMachineDisplayMetadata(metadata: MachineMetadata | null | u
         host: typeof metadata.host === 'string' ? metadata.host : null,
         homeDir: typeof metadata.homeDir === 'string' ? metadata.homeDir : null,
         platform: typeof metadata.platform === 'string' ? metadata.platform : null,
+        ...(metadata.agentInventory ? { agentInventory: metadata.agentInventory } : {}),
     };
 }
 
@@ -105,7 +107,8 @@ function areMachineDisplayValuesEqual(
         && (previous.metadata?.displayName ?? null) === (next.metadata?.displayName ?? null)
         && (previous.metadata?.host ?? null) === (next.metadata?.host ?? null)
         && (previous.metadata?.homeDir ?? null) === (next.metadata?.homeDir ?? null)
-        && (previous.metadata?.platform ?? null) === (next.metadata?.platform ?? null);
+        && (previous.metadata?.platform ?? null) === (next.metadata?.platform ?? null)
+        && JSON.stringify(previous.metadata?.agentInventory ?? null) === JSON.stringify(next.metadata?.agentInventory ?? null);
 }
 
 export function getMachineDisplaySubtitle(machine: MachineDisplayRenderable | undefined, machineId: string): string {

@@ -44,8 +44,13 @@ import {
     saveSessionListWarmCacheEntries,
     saveUsageSummaryWarmCache,
     setWarmCacheAccountScope,
+    loadFoundWarmCacheEntry,
+    saveFoundWarmCacheEntry,
 } from './warmCachePersistence';
+import { SkillFoundListResultV1Schema } from '@happier-dev/protocol/prompts/library/skills/skillActionSchemasV1';
+import { DaemonMcpServersDetectResponseSchema } from '@happier-dev/protocol/mcp/servers/daemonRpcV1';
 import { prepareWarmCacheEncryptionKey } from './warmCacheEncryptionKey';
+import * as warmCache from './warmCachePersistence';
 
 describe('warmCachePersistence', () => {
     beforeEach(async () => {
@@ -56,6 +61,29 @@ describe('warmCachePersistence', () => {
         set.mockClear();
         deleteKey.mockClear();
         clearWarmCacheAccountScope();
+    });
+
+    it('retains Found results by kind, machine, Home and Account without lending online authority', () => {
+        const result = { kind: 'mcp_server' as const, machineId: 'machine-a', observedAt: 10,
+            result: DaemonMcpServersDetectResponseSchema.parse({ ok: true, servers: [{ provider: 'claude', name: 'one',
+            transport: 'stdio', stdio: { command: 'tool', args: [] }, envKeys: ['API_KEY'], enabled: true,
+            source: { kind: 'user', path: '/config.json' } }] }) };
+        warmCache.saveFoundWarmCacheEntry('server-a', 'account-a', result);
+        expect(warmCache.loadFoundWarmCacheEntry('server-a', 'account-a', 'mcp_server', 'machine-a')).toEqual(result);
+        expect(warmCache.loadFoundWarmCacheEntry('server-b', 'account-a', 'mcp_server', 'machine-a')).toBeNull();
+        expect(warmCache.loadFoundWarmCacheEntry('server-a', 'account-b', 'mcp_server', 'machine-a')).toBeNull();
+        expect(warmCache.loadFoundWarmCacheEntry('server-a', 'account-a', 'mcp_server', 'machine-b')).toBeNull();
+        expect(warmCache.loadFoundWarmCacheEntry('server-a', 'account-a', 'skill', 'machine-a')).toBeNull();
+    });
+
+    it('keeps dated Found results isolated by Home, Account, kind and Machine without file bytes', () => {
+        const entry = { kind: 'skill' as const, machineId: 'machine', observedAt: 123,
+            result: SkillFoundListResultV1Schema.parse({ scannedAt: 123, roots: [], items: [] }) };
+        saveFoundWarmCacheEntry('home', 'account', entry);
+        expect(loadFoundWarmCacheEntry('home', 'account', 'skill', 'machine')).toEqual(entry);
+        expect(loadFoundWarmCacheEntry('other', 'account', 'skill', 'machine')).toBeNull();
+        expect(loadFoundWarmCacheEntry('home', 'other', 'skill', 'machine')).toBeNull();
+        expect(loadFoundWarmCacheEntry('home', 'account', 'skill', 'other')).toBeNull();
     });
 
     it('retains each account reading time in the scoped usage cache', () => {

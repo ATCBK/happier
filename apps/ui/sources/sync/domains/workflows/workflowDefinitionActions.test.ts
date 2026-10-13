@@ -1,173 +1,109 @@
-import { beforeEach, describe, expect, it, vi } from 'vitest';
+import { afterEach, beforeAll, beforeEach, describe, expect, it } from 'vitest';
+import { createHomeGovernanceHarness, installHomeGovernanceBoundaries } from '@/dev/testkit/harness/homeGovernanceHarness';
+import { createWorkflowDefinitionFixture } from '@/dev/testkit/fixtures/workflowRunFixtures';
+import { installDisconnectedServerSocketBoundary } from '@/dev/testkit/harness/serverAccountConnectionHarness';
+import { loadSyncSingletonForTests } from '@/dev/testkit/harness/syncSingletonLoader';
 
-const executeMock = vi.hoisted(() => vi.fn());
+// Only HTTP and device credentials are replaced. The front door, Artifact
+// codec, definition owner and compare-and-set execute their production logic.
+const home = createHomeGovernanceHarness();
+installHomeGovernanceBoundaries(home);
+installDisconnectedServerSocketBoundary();
+beforeAll(loadSyncSingletonForTests);
+const { createWorkflowDefinition, getWorkflowDefinition, listWorkflowDefinitions,
+    updateWorkflowDefinition, deleteWorkflowDefinition, isWorkflowDefinitionConflictError } = await import('./workflowDefinitionActions');
+const { storage } = await import('@/sync/domains/state/storageStore');
+const { getActiveServerSnapshot } = await import('@/sync/domains/server/serverRuntime');
+const { getAppliedActiveServerSnapshot, isAppliedActiveServerRuntimeAvailable, publishAppliedActiveServerSnapshot } = await import('@/sync/runtime/orchestration/appliedActiveServerRuntime');
+const definitionId = '00000000-0000-4000-8000-000000000001';
+const definition = createWorkflowDefinitionFixture({ defaults: {
+    agentTarget: { kind: 'agent', identity: { pluginId: 'happier.agent.claude', localId: 'claude' } },
+} });
+const metadata = { title: 'Nightly triage' };
+let serverId: string;
+let previous = storage.getState();
+let applied = getAppliedActiveServerSnapshot();
+let available = isAppliedActiveServerRuntimeAvailable();
 
-vi.mock('@/sync/ops/actions/frontDoorRuntimeActionExecutor', () => ({
-    createFrontDoorActionExecute: () => executeMock,
-}));
+beforeEach(async () => {
+    previous = storage.getState();
+    applied = getAppliedActiveServerSnapshot();
+    available = isAppliedActiveServerRuntimeAvailable();
+    await home.reset();
+    serverId = await home.addHome({ name: 'Workflow Home', serverUrl: 'https://workflow-definitions.test', accountId: 'definition-owner' });
+    publishAppliedActiveServerSnapshot(getActiveServerSnapshot());
+    storage.setState({ profileScope: { serverId, accountId: 'definition-owner' } });
+    home.answer(serverId, '/v3/automations', { body: { automations: [], nextCursor: null } });
+});
+afterEach(async () => { await home.reset(); storage.setState(previous); publishAppliedActiveServerSnapshot(applied, available); });
 
-/** One normalized definition the canonical result schema accepts. */
-const definition = {
-    version: 1,
-    inputs: [],
-    defaults: {},
-    blocks: [{
-        kind: 'step',
-        id: 'wf-step-1',
-        document: { text: 'Do the thing', references: [], attachments: [] },
-        input: [],
-        result: { kind: 'text' },
-    }],
-} as const;
-
-const metadata = { title: 'Nightly triage' } as const;
-const revision = { headerVersion: 3, bodyVersion: 7 } as const;
-
-function succeedWith(result: unknown): void {
-    executeMock.mockResolvedValueOnce({ ok: true, result });
-}
-
-describe('workflow definition Action client', () => {
-    beforeEach(() => {
-        executeMock.mockReset();
+describe('workflow definition Action client through Account Artifact storage', () => {
+    it('reads the library page with a continuation bound to the requested page size', async () => {
+        await createWorkflowDefinition({ definitionId, definition, metadata });
+        await createWorkflowDefinition({ definitionId: '00000000-0000-4000-8000-000000000002', definition, metadata: { title: 'Second' } });
+        const page = await listWorkflowDefinitions({ limit: 1 });
+        expect(page.definitions).toHaveLength(1);
+        expect(page.nextCursor).toBeDefined();
+        const next = await listWorkflowDefinitions({ limit: 1, cursor: page.nextCursor });
+        expect(next.definitions).toHaveLength(1);
+        expect(next.definitions[0]?.definitionId).not.toBe(page.definitions[0]?.definitionId);
     });
 
-    it('reads the library through the canonical list Action and parses its result', async () => {
-        const { listWorkflowDefinitions } = await import('./workflowDefinitionActions');
-        succeedWith({
-            definitions: [{
-                kind: 'workflow-definition.v1',
-                definitionId: 'definition-1',
-                stepCount: 1,
-                contentStatus: 'available',
-                nextRunAt: null,
-                triggers: [],
-                revision,
-                metadata,
-            }],
-            nextCursor: 'cursor-2',
-        });
-
-        const page = await listWorkflowDefinitions({ cursor: 'cursor-1', limit: 20 });
-
-        expect(executeMock).toHaveBeenCalledTimes(1);
-        const [actionId, input] = executeMock.mock.calls[0]!;
-        expect(actionId).toBe('workflow.definition.list');
-        expect(input).toEqual({ cursor: 'cursor-1', limit: 20 });
-        expect(page.definitions[0]?.definitionId).toBe('definition-1');
-        expect(page.nextCursor).toBe('cursor-2');
+    it('reads one saved definition at its exact Artifact revision and access', async () => {
+        const created = await createWorkflowDefinition({ definitionId, definition, metadata });
+        const read = await getWorkflowDefinition({ definitionId });
+        expect(read).toMatchObject({ definitionId, definition, metadata, access: 'owner', revision: created.revision });
     });
 
-    it('reads one saved definition at its exact Artifact revision', async () => {
-        const { getWorkflowDefinition } = await import('./workflowDefinitionActions');
-        succeedWith({ definitionId: 'definition-1', revision, definition, metadata, access: 'view' });
-
-        const read = await getWorkflowDefinition({ definitionId: 'definition-1' });
-
-        expect(executeMock.mock.calls[0]?.[0]).toBe('workflow.definition.get');
-        expect(executeMock.mock.calls[0]?.[1]).toEqual({ definitionId: 'definition-1' });
-        expect(read.revision).toEqual(revision);
-        expect(read.access).toBe('view');
+    it('creates canonical stored content that the saved definition reader can open', async () => {
+        const created = await createWorkflowDefinition({ definitionId, definition: { ...definition, blocks: ['Do the thing'] }, metadata });
+        expect(created.definitionId).toBe(definitionId);
+        expect(home.artifacts(serverId).read(definitionId)).not.toBeNull();
+        expect((await getWorkflowDefinition({ definitionId })).definition).toEqual(created.definition);
     });
 
-    it('creates a definition through the canonical create Action', async () => {
-        const { createWorkflowDefinition } = await import('./workflowDefinitionActions');
-        succeedWith({ definitionId: 'definition-1', revision, definition, metadata, access: 'owner' });
-
-        const created = await createWorkflowDefinition({
-            definitionId: 'definition-1',
-            definition: { blocks: ['Do the thing'] },
-            metadata,
-        });
-
-        expect(executeMock.mock.calls[0]?.[0]).toBe('workflow.definition.create');
-        expect(created.definitionId).toBe('definition-1');
+    it('updates at the expected Artifact revision and reads the saved revision', async () => {
+        const created = await createWorkflowDefinition({ definitionId, definition, metadata });
+        const updated = await updateWorkflowDefinition({ definitionId, expectedRevision: created.revision,
+            definition: { ...definition, blocks: ['Changed prompt'] }, metadata });
+        expect(updated.revision.headerVersion).toBeGreaterThan(created.revision.headerVersion);
+        expect(updated.revision.bodyVersion).toBeGreaterThan(created.revision.bodyVersion);
+        expect((await getWorkflowDefinition({ definitionId })).definition).toEqual(updated.definition);
     });
 
-    it('carries the expected Artifact revision on every update so a concurrent save cannot be overwritten', async () => {
-        const { updateWorkflowDefinition } = await import('./workflowDefinitionActions');
-        succeedWith({
-            definitionId: 'definition-1',
-            revision: { headerVersion: 4, bodyVersion: 8 },
-            access: 'edit',
-            definition,
-            metadata,
-        });
-
-        await updateWorkflowDefinition({
-            definitionId: 'definition-1',
-            expectedRevision: revision,
-            definition: { blocks: ['Do the thing'] },
-            metadata,
-        });
-
-        const [actionId, input] = executeMock.mock.calls[0]!;
-        expect(actionId).toBe('workflow.definition.update');
-        expect((input as { expectedRevision: unknown }).expectedRevision).toEqual(revision);
-    });
-
-    it('surfaces a stale update as the canonical currentness conflict, not a generic failure', async () => {
-        const { isWorkflowDefinitionConflictError, updateWorkflowDefinition } =
-            await import('./workflowDefinitionActions');
-        executeMock.mockResolvedValueOnce({
-            ok: false,
-            errorCode: 'currentness_conflict',
-            error: 'A newer revision was saved',
-        });
-
-        const failure = await updateWorkflowDefinition({
-            definitionId: 'definition-1',
-            expectedRevision: revision,
-            definition: { blocks: ['Do the thing'] },
-            metadata,
-        }).catch((error: unknown) => error);
-
+    it('surfaces a stale update as currentness conflict without overwriting newer content', async () => {
+        const created = await createWorkflowDefinition({ definitionId, definition, metadata });
+        const newer = await updateWorkflowDefinition({ definitionId, expectedRevision: created.revision,
+            definition: { ...definition, blocks: ['Other editor'] }, metadata });
+        const failure = await updateWorkflowDefinition({ definitionId, expectedRevision: created.revision,
+            definition: { ...definition, blocks: ['Stale editor'] }, metadata }).catch((error: unknown) => error);
         expect(isWorkflowDefinitionConflictError(failure)).toBe(true);
+        expect((await getWorkflowDefinition({ definitionId })).definition).toEqual(newer.definition);
     });
 
-    it('does not report an unrelated failure as a currentness conflict', async () => {
-        const { isWorkflowDefinitionConflictError, deleteWorkflowDefinition } =
-            await import('./workflowDefinitionActions');
-        executeMock.mockResolvedValueOnce({
-            ok: false,
-            errorCode: 'run_access_denied',
-            error: 'Not allowed',
-        });
-
-        const failure = await deleteWorkflowDefinition({ definitionId: 'definition-1' })
-            .catch((error: unknown) => error);
-
+    it('does not report unrelated read failures or error prose as currentness conflict', async () => {
+        home.answer(serverId, `/v1/artifacts/${definitionId}`, { status: 403, body: { error: 'run_access_denied' } });
+        const failure = await getWorkflowDefinition({ definitionId }).catch((error: unknown) => error);
         expect(isWorkflowDefinitionConflictError(failure)).toBe(false);
         expect(isWorkflowDefinitionConflictError(new Error('currentness_conflict'))).toBe(false);
     });
 
-    it('rejects a malformed Action response instead of handing it to a screen', async () => {
-        const { getWorkflowDefinition } = await import('./workflowDefinitionActions');
-        // A partially migrated owner that answers with a header but no body.
-        succeedWith({ definitionId: 'definition-1', revision, metadata });
-
-        await expect(getWorkflowDefinition({ definitionId: 'definition-1' })).rejects.toThrow();
+    it('refuses malformed saved content instead of handing a header without a body to a screen', async () => {
+        await createWorkflowDefinition({ definitionId, definition, metadata });
+        const row = home.artifacts(serverId).read(definitionId);
+        home.answer(serverId, `/v1/artifacts/${definitionId}`, { body: { ...row, body: undefined } });
+        await expect(getWorkflowDefinition({ definitionId })).rejects.toThrow();
     });
 
-    it('rejects a malformed request before any dispatch reaches the front door', async () => {
-        const { createWorkflowDefinition } = await import('./workflowDefinitionActions');
-
-        await expect(createWorkflowDefinition({
-            definitionId: 'definition-1',
-            // An empty block list is not a workflow; the request schema owns that rule.
-            definition: { blocks: [] },
-            metadata,
-        })).rejects.toThrow();
-        expect(executeMock).not.toHaveBeenCalled();
+    it('rejects a malformed create before any persistence dispatch', async () => {
+        await expect(createWorkflowDefinition({ definitionId, definition: { blocks: [] }, metadata })).rejects.toThrow();
+        expect(home.requestsFor('/v1/artifacts')).toEqual([]);
     });
 
-    it('confirms a delete through the canonical delete Action', async () => {
-        const { deleteWorkflowDefinition } = await import('./workflowDefinitionActions');
-        succeedWith({ deleted: true, definitionId: 'definition-1' });
-
-        const deleted = await deleteWorkflowDefinition({ definitionId: 'definition-1' });
-
-        expect(executeMock.mock.calls[0]?.[0]).toBe('workflow.definition.delete');
-        expect(deleted).toEqual({ deleted: true, definitionId: 'definition-1' });
+    it('deletes the saved Artifact and confirms the definition is no longer readable', async () => {
+        await createWorkflowDefinition({ definitionId, definition, metadata });
+        expect(await deleteWorkflowDefinition({ definitionId })).toEqual({ deleted: true, definitionId });
+        expect(home.artifacts(serverId).read(definitionId)).toBeNull();
+        await expect(getWorkflowDefinition({ definitionId })).rejects.toThrow();
     });
 });

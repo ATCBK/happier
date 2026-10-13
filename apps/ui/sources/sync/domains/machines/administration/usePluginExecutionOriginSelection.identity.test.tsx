@@ -47,7 +47,7 @@ describe('execution-origin plugin identity with real Account and machine owners'
     afterEach(async () => {
         await standardCleanup();
         clearPluginAccountAvailabilityProjection();
-        network.dispose();
+        await network.dispose();
         publishAppliedActiveServerRuntimeAvailability(false);
         vi.restoreAllMocks();
     });

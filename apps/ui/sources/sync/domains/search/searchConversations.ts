@@ -191,6 +191,7 @@ export async function searchConversations(input: Readonly<{
             let machineStatus: ConversationSearchMachineStatus['status'] = 'disabled-by-settings';
             let documents: ConversationSearchMachineStatus['documents'];
             let indexed = false;
+            let indexReadFailed = false;
             let nativeIndexedUsable = false;
             let indexSources: readonly MemoryIndexSourceStatusV1[] | undefined;
             if (mode !== 'standard' && !continuation?.sourceKey && input.daemonEnabled !== false && settings.enabled) {
@@ -210,18 +211,26 @@ export async function searchConversations(input: Readonly<{
                 // Pre-X5 daemons can answer Session search without the readiness RPC.
                 // Keep only that released direction; native/doc readiness is never guessed.
                 if (query.query.trim() && status === null && !input.homeSessions && (!query.corpora || query.corpora.includes('sessions'))) {
-                    const result = await searchDaemonMemory({ ...query, corpora: undefined, ...target, cursor: continuation?.cursor ?? cursor });
+                    const result = await searchDaemonMemory({ ...query, corpora: undefined, ...target, cursor: continuation?.cursor ?? cursor }).catch(() => {
+                        input.signal?.throwIfAborted();
+                        indexReadFailed = true;
+                        return null;
+                    });
                     input.signal?.throwIfAborted();
                     documents = 'unavailable';
-                    if (result.ok) hits.push(...indexedRows(machine.id, result.hits.filter(isMemorySessionSearchHitV1)));
+                    if (result?.ok) hits.push(...indexedRows(machine.id, result.hits.filter(isMemorySessionSearchHitV1)));
                 }
                 if (indexed && query.query.trim()) {
                     const corpora = (query.corpora ?? ['sessions', 'external_transcripts']).filter(corpus =>
                         (corpus !== 'sessions' || !input.homeSessions) && (corpus !== 'external_transcripts' || settings.conversationSearch.indexExternal.enabled));
                     if (corpora.length > 0) {
-                        const result = await searchDaemonMemory({ ...query, ...target, corpora, cursor: continuation?.cursor ?? cursor });
+                        const result = await searchDaemonMemory({ ...query, ...target, corpora, cursor: continuation?.cursor ?? cursor }).catch(() => {
+                            input.signal?.throwIfAborted();
+                            indexReadFailed = true;
+                            return null;
+                        });
                         input.signal?.throwIfAborted();
-                        if (result.ok) {
+                        if (result?.ok) {
                             nativeIndexedUsable = nativeReady && corpora.includes('external_transcripts');
                             if (nativeIndexedUsable && (!indexSources || (externalSource
                                 ? !indexSources.some(source => source.source.type === 'external_transcript'
@@ -232,8 +241,8 @@ export async function searchConversations(input: Readonly<{
                             documents = result.documents?.state ?? 'unavailable';
                             if (result.nextCursor) continuations.push({ machineId: machine.id, cursor: result.nextCursor });
                             if (result.hasMore || queuePending > 0) machineStatus = 'partial';
-                        } else machineStatus = result.errorCode === 'memory_disabled' ? 'disabled-by-settings'
-                            : result.errorCode === 'memory_index_missing' ? 'outdated' : 'partial';
+                        } else machineStatus = result?.errorCode === 'memory_disabled' ? 'disabled-by-settings'
+                            : result?.errorCode === 'memory_index_missing' ? 'outdated' : 'partial';
                     }
                 }
             }
@@ -289,7 +298,7 @@ export async function searchConversations(input: Readonly<{
                     await publish();
                 }
             }
-            return { machineId: machine.id, status: machineStatus, standardSearchEnabled, ...(documents ? { documents } : {}) };
+            return { machineId: machine.id, status: indexReadFailed ? 'partial' : machineStatus, standardSearchEnabled, ...(documents ? { documents } : {}) };
         } catch (error) {
             input.signal?.throwIfAborted();
             return { machineId: machine.id,
