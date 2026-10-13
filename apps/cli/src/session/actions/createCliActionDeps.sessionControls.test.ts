@@ -1,6 +1,7 @@
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 
 import type { Credentials } from '@/persistence';
+import { configuration } from '@/configuration';
 import {
   ReviewStartInputSchema,
   SessionUsageLimitRecoveryOperationResultV1Schema,
@@ -301,7 +302,11 @@ describe('createCliActionDeps session controls', () => {
     expect(JSON.stringify(configOptions)).not.toMatch(/token|secret|password/i);
   });
 
-  it('lists spawn target paths, machines, and servers from canonical session and daemon owners', async () => {
+  it('lists spawn target paths, account machines, and configured servers through their canonical owners', async () => {
+    mocks.axiosGet.mockResolvedValueOnce({ status: 200, data: [
+      { id: 'machine-cloud', active: true },
+      { id: 'machine-remote', active: false },
+    ] });
     mocks.listSessions.mockResolvedValueOnce({
       sessions: [
         { id: 'sess-a', path: '/repo/a', host: 'host-a', activeAt: 30 },
@@ -387,11 +392,21 @@ describe('createCliActionDeps session controls', () => {
         value: 'machine-cloud',
         label: 'machine-cloud',
         machineId: 'machine-cloud',
-        serverId: 'cloud',
-        serverName: 'Cloud',
+        serverId: configuration.activeServerId,
+        serverName: configuration.serverUrl,
         authenticated: true,
         machineRegistered: true,
         daemonRunning: true,
+      },
+      {
+        value: 'machine-remote',
+        label: 'machine-remote',
+        machineId: 'machine-remote',
+        serverId: configuration.activeServerId,
+        serverName: configuration.serverUrl,
+        authenticated: true,
+        machineRegistered: true,
+        daemonRunning: false,
       },
     ]);
     expect(servers.items).toEqual([
