@@ -50,6 +50,21 @@ encrypted operands: the receiving daemon still resolves the exact placement
 from schema-admitted input. Native-purpose metadata selects the existing strict
 transport checks; it does not grant authority or relax their target binding.
 
+For original Account and terminal Session Actions, an outer Machine target selects the daemon
+that opens the encrypted input. The existing input reconciliation then resolves the Session target,
+and the daemon signs that resolved target for Home verification. Issuance, principal currentness and
+resolved-effect verification share the Session-target admission owner: explicit or resolved Sessions
+still require the current Account/Session/Machine access relationship. A Machine placement alone
+does not grant access to a Session. Offline Machines and mismatched daemon installations remain
+unavailable at the dispatcher.
+
+In 0.3 development, skill writes declare an explicit approval input projection
+separate from their identity-only observation projection. The deciding user can
+review the name, reach rules and file changes: text files show their decoded
+contents, while binary files show their path, kind, size and mode. Replay keeps
+the original schema-admitted operands. Agent, CLI and MCP creates and installs
+still ask by default through the existing Action approval policy.
+
 In 0.3 development, Project setup effect review uses the `projects.prepare`
 approval default and its original surface's waiver. Waiving review permits only
 that invocation; it writes no remembered Project trust and grants no agent
@@ -62,6 +77,17 @@ stale effect digest remains a refusal, not an approval that policy can waive.
 Admitted Local Services Actions supply the raw transport's
 acknowledgement or confirmation nonce after approval routing, including when
 the user waived approval; those fields are not another approval policy.
+
+The setup control opens the captured Home's approval when Ask first applies.
+Approving “This time” runs the reviewed setup without writing Project trust.
+Successful setup wakes held Script/Exec operations on the same target through
+their existing review producer; exact current target completion skips repeating
+setup effects. Changed inputs still require a fresh review.
+Ordinary `actionOperation.get.v2` reconciliation returns its retained snapshot
+while a setup review refresh runs. Human review readers explicitly request
+`refreshSetupReview: true` and await the current producer before deciding.
+Stop approval opens through the same captured Home; awaiting that decision is
+distinct from a dispatched Stop, and terminal snapshots clear the stopping state.
 
 In 0.3 development, a spec may declare `safetyForInput` for a validated,
 field-sensitive approval default. The approval-policy owner consumes it after
@@ -76,6 +102,22 @@ and Provider selections stay distinct; unreadable retained entries survive.
 `session.model.unarm` is safe and asks the running Session's model-transition
 owner to restore its applied selection. It writes through the same intent queue
 as model selection and does not send a message or restart the Agent.
+
+In 0.3 development source, `sessions.spawn.capabilities.preview` reads both
+skills and MCP servers through the selected Machine's existing preview producer.
+Preview admits Profile skill seeds through the same Profile reader as fresh
+Session creation; explicit Session exclusions still win.
+`session.capabilities.get` reaches that same Machine producer after resolving
+the owned Session, so an online Machine can answer for a stopped Session.
+`session.capabilities.set` writes the Session's desired item override and applied
+baseline through the metadata codec and exact metadata revision. The write can
+land while its Machine is offline. Its spec declares a reversible direct
+present-user UI effect; Agent, CLI and MCP callers ask by default through the
+existing deferred approval owner. Optional `reason` is a review operand and
+does not change the effect. Undo sends the returned previous override through
+the same Action. Agent-created skills use that same Session include writer;
+widening their reach is a separate rules Action. The former MCP-only Session
+write Action and UI metadata publisher are retired in place.
 
 For attached Runs, `execution_run_child_choice_required` carries a strict
 `details.childChoice` projection and `noRunCreated` evidence. Callers may start
@@ -326,7 +368,13 @@ an empty string or null clears it. This write is available on every Home and
 does not depend on Friends. `account.username.set { username }` reaches the
 existing username route and retains that Home's Friends and username policy.
 Neither input accepts another Account's id. Both are write Actions with required
-result-bearing approval metadata; the shared approval owner decides admission.
+result-bearing, deferred approval metadata; the shared approval owner decides admission.
+When approval is required, an Agent call returns the durable approval reference
+immediately. Human approval replays the reviewed Account effect once in the approving app.
+For a public `approval.request.create` proposal, the signed carrier retains that
+authoring Action id. Currentness verifies the installed producer's signature over
+the reviewed target Action and input; the approving app uses its own present-user
+Home adapter for the effect.
 The mounted UI follows pending approval through the existing approval notice and
 applies a save acknowledgement only after the admitted write actually completes.
 Account/Home retirement prevents that acknowledgement from updating another
@@ -421,6 +469,11 @@ reporting relation itself grants no access or authority. The
 [`relation schema`](../packages/protocol/src/sessions/relations/sessionReportsToV1.ts)
 requires the expected current lead, and the relation owner checks input, audience
 and cycles. Reparenting is not a new creation origin or a lower causal work depth.
+In development source, `session.reports_to.set` succeeds once that edge commits,
+including approval replay. Pending source-key preparation is reported separately
+as `sourceKeyPreparation: { kind: 'waiting', reason }`; it never makes the
+committed relation a failed approval. A preparation retry uses the current lead
+as `expectedLeadSessionId`, preserving the attachment and delivery frontier.
 
 In development source, a committed `session.spawn_new` returns its successful
 creation result even when reporting-edge key preparation is waiting.
@@ -494,6 +547,28 @@ the separate folder catalog and Artifact owners: a committed folder can remain
 if the subsequent content write fails. Approval settlement adopts the original
 receipt without replacing a newer local update draft. Existing host import
 operations retain their independently derived provenance.
+
+Found skill reads and adoption use the `skills` Action family on both UI and CLI
+hosts. `skills.found.list` returns the selected machine's scanner projection;
+`skills.found.read` reads a reported directory over the existing download
+transfer without creating library content. `skills.found.adopt` copies those
+bytes into the captured library Account through the canonical skill-create and
+reach owners, deriving machine provenance from the scanner rather than caller
+input. A selected Machine Home may differ from the library Home; each retains
+its own authority. Plugin-owned skills become ordinary library copies.
+
+The friendly CLI commands are `skills found --machine <id>`,
+`skills found show <name-or-path> --machine <id>` and
+`skills adopt <names...> --machine <id> [--off]`. Ambiguous names require an exact
+scanner path. Reads are safe Actions; adoption follows required approval for
+external callers, while a present user's reversible UI tap acts directly.
+Content, reach and Session inclusion acknowledgements remain ordered, not
+transactional: partial outcomes retain acknowledged skill ids and identify
+unfinished steps. `skills.machine.install` and `skills.machine.uninstall` remain
+separate machine Actions; adopting a skill does not install it into native
+Agent folders. The generated host Action reference owns the exact schemas and
+surface declarations. Loaded-runtime and new Found-screen validation remain
+integration obligations, not evidence supplied by these docs.
 
 ### Headless Services (development)
 
@@ -642,6 +717,16 @@ another Machine's preference. Phones display List while preserving the remembere
 desktop shape. Process stop, kill and left-behind cleanup all use the shared
 resource proposal check, subset and per-item receipt body; cleanup keeps its
 identity-pinned primitive refs rather than inventing target expectations.
+
+Process proposals check the current identity and the canonical Guard planner's
+kept-session facts before approval. Proposed working or waiting sessions show
+Keep and start unticked; including one requires an inline confirmation naming
+the work and the loss from stopping or killing it. A changed expectation or
+loss requires fresh confirmation. An unavailable check withholds approval and
+offers Check again. These are review and selection rules; the Action's own
+approval policy still governs execution. Full Suggestion widgets offer inline
+Approve only when the entire proposal fits their visible rows; Review opens the
+complete proposal for larger sets.
 
 The Resources settings family supplies separate Reading and Changing sections.
 Read-only Automation and filesystem facts are declarations, not configurable
@@ -1019,11 +1104,17 @@ loaded-runtime verification are owned by the Usage integration boundary.
 Plans consume quota history through the existing B history/pace owner. Unused
 capacity retains the witnessed denominator and entitlement. An ending projection
 is labelled as an estimate; absent or incompatible history/denominators produce
-explicit insufficient basis, never an invented currency loss. The Usage reader
-traverses the existing quota-history cursor for its selected range; transport
-batch size is not a history cutoff. A later ordinary read failure keeps an
-explicitly partial accepted prefix, while denied or retired authority withdraws
-the facts.
+explicit insufficient basis, never an invented currency loss. The mounted UI
+reader traverses the existing quota-history cursor for its selected range;
+transport batch size is not a history cutoff. For a requested bounded history
+range, a finite CLI or MCP Usage snapshot retains the first canonical page for
+each eligible account. It preserves any non-null `nextCursor`, marking both
+the account and aggregate quota source partial while continuation remains.
+Consumers that need further recorded history use `connectedServices.quota.get`
+with the same source, requested range and page size plus that cursor. This does
+not add a history limit or a second cache. A later ordinary UI read failure
+keeps an explicitly partial accepted prefix, while denied or retired authority
+withdraws the facts.
 
 ### Native usage sources (development)
 
@@ -2117,6 +2208,29 @@ the client must have that tab in its current workspace. No-tab opening retains
 its existing Session navigation behavior. These controls do not create another
 workspace store or infer layout measurements on headless hosts.
 
+In 0.3 development, the workspace tab context and overflow menus also expose
+Close others, Close to the left, Close to the right and Close all through the
+same client Action family. Bulk closes apply to the selected tab's pane, or the
+explicit/focused pane for Close all, and preserve pinned tabs. Single-tab Close
+can close a pinned tab. The mounted client's existing unsaved-draft guard owns
+the decision before any selected tab is retired; Action approval settings remain
+user-configurable, with no mandatory approval floor added by these commands.
+
+Retained screens supply their identity through their existing `PageHeader` or
+plain screen-title option. Native header chrome is separate from that identity.
+`DestinationInstanceHost` publishes the identity into
+the current workspace's transient projection, bound to the exact destination
+and Account. Native scenes bind the same collector using Expo's local module
+and parameters, so an inactive retained scene cannot borrow the foreground URL.
+The destination catalog's reader and live hook combine it with the existing live
+Session, Project and Discussion title owners for tab strips, overflow/switcher,
+closed-tab Action labels and window/document title consumers. Nested screens wait quietly for
+their own title rather than borrowing an area label. Publication writes no
+layout or Account settings; changing the destination retires its former title.
+`WorkspaceWindowTitle` projects the focused title to the browser document and
+desktop window adapter; the Expo route mirror preserves navigation metadata,
+but is not a document-title writer.
+
 For `workspace.split`, an explicit `groupId` selects the pane to split; a named
 `tabId` may move there from another pane. Without `groupId`, a named tab splits
 its own pane, otherwise the focused pane is used. Admission and execution both
@@ -2484,6 +2598,53 @@ an uncertain effect. Channels has no literal rename field: the displayed
 endpoint label is not a newly writable preference.
 
 These are development-source contracts, not a released availability claim.
+
+### Email, router and recipe Actions (0.3 development)
+
+`happier.channels/actions/conversation/start-v1` takes `routerBindingId`,
+`audienceGroupId`, `subject`, `content: { text, html? }` and `sessionId`, validated
+by `packages/channels-protocol/src/v1/management/conversationStart.ts`. The Channels
+manifest exposes UI, CLI, Agent, MCP and plugin invocation; Workflow `action`
+leaves use the qualified id through the existing contributed-Action executor.
+Its `writesRemote` confirmation remains subject to the shared Action policy.
+An owner-authored Workflow is not a separate sender or an implicit grant to the
+model. The result `{ kind: 'accepted', custodyId }` means ordinary outward custody
+admission; the supervisor owns SMTP outcome and child-binding completion.
+
+Recipients are resolved from the router's principal group, never Action-supplied
+addresses. The named Session must be confirmed to have no attested sender
+identity before starting a multi-principal thread. Delivery then creates an
+ordinary child binding allowing that audience; partial/unknown outcomes use
+`delivery/resolve-v1`. Binding create/update Actions consume the same
+`threadRouter` target and existing session policy; there is no router-specific
+CRUD owner or thread registry. Parent policy governs children. Email transport
+operations are plugin-only; user effects remain at Channels custody.
+
+`session.spawn_new` and recipe authoring expose `allowedTools` and `unlistedTools`
+through the Session owner, seeding the existing permission allowlist and denying
+unlisted requests when selected. Current MCP authoring uses
+`capabilitySelection.mcp`. The public HTTP projection omits `executionTarget`;
+machine placement is supplied by the outer target. Directory input is
+`{ kind: 'managed' }` or `{ kind: 'path', path }`.
+
+`attestedContext: { externalPrincipalId, sourceMessageId }` is accepted only from
+host-stamped plugin callers. Other callers receive
+`session_attested_context_forbidden`; the Session stores these birth facts
+immutably. MCP header values use the canonical `ValueRefV1` `sessionAttested`
+arm, resolved by the existing materializer, omitting absent facts. Token grants
+do not confer plugin identity.
+
+`workflow.trigger.run_now` takes an existing `automationId` and optional
+`idempotencyKey`. API grants can restrict this Action and its machine/Session
+targets, but `ApiTokenGrantV1Schema` has no automation-ID selector. A trusted
+integrator must choose the Automation; documentation must not claim a token
+grant isolates exactly one saved Automation. Notification alerts use
+`workflow_run_update` with `workflowRun.updateKind` and optional reason code;
+they do not prove that Channels delivery completed.
+
+Operator examples live in the canonical published
+[email guide](../apps/docs/content/docs/extending/email-channel.mdx) and
+[recipe guide](../apps/docs/content/docs/extending/email-agent-recipes.mdx).
 
 ## Boards (0.3 development source)
 
@@ -2950,7 +3111,7 @@ present-user Action. For the built-in host Agent/MCP Account requests, the decid
 reuses its authenticated Home adapter and existing execution claim, stamping the human
 authority only on that approved replay. Other daemon-owned provenance stays on its
 existing exact-daemon replay path.
-The owner ruling of 2026-10-12 permits signed Agent-Session Account-only approvals
+The owner ruling of 2026-10-12 permits signed Agent-Session Account/client-only approvals
 without a Machine/workspace effect to execute in the approving app after validation
 of the original proposal, alongside eligible unsigned host-CLI Account approvals.
 Eligibility uses the Action's input-aware placement, workspace
@@ -3468,6 +3629,16 @@ such as passwords. The artifact carries only the declared input projection from 
 replay without the live invocation fails closed. CLI rows with either live-only custody declaration
 retain their blocking invocation; Agent and MCP blocking callers are unchanged.
 
+The development personal Saved Secret `secrets.create` and `secrets.update`
+Actions use this live-only input custody when carrying a value. Their observation
+projection omits the value. Present-user UI writes act directly, while Agent,
+CLI and MCP writes ask through the shared spec-owned policy. `secrets.list`
+returns owned resource metadata only; create returns its canonical resource ref.
+The `updatedAt`/`expectedUpdatedAt` fields on these Actions are aliases for the
+private resource's revision concurrency token, not wall-clock timestamps.
+The existing encrypted/plain private-resource mutation owner remains the writer;
+these Actions do not recreate the retired Account Settings secret writer.
+
 In 0.3 development, `requiresExactDaemonApprovalReplay` is the shared replay-custody
 owner. An unsigned host-CLI request for any Account-placed Action with durable
 (`approvalInputCustody !== 'live_only'`) input and no Machine/workspace effect is replayed by the approving app
@@ -3480,11 +3651,16 @@ requests use this same app-owned effect after validating their original
 installation signature, Action id, input and requester. That signed automation
 carrier remains immutable provenance, not effect authority. Profile Actions retain
 their declared authority; this custody rule does not make them mandatory present-user
-Actions. Plugin callers, Machine/client-placed CLI Actions and live-only inputs retain
+Actions. Schema-admitted client effects requested from UI, Voice, Agent or MCP by
+a host or Session also replay in the approving app's mounted owner. This includes
+Voice unmute: the requesting Session's Machine does not own the client's microphone.
+Signed Account-admitted Session proposals for client effects retain the same
+signature verification and human replay authority. Plugin callers,
+Machine/client-placed CLI Actions and live-only inputs retain
 exact-daemon custody.
-The existing host Account-effect and Home-continuation exceptions for present-user
-approval requests remain with the same owner; the app does not classify families
-independently.
+The existing host Account-effect eligibility remains with the same owner;
+Home continuation uses the shared client-placement rule. The app does not classify
+families independently.
 
 In 0.3 development, approval Artifact bodies are private replay custody. A signed
 external request retains `executionOriginV1.externalActionExecutionAuthorization`

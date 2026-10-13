@@ -36,6 +36,14 @@ sources use the generic schema and declare the native-service selection path.
 
 Triage's [`administerConfiguredSourceInstance.ts`](../packages/plugins/triage/src/corpus/configuration/administerConfiguredSourceInstance.ts) owns configured-instance writes and the exact source-ownership comparison. [`readConfiguredSourceRows.ts`](../packages/plugins/triage/src/corpus/configuration/readConfiguredSourceRows.ts) supplies the shared active-row read and cursor handling. Discovery produces candidates, not automatic durable creation; mounted source Settings uses the administration Action rather than a direct Collection writer. The read ABI distinguishes complete from truncated results and refuses invalid or changed caller authority.
 
+In 0.3 development source, the durable `source-instances` Collection is v3 because
+its embedded Connected Account service schema also admits the reserved
+`happier/mcp-sign-in` identity. Its existing migration artifact carries v1/v2 rows
+forward unchanged; the widening changes neither configured-source identity nor
+private configuration. `session-links` and `user-marks` remain v2 because their
+entry references do not embed that service schema. The canonical Availability
+guard still refuses equal-version declarations with different contract digests.
+
 The source plugin retains its private configuration-token encoding and provider-specific behavior. Triage business behavior stays in `packages/plugins/triage`; shared host code stays source-neutral. Do not use this schema package as a new source service, credential store or corpus persistence owner.
 
 In 0.3 development, GitHub Settings supplies a source-native draft editor through

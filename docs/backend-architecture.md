@@ -338,7 +338,7 @@ erDiagram
 ```mermaid
 flowchart TD
     Start([inTx call]) --> Begin[Begin Transaction]
-    Begin --> |Explicit isolation or safe Serializable default| Exec[Execute Operations]
+    Begin --> |Explicit isolation or ReadCommitted default| Exec[Execute Operations]
     Exec --> Commit{Commit}
 
     Commit --> |Success| After[afterTx callbacks]
@@ -352,7 +352,7 @@ flowchart TD
 
 `inTx()` wraps Prisma transactions with:
 
-- During the Account-publication validation boundary, Serializable remains the safe PostgreSQL/MySQL default. Explicit ReadCommitted candidates and named Serializable invariants preserve caller-owned isolation; SQLite retains its provider-owned transaction/read-snapshot behavior.
+- In 0.3 development source, ReadCommitted is the PostgreSQL/MySQL default. Named cross-row invariants and coherent snapshots explicitly retain Serializable; SQLite retains its provider-owned transaction/read-snapshot behavior.
 - Automatic retry on `P2034`, PostgreSQL serialization/deadlock failures and stale fenced audiences, using the existing provider-owned recovery budget.
 - `afterTx()` to emit socket updates after commit.
 

@@ -32,12 +32,67 @@ This is the standing reference for **0.3 development source / Developer Preview 
 
 The canonical manifest schema and normalizer remain Protocol/platform-owned. [`manifest/v2.ts`](../packages/protocol/src/plugins/manifest/v2.ts) admits runtime API version 1 and an **optional** non-wildcard `engines.happier` range. Host/runtime ABI admission and package SemVer are separate contracts; do not infer a host compatibility range from a package version or source build identity. See [protocol evolution](compatibility.md#sdk-protocol-evolution).
 
+In 0.3 development source, `registrySources` is a descriptor-only manifest
+family. `definePlugin.registrySources` projects plugin-local declarations;
+the admitted lazy catalog supplies them without activation or a new runtime
+registry. The registry source owner merges these with built-ins and the
+Account `registry-sources` row, retaining supplier identity and read-only
+plugin ownership. Declarations contain credential-free HTTPS locations and
+format/item-kind facts, never tokens or npm profiles. Source enablement does
+not grant execution or credential authority.
+
 In 0.3 development source, each MCP discovery source declares
 `loadedInHappierSessions`. Detection carries that fact into its server rows, and
 session previews omit sources that declare `false`. Discovery can therefore find
 native configuration for adoption without claiming that a Happier Session loads
 it. The declaration schema owns the fact; the host does not infer it from an Agent
 id.
+
+Plugin-declared MCP servers in 0.3 development source project from the lazy
+contribution catalog, not a runner-owned manifest loader. Their metadata carries
+`source: { kind: 'plugin', pluginId, pluginName }` for the MCP page's
+"From <plugin>" presentation. These are declaration-owned servers: Account
+rules and tool settings may change, but catalog configuration/removal Actions
+do not take ownership of the declaration. Durable plugin installation seeds a
+missing Everywhere-On rule through the existing MCP catalog CAS owner and
+`resolveCreateReachV1`; publication never overwrites an existing Off rule.
+Startup and development reload do not invent defaults. Removed declarations
+leave stored rules inert. Visible page integration and live validation remain
+separate capabilities-program work.
+
+In 0.3 development source, an Agent's optional `mcpToolControl` and
+`mcpToolLoading` facts project from its own definition through the same tools
+capability owner. Absence is not inferred support. The host supplies the
+Protocol-resolved, data-only `mcpToolPolicy` beside `mcpServers` on Session and
+Run opens; the shared Run-to-Session adapter preserves both. Native Session
+policy changes use `AgentSessionConfigurationUpdate`, not a plugin-owned policy
+reader or a second permission engine. A declaration still requires proof through
+the actual Agent's launch and permission path.
+
+Persistent MCP tool grants use the Account catalog Actions. The unpublished
+permission decision's unused `persistAllowRule` field and scope aliases have
+been removed in place; native Session permission updates retain their existing
+carrier. The host's permission decision does not introduce another Account or
+workspace rule writer.
+
+The development MCP tool-policy testing contract extends the existing launch
+observer. It checks secret-free effective Agent and tool-shell environments,
+native knob artifacts, fixture-server receipts, approval ordering, same-mode
+revocation and server/tool identity. A missing declaration remains unsupported;
+an explicitly tested candidate is characterization, not admission. Native Allow
+requires live revocation through the existing configuration-update carrier;
+host approval requires a real leaf call reaching the host before the server.
+The public testing barrel is published by the SDK's canonical API producer,
+and source declarations do not substitute for successful publication or vendor
+validation.
+
+In 0.3 development source, Happier-tool auto-approval is derived from safe
+Action specs by `tools/happierToolAutoApprovalV1.ts`. Native projections request
+their actual server prefix: Claude uses `mcp__happier__`, OpenCode/Kilo use
+`<server>_`, and Codex's per-server config uses bare tool names. Host permission
+recognition retains transport/title aliases separately. Native launch rules do
+not enumerate those aliases. OpenCode's policy remains in `OPENCODE_PERMISSION`
+and Kilo's in `KILO_PERMISSION`, preserving native environment precedence.
 
 The host derives registration rights from the admitted manifest. [`registrationRightsHost.ts`](../apps/cli/src/plugins/runtime/api/registrationRightsHost.ts) wraps the SDK registration scope with occurrence currentness and diagnostics; a retired occurrence cannot register. The reload lifecycle owns the serving occurrence in [`runtimeSlots.ts`](../apps/cli/src/plugins/runtime/runtimeSlots.ts). A consumer does not reconstruct currentness from an id, callback or manifest snapshot.
 
@@ -403,6 +458,11 @@ per-plugin exact-origin selector: valid saved preference, then an admitted
 `executionTarget: { default: 'installation' }` declaration, then a sole eligible
 compatible installation, otherwise a selector. An unavailable saved choice stays
 visible and is never silently substituted on those uncontextual App surfaces.
+In 0.3 development, the selected surface member's readable daemon
+Resource declaration requires that execution origin even when the renderer's
+`requiredHostMethods` compatibility minimum is empty. Account-owned borrowed
+reads without a readable daemon Resource declaration remain machine-free;
+dynamic observation alone cannot grant an unreadable snapshot transport.
 In 0.3 development source, an App panel presented beside a Session uses that
 Session's exact Home and Machine as its initial execution context, on desktop and
 phone. Missing or unavailable contextual supply does not select another Machine.
@@ -530,6 +590,8 @@ stays with the same host canvas, with no additional SDK planet component.
 
 ## Public seam and authority
 
+In 0.3 development source, `/components` and the package root form one Plugin UI author layer. They expose themed adapters and domain-neutral shared producers from their existing implementation owners. `/presentation` remains the host app's implementation entrypoint, including mounted host controls; plugin UI artifacts cannot import that entrypoint or its nested subpaths, and author API governance excludes them. The package-owned generated reports describe the author exports.
+
 The 0.3 development Agent SDK adds `AgentSessionSkillDelivery` on
 `AgentSessionOpenRequest.skills` and `AgentExecutionRunOpenRequest.skills`.
 It names the host-owned `pluginRoot`, its `skillsRoot`, delivered
@@ -538,9 +600,39 @@ Run-to-Session adapter preserves this delivery alongside MCP bindings. Plugins
 receive resolved delivery only through the open request, without a pull service
 or composer dependency carrier. `AgentSessionRuntime.skillsDelivered` can report
 an unsupported launch path; `refreshSkills` is reserved for Agents declaring
-`capabilities.skills.liveReload: 'supported'`. Bundled Agents currently declare
-no delivery or live reload; folder materialization, native leaf application and
-the skills contract kit belong to the later consumed delivery units.
+`capabilities.skills.liveReload: 'supported'`. The development delivery vertical
+resolves skill selection in the host, materializes read-only content through
+the daemon, and gives Claude and Codex their session-only native path. The shared
+`testing` launch observer and skill delivery contract exercise native launch,
+disable overlays and unsupported variants; they also serve tool-policy tests.
+Agents without a native knob receive the index only through a declared Action
+channel and read content with the safe `skills.read` Action. These are current
+development-source contracts, not release or vendor-tenant certification.
+
+Skill catalog facets use Protocol's `SkillCatalogItemV1` directly; there is no
+parallel SDK item shape. Agent facets produce their native catalog facts, while
+the host annotates current delivered identities. Claude's SDK reload waits for
+both its successful `reload_skills` control response and `commands_changed`;
+Codex's app-server reload waits for the repeated `skills/extraRoots/set`
+response. Their terminal and shared-proxy launch paths retain their explicit
+restart requirement. The shared contract kit checks native-home preservation
+after refresh as well as at launch.
+
+Plugins declaring `capabilities.skills.usageEvidence: 'reported'` publish native
+invocations through the closed `skill-usage` runtime event. Its items report
+native names and optional paths; only the host maps those observations to
+delivered library identities. K13 in the shared delivery contract validates the
+real producer output against the runtime schema. The Account timestamp recorder
+and its failure semantics belong to [runtime core](runtime-core.md#session-path-and-owners).
+
+The fallback index contains delivered skill names and frontmatter descriptions,
+omitting skills marked `disable-model-invocation`; it does not paste bodies or
+truncate the item count. The safe `skills_read` tool reads full instructions and
+supporting file bytes through the same bundle validator as native delivery.
+Name reads require a Session and resolve against its current delivered identities
+and digests. UI and remote CLI name reads reach that Session's owner through the
+existing Session Action RPC; an explicit `skillId` without a Session reads the
+Account library directly. Supporting files retain their byte sizes and `unixMode`.
 
 In 0.3 development, SDK `fs#createSecureTempDirectorySync({ prefix, tmpDir? })`
 keeps its existing `{ path, cleanup }` contract and delegates to
@@ -591,12 +683,44 @@ the attempt and written only by the existing credential/configuration
 settlement. Plugin identity grammar and plugin invocation authority are
 unchanged.
 
+The shared MCP Action owner requests operation-specific peer admission when
+describing this service: credential writes for sign-in and credential deletion
+for removal. UI and CLI adapters transport that same command rather than
+reconstructing it. The daemon supplies its v4 operation-transport fact only
+for an explicitly requested operation; an unqualified description is not
+authorization to begin a grant.
+
+MCP OAuth discovery, registration, token exchange, refresh and revocation use
+the host runtime's HTTPS-only transport; the browser authorization endpoint is
+checked before publishing a redirect. An HTTP endpoint is refused with
+`mcp_oauth_endpoints_require_https`, including an HTTP localhost authorization
+service. The [MCP 2025-11-25 communication-security contract](https://modelcontextprotocol.io/specification/2025-11-25/basic/authorization#communication-security)
+permits localhost only for redirect URIs. The host's existing redirect refusal
+also prevents a redirect from forwarding exchange or registration secrets.
+
+The development MCP callback controller consumes the stable
+`https://app.happier.dev/oauth/mcp/callback` response and strips its query before
+any browser handoff or asynchronous work. It forwards code, full state and
+optional issuer to an opener, or uses the existing Connected Account Actions
+on the retained or discovered same-Account machine. Account retirement aborts
+completion; a signed-out client or an attempt without a reachable owner keeps
+the full callback URL for paste. The state prefix selects an attempt, never
+authorizes it. Callback rendering and installed-app return remain separate
+UI and release obligations.
+
 The host MCP grant is available only to its daemon-issued request-auth subject,
 bound to the exact current server resource and captured Session/Run authority.
 Generic Plugin purpose selection, activation and materialization cannot select
 this host grant, even by claiming the same purpose address. The private subject
 uses the existing purpose, capability and refresh owners; it is not another
 public SDK target or an executable Plugin declaration.
+
+The remote bridge's existing lifetime redaction lease covers per-request OAuth
+bearers and supplied static-header credential representations, including Basic
+credentials. Its Agent-facing output projection preserves SDK-owned protocol
+fields and correlation facts while redacting private dictionary keys and
+string payloads. The same lease protects diagnostics through rotation and late
+responses; static authentication policy is unchanged.
 
 MCP discovery sources also declare `loadedInHappierSessions`. Discovery retains
 this fact in each detected definition; session previews omit sources that the
@@ -662,17 +786,17 @@ Changing between card and inline presentation retains the mounted facts. This
 is development-only composition, not a new approval authority or released API
 availability claim.
 
-In 0.3 development source, public `WidgetFrame` and the core widget adapter share the same frame and controlled `disclosure` contract. The frame's `source` slot takes a name, or a bound-source descriptor (`binding: 'pin' | 'follow'`, `text`, optional `compactText` and `accessibilityLabel`): the frame draws the pin or follow glyph, keeps the short form when it narrows, and names the line for assistive tech, so a group's pinned value and a follower's "Following group · value" are one recipe for core and plugin frames. `HappierSegmentedChoiceRow` and its model `resolveHappierSegmentedChoiceRow` (public `/presentation`) own the "label + inline segmented choice" row, where an unavailable option stays visible and says why; core's configuration and menu rows resolve their segments through the same model. Collapse belongs to the current viewer; it keeps the body mounted and hidden without changing widget layout, input or Resource identity. Public `/presentation` also owns tree keyboard/focus semantics (`HappierTreeNode` and `useHappierTreeInteraction`), using explicit parent keys rather than filesystem path spelling. Filesystem trees translate their domain rows into that owner.
+In 0.3 development source, public `WidgetFrame` and the core widget adapter share the same frame and controlled `disclosure` contract. The frame's `source` slot takes a name, or a bound-source descriptor (`binding: 'pin' | 'follow'`, `text`, optional `compactText` and `accessibilityLabel`): the frame draws the pin or follow glyph, keeps the short form when it narrows, and names the line for assistive tech, so a group's pinned value and a follower's "Following group · value" are one recipe for core and plugin frames. `HappierSegmentedChoiceRow` and its model `resolveHappierSegmentedChoiceRow` (public `/components`) own the "label + inline segmented choice" row, where an unavailable option stays visible and says why; core's configuration and menu rows resolve their segments through the same model. Collapse belongs to the current viewer; it keeps the body mounted and hidden without changing widget layout, input or Resource identity. Public `/components` also owns tree keyboard/focus semantics (`HappierTreeNode` and `useHappierTreeInteraction`), using explicit parent keys rather than filesystem path spelling. Filesystem trees translate their domain rows into that owner.
 
-The rows inside a widget body and the lines-added/removed readout have one neutral owner each in public `/presentation`: `HappierWidgetGlanceRow` (mark, name, tag, quiet or attention fact, one trailing element; one pressable when it leads somewhere) and `HappierDiffStat` with its formatter `formatHappierDiffStat`. The root adapters `WidgetGlanceRow` and `DiffStat` supply the plugin theme and faces; core's `components/widgets/glance/WidgetGlanceRow.tsx` and `components/workspaces/scm/DiffStat.tsx` supply core's text owner (font scale), glyphs, density-aware spacing and inks. The version-control inks travel as the optional same-realm palette facts `versionControlAdded` / `versionControlRemoved`; a hosted frame without them draws the snapshot's success and danger inks. A plugin's glance row lays out on the regular spacing steps, because the public snapshot carries no density fact for them.
+The rows inside a widget body and the lines-added/removed readout have one neutral owner each in public `/components`: `HappierWidgetGlanceRow` (mark, name, tag, quiet or attention fact, one trailing element; one pressable when it leads somewhere) and `HappierDiffStat` with its formatter `formatHappierDiffStat`. The root adapters `WidgetGlanceRow` and `DiffStat` supply the plugin theme and faces; core's `components/widgets/glance/WidgetGlanceRow.tsx` and `components/workspaces/scm/DiffStat.tsx` supply core's text owner (font scale), glyphs, density-aware spacing and inks. The version-control inks travel as the optional same-realm palette facts `versionControlAdded` / `versionControlRemoved`; a hosted frame without them draws the snapshot's success and danger inks. A plugin's glance row lays out on the regular spacing steps, because the public snapshot carries no density fact for them.
 
-In 0.3 development source, four more presentation concepts have one neutral owner in public `/presentation`, a themed author adapter at the package root, and a core adapter that binds only typography, buttons and glyphs: the full state composition `HappierSurfaceState` (root `SurfaceState`, `LoadingState`, `ErrorState onRetry`; core `SurfaceStateCard`), the section action cluster `HappierFormActions` with its far-edge `trailing` slot and consequence/refusal `footnote` (root `Form.Actions`; core `SectionButtonRow`), the link handover `HappierLinkDelivery` (root `LinkDelivery` over the host clipboard, external-link and QR owners; core `TeamLinkDelivery`), and the settings-row value slot and status line `HappierSettingValueSlot` / `HappierSettingStatusLine` (root `SettingRow`, `SettingValueSlot`, `SettingStatusLine`; core `SchemaFieldRow`). Lifetimes, translations, announcers, schema drafts and writes stay with the core adapters and their domain owners. The Team adapter keeps a one-time invitation bearer in its own props: the neutral renderer never fetches, stores or reports a link, and plugin surfaces get no path to invitation secrets. `WorkosMark` and the Inbox approval card stay host-only.
+In 0.3 development source, four more presentation concepts have one neutral owner in public `/components`, a themed author adapter at the package root, and a core adapter that binds only typography, buttons and glyphs: the full state composition `HappierSurfaceState` (root `SurfaceState`, `LoadingState`, `ErrorState onRetry`; core `SurfaceStateCard`), the section action cluster `HappierFormActions` with its far-edge `trailing` slot and consequence/refusal `footnote` (root `Form.Actions`; core `SectionButtonRow`), the link handover `HappierLinkDelivery` (root `LinkDelivery` over the host clipboard, external-link and QR owners; core `TeamLinkDelivery`), and the settings-row value slot and status line `HappierSettingValueSlot` / `HappierSettingStatusLine` (root `SettingRow`, `SettingValueSlot`, `SettingStatusLine`; core `SchemaFieldRow`). Lifetimes, translations, announcers, schema drafts and writes stay with the core adapters and their domain owners. The Team adapter keeps a one-time invitation bearer in its own props: the neutral renderer never fetches, stores or reports a link, and plugin surfaces get no path to invitation secrets. `WorkosMark` and the Inbox approval card stay host-only.
 
-Composer-rail buttons use the public `/presentation` `HappierComposerChip` shell in both core and plugin adapters. The host continues to supply rail theme chrome and responsive placement; the shared shell owns button/toggle semantics, disabled and selected state, and native touch-target geometry, so plugin controls do not maintain a similar-but-different chip implementation.
+Composer-rail buttons use the public `/components` `HappierComposerChip` shell in both core and plugin adapters. The host continues to supply rail theme chrome and responsive placement; the shared shell owns button/toggle semantics, disabled and selected state, and native touch-target geometry, so plugin controls do not maintain a similar-but-different chip implementation.
 
 Measured `FrameRect` placement and `resolveFloatingFrameRect` share companion geometry with core. Callers supply available space and measured avoid rectangles; the result reports when no non-overlapping placement fits so the domain can use its dock composition. Pointer listeners, native gestures and measurements remain host adapters. These foundations do not create a viewer registry or assert that every capture/viewer shell is integrated.
 
-Public `/presentation` exports `FloatingFrame` / `FloatingFrameProps`: one controlled neutral frame (`floating`, `expanded`, `docked`, `closed`) with a controls band and one body. It owns only geometry and shell mode: drag, velocity and release use the shared companion interaction owner, settling uses `resolveFloatingFrameRect` and asks to dock when nothing fits, arrow keys snap corners and the grip resizes with the body's aspect. `moveInput` decides whether the body or only the controls band and grip move it; the host decides that from its own control facts. While the body moves the frame, a double-click on it expands (and restores) the frame, and Escape restores an expanded frame. An optional `footer` stands one presence capsule below the body (`HAPPIER_FLOATING_FRAME_METRICS.footerHeight` is that capsule's height); `aspectRatio` is the body's own shape, so placement (`resolveFloatingFrameRect` with `chromeHeight`) shrinks both axes together, and `minWidth` is the host's measured usable minimum below which resizing stops and placement docks. A frame's chrome is public beside it, so an author's frame matches the viewer's without copying it: `FloatingFramePicture` is the body's material (the picture rounded to the frame's body radius and lifted on the host's `elevationStyle`, never a card; `drivenRingColor` draws the thin ring that says the person drives it; `framed={false}` draws the same element tree flush in a pane so a body is not remounted when it moves), `HappierControlCapsule` holds a group of controls on the floating material for the `controls` slot (`HAPPIER_CONTROL_CAPSULE_METRICS`, `HAPPIER_CONTROL_CAPSULE_BUTTON_SIZE`; the material is a backing, not a clip, so a control's touch target may overhang the band without the capsule growing), and `HappierIdentityCapsule` names what the frame shows (a Machine, with a `leading` status dot) as plain text, never a live region. `HappierStatusCapsule` remains the announcing capsule for a state that is not normal. `resolveFloatingFrameSettleTransition` returns the duration, critically damped `linear()` curve and transitioned properties a released frame travels on, and `resolveFloatingFramePlacementStyle` places a rectangle the way the frame does (on the web a compositor `transform` for its position, so only a size change lays out), for a host that draws the body in another layer and must move it in step; `HAPPIER_FLOATING_FRAME_METRICS.resizeStep` is the one resize step for the grip's keys and a host's Larger/Smaller. On the web the controls reveal on hover and focus for a pointer that hovers and stay shown for one that cannot (`(hover: none)`, or once a touch reaches the frame). The platform pointer boundary comes from the `pointer` prop or the presentation host's `companionPointer`; without one the frame moves by keyboard and menu only. It has no target, Session, network or trust props. In 0.3 development source the Session viewer is its first consumer: it frames the retained Computer or Browser body, publishes its settled rectangle to the shell's measured Voice/pet geometry and moves the reading column aside on snap. Development-only until 0.3 ships.
+Public `/components` exports `HappierFloatingFrame` / `HappierFloatingFrameProps`: one controlled neutral frame (`floating`, `expanded`, `docked`, `closed`) with a controls band and one body. It owns only geometry and shell mode: drag, velocity and release use the shared companion interaction owner, settling uses `resolveFloatingFrameRect` and asks to dock when nothing fits, arrow keys snap corners and the grip resizes with the body's aspect. `moveInput` decides whether the body or only the controls band and grip move it; the host decides that from its own control facts. While the body moves the frame, a double-click on it expands (and restores) the frame, and Escape restores an expanded frame. An optional `footer` stands one presence capsule below the body (`HAPPIER_FLOATING_FRAME_METRICS.footerHeight` is that capsule's height); `aspectRatio` is the body's own shape, so placement (`resolveFloatingFrameRect` with `chromeHeight`) shrinks both axes together, and `minWidth` is the host's measured usable minimum below which resizing stops and placement docks. A frame's chrome is public beside it, so an author's frame matches the viewer's without copying it: `FloatingFramePicture` is the body's material (the picture rounded to the frame's body radius and lifted on the host's `elevationStyle`, never a card; `drivenRingColor` draws the thin ring that says the person drives it; `framed={false}` draws the same element tree flush in a pane so a body is not remounted when it moves), `HappierControlCapsule` holds a group of controls on the floating material for the `controls` slot (`HAPPIER_CONTROL_CAPSULE_METRICS`, `HAPPIER_CONTROL_CAPSULE_BUTTON_SIZE`; the material is a backing, not a clip, so a control's touch target may overhang the band without the capsule growing), and `HappierIdentityCapsule` names what the frame shows (a Machine, with a `leading` status dot) as plain text, never a live region. `HappierStatusCapsule` remains the announcing capsule for a state that is not normal. `resolveFloatingFrameSettleTransition` returns the duration, critically damped `linear()` curve and transitioned properties a released frame travels on, and `resolveFloatingFramePlacementStyle` places a rectangle the way the frame does (on the web a compositor `transform` for its position, so only a size change lays out), for a host that draws the body in another layer and must move it in step; `HAPPIER_FLOATING_FRAME_METRICS.resizeStep` is the one resize step for the grip's keys and a host's Larger/Smaller. On the web the controls reveal on hover and focus for a pointer that hovers and stay shown for one that cannot (`(hover: none)`, or once a touch reaches the frame). The platform pointer boundary comes from the `pointer` prop or the presentation host's `companionPointer`; without one the frame moves by keyboard and menu only. It has no target, Session, network or trust props. In 0.3 development source the Session viewer is its first consumer: it frames the retained Computer or Browser body, publishes its settled rectangle to the shell's measured Voice/pet geometry and moves the reading column aside on snap. Development-only until 0.3 ships.
 
 The public root and `/components` export the themed `FloatingFrame` adapter and
 its props over that same neutral owner. It supplies host theme and accessibility
@@ -1366,6 +1490,14 @@ UI icon token (including `waveform`). These are decorative identity facts, never
 credential, execution or Agent access. The service gallery and pipeline use one
 renderer; first-party UI metadata has no separate mark privilege. OpenAI, xAI,
 ElevenLabs and Codex declare their marks in the same public manifests.
+
+Conversation declarations may also carry an optional localized `description`
+(a string or `{ key, fallback }`) through the public `/voice` author types and
+schema. The declaration-driven registry preserves it for the Service gallery,
+independently of billing-option subtitles. Missing descriptions remain valid
+and retain the existing option-subtitle presentation; the host never substitutes
+a plugin identifier. This is an additive 0.3 development presentation field; executable
+declarations and localized text objects remain closed to unknown fields.
 
 Plugin UI's public `VoiceMarkArt` and labelled generic `StatusCell` are thin
 requests through the incumbent same-realm presentation host. The mark supplies
@@ -2339,7 +2471,7 @@ migration. See [linked Session authoring](../apps/docs/content/docs/plugins/ui/i
 
 ## Work and consent presentation (0.3 development)
 
-Plugin UI's public `/presentation` entrypoint owns Work row shells and summary
+Plugin UI's public `/components` entrypoint owns Work row shells and summary
 leaves, section empty/start and disclosure lines, update-card frames, fact lines,
 breadcrumbs and the decision bar. Core binds identity lookup, localization,
 navigation and Action handlers to those same components; it does not redraw
@@ -2571,6 +2703,33 @@ Account Settings/Data HTTP requests likewise use their Account/operation
 cancellation without a descendant deadline, including Account Data's real
 encryption-currentness preflight. Currentness and mode checks still fail closed
 before disclosure or mutation.
+
+In 0.3 development source, the Account's `registry-sources` row is the source
+authority for skill and plugin browsing and ordinary plugin exact-install
+lookup. Clients no longer send configured source lists to the daemon. Public
+plugin discovery shares Protocol parsing with daemon install revalidation;
+listing data contains no machine admission or artifact-access decision. npm
+credential profiles remain machine-local. A fresh Temporary-computer endpoint
+instead supplies its already verified, sealed reviewed source as readonly
+input to that same exact-install owner; it neither creates a writable source
+registry nor obtains the creator's Account credentials or npm profile.
+
+Ordinary plugin Action preparation reads that row through its captured Home and
+Account credential, rather than the machine's ambient stored sign-in. Daemon
+staging and final review revalidation share its captured authenticated Account
+reader. Machine placement does not supply a foreign requester's private source
+catalog: without that custody, the Action returns the existing
+`approval_context_unavailable` refusal before reading sources or preparing code.
+
+The development `plugins.install` Action accepts an exact marketplace source,
+plugin and version plus the selected Machine, without public trust fields. A
+present-user UI host retains that invocation through the existing installation
+review dialog and authenticated private daemon decision. The same review owner
+serves already-prepared changes on the plugin screen. Declining cancels the
+pending change; retiring the captured Account or selected-Machine operation
+prevents a later decision from granting trust. Headless CLI and Agent callers
+receive `reviewRequired` unchanged, including when configurable Action approval
+is waived. That policy waiver is not installation trust.
 
 Source registries and npm profile, scope and paused-source inventories have no
 independent count ceilings. Mutation receipts remain for the npm registry file's

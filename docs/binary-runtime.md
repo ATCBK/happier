@@ -64,6 +64,14 @@ managed or explicit override command is available, it fails rather than falling
 back to `pnpm` on `PATH`. See
 [Agent install and update jobs](./agents-catalog.md#agent-cli-install-and-update-jobs-03-development).
 
+In 0.3 development, MCP servers and configured ACP command launches share the
+package-runner normalizer. For pnpm-backed commands, it ensures pnpm and a
+JavaScript runtime, then carries the runtime paths and managed pnpm environment
+into the child launch. This lets
+package binaries with a `#!/usr/bin/env node` entrypoint run without Node on the
+user's PATH. Selecting an absolute launcher executable alone does not prepare
+the package's child processes.
+
 One request-scoped exception exists: `AgentCliSourcePolicy` (`packages/cli-common/src/agents/resolution.ts`). Passing `sourcePolicy: 'managed_only'` to the canonical resolver, install preflight, or `prepareAgentCliForRuntime(...)` restricts that single request to the managed install under its own `HAPPIER_HOME_DIR`: environment overrides, system/global installs and vendor recipes are ignored, and a retry may reuse a valid current managed install. It is a per-request argument, never a persisted or environment-configurable preference, because a composition that may run only what it installed itself (the temporary-computer Runner) must not be widened by the endpoint's environment. Such a composition passes the returned resolution unchanged into the launch through `buildAgentCliLaunchSpecFromResolution(...)`; resolving again at launch would let an override or system binary substitute itself between readiness and launch.
 
 Model Provider endpoints are not Agent executables. Provider discovery may use only the bounded detector and local-command declarations owned by the Provider contribution and the canonical local-services/runtime abstractions. An adopted local service is observed but never stopped or restarted by Happier. A Provider process started through the managed-local-service path is owned by that path; Provider code must not spawn `node`, package managers, or vendor commands directly. See [Providers](./providers.md#local-discovery-and-process-ownership).
@@ -239,6 +247,10 @@ healthy plugins still publish and source preparation continues. The existing
 inventory producer validates retained manifests and complete file digests before
 admission. Native source construction materializes those verified bytes into its
 own retained output graph, or leaves the unavailable plugin's output root empty.
+The source daemon retains that inventory beside its emitted runtime. Its next
+shared build feeds the selected incumbent inventory to the same compiler and
+inventory producer, which revalidates the candidate graphs and copies admitted
+bytes into the replacement's own plugin outputs.
 Host preparation failures still leave the serving inventory available and report
 the problem. Explicit package artifact publication remains strict.
 Metro readiness requires the inventory and every referenced asset, not the CLI's SDK dist/materialization
@@ -255,7 +267,15 @@ owned by another Stack rejects the refresh with
 dependency admission is withdrawn. The owning Stack must be stopped explicitly
 before retrying; discovering its PID state does not grant termination authority.
 
-Development startup checks dependency admission and installed patches read-only.
+In 0.3 development, startup automatically refreshes stale dependency inputs
+through `ensureDepsInstalled`. The existing dev reload coordinator also admits
+dependency refresh before component builds when manifests, the lockfile, patches
+or declared install inputs change. Only the calling Stack's Expo consumers pause
+during mutation; their existing supervisor resumes them when mutation completes.
+Server and daemon last-green processes continue serving. A foreign Stack's live
+Expo consumer blocks mutation: development warns and continues with installed
+bytes, retrying on the next input change or startup. Explicit skip/disable refresh
+flags and service-mode refresh permission retain their existing semantics.
 In 0.3 development, `hstack dev` admits each component's runnable last-green
 output before refreshing current inputs, including with `--no-watch` (one
 background refresh). Server-only admission validates only the server's retained
@@ -265,9 +285,9 @@ bundled-dependency publication contract; that validation stays in the background
 build. A cold component's startup failure is reported without exiting the runner
 or stopping available siblings. Infrastructure, authentication, ownership and
 output integrity remain prerequisites for the component that needs them.
-Drift reports one explicit `ensureDepsInstalled` refresh command, which reapplies
-and verifies patches; it does not start an installation. Metro can serve installed
-bytes and its retained source inventory while those inputs move. Missing packages
+The automatic refresh reapplies and verifies installed patches. Metro can serve
+installed bytes and its retained source inventory while those inputs move or
+another Stack prevents refresh. Missing packages
 and broken source fail the importing bundle rather than stopping Metro. Its dev
 supervisor keeps retrying exits and failed starts with the existing capped backoff,
 and replaces an unresponsive owned process using Metro's existing readiness budget.
@@ -276,7 +296,14 @@ configured old-space limit, after all HTTP requests complete and its listener st
 accepting work. It logs the observed heap, watermark, limit and restart reason.
 
 Dependency identity includes manifests, the lockfile, patches and installation
-tool inputs. Authored UI/Protocol source is excluded: generated password/atmosphere
+tool inputs. In 0.3 development, root and workspace manifests contribute their install
+fields and install lifecycle scripts; exports, main/types and unrelated commands
+do not require reinstallation. Root lifecycle inputs also include `prepare` and
+`prepublish`; declared tool inputs remain whole-file inputs.
+Raw-only v6 admissions still prove unchanged manifest bytes;
+a changed raw-only manifest needs its admitted contents or an owning refresh to
+establish the projected install inputs safely.
+Authored UI/Protocol source is excluded: generated password/atmosphere
 workers and WebView bundles own their source compilation and retained files.
 Dependency-only postinstall skips those compilers. UI source preparation reuses
 the existing producers; development may retain usable prior files with a diagnostic,

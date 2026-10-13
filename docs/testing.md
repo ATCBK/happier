@@ -79,7 +79,7 @@ Use shared boundary fixtures and real internal owners. A changed internal export
 
 Root unit and integration commands collect failures across independent workspaces instead of stopping at the first red package. Package preparation remains a prerequisite; aggregate failure collection cannot expose behavior behind an unavailable build, database, or candidate. Do not call an unexecuted lane successful.
 
-In 0.3 development, runtime worker bootstrap, validation preparation, local `hstack` bundled-workspace preflight and the Stack unit runner prepare emitted workspace prerequisites in `source-dev` mode by default. Their package compilers use the existing `package-dist` envelope, reusing an authenticated parent admission when present. Explicit strict mode, typecheck preparation and public packing/publication still check semantics; public `typecheck` remains independent. Both UI patch stages request patch-package's `--error-on-fail`, so a mixed previously patched tree reaches the existing dependency owner's pristine re-extraction and retry rather than being admitted as ready.
+In 0.3 development, runtime worker bootstrap, runtime validation preparation, local `hstack` bundled-workspace preflight and the Stack unit runner prepare emitted workspace prerequisites in `source-dev` mode by default. Their package compilers use the existing `package-dist` envelope, reusing an authenticated parent admission when present. Explicit strict mode and public packing/publication still check semantics. Public `typecheck` reads published dependency declarations and leaves project declaration emission to its compiler; its preparation never republishes CLI dist or bundled plugins, and missing declarations remain compiler diagnostics. Both UI patch stages request patch-package's `--error-on-fail`, so a mixed previously patched tree reaches the existing dependency owner's pristine re-extraction and retry rather than being admitted as ready.
 
 Expo dev/mobile startup is source-first: its canonical UI preflight compiles only
 plugin UI assets and publishes the app-owned inventory through the existing
@@ -94,7 +94,7 @@ workspace dependency build owner before the generator consumes them. This also p
 `dist` on a cold AUTO replica; check-only projections and compiler-input generation do not compile
 plugin packages. Existing optional-build isolation and required-plugin failure policy still apply.
 
-Both `source-dev` and `qa-runtime` package builds compile captured inputs, so edits during compilation do not require a quiet checkout. The output record identifies the captured inputs; later edits demand a subsequent build rather than being marked current by the completed build. Typecheck preparation also requests captured inputs while retaining strict checking. Ordinary strict publication builds retain their live-input drift fence.
+Both `source-dev` and `qa-runtime` package builds compile captured inputs, so edits during compilation do not require a quiet checkout. The output record identifies the captured inputs; later edits demand a subsequent build rather than being marked current by the completed build. Ordinary strict publication builds retain their live-input drift fence.
 
 Development startup separately admits intact last-green output through
 `scripts/workspaces/ensureWorkspacePackagesBuilt.mjs`. Source server admission
@@ -168,6 +168,12 @@ Package-manifest and exact-entry facts preserve placement and effective compiler
 class while letting these publishers, rather than an outer package command,
 reserve their envelope. Explicit command environment/cwd overrides participate
 in that same policy. No second class table, admission budget or deadline is added.
+
+Package input fingerprints use the actual package workspace's compiler-owner
+scripts, not a different checkout selected by the running Stack's environment.
+Explicit captured-origin remapping remains supported. A compiler-owner change
+invalidates that workspace's cached output through the existing build owner;
+an unrelated runtime checkout's script change does not.
 
 In 0.3 development, denied admission attempts keep one custody worker and its
 directory watches across retries. Lease release, queue changes and reservation
@@ -387,11 +393,14 @@ exact-target typechecks alone.
 
 `mutagen_runtime.mjs` owns first-cycle readiness, including its generated `native_sync_readiness.sh` projection. A clean connected idle session with both endpoints in `no-watch` and no completed cycle is `needs-flush`: eligible for selection, with the mandatory dispatch barrier establishing a completed clean cycle before any payload. An active initial scan remains `synchronizing`. Status and doctor read the same classification; startup seeding also consumes it rather than deciding independently from watch/cycle fields.
 
-Known transition races (file modification during validation, a disappearing
-leaf, or a missing staged file during permission application) request one fresh
-flush through the same barrier. Startup uses that barrier too. Recovery never
+Known scan races (`hashed size mismatch: <bytes> != <size>` from Mutagen 0.18.1)
+and transition races (file modification during validation, a disappearing leaf,
+or a missing staged file during permission application) request one fresh flush
+through the same barrier, including before the first completed cycle. Startup
+uses that barrier too. Native and Windows consumers use the same readiness
+policy and retain the existing flush retry and timeout. Recovery never
 admits a payload until a fresh inspection is clean; persistent, unknown,
-excluded or permission-denied transition problems remain unhealthy.
+excluded or permission-denied scan and transition problems remain unhealthy.
 
 Managed worker enrollment and automatic command placement attempt to disable sleep through `dev-targets power no-sleep NAME|auto`. Ordinary unmanaged SSH enrollment requires explicit `host prepare --no-sleep` or `power no-sleep`. Managed workers apply the same policy to their outer host and Linux guest. Windows disables AC/battery idle and unattended sleep, idle hibernation and lid-triggered sleep; macOS disables idle system sleep; Linux masks systemd sleep targets. Manual targets are excluded from automatic placement setup. An existing Windows machine policy enforcing zero satisfies that setting; conflicting policy remains an error. Administrator privileges are required, and denied settings are reported without blocking worker enrollment or changing placement. The explicit power command returns failure for incomplete configuration. These defaults belong to worker setup, not ordinary Happier installation on a personal computer.
 
@@ -524,18 +533,24 @@ stops the sequence. These large app programs explicitly use `--singleThreaded`
 to avoid retaining duplicate native checker state. Use the public package
 `typecheck` entry point to check every partition, not only the source config.
 
-In 0.3 development, `apps/ui/scripts/deriveTypecheckProjects.mjs` derives the UI
-file lists at the serial compiler choke point. The largest source dependency cycle
+In 0.3 development, `scripts/workspaces/deriveTypecheckProjects.mjs` derives UI
+and CLI file lists at the serial compiler choke point. The public UI entry checks
+foundation, core, source, component tests and other tests; CLI checks foundation,
+services, core, source and tests. Their package entrypoints must pass those complete
+ordered project sets so preparation refreshes membership before compilation on
+both the local and AUTO-selected worker paths. The largest source dependency cycle
 belongs to core, its prerequisites belong to foundation, and remaining editor roots
 belong to source or tests. Shared ambient declarations contribute to every partition.
 Imported authored TypeScript and JSON are included in their consuming closure.
 The generator checks exactly-once editor-root coverage before writing finite
-projects into `apps/ui/node_modules/.cache/tsc/tsconfig.*.json`. These ignored
+projects into each package's `node_modules/.cache/tsc/tsconfig.*.json`. These ignored
 projects extend the authored configs, preserving option paths and redirecting
 references to the other finite projects. Public checking leaves tracked configs
-unchanged;
-`node apps/ui/scripts/deriveTypecheckProjects.mjs --check` detects stale projections.
-Adding or moving a source file requires no manual partition registration.
+unchanged. `node apps/ui/scripts/deriveTypecheckProjects.mjs --check` detects stale
+UI projections; the CLI script at `apps/cli/scripts/deriveTypecheckProjects.mjs`
+provides the same check. Pass `--write-authored` to either generator for an explicit
+refresh of its tracked membership lists. Adding, moving or deleting a source file
+requires no manual partition registration.
 
 Typecheck dependency preparation reuses the workspace owner's captured-input build
 path with strict checking enabled. Unchanged inputs reuse coherent declarations;

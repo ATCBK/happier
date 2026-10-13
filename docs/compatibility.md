@@ -304,6 +304,66 @@ private-row importers under the same destination-first rule. Their Settings
 exports do not remain live fallbacks. These source readers are removable only
 when the supported predecessor/raw-history census no longer needs them.
 
+In 0.3 development, skill reach rules use the same prompt-library entity-row
+authority under `skill-rules`. That row has no retained 0.2 Settings root: its
+first write still requires captured Settings currentness, but source cleanup,
+history normalization and encryption conversion skip its null root. Presence
+and versioned deletion prevent initialization from restoring removed rules.
+The row reader drops additive stored fields and rejects duplicate rules for
+the same skill, place and Agent scope; current writes use the closed record.
+
+The development Prompt Library list reads only physical keys recognized by
+its canonical key schema, before decoding their envelopes. Unfamiliar rows,
+including opaque content and tombstones, stay stored and confer no prompt
+authority; they do not make known context unreadable. Known rows still fail
+closed on corrupt content, key disagreement or Account-mode mismatch. Direct
+reads and mutations reject unknown keys. Account-mode conversion and its
+post-state check retain a complete prefix census and refuse unknown rows;
+display omission does not authorize a conversion that leaves them behind.
+
+`skills.rules.set` resolves skill names or ids through the Account Artifact
+library and applies the shared reach intent to the row revision it read. A bulk
+change commits in one row CAS, returns each item's previous rules for Undo,
+and returns `conflict` when that CAS loses. An unreadable row or incomplete
+Artifact inventory is `catalog_unavailable`, never an empty rules value.
+The shared rules Action spec supplies CLI `skills on/off/inherit` and declares
+the same approval behavior as MCP rules: present-user UI changes apply directly;
+Agent, CLI and MCP callers ask by default unless the existing policy waives it.
+These are unreleased development contracts. The bundled `happier` skill has one
+deterministic Everywhere rule in the initial `skill-rules` row; existing rows,
+Off rules and removed places never reseed it.
+
+Context-stack skill migration adds deterministic rules at the Account and
+Project layers, Profile seeds and Session includes. It retains legacy coding
+entries as inert stored data so retained `disabledInheritedEntryIds` can still
+map to skills at start/attach and become Session excludes. Shared Project
+attachments yield per-viewer Account rules and remain stored. Migration
+at the Profile and Session owners consumes enabled legacy entries once: the
+existing row's `skillMigrationV1: true` field is written with its seed or include
+in the same CAS. Removing that positive selection without Off does not restore
+it on reload. The kept marked entries still resolve inherited exclusions;
+predecessor readers ignore the additional field.
+Account and Project migration record the scoped deterministic legacy entry ids
+in `skill-rules.value.consumedLegacyEntryIds` on the viewer's existing destination
+row, in the same CAS as the projected rules. Rule edits and deletion preserve
+these ids, and later migration skips them before Artifact classification. Shared
+Sources are never written; each viewer consumes their attachments independently.
+The canonical strict Prompt Library row schema accepts this optional field;
+stored readers continue to ignore unknown fields. This is an unreleased 0.3
+contract, so a QA server must reload that schema before testing new writes.
+Classification preserves proven inherited excludes when an unrelated own
+Session bundle is unavailable. Unresolved required inherited custody withholds
+skill delivery through the existing capability notice, not Session startup.
+Private Run preparation reads only its captured Account custody and Artifact
+transport, including with ordinary Account credentials. Qualified references
+use the existing Home identity owner; foreign Home credentials are not borrowed.
+Skill-schema bundles are never pasted; retained generic bundles keep their
+existing text.
+Voice skill entries are dropped without a rule or include. The migration uses
+the existing catalog, Profile, Project and Session owners and adds no mapping
+store. Existing library skills without an applicable rule or Session selection
+stay Off. These source contracts still require the composed program live check.
+
 Launch Profile publication likewise uses only the admitted Profile-row port.
 It replaces the captured row's definition under its existing revision check;
 enablement, prompt attachments and private binding masks stay on that row. The
@@ -322,7 +382,35 @@ complete success. The editor retains its draft; reload the current row before
 reapplying it rather than retrying the old row revision. This development-only
 owner correction introduces no new wire or persisted format.
 
+Launch Profile rows also carry private `skillSeeds`, defaulting to an empty list
+when older stored rows omit the field. `launch_profiles.save` edits those seeds;
+the generated save command accepts repeated `--skill` names, resolved through
+the canonical Account skill Artifact inventory. New Session admission adds the
+seeds to `capabilitySelection.skills.forceIncludeSkillIds`, retaining explicit
+Session exclusions. Resume consumes the stored Session selection without
+reapplying the Profile seeds. Seeds stay on the private row and do not become
+reach rules or published Profile Artifact content. These are 0.3 development
+source contracts; the Profile catalog adds seeds from classified enabled legacy
+stack entries while retaining those entries for inherited exclusion identity.
+New Profile Save stacks, including first Artifact membership attachments, use
+the current prompt-stack authoring placement contract. Existing rows and
+captured duplication retain their stored placements through the row owner.
+
 ### Tolerant stored-data readers
+
+Session capability Actions in 0.3 development source keep the released
+`mcpSelectionV1` and `mcpSelectionRestartRequiredV1` shapes. The generic metadata
+codec also owns the skill selection and its applied baseline; its optional
+`capabilitySelectionApplyV1` field is a refusal/status projection, not desired
+policy or a durable work queue. A raw predecessor MCP selection patch reaches
+the same settled-turn synchronizer. Attach retains pending baselines; a fresh
+start acknowledges only the selections it actually prepared. The preview RPC
+adds generic capability fields while retaining its old MCP response projection
+for supported older clients. Current Actions validate the strict generic output,
+so a reachable older producer lacking those fields is an invalid input/unsupported
+producer response, not evidence that the Machine is offline. Native per-Session
+Off writes an exact native skill name through the existing overlay selection
+contract; it does not require an online scan to save the desired change.
 
 Stored widget definitions, instances and placements, Session/WorkBoard and Home
 layouts, Companion preferences, workspace tabs/canvas state, and legacy folder
@@ -1466,6 +1554,14 @@ therefore cannot replace the newer removal result in the shared UI store.
 
 ### Workflow Session input admission (development)
 
+The current daemon may return a strict `launch_retired` detail with
+`SPAWN_FAILED` after its startup owner verifies process exit and custody cleanup.
+The Workflow Session creator accepts it only for the requested spawn nonce, then
+uses the existing failed-invocation fact. This is a current 0.3 producer/consumer
+cut; older spawn failures and retained Workflow rows without decisive evidence
+remain unresolved, rather than gaining proof from their error code or age.
+No persisted format, migration, rollback adapter or timeout is added.
+
 Current development Session-conversation reuse refusals retain their existing
 codes and carry optional `WorkflowConversationUnavailableDetailsV1` facts through
 `WorkflowActionFailureV1Schema` and invocation progress. These closed objects name
@@ -2339,6 +2435,14 @@ read-epoch projection, not a second operation owner, parser, or promise of mixed
 0.2/0.3 stack support. Remove it only when the original V1 reader contract is
 explicitly retired; unrelated operations and retained operation results are
 unchanged.
+
+V2 get separates snapshot reconciliation from `refreshSetupReview: true`, which
+awaits the retained producer's current setup effect before a human consent
+decision. Ordinary reads can refresh in the background; identical progress and
+review facts do not publish another revision. The refresh operand belongs only
+to the closed V2 request. V1 rejects it, and an unavailable V2 method cannot
+satisfy a required fresh review through a V1 fallback. `includeSetupReview`
+retains its existing wait-only contract.
 
 Current managed bootstrap observations capture the native resource and controller
 installation on the V2 managed operation reference independently of an installer

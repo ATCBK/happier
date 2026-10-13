@@ -294,6 +294,17 @@ Direct command receipts do not cover relay replay. A later unsent attempt cannot
 earlier unresolved dispatch; a proven pre-effect refusal, including relay method unavailability,
 retains its no-effect meaning.
 
+Before selecting a direct Machine RPC route, the 0.3 development client checks the
+advertised endpoint through its existing harmless `OPTIONS` ingress, using the
+caller's remaining setup deadline and cancellation signal. A failed connection at
+this stage falls back through the normal per-method relay policy without sending
+the RPC. This is a connectivity check, not an older-daemon or proof-version probe.
+Browser network errors after a POST remain ambiguous even when no response arrived.
+The existing Home/Account/Machine reachability observation owner also retains the
+direct-route outcome, separately from overall Machine reachability. A successful
+relay call does not retry that failed direct route; an authenticated Machine or
+Account socket reconnect clears it through the existing recovery owner.
+
 The same module carries the restricted Runner's authority map, and it augments the route
 policy rather than replacing it. `resolveEphemeralRunnerMachineRpcAuthority` answers which
 Session capability a reusable Machine service installed in a restricted Runner needs —
@@ -570,6 +581,11 @@ that origin; native direct access does not weaken this server-origin boundary.
 `hostOriginAvailable` is derived from the actual HTTPS/domain resolver; `pathModeAvailable` is false.
 One-use URL admissions have a short expiry. An exchanged viewer cookie has no elapsed-time
 expiry: the server authorizes it against the live registration until that resource is unregistered.
+Private and public viewer cookies share `app/local/services/viewerCookie.ts`: host-only,
+HttpOnly, Secure, `SameSite=None; Partitioned`, with each route's existing path scope.
+The cross-site Browser frame can retain its exchanged admission, while browsers supporting
+partitioned cookies confine it to the embedding top-level site. Opening the preview under
+another top-level site requires its own URL admission; URL tokens remain one-use.
 Opening another viewer preserves existing viewer cookies; unregistering revokes them together.
 Hosted static-asset teardown uses the same daemon revoke route: it revokes the server registration
 before removing the local preview row, rather than leaving remote viewer access registered.

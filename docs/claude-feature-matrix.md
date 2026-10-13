@@ -81,6 +81,19 @@ Authenticated `SubagentStart` reopens a known background invocation. A terminal
 identity alone does not prove background membership. Async Agent/Workflow
 acknowledgements prove membership; successful SendMessage `resumedAgentId` proves
 an asynchronous resume even when the original child was foreground.
+
+In development source, a native failed SendMessage response that explicitly
+reports a user-stopped child which cannot resume supplies cancelled task evidence.
+The shared task-envelope reader handles this response for transcript and authenticated
+hook delivery, and the existing activity ledger retires only that child. Ordinary
+delivery failures and copied response text do not establish cancellation; the failed
+SendMessage tool result remains part of the conversation.
+
+Development-source workflow activity publication retries failed records with the
+existing session-mutation backoff. Fresh progress, terminal observations and flushes
+preserve each failed record's retry delay; healthy records can still publish, and
+the delayed retry reads the latest snapshot. Permanent request refusals remain
+observable failures rather than automatic retry loops.
 `SubagentStop` is progress because Claude can veto it and continue. Synchronous
 children finish on their tool results; asynchronous children finish on settled
 native evidence. Every tool block is folded and an implicit group closes when

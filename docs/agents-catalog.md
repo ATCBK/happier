@@ -47,6 +47,53 @@ runtime confirmation; Account-only rows do not prove that the Agent can run on
 any machine. See [Providers](providers.md#provider-connections) for the Account
 catalog writer and declaration-only model projection.
 
+### Session skills (0.3 development)
+
+The lazy Agent declaration projects `capabilities.skills`; the host's single
+runner resolver selects native session-directory delivery or the existing
+Action-backed index. A documented mechanism alone does not enable injection.
+Pi's probed `--skill` path supports session-directory delivery but not native
+disables or live reload. OpenCode stays index-only: configured custom native
+roots can evade static masking, and existing wildcard permissions can override
+a per-skill deny. Gemini, Kilo, Cursor, Grok and Oh My Pi remain index-only until
+their native probes pass. Native roots are read-only discovery inputs, not proof
+that an unprobed launch loads an injected directory.
+
+Declarative ACP Agents use the same lazy normalizer and one host ACP composer.
+The optional `skills.sessionDelivery` block selects `env_path_list`,
+`defaults_file_env`, or `native_config_skills_dir`; it accompanies a matching
+`session_dir` capability rather than creating another runtime carrier. The
+composer preserves inherited paths/defaults and user configuration, owns private
+launch files, and releases them with the launch. The native skills subdirectory
+is a portable component inside the private Agent directory. Bundled Copilot,
+Qwen, CodeBuddy and Devin remain index-only without a passing native probe;
+they do not advertise dormant delivery blocks. These are development-source
+contracts, not a statement of released availability or completed live QA.
+
+In development source, Claude's SDK `Skill` tool events and Codex's dispatched
+skill input items provide declared usage evidence. Claude's terminal path and
+other native-delivery Agents do not promise native usage coverage. Index Agents
+record successful Session-scoped `skills.read` calls. The captured Claude Code
+2.1.296 tool event verifies the `input.skill` shape and accepted native invocation;
+it was produced against an isolated loopback model fixture, not a real tenant.
+Codex parsed shell reads remain unreported until a real native vector establishes
+their contract. Account `lastUsedAt` is therefore a recorded-use fact, not a
+guarantee that every native Agent's use has been observed.
+
+The bundled `happier` skill uses the same library list and read Actions as Account
+skills, with a content-digest revision and read-only first-party provenance.
+Session-scoped `skills.read` can serve its bundled bytes without an Artifact;
+the current Session plan still must match its id, name and digest. Turning it
+off changes the existing reach rules and never reseeds them.
+
+Delivered library skills use their library id in the registered Session skill
+catalog. Native skills keep their Agent catalog identity. This lets the composer
+deduplicate session and library rows, and lets its identity-only mention resolve
+against the same current catalog at send time. Library picks delegate selection
+to the existing Session/draft owner; P8's sheet controller supplies the single
+apply notice shared with the composer. Composer mounting remains Lane 12 Main's
+integration work; these are development-source contracts, not release claims.
+
 ---
 
 ## Configured ACP definitions (0.3 development)
@@ -109,6 +156,17 @@ capability resolution; the contribution uses the public ACP runtime. There is
 no configured-only host runtime or synthetic per-definition identity. A deleted
 definition or unavailable catalog refuses launch and requires selection repair;
 it never silently selects another definition or a bundled Agent.
+
+Daemon launch in 0.3 development carries that admitted selection and captured
+Account context into execution-surface resolution. Runner bootstrap retains the
+admitted runtime descriptor when terminal presentation supplies none. Session
+CLI preconditions validate the definition's resolved command through the same
+Account ACP launch owner, rather than requiring a synthetic `custom-acp` binary.
+A missing executable returns the existing `agent_cli_missing` setup refusal.
+Other launch failures retain a redacted `launch_error` code and message through
+daemon transport and the optional `launchError` on `session.spawn_new` errors;
+the existing outcome and retry policy remain authoritative. These are source
+contracts; loaded-daemon launch and first-reply acceptance require live QA.
 
 Configured definitions use one typed `launch`: a user-authored command, a pinned
 npm package, a per-platform pinned archive or executable, or a pinned uv package.
@@ -211,6 +269,12 @@ bound by generated activation and supplied to the catalog's existing hook owners
 there is no broad Agent-runtime contribution object or parallel catalog path.
 Bundled and installed Agents therefore enter through the same manifest and
 registration contracts.
+
+In 0.3 development source, `catalog.acpRegistryIds` declares the ACP Registry
+identities corresponding to an Agent. The same catalog projection carries these
+discovery facts into the daemon's Agent projection and the generated cold UI
+declarations. `resolveBuiltInAgentForRegistryId` matches those declarations only
+on built-in catalog entries; the identities never select an executable runtime.
 
 In 0.3 development source, a bundled Agent's `nativePermissionModes` definition
 projects the same native permission vocabulary used by its execution code.
@@ -508,13 +572,40 @@ receipt when another internal refresh supersedes it; this upstream limitation pr
 freshness guarantee in that case. Happier does not inspect private registry state or add retries to
 hide the missing receipt semantics.
 
+In 0.3 development source, `capabilities.tools` may declare
+`mcpToolControl: { off: 'hidden' | 'blocked', approval: 'native' | 'host' }`
+and `mcpToolLoading: 'every_turn' | 'on_demand'`. These facts use the same
+manifest admission and catalog projection as other Agent capabilities; a
+consumer must not guess control support from delivery alone. An absent control
+declaration means unproven, not host approval. The SDK open/configuration carrier
+is `mcpToolPolicy` beside `mcpServers`. Host-controlled Agents receive Allow as
+Ask and rely on the canonical live host decision. Native approval requires
+actual same-mode Allow-to-Off and Allow-to-Ask revocation through that leaf's
+configuration path; a declaration or synthesized permission request is not
+proof. Development launch paths that accept tool policy request native Ask
+instead of granting native Allow until revocation is proven. Emitting Ask is
+not proof that a path reaches host approval; for example, Claude's native
+`dontAsk` confinement does not provide that mediation. A host session grant must
+not become a native
+“always” grant that bypasses the next host decision: the OpenCode and Codex MCP
+reply adapters return a one-call native approval while the host owns the grant.
+Native detached Runs likewise need proven revocation before native approval is
+declared; the open-request carrier alone does not provide it. The MCP contract
+kit distinguishes launch-time hiding from live call-time blocking and observes
+real server receipts as well as approval ordering. Source fixture evidence does
+not by itself admit a first-party declaration or certify a vendor launch path.
+
 In 0.3 development source, Pi receives user MCP servers through its existing
-native tools extension. The host's shared MCP resolver selects and materializes
-the servers; Pi writes that open-request record to its private 0600 config,
-registers `mcp__<server>__<tool>` tools over retained stdio connections, and asks
-through Pi's extension confirmation dialog before calling them. This uses the
-existing RPC dialog route to Happier, rather than a separate daemon MCP proxy.
-Session shutdown closes the connections and removes the private config.
+native tools extension for Sessions and detached Runs, including MCP-only launches
+without the built-in Happier bridge. The host's shared MCP resolver selects and
+materializes the servers; Pi writes the open-request record to its private 0600
+config and registers `mcp__<server>__<tool>` tools over retained stdio connections.
+Off tools are omitted at launch. Before each exposed MCP call, the extension's
+confirmation carries the native call id over the existing RPC dialog route.
+The host correlates it with the preceding tool-start event and requests approval
+through the canonical host handler; unrelated dialogs remain questions. Unknown,
+duplicate or retired call ids fail closed. Shutdown closes the connections and
+removes the private config. This does not introduce a daemon MCP proxy.
 Every Happier Pi launch includes `--approve`, so the user-selected project also
 loads its native skills, extensions and settings. Live vendor and Windows checks
 remain separate from the source tests.
@@ -908,6 +999,20 @@ an Agent without a native CLI probe, or one whose probe throws, cannot replace
 completed siblings with failures. Failed observations remain unknown rather than
 becoming negative installation facts, and do not acquire the successful snapshot
 cache lifetime. Workflow admission consumes the same exact-Machine inventory.
+For a custom Session Agent with no CLI declaration or runtime command, the
+catalog's current, identity-matched native Session factory is the installation
+proof instead. Session spawn and Machine inventory consume that same proof;
+retirement withdraws it rather than retaining a CLI-cache success. A declaration
+alone does not prove an executable factory, and configured ACP targets still
+validate their selected command.
+
+The optional inventory `signIn.required` fact can be false only after that
+CLI-less factory is proved current and no native or connected authentication is
+declared. Its status remains `unknown`, not fabricated `signedIn`. Missing or true
+facts retain the existing sign-in requirement. Explicit connected credentials,
+selected Profiles and Provider purposes keep their independent admission checks.
+These are 0.3 development-source contracts, not loaded-runtime certification.
+
 Its concrete availability refusals carry typed reasons through
 `WorkflowActionFailureV1Schema`; the shared Workflow presenter reuses localized
 Machine Agent status copy. Workspace preparation and Agent probe failures remain
@@ -962,6 +1067,17 @@ purpose-default catalog remains Native; availability alone does not select a def
 
 ### Agent CLI install and update jobs (0.3 development)
 
+Current development Machine metadata publishes `agentInventory`: the installed
+Agent IDs and their observation time. The daemon's reconnect metadata refresh and
+demanded capability reads reuse `detectCliSnapshotOnDaemonPath`; no homepage probe
+or second detector is involved. The shared strict Machine publication schema
+excludes executable paths, dependencies and authentication facts from this
+projection. A failed individual probe retains that Agent's last-known positive
+install fact; a successful negative observation removes it. These are install
+observations, not launch readiness or skill support. Passive reach readers use
+the published facts on a fresh device and offline. Older retained metadata without the optional projection
+can still use its device cache; malformed optional stored facts read as absent.
+
 Agent software acquisition has one owner:
 `packages/cli-common/src/agents/install.ts#installAgentCliForRuntime`. The daemon's
 `apps/cli/src/capabilities/installJobs/agentInstallJobOwner.ts` adds a job lifecycle around
@@ -1000,13 +1116,21 @@ succeed only after that same resolver reports a ready launch. Archive success
 also carries the checksum fact.
 Machine RPCs use `daemon.agents.install.start/read/cancel/list`:
 
-- `start({agentId, definitionId?, intent: 'install' | 'update' | 'uninstall', consent: {vendorRecipe: boolean}, force?})`
+- `start({agentId, definitionId?, expectedDefinitionVersion?, intent: 'install' | 'update' | 'uninstall', consent: {vendorRecipe: boolean}, force?})`
   returns `{ok: true, jobId}`. `force` requests reinstall rather than skip-if-installed.
 - `read({jobId, cursor})` returns `{ok: true, steps, progress, events, nextCursor, done, outcome}`. Events are
   `step`, `progress`, or `log`; the cursor advances through that job's event stream.
   The step/progress snapshots also serve Action status callers without replaying events.
 - `cancel({jobId})` requests cancellation and waits for the running operation to settle.
 - `list({})` returns active jobs and the latest completed attempt for each target.
+
+The private `expectedDefinitionVersion` precondition binds a reviewed registry
+install to its typed launch version. The daemon compares its own captured Account
+definition before joining or creating a job and returns `definition_version_changed`
+if the pin changed. Callers provide no executable declaration. Omitting the
+precondition retains ordinary install-current behavior; it is invalid for a
+target without a definition or for uninstall. It is not a public
+`machines.agents.install` Action input.
 
 Uninstall removes only Happier-managed software in the selected Account namespace.
 Definition uninstall, repair and forced reinstall refuse with `in_use` while a
@@ -1036,10 +1160,22 @@ The authenticated local daemon control transport exposes the same operations at
 `succeeded {version, checksum?}` or `failed {code, stepId, message,
 guideUrl?}`; unavailable automatic installs can carry the Agent's installation guide.
 
+The development CLI's install, update, setup, remove, status and cancel commands
+dispatch compiled Action leaves. An explicit `--machine` selects the target;
+otherwise machine mutations use the captured Account's local Machine identity.
+Read-only local `--dry-run` planning remains separate from starting a job.
+CLI requests follow the configured Action approval policy, and vendor-recipe
+consent does not waive that policy. Terminal observation uses the same status
+and cancellation Actions rather than a second local install-job client.
+
 Jobs and their recent history live in daemon memory. Closing an app surface or disconnecting
 its caller does not own the running operation. The module-scope app store in
-`apps/ui/sources/agents/machineAgents/installJobs/` keeps per-Agent subscriptions and cursor
-reads, and discovers jobs with `list` when reconnecting or reloading. A daemon restart loses
+`apps/ui/sources/agents/machineAgents/installJobs/` keeps subscriptions, admission and cursor
+reads per Agent/definition target, using the inventory's canonical tuple key. Start requests
+retain the exact `definitionId`; list hydration and cancellation keep separate definitions'
+jobs isolated. Each definition-qualified start reaches daemon admission, which owns joining
+under the captured Account/definition/version; a newly changed pin cannot join an older
+pending start in the client. The store discovers jobs with `list` when reconnecting or reloading. A daemon restart loses
 job state; re-detect installed software to recover rather than treating the missing job as
 proof of success or failure. Cancellation stops the active operation and cleans its partial
 staging; software installed by a completed step and vendor-script side effects may remain.
@@ -1116,8 +1252,24 @@ In 0.3 development source, Agent manifests may declare `capabilities.skills`:
 `delivery` (`session_dir` or `none`), `nativeDisable`, `liveReload`, optional
 `usageEvidence`, and optional native root segment arrays (`user`, `project`,
 `plugin`). The current catalog projects that declaration; an absent declaration
-resolves to no delivery, native disable or live reload. Bundled Agents initially
-declare `none`; native skill delivery is not yet activated by this seam.
+resolves to no delivery, native disable or live reload. Claude and Codex now
+declare `session_dir` in development source. Claude consumes a session-private
+plugin directory; Codex app-server consumes the session skills root, while its
+daemon-proxy and ACP launches report `skillsDelivered: false`. The generic ACP
+Session composer preserves MCP and refuses supplied skills visibly until native ACP
+delivery is implemented. Other Agents retain `none`
+until their native delivery vertical is implemented and tested. An Agent with
+a declared Action channel can instead receive a metadata-only skill index and
+read the selected content through `skills_read`.
+
+The bundled first-party `happier` skill contains a thin guide to the installed
+CLI's help. Its deterministic Everywhere rule is initial content of the
+`skill-rules` row, written only when that row is created. Turning it Off, removing
+its places, or deleting the row never seeds it again. Existing library skills
+without a rule stay Off. The runner materializes the stub from bundled content
+through the same skill plan and immutable store; it does not create an Artifact.
+Public Skills list/read and read-only detail support remain the separate
+first-party Skills surface integration, including reads by index Agents.
 
 Declarative ACP Session directory delivery requires both `delivery: 'session_dir'`
 and `definition.skills.sessionDelivery`. The closed declaration supports

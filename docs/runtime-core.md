@@ -4,6 +4,25 @@ The host owns the executable Session and turn lifecycle. An Agent plugin supplie
 
 This page describes **0.3 development source**, not a shipped release or a completed live-validation gate. It is the standing architecture reference; approved plans remain the execution contract for their assigned work.
 
+Session capability edits converge through the host's
+[`capabilitySelectionSynchronizer`](../apps/cli/src/agent/runtime/capabilitySelectionSynchronizer.ts).
+It observes the canonical desired selection and applied metadata baselines, waits
+for a settled turn, and uses P3's `reapplySessionSkills` for declared library-skill
+live reload. Native-skill overlay changes and MCP changes use the daemon's existing
+restart-with-resume owner with reason `capability_selection_change` and
+`force_current_cli`; they never create a fresh conversation as a fallback.
+Turn/approval busy refusals wait for the next settled turn. Missing resume evidence
+or a launch mode requiring a person's restart leaves the selection pending, with
+an apply-status projection rather than a queue or timer. Attach preserves the
+applied baseline; actual startup application or live-reload acknowledgement
+clears the corresponding pending marker, as does restoring the known applied
+selection through Undo. Explicit current terminal/Windows-hosted launch facts
+take precedence over a retained daemon projection when deciding manual restart.
+Host publication records the admitted
+Agent's resume/live-reload facts in `agentRuntimeCapabilitiesV1.capabilitySelection`
+so clients can decide timing without a live Machine round trip. These source paths
+still require the program's composed live journey before certification.
+
 ## Native Agent seam
 
 [`AgentRuntime`](../packages/plugin-sdk/src/agentRuntime/runtime.ts) has two mutually exclusive forms: a Session factory or an execution-only Run factory. A Session-capable Agent does not add an independent Run lifecycle. For Session-owned Runs, the host binds its Session runtime into the shared Execution Run adapter in [`nativeAgentExecutionRun.ts`](../apps/cli/src/agent/runtime/bridges/executionRun/nativeAgentExecutionRun.ts). Detached execution requires the Session factory's declared `executionRunContextV1` facet; it cannot fabricate a parent Session. The shared SDK implementation in [`executionRun.ts`](../packages/plugin-sdk/src/agentRuntime/executionRun.ts) owns correlated Run events, cancellation, terminalization and disposal for the finite/conversation adapters.
@@ -29,6 +48,57 @@ caller deadline or cancellation still ends that caller's wait; actual transport
 or catalog failures retain their existing unavailable result. This changes no
 catalog authority, retry loop or Session lifecycle owner.
 
+Plugin-declared MCP servers in 0.3 development source enter
+[`resolveSessionCapabilitiesV1`](../packages/protocol/src/reach/resolveSessionCapabilitiesV1.ts)
+as `plugin:<pluginId>/<localId>` items. Catalog rules and Session selection
+decide their inclusion together with Account-managed servers. The existing
+hosted loopback attaches selected dynamic registrations; it does not choose
+servers independently. Forwarded MCP peer tools retain their original names
+under the MCP SDK tool schema; host-authored hosted tools retain their existing
+namespace validation. Static declarations use the existing executable owner
+or remote bridge. Wire-name assignment reserves only enabled native servers
+whose discovery source declares `loadedInHappierSessions: true`.
+
+The public `services.mcp.resolveServers` signature is unchanged. Its host
+implementation projects the applied runner set and never repeats a catalog or
+rules resolution. Session-owned Runs receive their own applied projection;
+detached Runs retain execution-run scope and cannot attach a declaration that
+requires a Session. These source paths are not a claim of completed live QA.
+
+In 0.3 development source, known third-party MCP wire names resolve through the
+runner's canonical item-identity map and Protocol's tool decision owner. Off
+remains denied under full access and existing grants, including when a pending
+permission answer is rechecked. Read classification requires both the server's
+read-only opt-in and the tool's annotation. The built-in Happier server retains
+its Actions policy. For an admitted native Session declaration, MCP entity-row
+publication wakes the existing captured Account snapshot subscription and sends
+the current projection through the ordinary configuration-update carrier;
+Settings need not change. Invocation-only foreign-Account reads retain the
+existing Saved Secret operation holder: MCP admission publishes the row into
+that captured holder, and the owning Session or Machine's existing AccountChange
+and reconnect wakes re-read demanded rows through it. A captured catalog failure
+withdraws that holder's tool authority; credential retirement clears its readers
+and subscriptions. A failed demanded MCP read does not prevent the Machine's
+unrelated notification, Pending, or cursor convergence; cancellation or captured
+Account retirement encountered during that demanded read still refuses the
+catch-up. An already-retired holder has no catalog demand. These reads never
+retarget the process's Active Account.
+Ordinary foreground Sessions retain their captured Active Account scope and
+lifetime; Session-derived Runs reuse the existing Session configuration carrier,
+not a new detached-Run control method.
+
+The 0.3 development approval logic preserves the host's validated `mcpTool`
+identity through Session-core's stored request, transcript and pending-request
+projections. Its Always-allow controller answers through the existing Session
+permission owner, then writes `mcp.servers.tools.set` as the present user. A
+failed catalog save retries that write only. Capability enablement uses the
+existing `session.capabilities.set` approval and its review-only `reason`;
+Always retains the deciding rule's Agent qualifier and writes through the rules
+Action. The shared apply-notice producer reads the current desired/applied
+metadata, so a stale preview cannot retain a cleared notice or claim a live
+reload was acknowledged. Card rendering and composer placement remain separate
+capabilities-program integration work.
+
 In 0.3 development source, the shared runner MCP resolver publishes skipped
 non-strict servers in one committed Session `message` per launch, deduplicated by
 server name, while retaining its debug diagnostics. The typed
@@ -37,6 +107,16 @@ contains the server name, reason and optional library item id. Its canonical
 reader validates the notice independently of the message; malformed or future
 sidecars leave the fallback text readable. Explicit Saved Secret catalog failures
 retain their existing fail-closed error path.
+
+In 0.3 development source, prompt Artifact preparation uses the admitted Session
+HTTP route for the active Home; a saved descriptor supplies Home identity rather
+than overriding that route with its HTTPS endpoint. Optional prompt entries with
+an unavailable transport are omitted from the current prompt and retained as
+typed unavailable admission facts. The Session prompt-plan producer reports
+`prompt_library_unavailable` through the same committed capability notice, with
+no document or Account identifiers. Required inputs, invalid or locked content,
+and cancellation retain their fail-closed preparation path. Recovery is checked
+on the next preparation.
 
 In current 0.3 development source, the daemon's [admission drain](../apps/cli/src/daemon/lifecycle/admissionDrain.ts) owns fresh-work quiescence. Temporary drain preserves accepted custody, native request-auth and daemon publications; reopening wakes the incumbent Automation claim loop and parked Workflow admission. Fresh turn and managed-process authorization remain closed during drain. Plugin handoff retains its own exclusion and publication custody. Final shutdown closes admission irreversibly and awaits the existing finite-operation owner's actual settlement before disposing native plugin leases, terminals or roots. Unconfirmed Stop retains that custody and keeps observation and explicit repeated Stop reachable; it does not prove settlement. Session-hosted Execution Runs ask that current daemon owner over the scoped control transport before creating a Run; an unavailable admission reply refuses the new start. Retained Run state stays with the [execution registry](../apps/cli/src/daemon/executionRunRegistry.ts), rather than becoming another drain decision or start registry. These source contracts are distinct from loaded-daemon certification.
 
@@ -303,6 +383,206 @@ See [Providers](providers.md#managed-subscription-backed-gateways) for source
 authority and the remaining composed-validation boundary.
 
 ## Session path and owners
+
+In 0.3 development source, the Session host's open context retains the admitted
+Session transport's Home id and HTTP endpoint, Account credentials and Account
+lifetime. Prompt, skills, MCP and role preparation consume that context rather
+than selecting a saved Home profile or another endpoint. Each finite read may
+capture newer material from the same Account lifetime; retirement still refuses
+private reads and provider effects. Manual startup reads Machine policy after
+the real Session supplies its binding, including deferred attachment. This
+does not add another credential or routing authority.
+
+The shared MCP startup reader admits an unavailable non-strict catalog as a
+typed capability notice without removing the built-in Happier tools. Strict
+MCP policy and Account custody/encryption failures retain their typed refusals.
+Selected-server operations and execution-only detached Run admission continue
+to require their catalog; detached Runs have a different output contract from
+Session capability notices. Optional daemon plugin-tool catalog loss likewise
+publishes a startup notice and permits bridge construction; it does not admit
+an empty executable catalog. HTTP POST and native tool execution still demand
+fresh daemon authority and refuse until recovery, through the existing inventory
+owner. Required prompt, Role and admitted-context failures use the host's typed
+`preparation_pending` publication before construction cleanup, without exposing
+private Account or document facts. Loaded-runtime verification remains a
+separate boundary from these source contracts.
+
+Coding prompt preparation may omit unavailable optional Account library,
+Artifact and automatic plugin-asset augmentation, publishing one private-safe
+Prompt Library notice from the full-plan producer. A remembered required
+selection prevents silent omission until a ready selection confirms deletion;
+its old body is never read as a fallback. Selected Profile, Project and required
+attachment admission remain strict. Ready captured coding records avoid repeating
+catalog reads through the same hydration owner. The memory corpus rejects an
+incomplete inventory before replacement or pruning; confirmed absence still
+withdraws the corresponding indexed document.
+
+Notes and live worker boundaries without a selected or inherited Role do not
+demand unused Account Role inventory. Selected Role policy retains its own
+required source admission. Prepared-plan freshness likewise belongs to the
+full-plan producer: its currentness assertion is consumed again at native open
+and provider dispatch after asynchronous preparation. Withdrawn facts cannot be
+reconstructed from earlier returned text. A valid empty plan remains distinct
+from withdrawal; string-only callers without that producer authority retain
+their existing fallback contract.
+
+In 0.3 development source, skill delivery consumes the canonical reach and
+Session selection owners before the runner opens an Agent. The daemon alone
+writes `<happierHome>/skills`: immutable digest-addressed bundles feed absolute
+POSIX session links or Windows copies, with `session.json` retaining the digest
+roots for both Sessions and their Runs. Runner exit releases the folder after
+the existing replacement check; daemon re-adoption removes abandoned folders
+only with a reliable live inventory. GC runs at those lifecycle boundaries and
+skips sweeping if the library or any session manifest is unreadable. Supporting
+files retain executable bits; native skill roots remain read-only inputs.
+Remote library marks are read before entering the store mutation queue; the
+current Session/Run roots and sweep remain serialized, so a slow GC read does
+not prevent another Session's content from being materialized.
+Foreground identity registration and marker persistence reuse the ordinary
+daemon report owner before materialization, without admitting runtime readiness.
+The existing heartbeat and exit owner retire those folders after a crash; a
+Session-owned Run carries that parent's captured metadata/PID, not the resolver
+process. Native registration enters the existing exit custody before awaiting
+OS evidence; an unavailable, departed or mismatched recorded process cannot
+republish a folder after retirement. A live foreground parent is registered
+even when its own skill delivery uses only an index.
+
+One pure skill-plan owner decides native masking, duplicate names and the
+index fallback. An unreadable native root withholds every otherwise unmasked
+selected skill, while keeping known masking evidence visible. Failure to read
+content or reach the daemon never prevents the Session from starting; the host
+publishes its existing capability notice. A Run uses its own Agent, cwd and
+folder through the same resolver and SDK carrier.
+
+In current development source, stack skill migration is additive. The Prompt
+Library load owner adds deterministic Everywhere rules, the Profile owner adds
+seeds, and the Project owner adds rules in each viewer's Account. Shared Project
+attachments remain intact. Session startup classifies its own and inherited
+bundle references through the Artifact reader before its metadata CAS: enabled
+own entries become includes, and disabled inherited entry ids become excludes.
+Profile seed and Session include migration mark consumed enabled entries with
+`skillMigrationV1: true` on their existing stack entries in the same row CAS.
+Subsequent loads skip those positive projections, so removing a seed or include
+without Off remains effective. The retained marker never suppresses inherited
+exclusion identity.
+Account and Project migration use `consumedLegacyEntryIds` on the viewer's
+existing `skill-rules` row instead: the scoped deterministic entry ids and rules
+are written in one destination CAS. Rules Actions preserve consumption when a
+rule is removed, and the migration skips consumed positives before reading
+Artifacts. Shared Source attachments remain unchanged, with independent
+consumption in each viewer's Account. The strict server row schema and tolerant
+stored reader share the Protocol schema owner for this optional field.
+The kept Account, Profile and Project rows retain entry-to-skill identity even
+after a rule is removed or recreated. Disabled Profiles remain readable for this
+retained identity purpose without becoming active context or adding new Session
+seeds. Deferred native attach forwards its existing credentials to that same
+preparation owner. Required inherited exclusions are classified independently
+of positive Session attachments: an unreadable own bundle cannot erase a proven
+exclude. If required inherited custody cannot be read or classified, the runner
+uses its existing skill-unavailable result without preventing Session startup.
+Privately captured Runs reuse the same row reader and selection calculation,
+without publishing their Account snapshot into active process state.
+Coding entries remain inert stored data; the stack resolver never pastes
+skill-schema content. Generic bundles continue
+to contribute their existing text. The same Prompt Library load owner drops
+Voice skill entries through its existing row CAS (D32), without enabling them.
+Malformed or unavailable source/target data cannot authorize migration writes.
+The program's composed live journey remains a separate verification boundary.
+
+Before capturing skill rules, the runner prepares the Session's selected Project
+through that same context owner, including when no project rule exists yet.
+It re-reads the captured Account's rules after migration. A failed Project
+migration uses the existing skill-unavailable result and capability notice;
+it does not refuse Session startup. Private invocation contexts keep their
+captured Account/Home and never publish into the daemon's active Account.
+The shared Artifact reader binds both ordinary Account credentials and
+requester-scoped credentials to that invocation's captured Home transport.
+Qualified references must resolve to the same bound Home through the existing
+profile identity owner; saved profiles never supply another Account's material.
+Invocation currentness is checked even when the reader reuses a cached store.
+
+The host's [skills reapply operation](../apps/cli/src/prompts/skills/runtime/reapplySessionSkills.ts)
+reuses that resolver and folder owner. A declared live-reload Agent acknowledges
+the new delivery before the host publishes its applied plan; a native-root scan
+or library inventory/content failure preserves the retained folder. Account
+currentness is checked again after native acknowledgment before publication.
+Unsupported launch
+paths return a next-turn result, and reload errors return a failed result for
+the capability-selection synchronizer's restart-with-resume path. Native-skill
+disables remain launch-owned and require that restart rather than library reload.
+The synchronizer and its composed Session journey are a separate integration
+boundary from this operation's source contract.
+
+The Session skill catalog reads the current acknowledged delivery at demand.
+The host's [delivered-skill identity owner](../apps/cli/src/prompts/skills/runtime/resolveHappierSkillIdentity.ts)
+recognizes both session paths and the immutable digest-cache paths Agents may
+report, then publishes `origin: 'happier'` with the library `projectionRef`.
+Containment and home-prefix spellings use the existing CLI path owner.
+A reported native path retains its native identity even when its name matches.
+A per-open refusal hides only that refused delivery; a later acknowledged reload
+can publish its fresh delivery without restarting the host catalog reader.
+
+Skill use in 0.3 development source is an Account fact separate from the skill's
+Artifact revision. Declaring native plugins emit the strict `skill-usage` event;
+the transcript projection resolves it through that same delivered-skill identity
+owner and posts `/skills/usage` without committing a transcript message. A
+successful `skills.read` inside a current Session plan uses the same daemon
+recorder; reads without a Session do not record use. Native-only paths, stale
+plans and failed content reads cannot authorize a usage write.
+The request retains its source Account id and captured Home endpoint; the daemon
+refuses observations for another Account or Home before reading its catalog.
+Session-owned finite and retained Runs forward the native evidence through their
+own resolved delivery and captured Account binding, without adding a Run event
+or a second token-usage observation.
+
+The daemon's `createSkillUsageRecorder` reads the captured Account's hydrated
+`skill-usage` catalog and writes through the existing Prompt Library row CAS.
+`planSkillUsageWriteV1` updates a skill only when its timestamp is absent or at
+least one day old. The recorder also reserves an attempt for that interval in
+its daemon lifetime, so concurrent uses or rejected writes cannot repeat it;
+this reservation is not a persisted usage fact. Unavailable rows and conflicts
+drop the observation; the existing catalog refresh withdraws stale rows after a
+mutation receipt. This
+network work stays outside the filesystem store queue. The row retains one
+timestamp per skill, including historical ids, for the Skills read/list consumers.
+`skills.list` and Session-less library `skills.read` join this row without
+recording a use.
+The list also projects its oldest timestamp as `usageObservedSince`; deleted
+skill ids remain part of that observation bound. An empty or unreadable row
+leaves the bound unknown, and an unreadable row supplies no last-used facts.
+The shared `deriveSkillAccountStatusesV1` owner marks a skill unused only after
+more than 30 days since its recorded use. Without a recorded use, both the
+observation bound and the skill's creation must predate that boundary. UI
+consumers suppress this status while the usage row is unavailable, including
+when other library facts are retained for continuity. These are development
+source contracts and do not claim complete native Agent observation.
+Source tests do not certify the program's loaded vendor/daemon journey.
+
+Machine skill installation in 0.3 development source is a separate, opt-in
+custodian operation. The existing daemon Action executor copies a library bundle
+to the selected Agents' declared user roots and preserves supporting-file modes.
+It does not write plugin caches or overwrite an unmanaged skill. The existing
+Account `external-links` CAS row retains machine/Home-scoped receipts with the
+library digest and actual installed digest; new receipt writes omit the retired
+sync-mode field, and the canonical reader folds legacy modes to manual. Account
+artifact changes
+and reconnect demand use those receipts to refresh matching unchanged copies.
+Locally edited copies are refused; uninstall removes only a receipted matching
+copy unless the custodian explicitly forces it. Account or Home retirement
+refuses further effects, and receipt-write failures preserve the reported native
+outcome without a retry queue.
+
+Found in 0.3 development source uses the same declared-root scanner as masking,
+including plugin roots for discovery only. `skills.found.list` reports directory
+paths and plugin provenance. The existing download transfer accepts one of those
+paths, re-scans it, and reads the bundle with its actual file modes; it does not
+resolve prompt-asset adapter ids. Both hosts supply that reader to the single
+`skills.found.read` / `skills.found.adopt` operation. Adoption creates library
+content, then acknowledges its reach rules and optional Session include in order;
+it keeps any acknowledged identity when a later step fails. A plugin-owned skill
+is copied into the library without writing its plugin cache. UI reads retain the
+exact selected Machine Home independently of the captured library Account.
+Loaded daemon and browser verification is separate from these source contracts.
 
 | Responsibility | Canonical host owner |
 | --- | --- |
@@ -642,8 +922,18 @@ existing accepted-spawn marker writer and exact-process adoption carry these
 facts across recovery; an old marker without them stays unknown. Attribution is
 not authorization, and server metadata cannot manufacture it. The transient
 admission-currentness callback stays with the live launch and is never persisted
-as respawn state. Foreign Session/run/workflow starts still refuse before using
-custodian policy or credentials until their requester bootstrap is available.
+as respawn state. In current 0.3 development, an original Account Action for a
+shared Machine start carries installation-sealed requester custody. The existing
+daemon `prepareRequesterSessionBootstrap` wrapper accepts that admitted Account
+context as well as existing per-Session custody; attribution and currentness come
+from the verified binding, never caller-authored spawn fields. Failed launch
+cleans the prepared custody through the same owner. UI and CLI requester starts
+use this Action path; raw custodian-only spawn methods remain refused. Existing
+requester resume restores the original Session's protected custody through
+`session.open`, without substituting the Machine custodian's Account. Other
+foreign Session/run/workflow starts still refuse until their own requester
+bootstrap is available. This is source behavior, not released availability or
+loaded-runtime certification.
 
 ### Triggers at Session birth (0.3 development)
 
@@ -729,6 +1019,33 @@ settled credential-revision transition; process replacement or reselection
 invalidates that authority.
 This is an unreleased source corridor, not a claim of loaded-daemon validation
 or released availability. The corridor does not restart the parent Session.
+
+In current 0.3 development source, accepted-turn failures in finite, retained
+and detached Runs enter the existing Connected Account recovery pipeline before
+terminal Run projection. Session and Run scope share classification, policy,
+result disposition, temporary-throttle waiting and continuation admission;
+scope adapters supply the exact target, account materialization and cancellation.
+Provider-native failure facts without a member identity are qualified against
+the current registered binding, never an invented account selection. A Run
+disposes its failed native runtime before rematerializing, resumes the same native
+conversation/checkpoint and sends only the configured continuation with a fresh
+input identity. Partial output is retained; the accepted input is not replayed.
+Stopping a Run's wait does not cancel or fence its parent Session. Refused
+recovery or native resume failure follows the ordinary terminal failure path.
+Pre-admission rejection and unknown input custody remain authoritative and do
+not authorize automatic continuation, even when their diagnostics retain
+provider health evidence. Successful native completion records the same
+scope's outcome before completion waiters settle, clearing its capacity streak.
+Account replacement preserves the Run's existing lifetime switch budget.
+This is source behavior; the loaded-daemon journey still needs validation.
+
+Native authentication is carried by `context.session.services.auth` for a
+Session runtime and the existing `context.executionRun.services.auth` for a
+detached Run. Both use the same daemon refresh owner, bound to their actual
+scope and lifetime. A Session-owned Run refreshes its own materialization;
+this capability neither requires nor grants general `services.sessions`
+access. Action consumers with declared Session access retain their genuine
+Session-handle auth API.
 
 The execution host bridge retains private Run control state through the existing
 device-local execution registry, sealed separately from disposable visibility

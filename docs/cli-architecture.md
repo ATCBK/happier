@@ -50,6 +50,21 @@ graph TB
 
 Executable Agents and model Providers are different domains. `happier agents ...` manages Agent runtimes; `happier providers ...` manages configured model-source connections. Provider contributions, connections, grants, settings, and structured model selections are protocol-owned. See [Providers](./providers.md) for the complete ownership and safety contract.
 
+### Personal Saved Secret commands (0.3 development)
+
+The generated `secrets` leaves execute the same personal Saved Secret Actions as
+the UI. Create and value rotation read piped stdin or the existing hidden terminal
+prompt; plaintext values are not accepted in argv or whole-input JSON. Rename-only
+updates do not consume stdin. Name/id selection resolves metadata through the
+canonical catalog and supplies the observed private-resource revision, exposed by
+the Action as `expectedUpdatedAt`, not a timestamp.
+
+Registry token options select an existing Saved Secret's canonical ref rather
+than accepting a token value. The authenticated Action executor retains the
+originating Account context through private-resource reads and registry mutation.
+No Settings secret writer or separate CLI secret store is introduced. See
+[registry ownership](registries.md) and [input approval custody](actions.md).
+
 ### Connected Agent homes (0.3 development)
 
 `daemon/connectedServices/materialize/materializeConnectedServicesForSpawn.ts`
@@ -68,6 +83,12 @@ shared links; isolated mode keeps local state in the account/group home. Existin
 resume roots feed the same import owner, and adoption does not authorize deleting
 the previous root. Agent declarations own the state inventory and configuration
 inheritance separately; no refresh-specific copier or migration registry exists.
+
+If isolated-to-shared import finds different bytes at the same destination path,
+the existing importer retains that destination and preserves the incoming file
+under a `.happier-import-*` name. Both versions survive, but no conversation merge
+or conflict-resolution decision is made. Antigravity's shared view therefore does
+not make the incoming version authoritative at the original path.
 
 In isolated mode, adopting a legacy per-session or per-Run root retains its
 declared private state. Between durable account homes, materialization imports
@@ -1010,6 +1031,15 @@ node. APFS container-wide capacity never produces a per-volume hidden-space
 remainder. Synthetic space and folded aggregates are excluded from trusted
 filesystem-node lookup; they are not cleanup operands.
 
+In current 0.3 development, the same native scanner reports an observed
+`apfsLocalSnapshotCount` from a read-only `tmutil listlocalsnapshots` query for
+the APFS mount. Zero means the query observed no local snapshots; omission means
+the count was not observed. This fact supplies no byte estimate or deletion
+operation. Folder shortcuts use daemon-reported Downloads and cache paths from
+the existing protection/environment facts, plus admitted Project roots on the
+selected Home and Machine. They start the ordinary scan Action. Shortcut paths
+are omitted from recipient summaries.
+
 Resume uses the persisted pending frontier for the same root, not a fresh scan of
 every completed folder. Retained allocation observations are supplied to the new
 helper invocation so already-observed hard links and clones remain one union.
@@ -1388,6 +1418,25 @@ name/code, the failing operation and recognized repository, packaged-runtime or
 Node code locations. Absolute user paths and function labels are not logged.
 Assignment-refresh failures leave the worker's last successful assignment
 cache intact; the existing reconciliation loop owns retries.
+
+Workflow Action failures keep their typed public result. The shared failure
+normalizer emits `workflow_action_failure` through the CLI file logger when
+that result is `storage_unavailable`, retaining only the original error code,
+HTTP status, operation and measured duration. The storage client attaches the
+operation and duration to the original exception, and storage translation keeps
+its cause; request bodies, headers, messages and stack traces are excluded from
+this diagnostic.
+
+In 0.3 development, a Session startup failure becomes a failed Workflow leaf
+only after the daemon's existing startup-cancellation owner proves the launch
+wrapper and runner exited and finishes custody cleanup. Its strict
+`launch_retired` detail binds that proof to the exact spawn nonce and wrapper
+PID. The Session executor checks the nonce and returns failure to the existing
+coordinator fact writer (`applyWorkflowInvocationFactV1`); no Workflow input is
+sent. Stop and recovery then consume the ordinary failed-leaf fact. A generic
+`SPAWN_FAILED`, incomplete retirement or missing execution correspondence still
+leaves custody unresolved. Older stuck Runs without a decisive fact are not
+automatically settled merely by a daemon reload or Machine reachability.
 
 Workflow conversation reply handoff reads a fresh owner-bound Run-key census
 through the authenticated storage client and uses Protocol's per-run key
@@ -1873,6 +1922,50 @@ owns admission and semantic mutations; the CLI `mcpServerStore`/`hydrateMcpServe
 and UI `apiMcpServerCatalog` consume that same contract. This Account row is
 distinct from the daemon's executable plugin-contribution catalog.
 
+Current development definitions use the neutral
+`valueRefs/valueRefV1.ts` owner for literals, personal or qualified shared Saved
+Secrets, and single-pass templates. Only used template variables resolve;
+rendered secret bytes are never reinterpreted as templates. Base working folders
+select the Session folder or an explicit path; per-Machine overrides configure
+values and an explicit folder, never enablement. Resolved env values stay in
+private launcher files, not Agent configuration. Remote bridge env is applied
+at process startup, while headers stay in its private configuration file.
+
+`mcp.servers.test` has one daemon pipeline; the retained CLI spelling dispatches
+the compiled Action instead of running a second probe. A saved-server Test
+captures the row revision, initializes and lists all tool pages through the MCP
+SDK, then writes metadata and per-tool token estimates through the catalog CAS.
+A conflict is reported, not retried against newer configuration. Draft Tests do
+not persist snapshots. Diagnostics use the existing bounded stderr and Saved
+Secret redaction owners; a wrapped stdio spawn failure retains its typed runtime
+diagnostic. `mcp.servers.tools.list` reads the checked snapshot without launching
+a server; unchecked cost is unknown (`null`), not zero. Per-Agent control/loading
+facts come from the target Machine's admitted plugin projection; absent control
+declarations remain unproven, not guessed as host approval.
+
+`mcp.servers.tools.set` patches server defaults and named tool overrides through
+the same CAS owner. `inherit` removes an override; its returned `previous` patch
+supports Undo without replacing unrelated overrides. The compiled CLI adapter
+supports `mcp servers tools <name>`, `<name> set <tool> off|ask|allow|inherit`,
+and `<name> default ask|read-only|all`; id matches take precedence over names.
+The list-to-change flow retains its captured Home and Account. Approval is declared on
+the Action spec: reversible present-user UI changes are direct, while Agent,
+CLI and MCP callers ask by default. The pure per-tool resolver owns decisions;
+with an admitted current Account-domain context, known MCP identities are checked before broad session grants and again when a
+pending request is answered. The SDK carries typed `mcpToolPolicy` beside
+`mcpServers`; host-controlled Agents never receive native Allow projections.
+Captured foreign Session/Run reads publish their admitted MCP row through the
+existing invocation operation context, without replacing the focused Account.
+The Session's authenticated Account-change socket, reconnect cursor callbacks,
+and the daemon's existing MCP row-change branch demand that same owner; the
+captured credential lifetime and identity map stay paired. Ordinary CLI Sessions
+bootstrap Active state in their own child process and retain that scope/lifetime
+adapter rather than borrowing a replacement Account. MCP publication does not
+invent a scalar Settings version change or a second catalog cache.
+First-party Agent leaves are a later integration unit. Native detached-Run leaves must
+prove actual revocation before declaring native approval; these additions alone
+do not certify that later leaf contract.
+
 The stored `bindings` array holds rules; configuration overrides live on each
 server's `configOverrides`. Configuration saves preserve reach rules. The shared
 [reach owner](../packages/protocol/src/reach/resolveReachV1.ts) resolves Agent-qualified
@@ -1881,6 +1974,15 @@ specificity within that Agent scope. Session overrides are applied afterwards
 by [the capability resolver](../packages/protocol/src/reach/resolveSessionCapabilitiesV1.ts).
 Workspace comparisons use the target-platform path owner; Windows paths ignore
 case and comparisons keep separator boundaries without rewriting stored roots.
+
+Project rules follow the Account Project across checkout roots and Machines.
+The CLI's [session Project owner](../apps/cli/src/workspaces/resolveSessionProjectKey.ts)
+resolves the Session's Account association through the same WorkspaceRef used
+by its Project context stack. Reach asks for this association only when a
+receivable item has a Project rule. An unavailable association remains
+`project_association_unavailable`; it does not become an absent Project or an
+Off decision. The existing MCP preview accepts an explicit `projectKey`, including
+at the Machine level without a directory, through the same capability resolver.
 
 `mcp.rules.set` is the rules mutation Action. The current user's reversible UI
 changes are direct; Agent and CLI callers require approval by default through
@@ -1898,8 +2000,11 @@ spellings are folded at their retained ingress boundaries, with an explicitly
 present current carrier taking precedence. Invalid current input does not fall
 back to a valid legacy value. The released MCP preview RPC retains its old
 `selection` input, while current callers supply `capabilitySelection` to the same
-resolver. This does not yet publish the later generic capabilities-preview Action
-or the resolved skill delivery plan.
+resolver. The generic `sessions.spawn.capabilities.preview` Action reads that
+producer's safe MCP item projection and the resolved skill plan. An omitted
+directory means Machine-level reach and Agent user-root scanning; an explicit
+Project remains applicable without a directory. The released MCP-only preview
+Action projects the same producer and retains its response envelope.
 
 `reach/sessionCapabilityMetadataV1.ts` owns desired selection and applied-baseline
 metadata. Existing `mcpSelectionV1` and `mcpSelectionRestartRequiredV1` keys remain;
@@ -1911,7 +2016,12 @@ startup is acknowledging a captured configuration, that captured policy becomes
 the applied baseline and the newer desired policy stays pending. Daemon-committed birth metadata uses
 this same writer; child environment variables do not provide a second selection
 writer. These are development-source contracts, not certification of the later
-selection Actions or composed live capability journey.
+composed live capability journey. `session.capabilities.set` uses this codec
+inside the captured Session metadata revision write, and returns the previous
+override for Undo. `session.capabilities.get` reaches the Session's Machine
+preview producer even when the Session is stopped. The compiled CLI declarations
+provide `session capabilities <session> list|add|remove|reset` and `session preview`;
+they share Action approval and execution with the app.
 
 Persisted Account encryption mode admits Plain content or domain-bound
 `account_mcp_catalog` ciphertext (43). Unavailable material, a mode mismatch or
@@ -2454,9 +2564,19 @@ rows carry name/group and metrics, never command, cwd or owner tag; only a same-
 single process may be ended explicitly, never its tree or by automatic policy. Use
 recipients see their own attributed owners and a count of others' work. Unavailable
 requester display identity remains unavailable rather than masquerading as custodian work.
+In current 0.3 development, the custodian's Machine view also reports an
+`unverifiableCount` for ownerless unknown census rows. These rows supply no
+commands or cleanup operands; recipients and Session-scoped reads omit the count.
+Session ceiling presentation consumes the existing Linux ceiling owner's observed
+charged-scope bytes (including cache), limit and five-minute throttle delta.
+Until a full five-minute observation is available, the throttle count stays
+unknown, not zero. No second census, timer or process-memory estimate supplies
+these facts.
 The same policy's nullable `processes.toolIdleCloseMs` controls documented tool-idle
 environment injection at the next Session start; Off adds nothing, and authored
-environment values win over the default five minutes.
+environment values win over the default five minutes. Guard's Agent tools controls
+write idle-close and browser concurrency through the existing resources-policy
+Action; they do not introduce another policy store or approval floor.
 
 In unreleased 0.3 source, agent browser sidecars are admitted at the existing
 [`productSource`](../apps/cli/src/daemon/browser/sidecar/productSource.ts) Session
@@ -3231,7 +3351,10 @@ readiness reconciliation, and the original spawn awaiter. Pending Windows
 Terminal launches retain custody when only the launcher exits. The
 shared presence owner uses one paired runner PID/generation fact for ordinary
 wrappers and exact Windows launches, preserving launcher identity until normal
-marker promotion. Heartbeat and visible-console observations delegate retirement
+marker promotion. Webhook and accepted-spawn marker refreshes update the launcher's
+birth and command witnesses only from its own PID. A distinct runner's marker
+retains its own witness without replacing the launcher's Stop and exit custody.
+Heartbeat and visible-console observations delegate retirement
 to the canonical exit owner; the console poll does not independently settle
 startup. Missing process evidence keeps existing startup finalization or
 cancellation authoritative, and a reused runner PID cannot be promoted. Stop and
@@ -3380,6 +3503,27 @@ Sessions can be started by:
 - Remote requests over RPC (from mobile/web via machine connection).
 
 Daemon session spawning uses `registerCommonHandlers` to expose a controlled RPC surface (shell commands, file operations, search/diff helpers).
+
+In current 0.3 development, `createSpawnedSession` uses the same authenticated
+creation-tag proof before dispatch and after a returned or nonce-settled spawn
+failure. A unique Account-owned candidate whose immutable correspondence and
+requested Replay lineage match is returned as `rejoined`. An absent candidate
+preserves the spawn failure; unavailable or conflicting proof fails closed.
+This settles durable creation without launching again or claiming runtime
+readiness. Initial input still receives its actual Message-owned admission result.
+
+Shared-Machine requester starts in current 0.3 development use the incumbent
+original Account Action transport, not the custodian-only raw spawn methods.
+Home admission checks the current Use grant, and the receiving installation opens
+the requester's sealed Account context. The daemon's existing bootstrap wrapper
+prepares requester-owned Session credentials and attribution before physical
+launch and cleans prepared custody on failure. An existing requester Session
+resumes through `session.open`; its strict optional `resumeRequest` retains the
+headless resume options while the private lifecycle owner restores that Session's
+protected custody. Neither path borrows custodian Account settings or credentials,
+and revoked authority fails closed. See
+[Session Account-action authority](./runtime-core.md#session-account-action-authority-03-development).
+This describes development source, not released availability or live certification.
 
 #### Managed session directories (planned 0.3 development behavior)
 
@@ -3616,6 +3760,16 @@ not assume that a source process came from `dist`. Its daemon status preserves t
 reported as stale or dead; Machine RPC readiness remains separately true, false, or unknown.
 The former diagnostic environment flags no longer bypass Machine sync or Automation worker startup.
 
+Current 0.3 development Doctor inventory also reads the daemon's cached vitals
+sample and attention through the authenticated local `/doctor/vitals` control
+route. Self memory, heap, active handles and event-loop busy share come from the
+existing stall-monitor owner; Doctor does not start another Machine sampler.
+Unavailable/older daemon replies leave this optional section absent. Bun's
+placeholder busy/handle APIs are reported as null with `runtime_not_reported`,
+not measured calm/zero. Real Bun busy/handle telemetry remains an unresolved
+machine-resources plan amendment; Node metrics and observed memory are separate
+from that obligation.
+
 In current 0.3 development, `daemon start` uses its existing wait budget as a
 reporting checkpoint while the observed startup process remains alive.
 It reports that startup is continuing and waits for control-server readiness;
@@ -3766,8 +3920,11 @@ and exhausted commit feed the shared effective rule level; a negative binary
 low-memory signal permits rule recovery without inventing a native pressure
 metric for the UI.
 
-The alert runtime journals each transition before delivery and restores episodes
-from the retained history, avoiding a duplicate fire after restart. Its notification
+The alert runtime journals each transition before delivery. Before historical day
+files age out, the same stream carries open episodes forward with their original
+fire time; historical display pruning does not close an active condition. Startup
+restores that state before pruning, avoiding a duplicate fire or lost recovery
+after restart. Its notification
 builder calls the existing activity-notification dispatcher using `resource_limit`.
 That event and Guard's distinct events share the `machines` channel topic.
 Recovery delivery is quiet; machine/rule/volume notification identity is stable,

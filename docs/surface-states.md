@@ -278,6 +278,8 @@ Core injects device-local style, speed and pause preferences, including pending 
 
 ## Retained content and recovery
 
+In 0.3 development source, Plugin UI `State` consumes the `PluginUiResourceSnapshot` returned by the Resource hooks directly. An admitted value stays mounted during refresh or failure; `FreshnessLine` shows pending work or the retained failure beside recovery. Without a value, initial loading and failed reads use the shared state components, and `onRetry` invokes the consumer's canonical refresh. The consumer declares emptiness with `isEmpty`; the presentation does not infer it from Resource bytes. Standalone author `SceneArt` uses the same scene registry and mounted host renderer as empty states.
+
 [`SurfaceFreshnessLine`](../apps/ui/sources/components/ui/surfaces/SurfaceFreshnessLine.tsx) presents the retained observation's time, refresh/reconnect reason and optional recovery action. Show it alongside retained content, under the header; when there is no retained content, show the appropriate loading/error/unavailable card instead. It and the public Plugin UI freshness component consume the same `HappierFreshnessLine` renderer and freshness-text formatter. Domain adapters still own observation timestamps and recovery actions.
 
 Loading narration and diagnostic disclosure belong to the composition. The card does not own retries, availability, permissions or the underlying request lifecycle. Supply truthful state from that domain's owner, stop live activity at its terminal outcome and keep technical codes behind details. Avoid a second consumer-local spinner/error parser or timer for the same work.

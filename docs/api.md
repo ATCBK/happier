@@ -1477,6 +1477,15 @@ list, lookup and upsert schemas exclude the namespace entirely. Every Board muta
 rechecks the actor's current `editSessionRecords` capability in the committing
 transaction.
 
+Current development System Record CRUD diagnostics report unexpected exceptions
+and internal stored-record failures after their owning transaction settles. The
+default server error log includes the operation, a fixed failure category, an
+allowlisted exception name and a validated Prisma code when available. It omits
+record content, identifiers, raw messages, SQL, stacks and exception metadata.
+Recovered unique-create races stay silent. These diagnostics identify the next
+failure to investigate; they do not repair an underlying database or stored-row
+defect, and the public error responses remain unchanged.
+
 Current development `item.v1` reads also expose server-owned `creator` metadata,
 separate from the plain/encrypted visual content: `session` (with the original
 Session id), `user`, `plugin`, or `unknown`. Only verified transport provenance
@@ -1568,9 +1577,14 @@ replacement, Automation assignments and claims, and Automation Event watcher
 currentness. This does not establish readiness of the complete Runner runtime.
 
 `GET /v1/machines` excludes revoked Machines server-side, including owned
-Machines; unrevoked offline Machines remain discoverable. Exact owner reads
-retain revoked rows. Managed Machine listing explicitly includes revoked owned
-controllers so retained resources, cleanup, and archived history remain visible.
+Machines; unrevoked offline Machines remain discoverable. History readers opt
+into `?includeRevoked=true` to retain owned predecessor rows needed for Session
+replacement resolution; revoked nonowned rows remain concealed. UI Machine sync
+and the CLI replacement-identity reader use that opt-in, so history sync retains
+its existing full inventory rather than receiving the ordinary discovery subset.
+Exact owner reads retain revoked rows. Managed Machine listing explicitly
+includes revoked owned controllers so retained resources, cleanup, and archived
+history remain visible.
 
 #### Personal Machine Pools (0.3 development)
 

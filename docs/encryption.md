@@ -328,6 +328,34 @@ Discovery configuration and temporary exchange metadata stay in the existing
 sealed attempt until settlement. Request-auth capability files are private,
 machine-local bearer capabilities, not a synced credential catalog.
 
+The private Account MCP catalog in 0.3 development admits personal Saved Secret
+references, including references inside template variables, alongside qualified
+shared-resource references. Personal values resolve through the client's current
+Account vault at materialization; server admission does not assert their
+existence or inspect E2EE Settings. Shared references retain the resource owner's
+authorization and captured-revision checks. Unknown or malformed reference
+carriers remain diagnostic and cannot silently become active configuration.
+
+In 0.3 development source, MCP environment values are delivered through the
+existing private runtime configuration files. A stdio server with environment
+values runs through the stdio launcher. Remote bridge environment values also
+use that launcher, so startup-only runtime variables take effect before the
+bridge process starts; remote headers remain in its private bridge file.
+Registry URL variables retain their ValueRef bindings in `remote.urlTemplate`;
+`remote.url` stays nonsecret endpoint metadata. The resolved URL and its
+credential redaction atoms exist only in the private bridge configuration.
+OAuth admission compares that resolved URL with the request-auth resource
+exactly; a base endpoint match does not authorize another resolved destination.
+The bridge registers these private URL redaction atoms, including JSON-escaped
+forms, in its existing credential lease before connecting. The same lease
+redacts server tool results, structured output and transport diagnostics for
+the bridge process lifetime.
+Agent launch configuration receives the file paths,
+without the resolved MCP secret values. The existing secure file writer applies
+private permissions and the materialization lifetime owns cleanup. This prevents
+ambient disclosure through the Agent's launch configuration; another process
+running as the same operating-system user can still read those files.
+
 Usage request attribution in 0.3 development carries only the qualified
 Connected Account reference (`service` and opaque `accountId`) or Provider
 connection identity, not personal labels, credentials or provider subjects.
@@ -3328,10 +3356,22 @@ readiness does not reinterpret encrypted material as plain.
 
 Deleting a shared Saved Secret runs the same owner-side reference census first. The Home cannot
 semantically inspect an E2EE owner's Settings, so the owner client refuses the delete while its own
-profile, Provider, Voice, MCP, ACP, plugin, or Connected Account bindings still name the resource and
+profile, Provider, Voice, MCP, ACP, plugin, Connected Account, or registry token bindings still name the resource and
 reports where it is used. That is client-enforced referential integrity for the owner's own
 document, not a server-side guarantee, and it says nothing about recipient Settings: a recipient's
 reference to a deleted resource simply resolves as deleted and offers replacement.
+
+Registry tokens join the existing catalog census through the prompt-library
+`registry-sources` row. Deletion and personal-source promotion capture its revision;
+a changed or unreadable row refuses the operation. Promotion rewrites the token
+reference through that row's existing CAS in the same resource transaction. Disabled
+sources still retain their token binding and therefore remain in the census.
+Ordinary token-bearing row writes carry the existing SavedSecret reference and
+resource-revision proofs. The canonical prompt-row transaction derives Plain
+references, accepts the authorized client's E2EE declaration, and rechecks current
+use permission and revision before the row CAS. Missing, stale or unentitled
+resources return `invalid-reference`; unrelated prompt rows and tokenless registry
+writes keep their existing mutation shape.
 
 Possessing an envelope or a previously disclosed value is not current authorization. Every read
 rechecks the current grant and Home-local Team/Group membership. Revocation stops later reads but
