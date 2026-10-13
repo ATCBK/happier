@@ -114,10 +114,10 @@ export function readClaudeTaskLifecycleEnvelope(value: unknown): ClaudeTaskLifec
     return taskId ? { subtype: 'handback', taskId, toolUseId: null, status: 'active', ...identity } : null;
   }
   // Lifecycle decisions require native delivery provenance; presentation can still inspect copied XML.
-  const mayReadXml = row.type !== 'user' || origin?.kind === 'task-notification';
-  const nativeAttachment = attachment?.type !== 'queued_command' || origin?.kind === 'task-notification'
-    || attachment.commandMode === 'task-notification';
-  const xml = mayReadXml && nativeAttachment ? parseClaudeTaskNotificationXml(value) : null;
+  const nativeNotification = origin?.kind === 'task-notification'
+    || (attachment?.type === 'queued_command' && attachment.commandMode === 'task-notification');
+  if (!nativeNotification) return null;
+  const xml = parseClaudeTaskNotificationXml(value);
   const notificationOrigin = origin?.kind === 'task-notification' ? origin : null;
   if (!xml && !notificationOrigin) return null;
   const summary = text(notificationOrigin?.summary) ?? xml?.summary;
@@ -145,6 +145,11 @@ export function projectClaudeTaskNotificationToolResult(value: unknown, correlat
   const toolUseId = notification.toolUseId ?? correlatedToolUseId;
   if (!toolUseId || !text(row.uuid)) return null;
   const result = notification.result ?? notification.summary ?? notification.status;
+  // Released scanner rows already contain the findings, but do not carry origin.result.
+  // Preserve only the result for this authenticated tool identity when reprojecting it.
+  const content = record(row.message)?.content;
+  const existingResult = Array.isArray(content) ? content.map(record).find(block =>
+    block?.type === 'tool_result' && text(block.tool_use_id) === toolUseId) : null;
   const nativeOrigin = record(row.origin) ?? record(record(row.attachment)?.origin);
   const { attachment: _attachment, rendered: _rendered, isMeta: _isMeta,
     toolUseResult: _toolUseResult, tool_use_result: _toolUseResultSnake, ...base } = row;
@@ -156,7 +161,7 @@ export function projectClaudeTaskNotificationToolResult(value: unknown, correlat
       toolUseId, status: notification.status === 'complete' ? 'completed' : notification.status === 'cancelled' ? 'stopped' : 'failed', result },
     ...(notification.status === 'complete' ? {} : { toolUseResult: { status: notification.status, result } }),
     message: { role: 'user', content: [{ type: 'tool_result', tool_use_id: toolUseId,
-      content: [{ type: 'text', text: result }], is_error: notification.status !== 'complete' }] },
+      content: existingResult?.content ?? [{ type: 'text', text: result }], is_error: notification.status !== 'complete' }] },
   });
   return projected.success ? projected.data : null;
 }

@@ -120,7 +120,8 @@ export class SDKToLogConverter {
     convert(sdkMessage: SDKMessage): RawJSONLines | null {
         const fact = readClaudeTaskLifecycleEnvelope(sdkMessage);
         const rawType = (sdkMessage as any)?.type;
-        if (providers.claude.isClaudeInternalEventType(rawType) && rawType !== 'attachment') {
+        if (providers.claude.isClaudeInternalEventType(rawType) && rawType !== 'attachment'
+            && fact?.subtype !== 'task_notification') {
             return null;
         }
 
@@ -154,10 +155,9 @@ export class SDKToLogConverter {
             if (!isSidechain) this.lastMainUuid = uuid;
             return peerMessage;
         }
-        if (providers.claude.isClaudeInternalEventType(rawType)) return null;
-
         const taskResult = this.taskNotificationProjector.project({ ...sdkMessage, ...baseFields }, sidechainId ? { sidechainId } : undefined);
         if (taskResult || fact?.subtype === 'task_notification') return taskResult;
+        if (providers.claude.isClaudeInternalEventType(rawType)) return null;
 
         let logMessage: RawJSONLines | null = null
         let shouldUpdateLastMainUuid = true

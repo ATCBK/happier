@@ -62,6 +62,9 @@ describe('readClaudeTranscriptProviderActivity', () => {
       content:
         '<task-notification><task-id>task_1</task-id><tool-use-id>toolu_wf</tool-use-id><status>completed</status></task-notification>',
     } as unknown as RawJSONLines)).toBeNull();
+    expect(readClaudeTranscriptProviderActivity({ type: 'user', uuid: 'copy', message: {
+      content: '<task-notification><task-id>task_1</task-id><status>completed</status></task-notification>',
+    } })).toBeNull();
   });
 
   it('detects terminal task notifications from queued_command attachment prompt XML', () => {
