@@ -46,7 +46,7 @@ import {
   partitionProviderSessionArgs,
   type ProviderSessionArgPartitionResult,
 } from '@/cli/providerSessionArgPartition';
-import { resolveSessionStartModelSelection } from '@/cli/resolveSessionStartModelSelection';
+import { resolveSessionStartBackendTarget, resolveSessionStartModelSelection } from '@/cli/resolveSessionStartModelSelection';
 import { buildRootHelpText } from '@/cli/buildRootHelpText';
 import { getSessionHostBridge } from '@/agent/runtime/bridges/session/SessionHostBridge';
 import { selfMigrateDaemonSpawnedSessionProcessOutOfDaemonServiceCgroup } from '@/daemon/platform/linux/daemonSpawnedSessionCgroupSelfMigration';
@@ -294,13 +294,13 @@ Provider CLI Options:
       if (!backendId) {
         throw new Error('Session command is missing a backend id for session startup');
       }
-      const modelSelectionBackendTargetInput = (
-        extraOptions as Readonly<{ backendTarget?: BackendTargetRefV2Input }>
-      ).backendTarget ?? {
-        kind: 'backend',
+      const modelSelectionBackendTargetInput = resolveSessionStartBackendTarget({
+        agentTarget,
+        backendTarget: (
+          extraOptions as Readonly<{ backendTarget?: BackendTargetRefV2Input }>
+        ).backendTarget,
         backendId,
-        sourceKind: 'built_in',
-      };
+      });
 
       let credentials = await readStoredCredentials();
       let machineId: string;

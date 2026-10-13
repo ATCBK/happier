@@ -2,6 +2,21 @@ import { buildBackendTargetKeyV2 } from '@happier-dev/protocol/backends/targets/
 import { BackendTargetRefV2InputSchema, readBackendTargetRefV2 } from '@happier-dev/protocol/backends/targets/backendTargetRefV2';
 import { resolveSessionModelSelectionInputRefV1, SessionModelSelectionResolutionError, SessionModelSelectionV1Schema } from '@happier-dev/protocol/providers/model-selection';
 import type { SessionModelSelectionV1 } from '@happier-dev/protocol';
+import type { AgentExecutionTargetV1 } from '@happier-dev/protocol/agents/executionTargetV1';
+import type { BackendTargetRefV2Input } from '@happier-dev/protocol/backends/targets/backendTargetRefV2';
+
+/** Keeps startup target selection shared by model ingress and runtime admission. */
+export function resolveSessionStartBackendTarget(params: Readonly<{
+  agentTarget?: AgentExecutionTargetV1;
+  backendTarget?: BackendTargetRefV2Input;
+  backendId: string;
+}>): BackendTargetRefV2Input {
+  return params.agentTarget ?? params.backendTarget ?? {
+    kind: 'backend',
+    backendId: params.backendId,
+    sourceKind: 'built_in',
+  };
+}
 
 /** Canonicalizes the CLI child-process ingress before the host runtime sees it. */
 export function resolveSessionStartModelSelection(params: Readonly<{
