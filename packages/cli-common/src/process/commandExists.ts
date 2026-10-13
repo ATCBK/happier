@@ -7,6 +7,7 @@ export function commandExistsOnPath(
   options: Readonly<{
     env?: NodeJS.ProcessEnv;
     path?: string | undefined;
+    cwd?: string;
   }> = {},
 ): boolean {
   const name = String(cmd ?? '').trim();
@@ -31,6 +32,7 @@ export function commandExistsOnPath(
     const res = spawnBackgroundSync('where', [name], {
       stdio: 'ignore',
       env: probeEnv,
+      cwd: options.cwd,
     });
     return (res.status ?? 1) === 0;
   }
@@ -38,6 +40,7 @@ export function commandExistsOnPath(
   const res = spawnBackgroundSync('sh', ['-lc', 'command -v "$1" >/dev/null 2>&1', 'sh', name], {
     stdio: 'ignore',
     env: probeEnv,
+    cwd: options.cwd,
   });
   return (res.status ?? 1) === 0;
 }

@@ -28,7 +28,8 @@ export async function resolveAgentCliLaunchSpecForSession(agentId: string, opts:
     savedSecretOperationContext: opts.savedSecretOperationContext }) : null;
   if (!configured) return declaration?.runtimeSpec ? resolveAgentCliLaunchSpec(agentId, opts) : null;
   const launch = await configured.resolveHostLaunch({ cwd: opts.options.directory });
-  if (!commandExistsOnPath(launch.command, { env: { ...(opts.processEnv ?? process.env), ...launch.env } })) {
+  if (!commandExistsOnPath(launch.command, { cwd: opts.options.directory,
+    env: { ...(opts.processEnv ?? process.env), ...launch.env } })) {
     throw new AgentCliNotFoundError(agentId, `Agent '${configured.configuredBackend.title}' is not installed or its configured command is unavailable.`);
   }
   const spec = buildAgentCliLaunchSpecFromResolution({ command: launch.command,

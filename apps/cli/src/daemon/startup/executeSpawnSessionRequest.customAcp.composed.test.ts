@@ -156,4 +156,20 @@ describe('Custom ACP fresh daemon launch composition', () => {
     expect({ reached, result }, JSON.stringify(result)).toMatchObject({ reached: true,
       result: { type: 'error', errorCode: 'DAEMON_RPC_UNAVAILABLE' } });
   });
+
+  it('validates a relative configured command from the Session directory', async () => {
+    const command = 'df38-relative-agent';
+    await writeExecutableShim({ dir: storage.home, fileName: command,
+      contents: process.platform === 'win32' ? '@echo off\r\nexit /b 0\r\n' : '#!/bin/sh\nexit 0\n' });
+    const snapshot = getActiveAccountSettingsSnapshot()!;
+    if (snapshot.acpCatalog?.status !== 'ready') throw new Error('Expected the ready launch catalog');
+    commitActiveAcpCatalog({ scopeKey: snapshot.scopeKey!, lifetimeToken: getActiveAccountSettingsSnapshotLifetimeToken(),
+      catalog: { ...snapshot.acpCatalog, revision: 5, record: AcpCatalogRecordV1Schema.parse({ v: 1,
+        definitions: snapshot.acpCatalog.record.definitions.map(definition => definition.id === 'alpha'
+          ? { ...definition, launch: { kind: 'command', command: `./${command}`, args: [] } } : definition) }) } });
+    let reached = false;
+    const result = await executeSpawnSessionRequest(params('alpha', async () => { reached = true; return false; }));
+    expect({ reached, result }, JSON.stringify(result)).toMatchObject({ reached: true,
+      result: { type: 'error', errorCode: 'DAEMON_RPC_UNAVAILABLE' } });
+  });
 });
