@@ -6,7 +6,6 @@ import type { DaemonNpmRegistryProfileMutationResponseV1 } from '@happier-dev/pr
 import type { PluginRegistryProfileRequirement } from '@/plugins/daemon/changeContract';
 import { createNpmRegistryProfileProbe } from '@/plugins/distribution/npm/profiles/probe';
 import { createNpmRegistryProfileService } from '@/plugins/distribution/npm/profiles/service';
-import { createMarketplaceSourceRegistryStore } from '@/plugins/store/marketplace/sources/store';
 
 /** Registry profile mutations name the Home-local actor; the endpoint has no daemon machine row of its own. */
 const ENDPOINT_PROFILE_ACTOR = 'runner-endpoint';
@@ -21,10 +20,9 @@ function requireSuccess(
 /**
  * Applies the endpoint's explicit answer to a registry requirement in the
  * activation-local Home, through the same owners every Home uses: the npm
- * registry profile service holds the profile and its credential, and the
- * marketplace source registry binds that profile to the reviewed listing's
- * source. Nothing here is a Runner store; the endpoint is only another Home
- * making its own selection, and the creator's registry facts never reach it.
+ * registry profile service holds the profile and its credential. The caller
+ * retains the selected id for this reviewed acquisition; no Account source
+ * catalog or writable marketplace registry is required.
  *
  * The one profile for the registry origin is reused when it exists (a
  * profile is unique per origin), widened only so it serves this package's
@@ -38,8 +36,6 @@ export async function selectEndpointRegistryProfile(params: Readonly<{
   happyHomeDir: string;
   requirement: PluginRegistryProfileRequirement;
   credential: string | null;
-  /** The reviewed listing's persisted marketplace source, when the listing came from one that can bind a profile. */
-  marketplaceSourceId: string | null;
 }>): Promise<string> {
   const service = createNpmRegistryProfileService({
     happyHomeDir: params.happyHomeDir,
@@ -109,11 +105,6 @@ export async function selectEndpointRegistryProfile(params: Readonly<{
       mutationId: mutationId('test'),
       profileId,
     });
-  }
-  if (params.marketplaceSourceId !== null) {
-    const bound = await createMarketplaceSourceRegistryStore({ happyHomeDir: params.happyHomeDir })
-      .setSourceRegistryProfile(params.marketplaceSourceId, profileId);
-    if (!bound) throw new Error('runner_reviewed_plugin_source_unbound');
   }
   return profileId;
 }

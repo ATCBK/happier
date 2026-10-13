@@ -11,6 +11,8 @@ import type { RunnerLaunchManifestV1 } from '@happier-dev/protocol/ephemeralRunn
 import { filterRunnerReviewedEnvironmentVariablesV1 } from '@happier-dev/protocol/ephemeralRunner/runnerEnvironment';
 import { VerifiedEphemeralSessionRunnerPrincipalSchema } from '@happier-dev/protocol/ephemeralRunner/principal';
 import { ExpectedMarketplaceListingV1Schema } from '@happier-dev/protocol/marketplace/internal';
+import { BUILT_IN_REGISTRY_SOURCES_V1, RegistrySourceDescriptorV1Schema, registryMarketplaceSourceV1, type RegistrySourceDescriptorV1 } from '@happier-dev/protocol/registries';
+import { deriveMarketplaceSourceId } from '@happier-dev/protocol/marketplace/marketplaceSourceRegistryV1';
 
 import { openTeamCredentialProviderBroker } from '@/api/client/providerBrokerApi';
 import { acquireTerminalAuthEnrollmentRuntime } from '@/auth/terminalAuthEnrollmentRuntime';
@@ -29,7 +31,6 @@ import { createScopedRuntimeActionSettingsProvider } from '@/settings/scopedRunt
 import { createDaemonMachineIrohRuntime } from '@/daemon/peer/iroh/daemonMachineIrohRuntime';
 import { createDaemonPluginChangeService } from '@/plugins/daemon/changeService';
 import { createDaemonNpmPluginChangePreparer } from '@/plugins/daemon/npmChangePreparer';
-import { createMarketplaceSourceRegistryStore } from '@/plugins/store/marketplace/sources/store';
 import { createProviderBrokerMachineCarrierTunnelOpen } from '@/daemon/peer/iroh/providerBrokerMachineCarrierTunnelOpen';
 import { resolvePeerMediationTrustRoots } from '@/daemon/peer/mediation/resolvePeerMediationTrustRoots';
 import { fetchServerFeaturesSnapshot } from '@/features/serverFeaturesClient';
@@ -156,41 +157,48 @@ const RUNNER_INERT_PLUGIN_RUNTIME_LIFECYCLE = Object.freeze({
  * Prepares the reviewed Agent plugin generation through the canonical plugin
  * change owner in the activation-local Home. A private registry is answered by
  * the endpoint's explicit selection: the change owner names the registry, the
- * answer is applied through the canonical profile and source owners, and the
- * same change is prepared again with that Home-owned binding.
+ * answer is applied through the canonical profile owner, and the same change
+ * is prepared again with that activation's selected binding.
  */
 async function prepareReviewedRunnerPluginAcquisition(input: Readonly<{
   manifest: RunnerLaunchManifestV1;
   homeDirectory: string;
   signal: AbortSignal;
+  registryProfileId?: string;
 }>): Promise<ReviewedRunnerPluginPreparation> {
   const { manifest, homeDirectory, signal } = input;
   const distribution = manifest.preparedAuthoring.agentPluginDistribution;
   if (distribution === null) return NO_RUNNER_PLUGIN_ACQUISITION;
   signal.throwIfAborted();
-  const sourceStore = createMarketplaceSourceRegistryStore({ happyHomeDir: homeDirectory });
-  // A catalog the creator added is unknown to this fresh activation-local
-  // Home. The reviewed source travels with the sealed commitment, so it is
-  // seeded here through the canonical source registry — with no registry
-  // profile: creator profiles are machine-local and never carried.
-  // Curated and community-npm sources already exist in every Home.
-  if (distribution.source.kind === 'user') {
-    const seeded = await sourceStore.upsertSource({ sourceUrl: distribution.source.sourceUrl, enabled: true, origin: 'user' });
-    if (seeded.id !== distribution.source.id) {
-      throw new Error('runner_reviewed_plugin_source_unbound');
-    }
+  const reviewed = ExpectedMarketplaceListingV1Schema.parse(distribution);
+  // The control connection admits this sealed commitment before calling the
+  // producer. A fresh endpoint has no Account source catalog: the reviewed
+  // source is a read-only input to the same exact-install owner. Only the
+  // endpoint's explicit profile answer may bind credentials to it.
+  if (reviewed.registryProfileId !== undefined) throw new Error('runner_reviewed_plugin_creator_profile_forbidden');
+  const builtInSource = BUILT_IN_REGISTRY_SOURCES_V1.find(source => source.id === reviewed.source.id);
+  if (reviewed.source.kind === 'user'
+    ? deriveMarketplaceSourceId(reviewed.source.sourceUrl) !== reviewed.source.id
+    : !builtInSource || registryMarketplaceSourceV1(builtInSource).kind !== reviewed.source.kind || builtInSource.url !== reviewed.source.sourceUrl) {
+    throw new Error('runner_reviewed_plugin_source_unbound');
   }
-  // The only registry binding is the one this endpoint selected for the
-  // source; the sealed commitment carries none, and the preparer revalidates
-  // it against the persisted source exactly as for any other listing.
-  const registryProfileId = distribution.source.kind === 'community-npm'
-    ? undefined
-    : (await sourceStore.read()).sources.find((source) => source.id === distribution.source.id)?.registryProfileId;
+  const registryProfileId = reviewed.source.kind === 'community-npm' ? undefined : input.registryProfileId;
   const expectedMarketplaceListing = ExpectedMarketplaceListingV1Schema.parse(
-    distribution.source.kind !== 'community-npm' && registryProfileId
-      ? { ...distribution, registryProfileId }
-      : distribution,
+    registryProfileId ? { ...reviewed, registryProfileId } : reviewed,
   );
+  const source: RegistrySourceDescriptorV1 = Object.freeze(RegistrySourceDescriptorV1Schema.parse({
+    id: reviewed.source.id,
+    title: builtInSource?.title ?? new URL(reviewed.source.sourceUrl).hostname,
+    format: reviewed.source.kind === 'community-npm' ? 'happier-npm' : 'happier-catalog',
+    kinds: ['plugin'],
+    url: reviewed.source.sourceUrl,
+    enabled: true,
+    addedAt: 0,
+    origin: { kind: reviewed.source.kind === 'user' ? 'user' : 'built_in' },
+    removable: false,
+    ...(registryProfileId ? { npmRegistryProfileId: registryProfileId } : {}),
+  }));
+  const sources = Object.freeze([source]);
   // The canonical plugin change owner performs the whole acquisition in the
   // activation-local Home: it revalidates the committed listing against the
   // freshly resolved one, stages the artifact, and produces the same
@@ -199,6 +207,7 @@ async function prepareReviewedRunnerPluginAcquisition(input: Readonly<{
     prepare: createDaemonNpmPluginChangePreparer({
       happyHomeDir: homeDirectory,
       runtimeLifecycle: RUNNER_INERT_PLUGIN_RUNTIME_LIFECYCLE,
+      readRegistrySources: async () => sources,
     }),
   });
   let requested;
@@ -227,13 +236,12 @@ async function prepareReviewedRunnerPluginAcquisition(input: Readonly<{
       requirement,
       selectRegistryProfile: async ({ credential, signal: selectionSignal }) => {
         selectionSignal.throwIfAborted();
-        await selectEndpointRegistryProfile({
+        const selectedProfileId = await selectEndpointRegistryProfile({
           happyHomeDir: homeDirectory,
           requirement,
           credential,
-          marketplaceSourceId: distribution.source.kind === 'community-npm' ? null : distribution.source.id,
         });
-        return await prepareReviewedRunnerPluginAcquisition({ manifest, homeDirectory, signal: selectionSignal });
+        return await prepareReviewedRunnerPluginAcquisition({ manifest, homeDirectory, signal: selectionSignal, registryProfileId: selectedProfileId });
       },
     };
     return Object.freeze(selection);
