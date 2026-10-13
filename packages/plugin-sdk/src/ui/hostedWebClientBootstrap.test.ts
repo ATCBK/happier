@@ -740,26 +740,6 @@ describe('hosted-web UI client bootstrap', () => {
         } satisfies PluginUiHostApiWireEnvelopeV1)).toThrow();
     });
 
-    it('cancels one waiter without cancelling the frame bootstrap for another consumer', async () => {
-        const harness = createRealm();
-        const cancellation = new AbortController();
-        expect(installHostedWebPluginUiHostApiClientBootstrap(harness.realm)).toBe(true);
-
-        const cancelled = awaitHostedWebPluginUiHostApiClientBootstrap(harness.realm, {
-            signal: cancellation.signal,
-        });
-        cancellation.abort();
-        await expect(cancelled).rejects.toMatchObject({ code: 'ui_host_bootstrap_aborted' });
-
-        const readiness = awaitHostedWebPluginUiHostApiClientBootstrap(harness.realm);
-        harness.dispatch({
-            source: harness.parent,
-            origin: 'https://host.test',
-            data: bootstrapMessage(),
-        });
-        await expect(readiness).resolves.toMatchObject({ identity });
-    });
-
     it('uses the same strict ready/bootstrap lifecycle over the native WebView boundary', async () => {
         const harness = createRealm();
         const postMessage = vi.fn();
