@@ -213,6 +213,10 @@ export function createUiPromptLibraryArtifactStore(
     create: async (input) => {
       throwIfAborted(input.signal);
       const artifactId = randomUUID();
+      if (account) {
+        const created = await account.createArtifactDocument({ ...input, artifactId });
+        return { artifactId: created.artifactId, revision: created.revision };
+      }
       await artifacts.create({ ...input, artifactId });
       return artifactId;
     },

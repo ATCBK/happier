@@ -73,7 +73,8 @@ const toolFactsProjection = PluginProjectionV2Schema.parse({
     },
 });
 
-async function prepareToolFactsHome(includeMachine = true, installedAgentIds = Object.keys(toolFactsProjection.agentsById), onCatalogRead?: () => void) {
+async function prepareToolFactsHome(includeMachine = true, installedAgentIds = Object.keys(toolFactsProjection.agentsById),
+    onCatalogRead?: () => void, maintenanceReady?: Promise<void>) {
     const home = await adoptHomeProfile({ source: 'manual', descriptor: { v: 1,
         homeServerIdentityId: 'srv_mcp_tool_facts', canonicalServerUrl: 'https://mcp-tool-facts.test', revision: 1,
         endpoints: [{ kind: 'https', url: 'https://mcp-tool-facts.test' }] } });
@@ -101,7 +102,10 @@ async function prepareToolFactsHome(includeMachine = true, installedAgentIds = O
                 content: { t: 'plain', v: { v: 1, servers: [{ id: 'server', name: 'server', transport: 'stdio',
                     stdio: { command: 'mcp-tool', args: [] }, env: {}, createdAt: 1, updatedAt: 1 }], bindings: [] } } });
         }
-        if (target.pathname === '/v1/account/entity-rows/profiles/transfer') return Response.json({ status: 'absent' });
+        if (target.pathname === '/v1/account/entity-rows/profiles/transfer') {
+            await maintenanceReady;
+            return Response.json({ status: 'absent' });
+        }
         if (target.pathname === '/v2/account/settings/history') return Response.json({ snapshots: [] });
         return Response.json({ error: 'not_found' }, { status: 404 });
     });
@@ -111,7 +115,9 @@ async function prepareToolFactsHome(includeMachine = true, installedAgentIds = O
 describe('UI MCP per-Agent tool facts', () => {
     it('joins simultaneous mounted tool reads without tying their transport to either observer', async () => {
         let catalogReads = 0;
-        const home = await prepareToolFactsHome(true, ['acme.mcp-facts/host'], () => { catalogReads += 1; });
+        const maintenance = createDeferred<void>();
+        // Hold optional history cleanup at HTTP so its authority rechecks do not count as foreground reads.
+        const home = await prepareToolFactsHome(true, ['acme.mcp-facts/host'], () => { catalogReads += 1; }, maintenance.promise);
         getStorage().setState({ settingsScope: { serverId: home.serverIdentityId!, accountId: 'tool-owner' } });
         const projectionStarted = createDeferred<void>();
         const projection = createDeferred<unknown>();
@@ -137,6 +143,7 @@ describe('UI MCP per-Agent tool facts', () => {
             await vi.waitFor(() => expect(catalogReads).toBe(2));
             await vi.waitFor(() => expect(second.getCurrent().list).toBe(admitted));
         } finally {
+            maintenance.resolve();
             projection.resolve({ protocolVersion: 1, projection: toolFactsProjection });
             await first.unmount();
             await second.unmount();

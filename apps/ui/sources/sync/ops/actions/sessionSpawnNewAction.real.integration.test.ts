@@ -83,6 +83,7 @@ import { enableMonitoring } from '../../../../../server/sources/app/api/utils/en
 import { enableOptionalStatics } from '../../../../../server/sources/app/api/utils/enableOptionalStatics';
 import { registerAuthPingRoute } from '../../../../../server/sources/app/api/routes/auth/registerAuthPingRoute';
 import { registerAccountApiTokenManagementRoutes } from '../../../../../server/sources/app/api/routes/auth/registerAccountApiTokenManagementRoutes';
+import { registerAccountSecurityRoutes } from '../../../../../server/sources/app/api/routes/auth/registerAccountSecurityRoutes';
 import { currentAccountStoredContentCompatibilitySocketAuth } from '../../../../../server/sources/app/api/testkit/accountStoredContentCompatibility';
 import { auth } from '../../../../../server/sources/app/auth/auth';
 import { db } from '../../../../../server/sources/storage/db';
@@ -189,6 +190,7 @@ describe('shared Machine spawn through the real UI, Home, daemon and SQLite owne
         enableOptionalStatics(app);
         registerAuthPingRoute(app);
         registerAccountApiTokenManagementRoutes(app);
+        registerAccountSecurityRoutes(app);
         accountRoutes(app);
         featuresRoutes(app);
         artifactsRoutes(app);
