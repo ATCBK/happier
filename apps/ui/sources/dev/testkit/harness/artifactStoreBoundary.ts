@@ -4,7 +4,6 @@ import { encodeBase64, decodeBase64 } from '@happier-dev/protocol/crypto/base64'
 import { Buffer } from 'buffer';
 
 import type { Artifact } from '@/sync/domains/artifacts/artifactTypes';
-import { vi } from 'vitest';
 import { createPlainAccountEncryptionCurrentnessFixture } from '@/dev/testkit/fixtures/accountEncryptionCurrentness';
 
 /**
@@ -264,15 +263,16 @@ export async function createPlainArtifactHomeFixture(serverUrl: string, options?
     serverFeatures?: unknown;
     /** Additional real Home HTTP routes needed by the consumer under test. */
     handleRequest?: (path: string, init?: RequestInit) => Promise<Response | null>;
+    /** Public catalogs leave the Home; the caller supplies their HTTP boundary. */
+    handleExternalRequest?: (url: string, init?: RequestInit) => Promise<Response | null>;
 }>) {
-    const [{ TokenStorage }, { upsertAndActivateServer, getActiveServerSnapshot }, { storage }, { setRuntimeFetch, resetRuntimeFetch }, applied] = await Promise.all([
+    const [{ TokenStorage }, { upsertServerProfileOnly, setActiveServer, getActiveServerSnapshot }, { storage }, { setRuntimeFetch, resetRuntimeFetch }, applied] = await Promise.all([
         import('@/auth/storage/tokenStorage'), import('@/sync/domains/server/serverRuntime'),
         import('@/sync/domains/state/storage'), import('@/utils/system/runtimeFetch'),
         import('@/sync/runtime/orchestration/appliedActiveServerRuntime'),
     ]);
     const accountId = 'artifact-account';
     const token = `header.${encodeBase64(Buffer.from(JSON.stringify({ sub: accountId })), 'base64url')}.signature`;
-    const credentialSpy = vi.spyOn(TokenStorage, 'getCredentialsForServerUrl').mockResolvedValue({ token });
     const boundary = createArtifactStoreBoundary({ ownerAccountId: () => accountId, encryptionMode: 'plain' });
     const requests: Readonly<{ path: string; method: string }>[] = [];
     setRuntimeFetch(async (input, init) => {
@@ -284,7 +284,11 @@ export async function createPlainArtifactHomeFixture(serverUrl: string, options?
         if (url.pathname === '/v1/account/encryption/currentness') return json(createPlainAccountEncryptionCurrentnessFixture({
             version: 0, updatedAt: 0, settingsVersion: options?.accountSettingsVersion,
         }));
-        if (url.origin !== new URL(serverUrl).origin) throw new Error(`Unexpected Home ${url.origin}`);
+        if (url.origin !== new URL(serverUrl).origin) {
+            const response = await options?.handleExternalRequest?.(url.href, init);
+            if (response) return response;
+            throw new Error(`Unexpected Home ${url.origin}`);
+        }
         requests.push({ path, method: init?.method ?? 'GET' });
         const additional = await options?.handleRequest?.(path, init);
         if (additional) return additional;
@@ -293,11 +297,27 @@ export async function createPlainArtifactHomeFixture(serverUrl: string, options?
     const previousState = storage.getState();
     const previousApplied = applied.getAppliedActiveServerSnapshot();
     const previousAvailable = applied.isAppliedActiveServerRuntimeAvailable();
-    const home = await upsertAndActivateServer({ serverUrl, scope: 'device' });
-    storage.setState({ settingsScope: { serverId: home.id, accountId }, profileScope: { serverId: home.id, accountId }, artifacts: {} });
-    // The connection owner admits a Home after restoring its Account scope.
-    // Persisting selection alone does not make Account content available.
-    applied.publishAppliedActiveServerSnapshot(getActiveServerSnapshot());
+    let credentialWrite: Awaited<ReturnType<typeof TokenStorage.setCredentialsForServerUrlWithRollback>> = null;
+    const restoreFixtureState = () => {
+        resetRuntimeFetch();
+        storage.setState(previousState, true);
+        applied.publishAppliedActiveServerSnapshot(previousApplied, previousAvailable);
+    };
+    let home: Awaited<ReturnType<typeof upsertServerProfileOnly>>;
+    try {
+        home = await upsertServerProfileOnly({ serverUrl });
+        credentialWrite = await TokenStorage.setCredentialsForServerUrlWithRollback(serverUrl, { serverId: home.id }, { token });
+        if (!credentialWrite) throw new Error('Artifact Home credentials could not be stored');
+        await setActiveServer({ serverId: home.id, scope: 'device' });
+        // Explicit fixture inputs model an admitted plain Account/Home. This is
+        // not a cold Sync bootstrap; credentials still traverse the real owner.
+        storage.setState({ settingsScope: { serverId: home.id, accountId }, profileScope: { serverId: home.id, accountId }, artifacts: {} });
+        applied.publishAppliedActiveServerSnapshot(getActiveServerSnapshot());
+    } catch (error) {
+        try { await credentialWrite?.rollback(); } finally { restoreFixtureState(); }
+        throw error;
+    }
+    const fixtureCredentialWrite = credentialWrite;
     return {
         home, boundary, requests,
         /** Hydrate this focused Home from its real Account Settings wire reader, as Sync does. */
@@ -317,10 +337,8 @@ export async function createPlainArtifactHomeFixture(serverUrl: string, options?
                     settings: settingsParse(baseline.raw), settingsVersion: baseline.version });
             } finally { account.dispose(); }
         },
-        dispose() {
-            resetRuntimeFetch(); credentialSpy.mockRestore();
-            storage.setState(previousState, true);
-            applied.publishAppliedActiveServerSnapshot(previousApplied, previousAvailable);
+        async dispose() {
+            try { await fixtureCredentialWrite.rollback(); } finally { restoreFixtureState(); }
         },
     };
 }

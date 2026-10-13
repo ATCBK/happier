@@ -45,7 +45,16 @@ export function createSessionSystemRecordHttpFixture(params: Readonly<{
 }
 
 type ConfigureSocketBoundary = (socket: Socket, serverUrl: string | undefined) => void;
-const socketBoundary = vi.hoisted(() => ({ configure: undefined as ConfigureSocketBoundary | undefined }));
+type SocketResponder = Readonly<{ configure: ConfigureSocketBoundary }>;
+const socketBoundary = vi.hoisted(() => ({
+    configure: undefined as ConfigureSocketBoundary | undefined,
+    responders: new Map<string, SocketResponder>(),
+}));
+let currentRuntimeFetchBoundary: object | undefined;
+
+function socketResponderKey(serverUrl: string, token: string): string {
+    return JSON.stringify([new URL(serverUrl).href.replace(/\/+$/, ''), token]);
+}
 
 /** Also reusable by cross-package suites whose host imports Socket before the UI harness. */
 export async function createSocketIoClientBoundary(importOriginal: <T>() => Promise<T>) {
@@ -53,6 +62,13 @@ export async function createSocketIoClientBoundary(importOriginal: <T>() => Prom
     recordBoundaryImportOriginal(actual);
     const createSocket = (...args: Parameters<typeof actual.io>) => {
         const socket = actual.io(...args);
+        // Capture the physical transport principal before a fixture configures
+        // SDK methods. A later Home must never become this socket's authority.
+        const auth = socket.auth;
+        const token: unknown = typeof auth === 'object' && auth !== null ? auth.token : undefined;
+        const responderKey = typeof args[0] === 'string' && typeof token === 'string'
+            ? socketResponderKey(args[0], token) : null;
+        let responder = responderKey ? socketBoundary.responders.get(responderKey) : undefined;
         // These replacements belong to this cold external transport for its
         // entire lifetime, including teardown after a test restores its spies.
         socket.connect = vi.fn<typeof socket.connect>(() => socket);
@@ -68,7 +84,24 @@ export async function createSocketIoClientBoundary(importOriginal: <T>() => Prom
             for (const listener of socket.listeners('disconnect')) listener('io client disconnect');
             return socket;
         });
-        socketBoundary.configure?.(socket, args[0]);
+        (responder?.configure ?? socketBoundary.configure)?.(socket, args[0]);
+        if (responderKey && responder) {
+            let respond = socket.emitWithAck;
+            const emitWithAck: typeof socket.emitWithAck = async (...emission) => {
+                const current = socketBoundary.responders.get(responderKey);
+                if (!current) throw new Error('Socket test responder retired for captured Home/auth principal');
+                if (current !== responder) {
+                    // The actual RPC pool may retain an idle socket across
+                    // fixture replacement for this SAME endpoint/principal.
+                    current.configure(socket, args[0]);
+                    respond = socket.emitWithAck;
+                    socket.emitWithAck = emitWithAck;
+                    responder = current;
+                }
+                return await respond.apply(socket, emission);
+            };
+            socket.emitWithAck = emitWithAck;
+        }
         return socket;
     };
     // Socket.IO publishes one callable namespace through io/connect/default in
@@ -85,11 +118,23 @@ export async function createSocketIoClientBoundary(importOriginal: <T>() => Prom
  * transport owner also registers the boundary itself, hoisted above every import:
  * `vi.mock('socket.io-client', async (importOriginal) => (await import('@/dev/testkit/harness/serverAccountConnectionHarness')).createSocketIoClientBoundary(importOriginal))`.
  * This call then only configures it.
+ * An optional Home/auth scope owns one external responder. Matching retained
+ * physical sockets resolve its replacement at request time; other principals
+ * retain their own responder. Disposal never removes a later replacement.
  */
-export function installDisconnectedServerSocketBoundary(configure?: ConfigureSocketBoundary): void {
+export function installDisconnectedServerSocketBoundary(configure?: ConfigureSocketBoundary, scope?: Readonly<{
+    serverUrl: string;
+    token: string;
+}>): Readonly<{ dispose(): void }> {
     assertBoundaryImportOrder('installDisconnectedServerSocketBoundary', ['socket.io-client']);
-    socketBoundary.configure = configure;
+    const responder = configure && scope ? Object.freeze({ configure }) : null;
+    const key = scope ? socketResponderKey(scope.serverUrl, scope.token) : null;
+    if (responder && key) socketBoundary.responders.set(key, responder);
+    else socketBoundary.configure = configure;
     vi.doMock('socket.io-client', createSocketIoClientBoundary);
+    return { dispose() {
+        if (key && socketBoundary.responders.get(key) === responder) socketBoundary.responders.delete(key);
+    } };
 }
 
 /** Apply a real Account lifetime before a test installs its domain data or fake clock. */
@@ -102,6 +147,12 @@ export async function restoreServerAccountForTest(params: Readonly<{
     credentials?: AuthCredentials;
     /** Other saved Homes remain signed out in a single-Home boundary fixture. */
     credentialScope?: 'restored-home';
+    /** Warm Account replacement uses the real serialized switch, not cold restore. */
+    activation?: 'switch';
+    /** Explicit external Homes that may receive captured cleanup after replacement. */
+    additionalRequestOrigins?: readonly string[];
+    /** Cold Socket SDK responder owned by this exact restored Home/auth principal. */
+    configureSocket?: ConfigureSocketBoundary;
     /** Unclaimed domain routes return null and remain HTTP 404, not network failures. */
     request?: (...args: Parameters<NonNullable<Parameters<typeof import('@/utils/system/runtimeFetch').setRuntimeFetch>[0]>>) => Promise<Response | null>;
 }>) {
@@ -112,17 +163,20 @@ export async function restoreServerAccountForTest(params: Readonly<{
     const { setServerProfileIdentityForUrl, getServerProfileById } = await import('@/sync/domains/server/serverProfiles');
     const { TokenStorage } = await import('@/auth/storage/tokenStorage');
     const { setRuntimeFetch, resetRuntimeFetch } = await import('@/utils/system/runtimeFetch');
-    const { restoreConnectionToActiveServer, disconnectActiveServerConnection } = await import('@/sync/runtime/orchestration/connectionManager');
+    const { restoreConnectionToActiveServer, switchConnectionToActiveServer, disconnectActiveServerConnection } = await import('@/sync/runtime/orchestration/connectionManager');
     // Home activation may start readiness immediately; install its HTTP
     // boundary before activation rather than racing a real network request.
-    setRuntimeFetch(async (url, init) => {
+    const requestOrigins = new Set([params.serverUrl, ...(params.additionalRequestOrigins ?? [])].map(url => new URL(url).origin));
+    const requestBoundary: Parameters<typeof setRuntimeFetch>[0] = async (url, init) => {
         const requestUrl = new URL(String(url));
-        if (requestUrl.origin !== new URL(params.serverUrl).origin) {
+        if (!requestOrigins.has(requestUrl.origin)) {
             throw new Error(`Unexpected test Home request origin: ${requestUrl.origin}`);
         }
         if (requestUrl.pathname === '/v1/auth/ping') return new Response('{}', { status: 200 });
         return await params.request?.(url, init) ?? new Response('{}', { status: 404 });
-    });
+    };
+    currentRuntimeFetchBoundary = requestBoundary;
+    setRuntimeFetch(requestBoundary);
     let home = await upsertServerProfileOnly({ serverUrl: params.serverUrl, name: 'Test Home' });
     if (params.serverIdentityId) {
         const identifiedHome = await setServerProfileIdentityForUrl(home.serverUrl, params.serverIdentityId);
@@ -132,27 +186,57 @@ export async function restoreServerAccountForTest(params: Readonly<{
     const credentials = params.credentials ?? { token: `e30.${Buffer.from(JSON.stringify({ sub: params.accountId ?? 'account-a' })).toString('base64url')}.signature` };
     const { canonicalizeServerUrl } = await import('@/sync/domains/server/url/serverUrlCanonical');
     const restoredHomeUrl = canonicalizeServerUrl(home.serverUrl);
-    // Activation can start connection readiness immediately. Its first credential
-    // read must see this restoration's Account, not a previously mounted fixture.
-    const credentialBoundary = vi.spyOn(TokenStorage, 'getCredentialsForServerUrl').mockImplementation(async serverUrl => {
-        if (params.credentialScope === 'restored-home' && canonicalizeServerUrl(serverUrl) !== restoredHomeUrl) return null;
-        return credentials;
-    });
-    await setActiveServer({ serverId: home.id });
-    await restoreConnectionToActiveServer(credentials);
+    // Device SDK storage is the boundary; the actual credential owner decides
+    // Home qualification, legacy migration and mutation lifetime before activation.
+    const credentialWrite = await TokenStorage.setCredentialsForServerUrlWithRollback(home.serverUrl, { serverId: home.id }, credentials);
+    if (!credentialWrite) throw new Error('Test Home credentials could not be stored');
+    const socketResponder = params.configureSocket
+        ? installDisconnectedServerSocketBoundary(params.configureSocket, { serverUrl: home.serverUrl, token: credentials.token }) : null;
+    try {
+        await setActiveServer({ serverId: home.id });
+        if (params.activation === 'switch') await switchConnectionToActiveServer();
+        else await restoreConnectionToActiveServer(credentials);
+    } catch (error) {
+        socketResponder?.dispose();
+        if (currentRuntimeFetchBoundary === requestBoundary) {
+            currentRuntimeFetchBoundary = undefined;
+            resetRuntimeFetch();
+        }
+        await credentialWrite.rollback();
+        throw error;
+    }
     // Restoration may adopt the Home's advertised portable identity. Return
     // the profile that owns the restored lifetime, rather than its pre-adoption alias.
     const restoredHome = getServerProfileById(getActiveServerSnapshot().serverId);
     if (!restoredHome || canonicalizeServerUrl(restoredHome.serverUrl) !== restoredHomeUrl) {
+        socketResponder?.dispose();
+        await credentialWrite.rollback();
         throw new Error('Test Account restoration did not retain its Home');
     }
+    const { captureActiveServerAccountScopeLifetime } = await import('@/sync/domains/scope/activeServerAccountScope');
+    const accountLifetime = captureActiveServerAccountScopeLifetime();
+    // Some callers deliberately serve no Profile route. Before Profile hydration
+    // there is no content lifetime to capture, so the real connection generation
+    // still fences disposal from a later activation of this same Home.
+    const restoredGeneration = getActiveServerSnapshot().generation;
     return {
         home: restoredHome,
         credentials,
         async dispose() {
-            await disconnectActiveServerConnection();
-            resetRuntimeFetch();
-            credentialBoundary.mockRestore();
+            try {
+                if (currentRuntimeFetchBoundary === requestBoundary
+                    && getActiveServerSnapshot().generation === restoredGeneration
+                    && (!accountLifetime || accountLifetime.isCurrent())) {
+                    await disconnectActiveServerConnection();
+                }
+            } finally {
+                socketResponder?.dispose();
+                if (currentRuntimeFetchBoundary === requestBoundary) {
+                    currentRuntimeFetchBoundary = undefined;
+                    resetRuntimeFetch();
+                }
+                await credentialWrite.rollback();
+            }
         },
     };
 }

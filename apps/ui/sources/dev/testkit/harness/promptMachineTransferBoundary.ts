@@ -3,13 +3,15 @@ import {
     MACHINE_PLAIN_DATA_KEY_MARKER, encodePlainMachineStoredContent,
     DirectRouteGrantRequestV2Schema, SignedDirectRouteGrantV2Schema, DIRECT_ROUTE_GRANT_AUDIENCE_V1,
     DIRECT_ROUTE_GRANT_TTL_MS, tryWriteServerEnabledBitInPlace,
-    type PromptAssetTypeDescriptorV1, type PromptAssetDiscoveryItemV1,
-    type PromptAssetReadResponseV1, type PromptRegistryFetchedItemV1,
+    type PromptAssetTypeDescriptorV1,
     type PromptAssetWriteRequest, type PromptAssetExternalRefV1,
     PromptAssetWriteRequestSchema,
     PromptAssetWriteBundleRequestSchema,
     PromptAssetWriteDocRequestSchema,
 } from '@happier-dev/protocol';
+import { RegistryFetchRequestV1Schema, RegistryFetchResponseV1Schema, RegistryItemV1Schema, RegistryDownloadRequestV1Schema,
+    computeGitBlobShaV1, computeGitTreeShaV1, RegistrySkillFilesPayloadV1Schema, type RegistryItemV1,
+    type RegistrySkillFileBytesV1 } from '@happier-dev/protocol/registries';
 import { PROMPT_LIBRARY_ROWS_ROUTE_V1, PromptLibraryCatalogKeyV1Schema } from '@happier-dev/protocol/prompts/library/promptLibraryRowsV1';
 import { createTransferManifestHasher } from '@/sync/domains/transfers/runtime/transferRuntime/plumbing/transferManifestHasher';
 import { createEncryptedTransferChunkEnvelope, createTransferRecipientKeyPair, decryptEncryptedTransferChunkEnvelope } from '@/sync/domains/transfers/runtime/transferRuntime/plumbing/transferChunkEncryption';
@@ -19,6 +21,24 @@ import { createMachineFixture } from '../fixtures/machineFixtures';
 import { createRootLayoutFeaturesResponse } from '../fixtures/featureFixtures';
 import { createPlainAccountEncryptionCurrentnessFixture } from '../fixtures/accountEncryptionCurrentness';
 import { SOCKET_RPC_EVENTS } from '@happier-dev/protocol/socketRpc';
+import { FoundSkillBundleV1Schema, FoundSkillDownloadRequestV1Schema, type FoundSkillBundleV1 } from '@happier-dev/protocol/prompts/library/skills/foundSkillTransferV1';
+import { SkillFoundListResultV1Schema, type SkillFoundListResultV1 } from '@happier-dev/protocol/prompts/library/skills/skillActionSchemasV1';
+
+/** Canonical strict Found producer shapes, including binary files and executable modes. */
+export function createFoundSkillTransferFixture(input: Readonly<{
+    name: string; path: string; scope: 'user' | 'project' | 'plugin';
+    agents: FoundSkillBundleV1['agents']; pluginOwned?: FoundSkillBundleV1['pluginOwned'];
+    files: FoundSkillBundleV1['files']; inLibrary?: string | null;
+}>) {
+    const bundle = FoundSkillBundleV1Schema.parse({ name: input.name, path: input.path, agents: input.agents,
+        pluginOwned: input.pluginOwned ?? null, files: input.files });
+    const list = SkillFoundListResultV1Schema.parse({ scannedAt: 1,
+        roots: [{ path: input.path.slice(0, input.path.lastIndexOf('/')), scope: input.scope, agents: input.agents, status: 'ok' }],
+        items: [{ name: input.name, description: null, path: input.path, digest: 'found-digest', agents: input.agents,
+            scope: input.scope, inLibrary: input.inLibrary ?? null, masksLibrary: false, happierInstalled: false,
+            pluginOwned: input.pluginOwned ?? null }] });
+    return { bundle, list };
+}
 
 /** Genuine native SDK boundary; carrier selection, grants and transfer codecs remain real. */
 export async function createPromptNativeTransferModuleBoundary(importOriginal: <T>() => Promise<T>) {
@@ -40,6 +60,9 @@ export async function createPromptNativeTransferModuleBoundary(importOriginal: <
 type DaemonRequest = Readonly<{ method: string; params: unknown }>;
 let receiveDaemonRequest: ((request: DaemonRequest) => Promise<unknown>) | undefined;
 export function installPromptMachineSocketBoundary() {
+    // Install both genuine transport leaves before importing screens whose
+    // runtime graph reaches Sync's Home HTTP client.
+    installHomeGovernanceBoundaries(createHomeGovernanceHarness());
     installDisconnectedServerSocketBoundary(socket => {
         socket.connected = true;
         socket.timeout = vi.fn<typeof socket.timeout>(() => socket);
@@ -55,15 +78,32 @@ export function installPromptMachineSocketBoundary() {
     });
 }
 
+/** Daemon fixture output uses the same pinned skill schema and Git hashes as real readers. */
+export function createPromptRegistrySkillFixture(input: Readonly<{ sourceId: string; itemId: string; title: string;
+    files: readonly Readonly<{ path: string; content: string; unixMode?: 0o644 | 0o755 }>[] }>) {
+    const files = input.files.map(file => ({ path: file.path, unixMode: file.unixMode ?? 0o644,
+        bytes: new TextEncoder().encode(file.content) } satisfies RegistrySkillFileBytesV1));
+    const commit = 'a'.repeat(40);
+    const item = RegistryItemV1Schema.parse({ summary: { sourceId: input.sourceId, itemId: input.itemId, kind: 'skill',
+        title: input.title, version: commit }, fetchedAt: 1, payload: { kind: 'skill', skill: {
+            ref: { kind: 'gitTree', repo: 'https://github.com/fixture/skills', path: input.itemId, commit, treeSha: computeGitTreeShaV1(files) },
+            skillMarkdown: input.files.find(file => file.path === 'SKILL.md')?.content ?? '',
+            files: files.map(file => ({ path: file.path, unixMode: file.unixMode, size: file.bytes.length, blobSha: computeGitBlobShaV1(file.bytes) })),
+        } } });
+    const payload = RegistrySkillFilesPayloadV1Schema.parse(files.map(file => ({ path: file.path, unixMode: file.unixMode,
+        contentBase64: Buffer.from(file.bytes).toString('base64') })));
+    return { item, files: payload };
+}
+
 /** Home/daemon HTTP and Socket boundaries shared by the real prompt screen owners. */
 export async function createPromptMachineTransferFixture(options: Readonly<{
     serverUrl: string;
     serverIdentityId: string;
     selectionKey: string;
     types: readonly PromptAssetTypeDescriptorV1[];
-    discoveries?: readonly PromptAssetDiscoveryItemV1[];
-    asset?: Extract<PromptAssetReadResponseV1, { ok: true }>['item'];
-    registryItem?: PromptRegistryFetchedItemV1;
+    foundSkill?: ReturnType<typeof createFoundSkillTransferFixture>;
+    registryItem?: RegistryItemV1;
+    registryFiles?: ReturnType<typeof RegistrySkillFilesPayloadV1Schema.parse>;
     handleHomeRequest(path: string, init?: RequestInit): Promise<Response | null>;
     /** A saved library Account, independent of the displayed Machine Home. */
     libraryHome?: Readonly<{
@@ -144,15 +184,21 @@ export async function createPromptMachineTransferFixture(options: Readonly<{
     const recipient = createTransferRecipientKeyPair();
     let uploadSize = 0;
     const types = [...options.types];
-    let discoveries = [...(options.discoveries ?? [])];
-    let asset = options.asset;
+    let foundList: SkillFoundListResultV1 | undefined = options.foundSkill?.list;
+    let beforeFoundList: (() => Promise<void>) | undefined;
     let afterExport: (() => Promise<void>) | undefined;
-    const transferBytes = () => new TextEncoder().encode(JSON.stringify(options.registryItem ?? asset));
+    const transferBytes = () => new TextEncoder().encode(JSON.stringify(options.registryFiles ?? options.foundSkill?.bundle));
     receiveDaemonRequest = async request => {
         daemonRequests.push(request);
         const method = request.method.slice(request.method.indexOf(':') + 1);
         if (method === 'daemon.promptAssets.listTypes') return { ok: true, types };
-        if (method === 'daemon.promptAssets.discover') return { ok: true, items: discoveries };
+        if (method === 'skills.found.list') {
+            if (!foundList) throw new Error('Found fixture is not installed');
+            const result = SkillFoundListResultV1Schema.parse(foundList);
+            const callback = beforeFoundList; beforeFoundList = undefined;
+            await callback?.();
+            return result;
+        }
         if (method === 'daemon.promptAssets.delete') return { ok: true, externalRef: {}, preview: { operation: 'delete', targetPath: 'review', fileCount: 1 } };
         if (method === 'daemon.directTransfer.import.prepare') {
             if (!request.params || typeof request.params !== 'object' || !('sizeBytes' in request.params)
@@ -165,12 +211,44 @@ export async function createPromptMachineTransferFixture(options: Readonly<{
                     url: 'http://127.0.0.1:48123/machine-transfers/direct/imports/prompt-screen-import' }] };
         }
         if (method === 'daemon.directTransfer.import.abort') return { success: true, aborted: true };
-        if (method === 'daemon.promptRegistry.install') return { ok: true, externalRef: { skillName: 'review' }, digest: 'digest-1',
-            preview: { operation: 'write', targetPath: '.agents/skills/review', fileCount: 2 } };
-        if (method === 'daemon.directTransfer.export.prepare') return { success: true, transferId: 'prompt-screen-export', name: 'prompt.json',
+        if (method === 'daemon.registries.fetch') {
+            const input = RegistryFetchRequestV1Schema.parse(request.params);
+            if (input.op === 'detect') return RegistryFetchResponseV1Schema.parse({ op: 'detect', detected: {
+                format: 'git', kinds: ['skill'], title: 'skills',
+            } });
+            const item = options.registryItem;
+            if (!item || !('sourceId' in input) || input.sourceId !== item.summary.sourceId)
+                return RegistryFetchResponseV1Schema.parse({ op: 'error', status: { state: 'invalid_source' } });
+            if (input.op === 'read') {
+                if (input.itemId !== item.summary.itemId || input.version !== undefined && input.version !== item.summary.version)
+                    return RegistryFetchResponseV1Schema.parse({ op: 'error', status: { state: 'invalid_source' } });
+                return RegistryFetchResponseV1Schema.parse({ op: 'read', item });
+            }
+            if (input.op === 'list') return RegistryFetchResponseV1Schema.parse({ op: 'list', page: { sourceId: input.sourceId,
+                status: { state: 'ok', fetchedAt: 1 }, items: !input.query || item.summary.title.includes(input.query) ? [item.summary] : [], nextCursor: null } });
+            throw new Error(`Unexpected registry operation ${input.op}`);
+        }
+        if (method === 'daemon.directTransfer.export.prepare') {
+            if (options.foundSkill) {
+                if (!request.params || typeof request.params !== 'object' || !('t' in request.params)) throw new Error('Missing Found export tag');
+                const { t, ...raw } = request.params;
+                if (t !== 'prompt_asset_download_v1') throw new Error('Unexpected Found export tag');
+                const pointer = FoundSkillDownloadRequestV1Schema.parse(raw);
+                if (pointer.path !== options.foundSkill.bundle.path) throw new Error('Found export must name the scanned path');
+            }
+            if (options.registryItem) {
+                if (!request.params || typeof request.params !== 'object' || !('t' in request.params)) throw new Error('Missing registry export tag');
+                const { t, ...raw } = request.params;
+                if (t !== 'prompt_registry_download_v1') throw new Error('Unexpected registry export tag');
+                const pointer = RegistryDownloadRequestV1Schema.parse(raw);
+                if (pointer.sourceId !== options.registryItem.summary.sourceId || pointer.itemId !== options.registryItem.summary.itemId
+                    || pointer.version !== options.registryItem.summary.version) throw new Error('Registry export must use the reviewed version');
+            }
+            return { success: true, transferId: 'prompt-screen-export', name: 'prompt.json',
             sizeBytes: transferBytes().length, expiresAt: Date.now() + DIRECT_ROUTE_GRANT_TTL_MS.finiteTransferCarrier,
             endpointCandidates: [{ kind: 'http', expiresAt: Date.now() + DIRECT_ROUTE_GRANT_TTL_MS.finiteTransferCarrier,
                 url: 'http://127.0.0.1:48123/machine-transfers/direct/prompt-screen-export' }] };
+        }
         if (method === 'daemon.directTransfer.export.release') {
             const callback = afterExport; afterExport = undefined;
             await callback?.();
@@ -296,7 +374,8 @@ export async function createPromptMachineTransferFixture(options: Readonly<{
             machineHomeStage = 'ready';
             return { serverId: machineServerId, artifacts: homes.artifacts(machineServerId) };
         },
-        setAsset(next: typeof asset) { asset = next; }, setDiscoveries(next: typeof discoveries) { discoveries = next; },
+        setFoundList(next: SkillFoundListResultV1) { foundList = SkillFoundListResultV1Schema.parse(next); },
+        beforeNextFoundList(callback: () => Promise<void>) { beforeFoundList = callback; },
         afterNextExport(callback: () => Promise<void>) { afterExport = callback; },
         setTypes(next: readonly PromptAssetTypeDescriptorV1[]) { types.splice(0, types.length, ...next); },
         selectMachine(machineId: string | null) { storage.getState().applySettingsLocal({

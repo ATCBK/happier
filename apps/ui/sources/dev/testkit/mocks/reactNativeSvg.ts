@@ -16,6 +16,7 @@ export const Circle = host('Circle');
 export const Line = host('Line');
 export const Path = host('Path');
 export const Text = host('SvgText');
+export const TextPath = host('SvgTextPath');
 export const Defs = host('Defs');
 export const G = host('G');
 export const Rect = host('Rect');

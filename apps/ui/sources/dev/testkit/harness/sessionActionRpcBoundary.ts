@@ -1,6 +1,7 @@
 import { vi } from 'vitest';
 import { SessionCurrentProjectionRecordV1Schema } from '@happier-dev/protocol';
 import type { SocketRpcRequestPayload } from '@happier-dev/protocol/socketRpc';
+import { SOCKET_RPC_EVENTS, SocketRpcCancellationPayloadSchema, SocketRpcRequestIdSchema, parseSocketRpcAuthorizationContext } from '@happier-dev/protocol/socketRpc';
 import type { Session } from '@/sync/domains/state/storageTypes';
 import type { storage } from '@/sync/domains/state/storage';
 import type { HomeGovernanceHarness } from './homeGovernanceHarness';
@@ -8,9 +9,22 @@ import { createSessionFixture } from '../fixtures/sessionFixtures';
 import { installDisconnectedServerSocketBoundary } from './serverAccountConnectionHarness';
 
 /** Real Session Action clients behind the Socket.IO serialization/response boundary. */
-export function installSessionActionRpcBoundary(respond: (request: SocketRpcRequestPayload) => unknown) {
+export function installSessionActionRpcBoundary(respond: (
+    request: SocketRpcRequestPayload,
+    context: Readonly<{ signal: AbortSignal }>,
+) => unknown) {
     const requests: SocketRpcRequestPayload[] = [];
     installDisconnectedServerSocketBoundary(socket => {
+        const pending = new Map<string, AbortController>();
+        const emit = socket.emit;
+        socket.emit = vi.fn<typeof socket.emit>((event, ...args) => {
+            if (event === SOCKET_RPC_EVENTS.CANCEL) {
+                const cancellation = SocketRpcCancellationPayloadSchema.parse(args[0]);
+                pending.get(cancellation.requestId)?.abort();
+                return socket;
+            }
+            return emit.call(socket, event, ...args);
+        });
         vi.mocked(socket.connect).mockImplementation(() => {
             socket.connected = true;
             for (const listener of socket.listeners('connect')) listener();
@@ -20,14 +34,24 @@ export function installSessionActionRpcBoundary(respond: (request: SocketRpcRequ
         // transport installed for the socket lifetime, like connect/emit/disconnect.
         socket.timeout = vi.fn<typeof socket.timeout>(() => socket);
         socket.emitWithAck = vi.fn<typeof socket.emitWithAck>(async (event, payload) => {
-            if (event !== 'rpc-call') return { v: 1, ok: true, admittedSessionIds: [] };
+            if (event !== SOCKET_RPC_EVENTS.CALL) return { v: 1, ok: true, admittedSessionIds: [] };
             const wire: unknown = JSON.parse(JSON.stringify(payload));
             if (!wire || typeof wire !== 'object' || !('method' in wire) || typeof wire.method !== 'string' || !('params' in wire)) {
                 throw new Error('Malformed socket RPC request');
             }
-            const request: SocketRpcRequestPayload = { method: wire.method, params: wire.params };
+            const authorization = 'authorization' in wire ? parseSocketRpcAuthorizationContext(wire.authorization) : null;
+            if ('authorization' in wire && !authorization) throw new Error('Malformed socket RPC authorization');
+            const request: SocketRpcRequestPayload = { method: wire.method, params: wire.params,
+                ...(authorization ? { authorization } : {}) };
             requests.push(request);
-            return { ok: true, result: await respond(request) };
+            const requestId = 'requestId' in wire ? SocketRpcRequestIdSchema.parse(wire.requestId) : null;
+            const controller = new AbortController();
+            if (requestId) pending.set(requestId, controller);
+            try {
+                return { ok: true, result: await respond(request, { signal: controller.signal }) };
+            } finally {
+                if (requestId) pending.delete(requestId);
+            }
         });
     });
     return requests;

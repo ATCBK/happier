@@ -85,11 +85,14 @@ export async function replayApprovedAsDaemon(input: Readonly<{
     signal?: AbortSignal;
     /** Runtime-native Actions use their real owner over the caller's daemon IO boundary. */
     runtimeActionExecute?: import('@happier-dev/protocol/actions/executor/types').RuntimeActionExecute;
+    /** The Home external-Action ingress decides before replaying at that daemon. */
+    decision?: 'approve';
 }>): Promise<ExecuteResult> {
     const [{ createActionExecutor }, { approvalArtifactBodyMatchesHeaderV1 },
         { captureLazyActionAccountContext }, { createMachineConnectionActionDeps },
         { writeApprovalRequestArtifact }, { isApprovalExecutionOriginCurrentForAccountContext },
-        { createUiConnectedServiceAction }] = await Promise.all([
+        { createUiConnectedServiceAction }, { executeActionOperationActionV1 }, { machineRpcWithServerScope },
+        { resolveServerProfileScopeIdForIdentifier }, { createUiProviderActionExecuteV1 }] = await Promise.all([
         import('@happier-dev/protocol/actions/actionExecutor'),
         import('@happier-dev/protocol/approvals/approvalArtifactHeaderV1'),
         import('@/sync/ops/actions/actionAccountContext'),
@@ -97,14 +100,23 @@ export async function replayApprovedAsDaemon(input: Readonly<{
         import('@/sync/ops/actions/approvalArtifactWriter'),
         import('@/sync/ops/actions/defaultActionExecutor'),
         import('@/sync/ops/actions/connectedServiceActionDeps'),
+        import('@happier-dev/protocol/actions/executor/actionOperationActions'),
+        import('@/sync/runtime/orchestration/serverScopedRpc/serverScopedMachineRpc'),
+        import('@/sync/domains/server/serverProfiles'),
+        import('@/sync/ops/actions/providerActionDeps'),
     ]);
     const account = await captureLazyActionAccountContext(input.serverId, input.signal);
     try {
         const read = (artifactId: string) => account.fetchArtifact(artifactId);
         const deps = {
             ...createMachineConnectionActionDeps(),
+            resolveServerProfileScopeId: resolveServerProfileScopeIdForIdentifier,
             ...(input.runtimeActionExecute ? { runtimeActionExecute: input.runtimeActionExecute } : {}),
             connectedServiceAction: createUiConnectedServiceAction(account),
+            providerActionExecute: createUiProviderActionExecuteV1(account),
+            actionOperationAction: args => executeActionOperationActionV1({ ...args,
+                transport: request => machineRpcWithServerScope({ ...request, accountId: account.accountId }),
+            }),
             approvalsGet: async ({ artifactId }) => {
                 const artifact = await read(artifactId);
                 if (!artifact?.header || typeof artifact.body !== 'string') return null;
@@ -125,7 +137,47 @@ export async function replayApprovedAsDaemon(input: Readonly<{
         // This boundary exposes only Machine and approval effects; unrelated
         // required executor ports cannot be reached by its admitted Action.
         const executor = createActionExecutor(deps as import('@happier-dev/protocol/actions/executor/types').ActionExecutorDeps);
+        if (input.decision) return await executor.execute('approval.request.decide', { artifactId: input.artifactId, decision: input.decision }, {
+            surface: 'ui', authority: 'present_user', serverId: account.serverId, runtimeAccountId: account.accountId,
+            ...(account.serverIdentityId ? { serverIdentityId: account.serverIdentityId } : {}),
+            ...(input.signal ? { signal: input.signal } : {}),
+        });
         return await executor.replayApprovedApprovalRequest({ artifactId: input.artifactId, callerAuthority: 'present_user',
             ...(input.signal ? { signal: input.signal } : {}) });
     } finally { account.dispose(); }
+}
+
+/** Home HTTP and Machine RPC remain boundaries; approval/Artifact/effect owners are real. */
+export async function installOwnMachineApprovalReplayBoundary(input: Readonly<{
+    harness: import('./homeGovernanceHarness').HomeGovernanceHarness;
+    serverId: string;
+    accountId: string;
+    machineId: string;
+}>) {
+    const [{ ExternalActionMachineBootstrapV1Schema, ExternalActionRequestEnvelopeV1Schema, ExternalActionResponseEnvelopeV1Schema },
+        { MACHINE_PLAIN_DATA_KEY_MARKER }, { getActionSpec }] = await Promise.all([
+        import('@happier-dev/protocol/actions/externalActionApi'),
+        import('@happier-dev/protocol/machines/machineStoredContent'),
+        import('@happier-dev/protocol/actions/actionSpecs'),
+    ]);
+    const machine = ExternalActionMachineBootstrapV1Schema.parse({ id: input.machineId, kind: 'persistent', active: true,
+        revokedAt: null, replacedByMachineId: null, installationId: `${input.machineId}-installation`,
+        dataEncryptionKey: MACHINE_PLAIN_DATA_KEY_MARKER, runnerContentKeyBinding: null,
+        access: { custodian: { accountId: input.accountId, displayName: input.accountId }, role: 'manage', resourceMode: 'plain', accessState: 'ready' },
+    });
+    input.harness.answer(input.serverId, '/v1/machines', { body: [machine] });
+    input.harness.answer(input.serverId, `GET /v1/machines/${input.machineId}`, { body: { machine } });
+    input.harness.answer(input.serverId, '/v1/actions/approval.request.decide', { select: async (body, request) => {
+        const envelope = ExternalActionRequestEnvelopeV1Schema.parse(body);
+        if (envelope.target?.kind !== 'machine' || envelope.target.machineId !== input.machineId) throw new Error('Wrong approval Machine');
+        const decision = getActionSpec('approval.request.decide').inputSchema.parse(envelope.input);
+        // The generic registry returns unknown; narrow its validated network
+        // input before passing the Artifact identity to the replay boundary.
+        if (typeof decision !== 'object' || decision === null || !('artifactId' in decision)
+            || typeof decision.artifactId !== 'string') throw new Error('Missing approval Artifact');
+        const result = await replayApprovedAsDaemon({ serverId: input.serverId, machineId: input.machineId,
+            artifactId: decision.artifactId, decision: 'approve', ...(request.signal ? { signal: request.signal } : {}),
+        });
+        return { body: ExternalActionResponseEnvelopeV1Schema.parse({ v: 1, actionId: 'approval.request.decide', requestId: envelope.requestId, execution: result }) };
+    } });
 }

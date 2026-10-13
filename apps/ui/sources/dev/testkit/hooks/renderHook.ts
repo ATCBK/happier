@@ -1,5 +1,6 @@
 import * as React from 'react';
 import renderer, { act } from 'react-test-renderer';
+export { act };
 
 import { registerStandardCleanupTarget, unregisterStandardCleanupTarget } from '../cleanup/standardCleanup';
 import { flushHookEffects, type FlushHookEffectsOptions } from './flushHookEffects';

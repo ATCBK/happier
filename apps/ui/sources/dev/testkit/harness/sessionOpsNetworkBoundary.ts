@@ -30,7 +30,7 @@ type SessionOpsSocketBoundary = ReturnType<typeof import('../mocks/socketIo').cr
 
 export type SessionOpsNetworkBoundary = Awaited<ReturnType<typeof installSessionOpsNetworkBoundary>>;
 
-/** Scoped operations use real Home/Account admission; only network and device credentials are replaced. */
+/** Scoped operations use real Home/Account admission and credentials; only network transports are replaced. */
 export async function installSessionOpsNetworkBoundary() {
     const requests: SessionOpsRpcRequest[] = [];
     const responses = new Map<string, unknown>();
@@ -89,20 +89,23 @@ export async function installSessionOpsNetworkBoundary() {
     });
 
     // This harness serves scoped saved Homes. It does not fabricate a focused Sync Account.
-    const { upsertServerProfile } = await import('@/sync/domains/server/serverProfiles');
+    const { upsertServerProfile, resolveUniqueServerProfileByUrl } = await import('@/sync/domains/server/serverProfiles');
     const { TokenStorage } = await import('@/auth/storage/tokenStorage');
     const { setRuntimeFetch, resetRuntimeFetch } = await import('@/utils/system/runtimeFetch');
-    const { MACHINE_PLAIN_DATA_KEY_MARKER } = await import('@happier-dev/protocol');
+    const { createPlainMachineRowFixture } = await import('../fixtures/machineFixtures');
     const { createAccountTokenForTests } = await import('./homeGovernanceHarness');
     const { canonicalizeServerUrl } = await import('@/sync/domains/server/url/serverUrlCanonical');
-    const homes = new Map<string, string>();
+    const homes = new Set<string>();
+    const accountIdsByHome = new Map<string, string>();
+    const credentialWrites: Array<NonNullable<Awaited<ReturnType<typeof TokenStorage.setCredentialsForServerUrlWithRollback>>>> = [];
     const credentialRequests: Array<{ serverUrl: string; serverId: string | undefined }> = [];
-    const readBoundaryCredentials: typeof TokenStorage.getCredentialsForServerUrl = async (serverUrl, options) => {
+    const readCredentials = TokenStorage.getCredentialsForServerUrl;
+    const observeCredentialRead: typeof TokenStorage.getCredentialsForServerUrl = async (serverUrl, options) => {
         credentialRequests.push({ serverUrl, serverId: options?.serverId ?? undefined });
-        const token = homes.get(serverUrl);
-        return token ? { token } : null;
+        return await readCredentials.call(TokenStorage, serverUrl, options);
     };
-    let credentialBoundary = vi.spyOn(TokenStorage, 'getCredentialsForServerUrl').mockImplementation(readBoundaryCredentials);
+    // Observation only: the real credential owner admits every served and unserved Home.
+    let credentialObserver = vi.spyOn(TokenStorage, 'getCredentialsForServerUrl').mockImplementation(observeCredentialRead);
     const httpRequests: Array<{ url: string; token: string | null }> = [];
     const runtimeFetchBoundary: RuntimeFetch = async (input, init) => {
         const url = new URL(String(input));
@@ -115,10 +118,12 @@ export async function installSessionOpsNetworkBoundary() {
         // contract is the HTTP status, not a response body.
         if (url.pathname === '/health') return new Response(null, { status: 200 });
         if (url.pathname === '/v1/auth/ping') return Response.json({});
-        if (url.pathname.startsWith('/v1/machines/')) return Response.json({ machine: {
-            id: decodeURIComponent(url.pathname.slice('/v1/machines/'.length)),
-            dataEncryptionKey: MACHINE_PLAIN_DATA_KEY_MARKER,
-        } });
+        const accountId = accountIdsByHome.get(url.origin);
+        if (!accountId) throw new Error(`Test Home Account is unavailable: ${url.origin}`);
+        if (url.pathname === '/v1/machines') return Response.json([createPlainMachineRowFixture({ id: 'machine-1', accountId })]);
+        if (url.pathname.startsWith('/v1/machines/')) return Response.json({ machine: createPlainMachineRowFixture({
+            id: decodeURIComponent(url.pathname.slice('/v1/machines/'.length)), accountId,
+        }) });
         return Response.json({}, { status: 404 });
     };
     setRuntimeFetch(runtimeFetchBoundary);
@@ -130,11 +135,8 @@ export async function installSessionOpsNetworkBoundary() {
         resetRequests() {
             // The global UI cleanup retires runtimeFetch after every test.
             setRuntimeFetch(runtimeFetchBoundary);
-            // Real-custody cases restore this shortcut to exercise the native
-            // credential parser/mutation owner. A reused fixture starts the
-            // next case with its original external credential boundary again.
-            credentialBoundary.mockRestore();
-            credentialBoundary = vi.spyOn(TokenStorage, 'getCredentialsForServerUrl').mockImplementation(readBoundaryCredentials);
+            credentialObserver.mockRestore();
+            credentialObserver = vi.spyOn(TokenStorage, 'getCredentialsForServerUrl').mockImplementation(observeCredentialRead);
             requests.length = 0;
             httpRequests.length = 0;
             credentialRequests.length = 0;
@@ -162,18 +164,31 @@ export async function installSessionOpsNetworkBoundary() {
         setSocketConfigurator(configure: (boundary: SessionOpsSocketBoundary) => void) {
             socketConfigurator = configure;
         },
-        setAccount(homeUrl: string, accountId: string) {
+        async setAccount(homeUrl: string, accountId: string) {
             const serverUrl = canonicalizeServerUrl(homeUrl);
             if (!homes.has(serverUrl)) throw new Error(`Test Home is not registered: ${serverUrl}`);
-            homes.set(serverUrl, createAccountTokenForTests(accountId));
+            const profile = resolveUniqueServerProfileByUrl(serverUrl);
+            if (!profile) throw new Error(`Test Home profile is not uniquely registered: ${serverUrl}`);
+            const write = await TokenStorage.setCredentialsForServerUrlWithRollback(
+                serverUrl, { serverId: profile.id }, { token: createAccountTokenForTests(accountId) },
+            );
+            if (!write) throw new Error(`Test Home credentials could not be stored: ${serverUrl}`);
+            credentialWrites.push(write);
+            accountIdsByHome.set(serverUrl, accountId);
         },
         async addHome(serverUrl: string, accountId: string) {
             const profile = await upsertServerProfile({ serverUrl, name: accountId });
             const token = createAccountTokenForTests(accountId);
-            homes.set(profile.serverUrl, token);
+            const write = await TokenStorage.setCredentialsForServerUrlWithRollback(
+                profile.serverUrl, { serverId: profile.id }, { token },
+            );
+            if (!write) throw new Error(`Test Home credentials could not be stored: ${profile.serverUrl}`);
+            credentialWrites.push(write);
+            homes.add(profile.serverUrl);
+            accountIdsByHome.set(profile.serverUrl, accountId);
             return { ...profile, accountId, token };
         },
-        dispose() {
+        async dispose() {
             rpcResponder = null;
             rpcAckResponder = null;
             httpResponder = null;
@@ -181,8 +196,9 @@ export async function installSessionOpsNetworkBoundary() {
             socketConfigurator = null;
             for (const socket of sockets) socket.disconnect();
             resetRuntimeFetch();
-            credentialBoundary.mockRestore();
+            credentialObserver.mockRestore();
             vi.doUnmock('socket.io-client');
+            for (const write of credentialWrites.splice(0).reverse()) await write.rollback();
         },
     };
 }

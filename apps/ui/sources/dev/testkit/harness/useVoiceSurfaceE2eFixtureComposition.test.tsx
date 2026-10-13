@@ -4,7 +4,9 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { standardCleanup } from '../cleanup/standardCleanup';
 import { flushHookEffects } from '../hooks/flushHookEffects';
 import { renderHook } from '../hooks/renderHook';
-import { buildServerFeaturesResponse } from '@/hooks/server/serverFeaturesTestUtils';
+import { createRootLayoutFeaturesResponse } from '@/dev/testkit';
+import { getServerFeaturesSnapshot, resetServerFeaturesClientForTests } from '@/sync/api/capabilities/serverFeaturesClient';
+import { resetRuntimeFetch, setRuntimeFetch } from '@/utils/system/runtimeFetch';
 import { getStorage } from '@/sync/domains/state/storage';
 import { getActiveServerSnapshot } from '@/sync/domains/server/serverRuntime';
 import { selectSessionViewShellSessionForRouteState } from '@/components/sessions/shell/sessionViewStableSession';
@@ -22,12 +24,7 @@ const localSearchParamsState = vi.hoisted(() => ({
     current: { happier_voice_e2e_fixture: 'sidebar_hidden_conversation' as string | string[] | undefined },
 }));
 
-const getServerFeaturesSnapshotSpy = vi.hoisted(() =>
-    vi.fn(async (_params: unknown) => ({
-        status: 'ready' as const,
-        features: buildServerFeaturesResponse({ voiceEnabled: true }),
-    })),
-);
+const featureRequests: string[] = [];
 
 vi.mock('expo-router', async () => {
     const { createExpoRouterMock } = await vi.importActual<typeof import('@/dev/testkit/mocks/router')>(
@@ -37,10 +34,6 @@ vi.mock('expo-router', async () => {
         params: () => localSearchParamsState.current as Record<string, string | string[] | undefined>,
     }).module;
 });
-
-vi.mock('@/sync/api/capabilities/serverFeaturesClient', () => ({
-    getServerFeaturesSnapshot: (params: unknown) => getServerFeaturesSnapshotSpy(params),
-}));
 
 const initialStorageState = getStorage().getState();
 const initialVoiceTargetState = useVoiceTargetStore.getState();
@@ -54,7 +47,16 @@ describe('useVoiceSurfaceE2eFixtureComposition', () => {
         useVoiceTargetStore.setState(initialVoiceTargetState, true);
         voiceSessionBindingStore.setState(initialBindingState, true);
         (globalThis as { __DEV__?: boolean }).__DEV__ = true;
-        getServerFeaturesSnapshotSpy.mockClear();
+        resetServerFeaturesClientForTests();
+        featureRequests.length = 0;
+        setRuntimeFetch(async (input) => {
+            const path = new URL(String(input)).pathname;
+            if (path === '/v1/features') {
+                featureRequests.push(path);
+                return Response.json(createRootLayoutFeaturesResponse({ features: { voice: { enabled: true } } }));
+            }
+            return new Response('{}', { status: 404 });
+        });
         localSearchParamsState.current = { happier_voice_e2e_fixture: 'sidebar_hidden_conversation' };
         globalThis.localStorage?.removeItem('happier.voice.e2e.fixture');
         process.env.EXPO_PUBLIC_DEBUG = initialExpoPublicDebug;
@@ -63,6 +65,8 @@ describe('useVoiceSurfaceE2eFixtureComposition', () => {
     afterEach(() => {
         vi.useRealTimers();
         standardCleanup();
+        resetServerFeaturesClientForTests();
+        resetRuntimeFetch();
         getStorage().setState(initialStorageState, true);
         useVoiceTargetStore.setState(initialVoiceTargetState, true);
         voiceSessionBindingStore.setState(initialBindingState, true);
@@ -105,14 +109,12 @@ describe('useVoiceSurfaceE2eFixtureComposition', () => {
             }),
         ).toMatchObject({
             conversationSessionId: 'voice-e2e-hidden-conversation',
-            targetSessionId: 'voice-e2e-root-session',
+            targetSessionAddress: { serverId: getActiveServerSnapshot().serverId, sessionId: 'voice-e2e-root-session' },
         });
+        // Presentation fixtures resolve persisted metadata, not a fabricated live lease.
         expect(
             voiceSessionBindingStore.getState().getByControlSessionId('__voice_agent__'),
-        ).toMatchObject({
-            conversationSessionId: 'voice-e2e-hidden-conversation',
-            targetSessionId: 'voice-e2e-root-session',
-        });
+        ).toBeNull();
         expect(
             selectVoiceTranscriptEntriesForConversationSession(
                 getStorage().getState(),
@@ -128,7 +130,8 @@ describe('useVoiceSurfaceE2eFixtureComposition', () => {
             mode: 'idle',
             canStop: true,
         });
-        expect(getServerFeaturesSnapshotSpy).toHaveBeenCalledWith({ force: true });
+        await vi.waitFor(() => expect(featureRequests).toContain('/v1/features'));
+        expect(await getServerFeaturesSnapshot()).toMatchObject({ status: 'ready', features: { features: { voice: { enabled: true } } } });
 
         await harness.unmount();
     });

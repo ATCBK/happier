@@ -41,7 +41,7 @@ export type HomeDomainAnswer = Readonly<{
      * One path serving several reads told apart by their body (the active and the archived Team
      * list): return the answer for this request, or `undefined` for this answer's own fields.
      */
-    select?: (input: unknown) => HomeDomainAnswer | undefined | Promise<HomeDomainAnswer | undefined>;
+    select?: (input: unknown, request: Readonly<{ signal?: AbortSignal | null }>) => HomeDomainAnswer | undefined | Promise<HomeDomainAnswer | undefined>;
     status?: number;
     /** Sent as the JSON body. Omit for an empty body. */
     body?: unknown;
@@ -178,7 +178,7 @@ export type HomeGovernanceHarness = Readonly<{
      * Someone else signs in on one saved Home: its credential now belongs to `accountId`, written
      * through the real credential store so every credential-lifetime observer sees the change.
      */
-    switchAccount(serverId: string, accountId: string): Promise<void>;
+    switchAccount(serverId: string, accountId: string, options?: Readonly<{ currentAccount?: boolean }>): Promise<void>;
     /** Used by the installed boundaries; tests address Homes by id. */
     findByServerUrl(serverUrl: string): HomeRecord | null;
     reset(): Promise<void>;
@@ -392,11 +392,11 @@ export function createHomeGovernanceHarness(): HomeGovernanceHarness {
             if (!record) throw new Error(`No Home saved for ${serverId}`);
             return record.artifacts;
         },
-        async switchAccount(serverId: string, accountId: string): Promise<void> {
+        async switchAccount(serverId: string, accountId: string, options?: Readonly<{ currentAccount?: boolean }>): Promise<void> {
             const record = homesByServerId.get(serverId);
             if (!record) throw new Error(`No saved Home ${serverId}`);
             record.accountId = accountId;
-            record.token = createAccountTokenForTests(accountId);
+            record.token = createAccountTokenForTests(accountId, options);
             const stored = await TokenStorage.setCredentialsForServerUrl(
                 record.serverUrl,
                 { serverId },
@@ -494,7 +494,7 @@ async function answerForEndpoint(
     const route = new URL(path, serverUrl).pathname;
     const pathAnswer = record?.answers.get(`${method} ${path}`) ?? record?.answers.get(path)
         ?? record?.answers.get(`${method} ${route}`) ?? record?.answers.get(route);
-    const answer = await pathAnswer?.select?.(input) ?? pathAnswer;
+    const answer = await pathAnswer?.select?.(input, { signal: init?.signal }) ?? pathAnswer;
     if (!answer) {
         const artifactResponse = record?.artifacts.handle(path, init);
         if (artifactResponse) return await artifactResponse;
@@ -507,6 +507,8 @@ async function answerForEndpoint(
     // precisely what makes the committed outcome unknowable to the client.
     if (answer.dispatchThenFail) throw new TypeError('Failed to fetch');
     const responseBody = path === ARTIFACT_CREATE_PATH
+        && method === 'POST'
+        && (answer.status ?? 200) >= 200 && (answer.status ?? 200) < 300
         && input && typeof input === 'object'
         && !Array.isArray(input)
         && answer.body && typeof answer.body === 'object'

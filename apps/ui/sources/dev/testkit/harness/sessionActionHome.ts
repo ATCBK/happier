@@ -13,9 +13,9 @@ export async function serveSessionActionHome(params: Parameters<typeof serveActi
         return {
             ...home,
             serverId: getActiveServerSnapshot().serverId,
-            dispose() {
+            async dispose() {
                 try {
-                    home.dispose();
+                    await home.dispose();
                 } finally {
                     sync.dispose();
                 }

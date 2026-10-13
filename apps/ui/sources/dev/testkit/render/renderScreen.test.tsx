@@ -1,4 +1,5 @@
 import * as React from 'react';
+import { act } from 'react-test-renderer';
 import type { TestRendererOptions } from 'react-test-renderer';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 
@@ -41,43 +42,40 @@ describe('UI testkit render helpers', () => {
         expect(screen.tree.findAllByType<typeof MemoControl>(MemoControl)).toHaveLength(1);
     });
 
-    it('renders screens, finds nodes by test id, and invokes press handlers', async () => {
+    it.each([
+        { host: 'Pressable', idProp: 'testID', handlerProp: 'onPress' },
+        { host: 'button', idProp: 'data-testid', handlerProp: 'onClick' },
+    ])('drives the actionable $host host through a wrapper sharing its test id', async ({ host, idProp, handlerProp }) => {
         const { renderScreen } = await import('./renderScreen');
 
-        const onPress = vi.fn();
-        const screen = await renderScreen(
-            React.createElement(
-                'View',
-                { testID: 'root' },
-                React.createElement('Pressable', { testID: 'settings.row', onPress }),
-                React.createElement('Text', null, 'settings.title'),
-            ),
-        );
+        function WrappedControl(props: { testID: string; onPress: () => void; onHostPress: () => void }) {
+            return React.createElement(host, {
+                [idProp]: props.testID,
+                [handlerProp]: props.onHostPress,
+            });
+        }
 
-        expect(screen.findByTestId('settings.row')).toBeTruthy();
-        expect(screen.getTextContent()).toContain('settings.title');
+        function Counter() {
+            const [count, setCount] = React.useState(0);
+            return React.createElement('View', null,
+                React.createElement(WrappedControl, {
+                    testID: 'settings.row',
+                    onPress: () => setCount(100),
+                    onHostPress: () => setCount((current) => current + 1),
+                }),
+                React.createElement('Text', { testID: 'settings.count' }, String(count)),
+            );
+        }
 
-        screen.pressByTestId('settings.row');
-        expect(onPress).toHaveBeenCalledTimes(1);
-    });
+        const screen = await renderScreen(React.createElement(Counter));
+        expect(screen.findByTestId('settings.row')?.type).toBe(host);
+        expect(screen.findAllByTestId('settings.row')).toHaveLength(2);
+        expect(screen.findAllHostsByTestId('settings.row')).toHaveLength(1);
 
-    it('matches raw web data-testid props through the test id helpers', async () => {
-        const { renderScreen } = await import('./renderScreen');
-
-        const onClick = vi.fn();
-        const screen = await renderScreen(
-            React.createElement(
-                'View',
-                null,
-                React.createElement('button', { 'data-testid': 'settings.raw-web-button', onClick }),
-            ),
-        );
-
-        expect(screen.findByTestId('settings.raw-web-button')?.type).toBe('button');
-        expect(screen.findAllByTestId('settings.raw-web-button')).toHaveLength(1);
-
-        screen.pressByTestId('settings.raw-web-button');
-        expect(onClick).toHaveBeenCalledTimes(1);
+        await act(async () => screen.pressByTestId('settings.row'));
+        expect(screen.findHostByTestId('settings.count')?.children).toEqual(['1']);
+        await act(async () => screen.tree.pressByTestId('settings.row'));
+        expect(screen.findHostByTestId('settings.count')?.children).toEqual(['2']);
     });
 
     it('awaits async press handlers through the screen helper', async () => {
@@ -86,19 +84,21 @@ describe('UI testkit render helpers', () => {
         const events: string[] = [];
         const started = createDeferred<void>();
         const release = createDeferred<void>();
-        const onPress = vi.fn(async () => {
-            events.push('started');
-            started.resolve(undefined);
-            await release.promise;
-            events.push('completed');
-        });
-        const screen = await renderScreen(
-            React.createElement(
-                'View',
-                null,
+        function AsyncControl() {
+            const [status, setStatus] = React.useState('idle');
+            const onPress = async () => {
+                events.push('started');
+                started.resolve(undefined);
+                await release.promise;
+                setStatus('completed');
+                events.push('completed');
+            };
+            return React.createElement('View', null,
                 React.createElement('Pressable', { testID: 'settings.async', onPress }),
-            ),
-        );
+                React.createElement('Text', { testID: 'settings.status' }, status),
+            );
+        }
+        const screen = await renderScreen(React.createElement(AsyncControl));
 
         let settled = false;
         const pressPromise = screen.pressByTestIdAsync('settings.async').then(() => {
@@ -110,35 +110,8 @@ describe('UI testkit render helpers', () => {
 
         release.resolve(undefined);
         await pressPromise;
-        expect(onPress).toHaveBeenCalledTimes(1);
         expect(events).toEqual(['started', 'completed']);
-    });
-
-    it('prefers the actionable host node when a wrapper component shares the same test id', async () => {
-        const { renderScreen } = await import('./renderScreen');
-
-        const onPress = vi.fn(async () => undefined);
-
-        function WrappedButton() {
-            return React.createElement(
-                'Pressable',
-                {
-                    testID: 'settings.shared-id',
-                    onPress,
-                    accessibilityLabel: 'wrapped.button',
-                },
-                React.createElement('Text', null, 'wrapped.button'),
-            );
-        }
-
-        const screen = await renderScreen(
-            React.createElement(WrappedButton, { testID: 'settings.shared-id' } as unknown as Record<string, unknown>),
-        );
-
-        expect(screen.findByTestId('settings.shared-id')?.props.accessibilityLabel).toBe('wrapped.button');
-
-        await screen.pressByTestIdAsync('settings.shared-id');
-        expect(onPress).toHaveBeenCalledTimes(1);
+        expect(screen.findHostByTestId('settings.status')?.children).toEqual(['completed']);
     });
 
     it('queries rendered host instances without counting transparent composite wrappers', async () => {
@@ -161,23 +134,21 @@ describe('UI testkit render helpers', () => {
     it('exposes the same test id helpers on the underlying tree result, including text changes', async () => {
         const { renderScreen } = await import('./renderScreen');
 
-        const onPress = vi.fn();
-        const onChangeText = vi.fn();
-        const screen = await renderScreen(
-            React.createElement(
-                'View',
-                null,
-                React.createElement('Pressable', { testID: 'settings.tree-row', onPress }),
-                React.createElement('TextInput', { testID: 'settings.tree-input', onChangeText }),
-            ),
-        );
+        function TextEditor() {
+            const [value, setValue] = React.useState('');
+            return React.createElement('View', null,
+                React.createElement('Pressable', { testID: 'settings.tree-row', onPress: () => setValue('pressed') }),
+                React.createElement('TextInput', { testID: 'settings.tree-input', value, onChangeText: setValue }),
+            );
+        }
+        const screen = await renderScreen(React.createElement(TextEditor));
 
         expect(screen.tree.findByTestId('settings.tree-row')).toBeTruthy();
-        screen.tree.pressByTestId('settings.tree-row');
-        screen.tree.changeTextByTestId('settings.tree-input', 'next value');
+        await act(async () => screen.tree.pressByTestId('settings.tree-row'));
+        expect(screen.tree.findByTestId('settings.tree-input')?.props.value).toBe('pressed');
+        await act(async () => screen.tree.changeTextByTestId('settings.tree-input', 'next value'));
 
-        expect(onPress).toHaveBeenCalledTimes(1);
-        expect(onChangeText).toHaveBeenCalledWith('next value');
+        expect(screen.tree.findByTestId('settings.tree-input')?.props.value).toBe('next value');
     });
 
     it('drives a text control that reports edits only through the host onChange event', async () => {
@@ -187,15 +158,19 @@ describe('UI testkit render helpers', () => {
         // and `onChange`. A control that needs the host event (IME composition
         // state travels on it) legitimately wires only `onChange`; the driver has
         // to reach it the same way the host does.
-        const onChange = vi.fn();
-        const screen = await renderScreen(
-            React.createElement('TextInput', { testID: 'settings.change-only-input', onChange }),
-        );
+        function HostEventEditor() {
+            const [value, setValue] = React.useState('');
+            return React.createElement('TextInput', {
+                testID: 'settings.change-only-input',
+                value,
+                onChange: (event: { nativeEvent: { text: string } }) => setValue(event.nativeEvent.text),
+            });
+        }
+        const screen = await renderScreen(React.createElement(HostEventEditor));
 
-        screen.changeTextByTestId('settings.change-only-input', 'typed value');
+        await act(async () => screen.changeTextByTestId('settings.change-only-input', 'typed value'));
 
-        expect(onChange).toHaveBeenCalledTimes(1);
-        expect(onChange.mock.calls[0]?.[0]).toMatchObject({ nativeEvent: { text: 'typed value' } });
+        expect(screen.findByTestId('settings.change-only-input')?.props.value).toBe('typed value');
     });
 
     it('reports a text control that exposes no edit handler at all', async () => {
@@ -298,44 +273,31 @@ describe('UI testkit render helpers', () => {
         expect(onChangeText).toHaveBeenCalledWith('Please clarify why this matters.');
     });
 
-    it('proxies common root find helpers onto the underlying tree result', async () => {
+    it('keeps the screen and tree queries current after replacing rendered content', async () => {
         const { renderScreen } = await import('./renderScreen');
 
-        const screen = await renderScreen(
-            React.createElement(
-                'View',
-                { testID: 'settings.root' },
-                React.createElement('View', { testID: 'settings.proxy-row' }),
-                React.createElement('Text', null, 'settings.proxy-title'),
-            ),
+        const content = (rowId: string) => React.createElement(
+            'View',
+            { testID: 'settings.root' },
+            React.createElement('View', { testID: rowId }),
+            React.createElement('Text', null, rowId),
         );
+        const screen = await renderScreen(content('settings.previous-row'));
 
-        expect(screen.tree.findByType('View')).toBeTruthy();
-        expect(screen.tree.findAllByType('View')).toHaveLength(2);
-        expect(screen.tree.findByProps({ testID: 'settings.proxy-row' })).toBeTruthy();
-        expect(screen.tree.findAllByProps({ testID: 'settings.proxy-row' })).toHaveLength(1);
-        expect(screen.tree.find((node) => node.props?.testID === 'settings.proxy-row')).toBeTruthy();
-        expect(screen.tree.findAll((node) => typeof node.type === 'string')).not.toHaveLength(0);
-    });
-
-    it('exposes the common root find helpers on the screen result itself', async () => {
-        const { renderScreen } = await import('./renderScreen');
-
-        const screen = await renderScreen(
-            React.createElement(
-                'View',
-                { testID: 'settings.screen-root' },
-                React.createElement('View', { testID: 'settings.screen-row' }),
-                React.createElement('Text', null, 'settings.screen-title'),
-            ),
-        );
-
-        expect(screen.findByType('View')).toBeTruthy();
-        expect(screen.findAllByType('View')).toHaveLength(2);
-        expect(screen.findByProps({ testID: 'settings.screen-row' })).toBeTruthy();
-        expect(screen.findAllByProps({ testID: 'settings.screen-row' })).toHaveLength(1);
-        expect(screen.find((node) => node.props?.testID === 'settings.screen-row')).toBeTruthy();
-        expect(screen.findAll((node) => typeof node.type === 'string')).not.toHaveLength(0);
+        for (const rowId of ['settings.previous-row', 'settings.current-row']) {
+            if (rowId === 'settings.current-row') await screen.update(content(rowId));
+            for (const queries of [screen, screen.tree]) {
+                expect(queries.findByType('View').props.testID).toBe('settings.root');
+                expect(queries.findAllByType('View')).toHaveLength(2);
+                const row = queries.findByProps({ testID: rowId });
+                expect(queries.findAllByProps({ testID: rowId })).toEqual([row]);
+                expect(queries.find((node) => node.props?.testID === rowId)).toBe(row);
+                expect(queries.findAll((node) => typeof node.type === 'string')).toHaveLength(3);
+                expect(queries.findByTestId(rowId)).toBe(row);
+            }
+        }
+        expect(screen.tree.findAllByProps({ testID: 'settings.previous-row' })).toEqual([]);
+        expect(screen.findByTestId('settings.previous-row')).toBeNull();
     });
 
     it('collects text content through component wrapper children, not only host props.children', async () => {
@@ -430,35 +392,23 @@ describe('UI testkit render helpers', () => {
         expect(onPress).toHaveBeenCalledTimes(1);
     });
 
-    it('collects unexpected raw text nodes outside allowed parent types', async () => {
-        const { collectUnexpectedRawTextNodes } = await import('./renderScreen');
-        const tree = {
-            type: 'View',
-            props: {},
-            children: [
-                'bad',
-                {
-                    type: 'Text',
-                    props: {},
-                    children: ['good'],
-                },
-            ],
-        } as any;
+    it('detects raw text outside allowed parents in renderer output, including empty input', async () => {
+        const { collectUnexpectedRawTextNodes, renderScreen } = await import('./renderScreen');
+        const screen = await renderScreen(React.createElement('View', null,
+            'bad',
+            React.createElement('Text', null, 'good'),
+        ));
 
-        expect(collectUnexpectedRawTextNodes(tree)).toEqual([
+        expect(collectUnexpectedRawTextNodes(screen.tree.toJSON())).toEqual([
             { parent: 'View', value: 'bad' },
         ]);
-    });
-
-    it('collects empty raw text nodes because React Native Web warns for them too', async () => {
-        const { collectUnexpectedRawTextNodes } = await import('./renderScreen');
-        const tree = {
+        // Keep the empty-string boundary vector: React's renderer removes empty
+        // children, but the collector must preserve them in a supplied host tree.
+        expect(collectUnexpectedRawTextNodes({
             type: 'View',
             props: {},
             children: [''],
-        } as any;
-
-        expect(collectUnexpectedRawTextNodes(tree)).toEqual([
+        })).toEqual([
             { parent: 'View', value: '' },
         ]);
     });

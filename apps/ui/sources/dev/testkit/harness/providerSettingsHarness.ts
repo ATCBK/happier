@@ -491,6 +491,10 @@ export function createProviderSettingsAccountHarness() {
         },
         async restore(options: Readonly<{
             accountId?: string;
+            /** Authenticated ordinary-Account ingress for exact-daemon Action replay. */
+            currentAccount?: boolean;
+            /** Use the real serialized switch when a staged Home leaves the prior runtime applied. */
+            activation?: 'switch';
             serverIdentityId?: string;
             settings?: Readonly<Record<string, unknown>>;
             catalog?: ProviderConnectionsCatalogV1;
@@ -505,10 +509,11 @@ export function createProviderSettingsAccountHarness() {
             await connection?.dispose();
             const accountId = options.accountId ?? 'account-a';
             if (!serverId) serverId = await home.addHome({ name: 'Provider settings', serverUrl, accountId,
-                serverIdentityId: options.serverIdentityId });
-            else await home.switchAccount(serverId, accountId);
+                serverIdentityId: options.serverIdentityId, currentAccount: options.currentAccount });
+            else await home.switchAccount(serverId, accountId, { currentAccount: options.currentAccount });
             await publishFeatures(serverId, options.features ?? defaultFeatures());
             let credentials: import('@/auth/storage/tokenStorage').AuthCredentials | undefined;
+            if (options.currentAccount) credentials = { token: home.findByServerUrl(serverUrl)!.token! };
             const secret = options.e2eeSecret;
             if (secret) {
                 const [{ encodeBase64 }, { createAccountScopedCryptoMaterialSnapshotV1 },
@@ -567,7 +572,8 @@ export function createProviderSettingsAccountHarness() {
                 } });
             }
             if (options.machines) await publishMachines(serverId, options.machines);
-            connection = await restoreServerAccountForTest({ serverUrl, accountId, request: home.request, credentials });
+            connection = await restoreServerAccountForTest({ serverUrl, accountId, request: home.request, credentials,
+                ...(options.activation ? { activation: options.activation } : {}) });
             // The connection helper mounts one Home; credential lookups for a
             // foreign Provider target must still answer for that exact Home.
             const { TokenStorage } = await import('@/auth/storage/tokenStorage');

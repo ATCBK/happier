@@ -35,6 +35,7 @@ export function createExpoFileSystemFileMock(cacheUri = 'file:///cache') {
             this.uri = name ? `${uri.replace(/\/+$/, '')}/${name}` : uri;
         }
         get exists() { return files.has(this.uri); }
+        get size() { return files.get(this.uri)?.length ?? 0; }
         create() { create(this.uri); }
         delete() { deleteFile(this.uri); }
         write(content: string | Uint8Array, options?: { append?: boolean }) {
@@ -55,7 +56,20 @@ export function createExpoFileSystemFileMock(cacheUri = 'file:///cache') {
         }
         open() {
             open(this.uri);
-            return { offset: 0, writeBytes: (bytes: Uint8Array) => writeBytes(this.uri, bytes), close: () => close(this.uri) };
+            const uri = this.uri;
+            return {
+                offset: 0,
+                get size() { return files.get(uri)?.length ?? 0; },
+                readBytes(length: number) {
+                    const content = files.get(uri);
+                    if (!content) throw new Error('File does not exist');
+                    const bytes = new Uint8Array(content.slice(this.offset, this.offset + length));
+                    this.offset += bytes.byteLength;
+                    return bytes;
+                },
+                writeBytes: (bytes: Uint8Array) => writeBytes(uri, bytes),
+                close: () => close(uri),
+            };
         }
     }
     return { module: { Directory, File, Paths: { cache: cacheUri } }, files, close, deleteFile, open, create, writeBytes, writes };

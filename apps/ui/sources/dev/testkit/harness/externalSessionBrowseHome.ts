@@ -18,5 +18,5 @@ export async function serveExternalSessionBrowseHome(params: Parameters<typeof s
         machineListStatusByServerId: Object.fromEntries(Object.values(home.homes).map(profile => [profile.id, 'idle' as const])),
     }));
     publishAppliedActiveServerSnapshot({ serverId, serverUrl: focused.serverUrl, generation: 0 });
-    return { ...home, serverId, dispose() { publishAppliedActiveServerRuntimeAvailability(false); home.dispose(); } };
+    return { ...home, serverId, async dispose() { publishAppliedActiveServerRuntimeAvailability(false); await home.dispose(); } };
 }

@@ -48,12 +48,13 @@ export function createPromptLibraryCatalogBoundary(options: Readonly<{
 export async function createPlainPromptLibraryCatalogHomeFixture(serverUrl: string, initial: PromptLibraryRecordV1,
     outcome: 'updated' | 'conflict' = 'updated', options?: Readonly<{
         handleRequest?: (path: string, init?: RequestInit) => Promise<Response | null>;
+        handleExternalRequest?: (url: string, init?: RequestInit) => Promise<Response | null>;
     }>) {
     const tombstoneKeys = PromptLibraryCatalogKeyV1Schema.options.filter(key => key !== initial.key);
     const catalog = createPromptLibraryCatalogBoundary({ records: [initial], revision: 4,
         tombstones: tombstoneKeys, mutationOutcome: outcome, settingsVersion: 7 });
     let settingsWrites = 0;
-    const fixture = await createPlainArtifactHomeFixture(serverUrl, { handleRequest: async (path, init) => {
+    const fixture = await createPlainArtifactHomeFixture(serverUrl, { handleExternalRequest: options?.handleExternalRequest, handleRequest: async (path, init) => {
         if (path === '/v2/account/settings' && init?.method === 'POST') {
             settingsWrites += 1;
             return Response.json({ success: true, version: 8 });
