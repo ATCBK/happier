@@ -2,7 +2,7 @@ import type { MemorySearchQueryV1 } from '@happier-dev/protocol/memory/memorySea
 import { MemoryDocBodyV1StoredSchema, MEMORY_ARCHIVE_TOPIC_TITLE_V1, projectMemoryDocIndexV1 } from '@happier-dev/protocol/prompts/library/memoryDocV1';
 import { PromptDocBodyV1Schema } from '@happier-dev/protocol/prompts/library/promptDocV2';
 import { createStoredReadSchema } from '@happier-dev/protocol/json/storedReadSchema';
-import { resolvePromptStackSystemAppendBlocksV1 } from '@happier-dev/protocol/prompts/library/resolvePromptStackSystemAppendBlocksV1';
+import { PromptStackPreparationError, resolvePromptStackSystemAppendBlocksV1 } from '@happier-dev/protocol/prompts/library/resolvePromptStackSystemAppendBlocksV1';
 import type { PromptArtifactRefV1 } from '@happier-dev/protocol/prompts/library/promptArtifactRefsV1';
 import type { PromptLibraryStoredArtifact } from '@happier-dev/protocol/prompts/library/promptLibraryActionOperations';
 import { prepareSessionPromptStackInputs } from '@/agent/prompting/coding/sessionPromptStack';
@@ -101,6 +101,8 @@ export async function syncMemoryDocuments(params: Readonly<{
           memoryEnabled: sessionId ? prepared.memoryEnabled : true,
           readArtifact, readArtifactHeader: reader.readArtifactHeader, signal: params.signal });
         prepared.assertCurrentAccount();
+        const incomplete = inventory.admittedEntries.find(entry => entry.outcome === 'unavailable' && entry.reason === 'unavailable');
+        if (incomplete) throw new PromptStackPreparationError('unavailable', incomplete.ref);
         for (const admitted of inventory.admittedEntries) {
           if (admitted.ref.kind !== 'doc' || admitted.outcome === 'unavailable') continue;
           const artifact = await readArtifact(admitted.ref);

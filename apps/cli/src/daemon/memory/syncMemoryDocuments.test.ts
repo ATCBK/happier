@@ -35,6 +35,7 @@ async function withCurrentDocumentFixture(run: (fixture: Readonly<{
   replaceAccount: () => void;
   credentials: import('@/persistence').StoredCredentials;
   setSessionWork: (work: Record<string, unknown>) => void;
+  setArtifactState: (state: 'available' | 'unavailable' | 'missing') => void;
 }>) => Promise<void>, machineId = 'session-machine', memory = false): Promise<void> {
   const { accountSettingsParse } = await import('@happier-dev/protocol');
   const { encodePlainArtifactStoredContent, ARTIFACT_PLAIN_DATA_KEY_MARKER } = await import('@happier-dev/protocol/storage/artifactStoredContent');
@@ -64,6 +65,7 @@ async function withCurrentDocumentFixture(run: (fixture: Readonly<{
     dataEncryptionKey: ARTIFACT_PLAIN_DATA_KEY_MARKER, headerVersion: 1, bodyVersion: 1, seq: 1, createdAt: 1, updatedAt: 1 };
   setActiveAccountSettingsSnapshot({ source: 'network', settings: accountSettingsParse({}), rawSettings: {},
     scopeKey: resolveAccountSettingsScopeKey(credentials), settingsVersion: 1, loadedAtMs: 1, settingsSecretsReadKeys: [] });
+  let artifactState: 'available' | 'unavailable' | 'missing' = 'available';
   vi.spyOn(axios, 'get').mockImplementation(async url => {
     const path = new URL(String(url)).pathname;
     if (path === '/v1/account/encryption/currentness') return { status: 200, data: { mode: 'plain', version: 1, signingKeyFingerprint: null, contentKeyFingerprint: null, updatedAt: 1 } };
@@ -71,7 +73,11 @@ async function withCurrentDocumentFixture(run: (fixture: Readonly<{
     if (path === '/v2/account/settings') return { status: 200, data: { content: { t: 'plain', v: {} }, version: 1 } };
     if (path === '/v1/account/entity-rows/prompt-library') return { status: 200, data: { status: 'listed', rows: PromptLibraryCatalogKeyV1Schema.options.map(key => ({ key, revision: 1, content: { t: 'plain', v: emptyPromptLibraryRecordV1(key) } })) } };
     if (path === '/v1/artifacts') return { status: 200, data: [artifact] };
-    if (path === `/v1/artifacts/${artifact.id}`) return { status: 200, data: artifact };
+    if (path === `/v1/artifacts/${artifact.id}`) {
+      if (artifactState === 'unavailable') throw new Error('Artifact Home unavailable');
+      if (artifactState === 'missing') return { status: 404, data: { error: 'artifact_not_found' } };
+      return { status: 200, data: artifact };
+    }
     throw new Error(`Unexpected document admission HTTP path: ${path}`);
   });
   // Account rows and Session HTTP are transport boundaries; Project association,
@@ -100,6 +106,7 @@ async function withCurrentDocumentFixture(run: (fixture: Readonly<{
   try {
     const scope = await prepare();
     await run({ scope, db, dbPath, prepare, serverId, artifactId: artifact.id, credentials,
+      setArtifactState: state => { artifactState = state; },
       setSessionWork: work => { sessionWork = work; }, replaceAccount: () => {
       const replacement = { token: `header.${Buffer.from(JSON.stringify({ sub: 'replacement-account' })).toString('base64url')}.signature`, encryption: null };
       setActiveAccountSettingsSnapshot({ source: 'network', settings: accountSettingsParse({}), rawSettings: {},
@@ -118,6 +125,19 @@ it('qualifies global Project documents using the owning Session Machine and work
     expect(db.searchDocuments({ query: 'quartz', eligibleDocuments: scope.eligibleDocuments, maxResults: 10 }))
       .toEqual([expect.objectContaining({ text: 'quartz remote project context', location: 'document' })]);
   }, 'daemon-machine');
+});
+
+it('retains the global document index during optional transport unavailability and prunes observed absence', async () => {
+  await withCurrentDocumentFixture(async ({ scope, db, prepare, setArtifactState }) => {
+    const search = () => db.searchDocuments({ query: 'quartz', eligibleDocuments: scope.eligibleDocuments, maxResults: 10 });
+    expect(search()).toHaveLength(1);
+    setArtifactState('unavailable');
+    expect(await prepare()).toMatchObject({ state: 'pending', eligibleDocuments: [] });
+    expect(search()).toHaveLength(1);
+    setArtifactState('missing');
+    expect(await prepare()).toMatchObject({ state: 'ready', eligibleDocuments: [] });
+    expect(search()).toHaveLength(0);
+  });
 });
 
 it('retains budget-loaded preparation facts separately from indexed topics, archive and expired facts', async () => {
