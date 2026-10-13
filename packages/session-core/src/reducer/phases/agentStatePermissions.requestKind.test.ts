@@ -2,8 +2,56 @@ import { describe, expect, it } from 'vitest';
 import { createReducer } from "../reducer.js";
 import { runAgentStatePermissionsPhase } from "./agentStatePermissions.js";
 import { applyToolResultUpdateToReducerMessage } from "../helpers/applyToolResultUpdateToReducerMessage.js";
+import { buildToolPermissionFromStored } from '../helpers/toolCallProjection.js';
+import { collectTranscriptRequestStates, type TranscriptRequestState } from '../../pending/listPendingRequests.js';
 
 describe('runAgentStatePermissionsPhase (request kind)', () => {
+  it('retains the request source through transcript-only projection and clears it on an authoritative refresh', () => {
+    const state = createReducer();
+    const changed = new Set<string>();
+    const run = (source?: string) => runAgentStatePermissionsPhase({ state,
+      agentState: { requests: { edit: { tool: 'Edit', arguments: {}, createdAt: 1, turnId: 'turn-first', ...(source ? { source } : {}) } } },
+      incomingToolIds: new Set<string>(), changed, allocateId: () => 'edit-message', enableLogging: false });
+    run('native_tool_approval_once');
+    expect(state.messages.get('edit-message')?.tool?.permission).toMatchObject({ source: 'native_tool_approval_once', turnId: 'turn-first' });
+    expect(buildToolPermissionFromStored('edit', state.permissions.get('edit')!)).toMatchObject({ source: 'native_tool_approval_once' });
+    const tool = state.messages.get('edit-message')!.tool!;
+    const transcriptStates = new Map<string, TranscriptRequestState>();
+    collectTranscriptRequestStates([{ kind: 'tool-call', id: 'edit-message', localId: null, createdAt: 1, tool, children: [] }], null, transcriptStates);
+    expect(transcriptStates.get('edit')?.request).toMatchObject({ source: 'native_tool_approval_once', turnId: 'turn-first' });
+    changed.clear();
+    run('native_tool_approval_once');
+    expect(changed.size).toBe(0);
+    run();
+    expect(state.messages.get('edit-message')?.tool?.permission).not.toHaveProperty('source', 'native_tool_approval_once');
+    expect(buildToolPermissionFromStored('edit', state.permissions.get('edit')!)).not.toHaveProperty('source', 'native_tool_approval_once');
+    expect(changed.has('edit-message')).toBe(true);
+  });
+  it('retains exact pending turn custody through projection, refresh, and stored reconstruction', () => {
+    const state = createReducer();
+    const changed = new Set<string>();
+    const run = (turnId?: string) => runAgentStatePermissionsPhase({ state,
+      agentState: { requests: { edit: { tool: 'Edit', arguments: {}, createdAt: 1, ...(turnId ? { turnId } : {}) } } },
+      incomingToolIds: new Set<string>(), changed, allocateId: () => 'edit-message', enableLogging: false });
+    run('turn-first');
+    expect(state.messages.get('edit-message')?.tool?.permission).toMatchObject({ turnId: 'turn-first' });
+    expect(buildToolPermissionFromStored('edit', state.permissions.get('edit')!)).toMatchObject({ turnId: 'turn-first' });
+    const tool = state.messages.get('edit-message')!.tool!;
+    const transcriptStates = new Map<string, TranscriptRequestState>();
+    collectTranscriptRequestStates([{ kind: 'tool-call', id: 'edit-message', localId: null,
+      createdAt: 1, tool, children: [] }], null, transcriptStates);
+    expect(transcriptStates.get('edit')?.request).toMatchObject({ turnId: 'turn-first' });
+    changed.clear();
+    run('turn-next');
+    expect(state.messages.get('edit-message')?.tool?.permission).toMatchObject({ turnId: 'turn-next' });
+    expect(changed.has('edit-message')).toBe(true);
+    changed.clear();
+    run('turn-next');
+    expect(changed.size).toBe(0);
+    run();
+    expect(state.messages.get('edit-message')?.tool?.permission?.turnId).toBeUndefined();
+    expect(buildToolPermissionFromStored('edit', state.permissions.get('edit')!).turnId).toBeUndefined();
+  });
   it('keeps the nonhuman approval actor when execution has already started', () => {
     const state = createReducer();
     const changed = new Set<string>();

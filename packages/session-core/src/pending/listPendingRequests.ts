@@ -260,6 +260,7 @@ export function collectTranscriptRequestStates(
                 permissionStatus === 'pending'
                 && !isPendingRequestCoveredByCompleted(completedRequests, requestId, createdAt, {
                     tool: toolName,
+                    turnId: permission.turnId,
                     kind: permission.kind,
                     arguments: message.tool?.input,
                     createdAt,
@@ -270,6 +271,8 @@ export function collectTranscriptRequestStates(
                     createdAt,
                     request: {
                         id: requestId,
+                        ...(permission.turnId !== undefined ? { turnId: permission.turnId } : {}),
+                        ...(permission.source !== undefined ? { source: permission.source } : {}),
                         tool: toolName,
                         kind: resolveAgentRequestKind({ toolName, requestKind: permission.kind }),
                         arguments: message.tool?.input,

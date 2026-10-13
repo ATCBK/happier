@@ -20,6 +20,10 @@ export type ToolCall = {
     result?: any;
     permission?: {
         id: string;
+        /** Exact request custody; never inferred from the Session's latest turn. */
+        turnId?: string;
+        /** Request-owned response scope, retained when full AgentState unloads. */
+        source?: string;
         status: 'pending' | 'approved' | 'denied' | 'canceled';
         kind?: string;
         reason?: string;

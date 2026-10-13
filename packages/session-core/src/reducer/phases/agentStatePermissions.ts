@@ -163,6 +163,8 @@ export function runAgentStatePermissionsPhase(params: Readonly<{
                         if (!message.tool.permission) {
                             message.tool.permission = {
                                 id: permId,
+                                turnId: request.turnId,
+                                source: request.source,
                                 status: 'pending',
                                 kind: typeof request.kind === 'string' ? request.kind : undefined,
                                 suggestions: request.permissionSuggestions,
@@ -190,6 +192,14 @@ export function runAgentStatePermissionsPhase(params: Readonly<{
                             if (message.tool.result !== undefined) {
                                 message.tool.result = undefined;
                             }
+                            hasChanged = true;
+                        }
+                        if (message.tool.permission && message.tool.permission.turnId !== request.turnId) {
+                            message.tool.permission.turnId = request.turnId;
+                            hasChanged = true;
+                        }
+                        if (message.tool.permission && message.tool.permission.source !== request.source) {
+                            message.tool.permission.source = request.source;
                             hasChanged = true;
                         }
                         if (message.tool.permission && typeof request.kind === 'string' && message.tool.permission.kind !== request.kind) {
@@ -223,6 +233,8 @@ export function runAgentStatePermissionsPhase(params: Readonly<{
                         result: undefined,
                         permission: {
                             id: permId,
+                            turnId: request.turnId,
+                            source: request.source,
                             status: 'pending',
                             kind: typeof request.kind === 'string' ? request.kind : undefined,
                             suggestions: request.permissionSuggestions,
@@ -257,6 +269,8 @@ export function runAgentStatePermissionsPhase(params: Readonly<{
                 // Store permission details for quick lookup
                 state.permissions.set(permId, {
                     tool: request.tool,
+                    turnId: request.turnId,
+                    source: request.source,
                     arguments: request.arguments,
                     createdAt: request.createdAt || Date.now(),
                     status: 'pending',
@@ -302,6 +316,8 @@ export function runAgentStatePermissionsPhase(params: Readonly<{
                         // Check if we need to update ANY field
                         const needsUpdate =
                             message.tool.permission?.status !== completed.status ||
+                            message.tool.permission?.turnId !== completed.turnId ||
+                            message.tool.permission?.source !== completed.source ||
                             (typeof completed.kind === 'string' && message.tool.permission?.kind !== completed.kind) ||
                             message.tool.permission?.reason !== completed.reason ||
                             message.tool.permission?.mode !== completed.mode ||
@@ -318,6 +334,8 @@ export function runAgentStatePermissionsPhase(params: Readonly<{
                         if (!message.tool.permission) {
                             message.tool.permission = {
                                 id: permId,
+                                turnId: completed.turnId,
+                                source: completed.source,
                                 status: completed.status,
                                 kind: typeof completed.kind === 'string' ? completed.kind : undefined,
                                 mode: completed.mode || undefined,
@@ -330,6 +348,8 @@ export function runAgentStatePermissionsPhase(params: Readonly<{
                         } else {
                             // Update all fields
                             message.tool.permission.status = completed.status;
+                            message.tool.permission.turnId = completed.turnId;
+                            message.tool.permission.source = completed.source;
                             if (typeof completed.kind === 'string') {
                                 message.tool.permission.kind = completed.kind;
                             }

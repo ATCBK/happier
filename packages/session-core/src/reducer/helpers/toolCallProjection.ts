@@ -7,6 +7,8 @@ export type ReducerStoredPermission = {
     createdAt: number;
     completedAt?: number;
     status: 'pending' | 'approved' | 'denied' | 'canceled';
+    turnId?: string;
+    source?: string;
     kind?: string;
     reason?: string;
     mode?: string;
@@ -28,6 +30,8 @@ export function buildToolPermissionFromStored(
 ): NonNullable<ToolCall['permission']> {
     return {
         id: toolId,
+        turnId: permission.turnId,
+        source: permission.source,
         status: permission.status,
         kind: permission.kind,
         reason: permission.reason,
@@ -82,6 +86,8 @@ export function buildReducerStoredPermissionFromCompletedRequest(completed: Read
     completedAt?: number | null;
     status: 'approved' | 'denied' | 'canceled';
     kind?: string | null;
+    turnId?: string;
+    source?: string;
     reason?: string | null;
     mode?: string | null;
     allowedTools?: unknown;
@@ -102,6 +108,8 @@ export function buildReducerStoredPermissionFromCompletedRequest(completed: Read
         createdAt: completed.createdAt || Date.now(),
         completedAt: completed.completedAt || undefined,
         status: completed.status,
+        turnId: completed.turnId,
+        source: completed.source,
         kind: typeof completed.kind === 'string' ? completed.kind : undefined,
         reason: completed.reason || undefined,
         mode: completed.mode || undefined,
