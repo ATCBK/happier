@@ -17,6 +17,9 @@ function isTurnTerminal(event: AgentSessionRuntimeEvent): boolean {
 
 export function withCursorEmptyResponseFailure(runtime: AgentSessionRuntime): AgentSessionRuntime {
   return {
+    ...(runtime.skillsDelivered !== undefined
+      ? { skillsDelivered: runtime.skillsDelivered }
+      : {}),
     ...(runtime.runtimeDescriptorV1 !== undefined
       ? { runtimeDescriptorV1: runtime.runtimeDescriptorV1 }
       : {}),

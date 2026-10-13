@@ -93,6 +93,13 @@ function turnComplete(sequence = 2, turnId = 'host-turn-1'): AgentSessionRuntime
 }
 
 describe('withCursorEmptyResponseFailure', () => {
+  it.each([false, true])('preserves the composed skills delivery fact %s', (skillsDelivered) => {
+    const fixture = createRuntimeFixture();
+    const runtime = withCursorEmptyResponseFailure({ ...fixture.runtime, skillsDelivered });
+
+    expect(runtime.skillsDelivered).toBe(skillsDelivered);
+  });
+
   it('preserves the composed runtime identity and capabilities', () => {
     const fixture = createRuntimeFixture();
     const source: AgentSessionRuntime = {

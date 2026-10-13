@@ -30,11 +30,57 @@
               }
             ]
           },
+          "skills": {
+            "delivery": "none",
+            "liveReload": "unsupported",
+            "nativeDisable": "unsupported",
+            "nativeRoots": {
+              "project": [
+                [
+                  ".agents",
+                  "skills"
+                ],
+                [
+                  ".cursor",
+                  "skills"
+                ],
+                [
+                  ".claude",
+                  "skills"
+                ],
+                [
+                  ".codex",
+                  "skills"
+                ]
+              ],
+              "user": [
+                [
+                  ".agents",
+                  "skills"
+                ],
+                [
+                  ".cursor",
+                  "skills"
+                ],
+                [
+                  ".claude",
+                  "skills"
+                ],
+                [
+                  ".codex",
+                  "skills"
+                ]
+              ]
+            }
+          },
           "tools": {
             "delivery": "native_mcp"
           }
         },
         "catalog": {
+          "acpRegistryIds": [
+            "cursor"
+          ],
           "agentCliSystemTool": {
             "toolId": "cursor-agent"
           },
@@ -119,6 +165,7 @@
     "projectNativeAdapters": [],
     "promptAssets": [],
     "providers": [],
+    "registrySources": [],
     "requestInterceptors": [],
     "resources": [],
     "roles": [],

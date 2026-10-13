@@ -3,6 +3,7 @@ const CURSOR_AGENT_ID = 'cursor';
 // IMPORTANT: this must stay JSON-serializable (data-only).
 export const AGENT_DEFINITION = Object.freeze({
   id: CURSOR_AGENT_ID,
+  acpRegistryIds: ['cursor'] as const,
   core: {
     id: CURSOR_AGENT_ID,
     cliSubcommand: 'cursor',

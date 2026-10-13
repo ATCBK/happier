@@ -73,11 +73,18 @@ export const CURSOR_PLUGIN = definePlugin({
         },
         primary: 'sessions',
         catalog: {
+          acpRegistryIds: [...AGENT_DEFINITION.acpRegistryIds],
           vendorResume: { support: AGENT_DEFINITION.core.resume.vendorResume },
           agentCliSystemTool: { toolId: 'cursor-agent' },
         },
         capabilities: projectAgentCapabilitiesV2FromDefinition(AGENT_DEFINITION.core, {
-          skills: { delivery: 'none', nativeDisable: 'unsupported', liveReload: 'unsupported' },
+          skills: {
+            delivery: 'none', nativeDisable: 'unsupported', liveReload: 'unsupported',
+            nativeRoots: {
+              user: [['.agents', 'skills'], ['.cursor', 'skills'], ['.claude', 'skills'], ['.codex', 'skills']],
+              project: [['.agents', 'skills'], ['.cursor', 'skills'], ['.claude', 'skills'], ['.codex', 'skills']],
+            },
+          },
           sessions: {
             open: ['create', 'resume'],
             delivery: ['newTurn', 'followUp'],
