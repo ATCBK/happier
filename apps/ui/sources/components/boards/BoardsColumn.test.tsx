@@ -76,10 +76,10 @@ describe('BoardsColumn collection search', () => {
         getStorage().setState({ isDataReady: true, profileScope: scope, settingsScope: scope });
         vi.useFakeTimers();
     });
-    afterEach(() => {
+    afterEach(async () => {
         standardCleanup();
         vi.useRealTimers();
-        home?.dispose();
+        await home?.dispose();
         home = null;
         retireActiveServerAccountScopeLifetime();
         invalidateAccountEncryptionModeCache();
