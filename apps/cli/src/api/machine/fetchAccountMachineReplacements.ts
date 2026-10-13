@@ -1,6 +1,7 @@
+import axios from 'axios';
 import { type MachineReplacementRecord } from '@happier-dev/protocol';
 
-import { fetchAccountMachines } from './fetchAccountMachines';
+import { resolveServerHttpBaseUrl } from '@/api/client/serverHttpBaseUrl';
 
 /**
  * The Account's machine rows, reduced to the identity a REPLACEMENT walk needs.
@@ -20,10 +21,28 @@ export async function fetchAccountMachineReplacements(params: Readonly<{
   credentials: Readonly<{ token: string }>;
   timeoutMs?: number;
 }>): Promise<readonly MachineReplacementRecord[] | null> {
-  const machines = await fetchAccountMachines(params);
-  // An unreadable chain proves nothing; callers keep their original refusal.
-  return machines?.map(({ id, replacedByMachineId }) => ({
-    id,
-    ...(typeof replacedByMachineId === 'string' ? { replacedByMachineId } : {}),
-  })) ?? null;
+  try {
+    const response = await axios.get(`${resolveServerHttpBaseUrl()}/v1/machines`, {
+      headers: { Authorization: `Bearer ${params.credentials.token}` },
+      timeout: params.timeoutMs && params.timeoutMs > 0 ? params.timeoutMs : 15_000,
+    });
+    if (!Array.isArray(response.data)) return null;
+    // Only `id` and `replacedByMachineId` are read. Projecting here keeps the
+    // encrypted metadata and key blobs the endpoint also serialises out of the
+    // resolution entirely.
+    return response.data.flatMap((row: unknown): MachineReplacementRecord[] => {
+      if (!row || typeof row !== 'object') return [];
+      const id = (row as { id?: unknown }).id;
+      if (typeof id !== 'string' || id.trim().length === 0) return [];
+      const replacedByMachineId = (row as { replacedByMachineId?: unknown }).replacedByMachineId;
+      return [{
+        id,
+        ...(typeof replacedByMachineId === 'string' ? { replacedByMachineId } : {}),
+      }];
+    });
+  } catch {
+    // An unreadable chain proves nothing, and the caller's fallback is the
+    // pre-existing refusal, so failing here fails closed.
+    return null;
+  }
 }

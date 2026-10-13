@@ -1,7 +1,5 @@
 import { listDaemonStatusesForAllKnownServers, type DaemonStatusEntry } from '@/daemon/multiDaemon';
 import type { Credentials } from '@/persistence';
-import { configuration } from '@/configuration';
-import { fetchAccountMachines } from '@/api/machine/fetchAccountMachines';
 import { listSessions } from '@/session/services/listSessions';
 import {
   normalizeActionOptionLimit,
@@ -108,28 +106,23 @@ async function readSpawnTargetServerStatuses(): Promise<DaemonStatusEntry[]> {
   }
 }
 
-export async function listSpawnMachineItems(params: Readonly<{ credentials: Credentials; limit?: unknown }>): Promise<SpawnMachineDiscoveryResult> {
+export async function listSpawnMachineItems(params: Readonly<{ limit?: unknown }>): Promise<SpawnMachineDiscoveryResult> {
   const limit = normalizeActionOptionLimit(params.limit) ?? 50;
-  const machines = await fetchAccountMachines({ credentials: params.credentials });
-  if (!machines) {
-    throw Object.assign(new Error('The current machine inventory is unavailable.'), { code: 'machine_inventory_unavailable' });
-  }
   const seen = new Set<string>();
   const items: SpawnMachineDiscoveryItem[] = [];
-  for (const machine of machines) {
-    if (machine.revokedAt != null || machine.replacedByMachineId != null) continue;
-    const machineId = normalizeActionOptionString(machine.id);
+  for (const status of await readSpawnTargetServerStatuses()) {
+    const machineId = normalizeActionOptionString(status.auth?.machineId);
     if (!machineId || seen.has(machineId)) continue;
     seen.add(machineId);
     items.push({
       value: machineId,
       label: machineId,
       machineId,
-      serverId: configuration.activeServerId,
-      serverName: configuration.serverUrl,
-      authenticated: true,
-      machineRegistered: true,
-      daemonRunning: machine.active === true,
+      serverId: status.serverId,
+      serverName: status.name,
+      authenticated: status.auth?.authenticated === true,
+      machineRegistered: status.auth?.machineRegistered === true,
+      daemonRunning: status.daemon.running === true,
     });
     if (items.length >= limit) break;
   }
