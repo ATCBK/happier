@@ -62,6 +62,7 @@ import {
   exportSessionHandoffState,
 } from '../../session/handoff/exportSessionHandoffState';
 import { importSessionHandoffProviderBundle } from '../../session/handoff/importSessionHandoffProviderBundle';
+import { ExistingSessionStateUnavailableError } from '../../session/handoff/sessionHandoffErrors';
 import { shouldResolveConnectedServiceAuthForSpawn } from '@/daemon/connectedServices/shouldResolveConnectedServiceAuthForSpawn';
 import {
   resolveSessionHandoffExportMetadata,
@@ -2026,6 +2027,13 @@ export function registerMachineSessionHandoffRpcHandlers(params: Readonly<{
     if (!metadata) {
       return { ok: false, errorCode: 'session_not_found' } as const;
     }
+    if (parsed.data.stateTransfer === 'existing') {
+      const { resolveExistingSessionHandoffEligibilityThroughCatalog } = await import('@/backends/catalog');
+      const eligibility = resolveExistingSessionHandoffEligibilityThroughCatalog(metadata);
+      if (!eligibility.eligible) {
+        return { ok: false, errorCode: 'existing_state_unsupported', error: `Existing-state handoff is unsupported: ${eligibility.reasonCode}` } as const;
+      }
+    }
     if (parsed.data.sourceMachineId === parsed.data.targetMachineId) {
       const targetDirectory = await resolveSessionHandoffLocalDirectory({ path: parsed.data.targetPath ?? '', homeDir: localHandoffHomeDir });
       const sourceDirectory = await resolveSessionHandoffLocalDirectory({ path: typeof metadata.path === 'string' ? metadata.path : '', homeDir: localHandoffHomeDir });
@@ -3208,7 +3216,9 @@ export function registerMachineSessionHandoffRpcHandlers(params: Readonly<{
           const failedAtMs = Date.now();
           const currentJob = await prepareJobStore.read(jobId);
           const lastErrorMessage = error instanceof Error ? error.message : 'Failed to prepare handoff target';
-          const lastErrorCode = resolvePrepareTargetFailureCode(lastErrorMessage);
+          const lastErrorCode = error instanceof ExistingSessionStateUnavailableError
+            ? error.errorCode
+            : resolvePrepareTargetFailureCode(lastErrorMessage);
           const failedStatus: SessionHandoffStatus = {
             ...(currentJob?.status ?? pendingStatus),
             status: currentJob?.cancelRequestedAtMs ? 'aborted' : 'awaiting_recovery',

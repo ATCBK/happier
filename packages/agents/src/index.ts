@@ -405,6 +405,7 @@ export {
 } from './sessionControls/existingSessionAutomationPolicy.js';
 export {
   resolveVendorHandoffIdFromSessionMetadata,
+  supportsExistingSessionHandoffState,
   evaluateVendorHandoffEligibility,
   type VendorHandoffEligibility,
   type VendorHandoffEligibilityReasonCode,

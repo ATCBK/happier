@@ -489,6 +489,7 @@ const sessionHandoffTranslationExtensions = {
       title: "傳輸工作階段資料",
       subtitle: "將此工作階段的對話記錄複製到另一台機器。如果那裡已有記錄，請關閉此選項。",
       checking: "正在檢查兩台機器是否支援…",
+      agentRequiresTransfer: "此智慧體需要在機器之間傳輸工作階段資料。",
       updateRequired: "請更新兩台機器上的 Happier 以關閉此選項。",
       sessionMissing: "目標機器上沒有此工作階段的對話記錄。請開啟「傳輸工作階段資料」後重試。",
       workspaceRequiresTransfer: "請開啟「傳輸工作階段資料」以複製或同步工作區檔案。",

@@ -180,7 +180,9 @@ describe('materializeConnectedServicesForSpawn', () => {
     });
 
     expect(result).not.toBeNull();
-    const expectedCodexRoot = join(baseDir, normalizeMaterializationKeyForPath('session-1'), 'codex');
+    const expectedCodexRoot = resolveConnectedServiceHomeDir({
+      activeServerDir, serviceId: 'openai-codex', profileId: 'work', agentId: 'codex',
+    });
     expect(result!.env.CODEX_HOME).toBe(
       join(expectedCodexRoot, 'codex-home'),
     );
@@ -486,7 +488,9 @@ describe('materializeConnectedServicesForSpawn', () => {
     });
 
     expect(result).not.toBeNull();
-    const expectedCodexRoot = join(baseDir, normalizeMaterializationKeyForPath('session-1'), 'codex');
+    const expectedCodexRoot = resolveConnectedServiceGroupHomeDir({
+      activeServerDir, serviceId: 'openai-codex', groupId: 'main', agentId: 'codex',
+    });
     expect(result!.env.CODEX_HOME).toBe(
       join(expectedCodexRoot, 'codex-home'),
     );
@@ -537,7 +541,11 @@ describe('materializeConnectedServicesForSpawn', () => {
 
     expect(result).not.toBeNull();
     const codexHome = result!.env.CODEX_HOME!;
-    expect(resolve(codexHome).startsWith(resolve(baseDir))).toBe(true);
+    const expectedRoot = resolveConnectedServiceHomeDir({
+      activeServerDir, serviceId: 'openai-codex', profileId: 'work', agentId: 'codex',
+    });
+    expect(resolve(codexHome)).toBe(resolve(join(expectedRoot, 'codex-home')));
+    expect(result!.materializationRoot).toBe(expectedRoot);
     expect(codexHome).not.toContain('evil');
   });
 

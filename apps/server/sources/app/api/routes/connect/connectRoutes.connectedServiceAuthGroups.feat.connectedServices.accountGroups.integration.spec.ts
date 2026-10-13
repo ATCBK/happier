@@ -367,7 +367,7 @@ describe("connectRoutes connected service auth groups (integration)", () => {
         expect(res.json()).toEqual({ error: "not_found" });
     });
 
-    it("allows gemini group configuration while rejecting same-group runtime fallback controls", async () => {
+    it("allows gemini same-group fallback policy and active profile changes", async () => {
         const user = await createAccount("pk-gemini-groups");
         await createConnectedProfile(user.id, "gemini", "work");
         await createConnectedProfile(user.id, "gemini", "backup");
@@ -381,15 +381,16 @@ describe("connectRoutes connected service auth groups (integration)", () => {
                 groupId: "gemini-main",
                 members: [{ profileId: "work" }, { profileId: "backup" }],
                 activeProfileId: "work",
+                policy: { autoSwitch: false },
             },
         });
         expect(created.statusCode).toBe(200);
-        expect(created.json()).toEqual({
-            group: expect.objectContaining({
-                serviceId: "gemini",
-                groupId: "gemini-main",
-                activeProfileId: "work",
-            }),
+        const createdGroup = ConnectedServiceAuthGroupResponseV1Schema.parse(created.json()).group;
+        expect(createdGroup).toMatchObject({
+            serviceId: "gemini",
+            groupId: "gemini-main",
+            activeProfileId: "work",
+            policy: { autoSwitch: false },
         });
 
         const autoSwitchPatch = await app.inject({
@@ -398,20 +399,42 @@ describe("connectRoutes connected service auth groups (integration)", () => {
             headers: authHeaders(user.id),
             payload: {
                 policy: { autoSwitch: true },
-                expectedGeneration: 0,
+                expectedGeneration: createdGroup.generation,
             },
         });
-        expect(autoSwitchPatch.statusCode).toBe(400);
-        expect(autoSwitchPatch.json()).toEqual({ error: "connect_group_runtime_fallback_unsupported" });
+        expect(autoSwitchPatch.statusCode).toBe(200);
+        const patchedGroup = ConnectedServiceAuthGroupResponseV1Schema.parse(autoSwitchPatch.json()).group;
+        expect(patchedGroup).toMatchObject({
+            activeProfileId: "work",
+            generation: createdGroup.generation + 1,
+            policy: { autoSwitch: true },
+        });
 
         const switchActiveProfile = await app.inject({
             method: "POST",
             url: "/v3/connect/gemini/groups/gemini-main/active-profile",
             headers: authHeaders(user.id),
-            payload: { profileId: "backup", expectedGeneration: 0 },
+            payload: { profileId: "backup", expectedGeneration: patchedGroup.generation },
         });
-        expect(switchActiveProfile.statusCode).toBe(400);
-        expect(switchActiveProfile.json()).toEqual({ error: "connect_group_runtime_fallback_unsupported" });
+        expect(switchActiveProfile.statusCode).toBe(200);
+        const switchedGroup = ConnectedServiceAuthGroupResponseV1Schema.parse(switchActiveProfile.json()).group;
+        expect(switchedGroup).toMatchObject({
+            activeProfileId: "backup",
+            generation: patchedGroup.generation + 1,
+            policy: { autoSwitch: true },
+        });
+
+        const read = await app.inject({
+            method: "GET",
+            url: "/v3/connect/gemini/groups/gemini-main",
+            headers: authHeaders(user.id),
+        });
+        expect(read.statusCode).toBe(200);
+        expect(ConnectedServiceAuthGroupResponseV1Schema.parse(read.json()).group).toMatchObject({
+            activeProfileId: "backup",
+            generation: switchedGroup.generation,
+            policy: { autoSwitch: true },
+        });
     });
 
     it("enforces account ownership and member profile existence", async () => {

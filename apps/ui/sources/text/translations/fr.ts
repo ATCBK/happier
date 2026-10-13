@@ -4879,6 +4879,7 @@ export const fr: TranslationStructure = {
           title: "Transférer les données de la session",
           subtitle: "Copie l’historique de cette conversation sur l’autre machine. Désactive si cet historique y est déjà.",
           checking: "Vérification de la prise en charge sur les deux machines…",
+          agentRequiresTransfer: "Cet Agent nécessite le transfert des données de session entre les machines.",
           updateRequired: "Mets à jour Happier sur les deux machines pour désactiver ce transfert.",
           sessionMissing: "L’historique de cette session est absent de la machine cible. Active « Transférer les données de la session » et réessaie.",
           workspaceRequiresTransfer: "Active « Transférer les données de la session » pour copier ou synchroniser les fichiers de l’espace de travail.",

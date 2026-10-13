@@ -4,9 +4,8 @@
     <img src=".github/logotype-black.svg" alt="Happier" width="340" />
   </picture>
 
-  ### The multi-device control room to run teams of 100x coding agents
-
-  **The way orchestrating parallel agents should feel.<br />From your phone, desktop and browser.**
+  ### The multi-device control room to orchestrate teams of 100+ coding agents
+  **From your phone, desktop and browser.**
 
   Claude Code, Codex, OpenCode, Pi and more, working together and in parallel on your own machines.
 

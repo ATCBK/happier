@@ -52,7 +52,10 @@ export function createCoalescedWorkflowActivityPublisher(params: Readonly<{
     if (pendingChangedRunIds.size === 0) return;
     const now = performance.now();
     const changedRunIds = [...pendingChangedRunIds].filter((runId) => isReady(runId, now));
-    if (changedRunIds.length === 0) return;
+    if (changedRunIds.length === 0) {
+      scheduleRetryTimer();
+      return;
+    }
     for (const runId of changedRunIds) pendingChangedRunIds.delete(runId);
     try {
       const result = await params.publisher.publish({

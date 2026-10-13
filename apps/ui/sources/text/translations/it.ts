@@ -483,6 +483,7 @@ const sessionHandoffTranslationExtensions = {
       title: "Trasferisci i dati della sessione",
       subtitle: "Copia la cronologia della conversazione di questa sessione sull’altro computer. Disattiva se è già presente.",
       checking: "Verifica del supporto su entrambi i computer…",
+      agentRequiresTransfer: "Questo Agente richiede il trasferimento dei dati della sessione tra computer.",
       updateRequired: "Aggiorna Happier su entrambi i computer per disattivare questa opzione.",
       sessionMissing: "La cronologia di questa sessione non è sul computer di destinazione. Attiva «Trasferisci i dati della sessione» e riprova.",
       workspaceRequiresTransfer: "Attiva «Trasferisci i dati della sessione» per copiare o sincronizzare i file dell’area di lavoro.",

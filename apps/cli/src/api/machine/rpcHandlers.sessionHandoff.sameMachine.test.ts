@@ -81,6 +81,18 @@ async function createFixture(root: string) {
 }
 
 describe('same-machine session handoff', () => {
+  it('keeps an unsupported OpenCode source running when capable peers request existing state', async () => {
+    await withLocalHandoff(async (fixture) => {
+      fixture.metadata.flavor = 'opencode';
+      fixture.metadata.opencodeSessionId = 'native-opencode';
+      const result = await fixture.call(RPC_METHODS.DAEMON_SESSION_HANDOFF_START, {
+        ...fixture.startRequest, targetMachineId: 'other-machine', stateTransfer: 'existing',
+      });
+      expect(result).toMatchObject({ ok: false, errorCode: 'existing_state_unsupported' });
+      expect(fixture.state()).toMatchObject({ running: true, stopCount: 0 });
+    });
+  });
+
   it('uses the existing-state lifecycle for a Codex folder move without copying or rewriting native state', async () => {
     await withLocalHandoff(async (fixture) => {
       const codexHome = join(fixture.root, 'codex');

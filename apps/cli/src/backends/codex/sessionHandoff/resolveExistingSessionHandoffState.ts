@@ -6,11 +6,12 @@ import { resolveExistingCodexIndexedRolloutPath } from '@/backends/codex/connect
 import { resolveConfiguredCodexSqliteHome } from '@/backends/codex/connectedServices/codexStateFileNames';
 import { resolveConfiguredCodexHome } from '@/backends/codex/utils/resolveConfiguredCodexHome';
 import { normalizeCodexVendorResumeId } from '@/backends/codex/utils/codexSessionFiles';
+import { ExistingSessionStateUnavailableError } from '@/session/handoff/sessionHandoffErrors';
 
 export const resolveExistingCodexSessionHandoffState: ExistingSessionHandoffStateResolver = async (params) => {
   const vendorResumeId = normalizeCodexVendorResumeId(params.vendorResumeId);
   if (!vendorResumeId || !await resolveExistingCodexIndexedRolloutPath({ env: params.env, vendorResumeId, cwd: params.targetPath })) {
-    throw new Error('Codex existing native session is unreachable through its index');
+    throw new ExistingSessionStateUnavailableError('Codex existing native session is unreachable through its index');
   }
   const codexHome = resolveConfiguredCodexHome(params.env);
   const sqliteHome = resolveConfiguredCodexSqliteHome(params.env, params.targetPath);

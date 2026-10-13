@@ -2103,7 +2103,9 @@ export function createActionExecutor(deps: ActionExecutorDeps): Readonly<{
           });
           if (res && typeof res === 'object' && 'ok' in res && res.ok === false) {
             const errorCode = 'errorCode' in res && typeof res.errorCode === 'string' ? res.errorCode : 'handoff_failed';
-            const error = 'error' in res && typeof res.error === 'string' ? res.error : 'Session handoff failed';
+            const error = 'errorMessage' in res && typeof res.errorMessage === 'string' && res.errorMessage.trim()
+              ? res.errorMessage
+              : 'error' in res && typeof res.error === 'string' && res.error.trim() ? res.error : 'Session handoff failed';
             return { ok: false, errorCode, error };
           }
           return { ok: true, result: res };

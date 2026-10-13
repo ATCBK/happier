@@ -1,4 +1,4 @@
-import { beforeEach, describe, expect, it, vi } from 'vitest';
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
 import type { Credentials } from '@/persistence';
 import { configuration } from '@/configuration';
@@ -114,6 +114,10 @@ function parseUsageLimitResult(value: unknown) {
 }
 
 describe('createCliActionDeps session controls', () => {
+  afterEach(() => {
+    vi.unstubAllEnvs();
+  });
+
   beforeEach(() => {
     mocks.axiosGet.mockReset();
     mocks.axiosGet.mockResolvedValue({ status: 200, data: { id: 'acct_1', connectedServicesV2: [] } });
@@ -176,6 +180,9 @@ describe('createCliActionDeps session controls', () => {
   });
 
   it('lists models from provider probes instead of stale current-session metadata', async () => {
+    // This case exercises the cold fallback; the catalog's discovered-membership cases
+    // exercise dynamic discovery separately through their HTTP boundary fixtures.
+    vi.stubEnv('HAPPIER_CLAUDE_DYNAMIC_MODEL_PROBE_ENABLED', '0');
     const deps = createCliActionInventoryDeps({
       token: 'token',
       credentials: createCredentials(),

@@ -483,6 +483,7 @@ const sessionHandoffTranslationExtensions = {
       title: "Transfereix les dades de la sessió",
       subtitle: "Copia l’historial de conversa d’aquesta sessió a l’altra màquina. Desactiva-ho si ja hi és.",
       checking: "Comprovant la compatibilitat de totes dues màquines…",
+      agentRequiresTransfer: "Aquest Agent requereix transferir les dades de la sessió entre màquines.",
       updateRequired: "Actualitza Happier a totes dues màquines per desactivar aquesta opció.",
       sessionMissing: "L’historial d’aquesta sessió no és a la màquina de destinació. Activa «Transfereix les dades de la sessió» i torna-ho a provar.",
       workspaceRequiresTransfer: "Activa «Transfereix les dades de la sessió» per copiar o sincronitzar fitxers de l’espai de treball.",

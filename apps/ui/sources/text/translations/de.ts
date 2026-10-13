@@ -4879,6 +4879,7 @@ export const de: TranslationStructure = {
           title: "Sitzungsdaten übertragen",
           subtitle: "Kopiert den Gesprächsverlauf dieser Sitzung auf den anderen Rechner. Ausschalten, wenn er dort bereits vorhanden ist.",
           checking: "Unterstützung auf beiden Rechnern wird geprüft…",
+          agentRequiresTransfer: "Dieser Agent benötigt die Übertragung der Sitzungsdaten zwischen Rechnern.",
           updateRequired: "Aktualisiere Happier auf beiden Rechnern, um dies auszuschalten.",
           sessionMissing: "Der Gesprächsverlauf dieser Sitzung ist auf dem Zielrechner nicht vorhanden. Aktiviere „Sitzungsdaten übertragen“ und versuche es erneut.",
           workspaceRequiresTransfer: "Aktiviere „Sitzungsdaten übertragen“, um Workspace-Dateien zu kopieren oder zu synchronisieren.",
