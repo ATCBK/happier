@@ -28,6 +28,7 @@ export function generateOauthState(bytes: number = 32): string {
 export function parseOauthCallbackUrl(params: Readonly<{ url: string; redirectUri: string; allowRawAuthorizationCode?: boolean }>): Readonly<{
   code?: string;
   state?: string;
+  iss?: string;
   error?: string;
   rawAuthorizationCode?: true;
 }> {

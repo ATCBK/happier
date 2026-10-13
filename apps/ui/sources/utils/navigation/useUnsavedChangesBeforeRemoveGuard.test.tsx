@@ -4,7 +4,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
 import { renderHook, renderScreen, standardCleanup } from '@/dev/testkit';
 import { DestinationInstanceHost } from '@/components/appShell/workspace/DestinationInstanceHost';
-import { clearActiveUnsavedChangesGuard, runGuardedNavigation } from './runGuardedNavigation';
+import { clearActiveUnsavedChangesGuard, runGuardedNavigation, runGuardedTabNavigation } from './runGuardedNavigation';
 
 const preventRemove = vi.hoisted(() => ({
     enabled: false,
@@ -84,6 +84,13 @@ describe('useUnsavedChangesBeforeRemoveGuard', () => {
         expect(navigate).toHaveBeenCalledOnce();
         expect(dirtyA.current).toBe(true);
         expect(dirtyB.current).toBe(false);
+        // Blur changes the navigation guard, never the retained editor's close guard.
+        await act(async () => { expect(await runGuardedTabNavigation(['a'], navigate)).toBe(false); });
+        expect(dirtyA.current).toBe(true);
+        expect(navigate).toHaveBeenCalledOnce();
+        await screen.unmount();
+        expect(runGuardedTabNavigation(['a'], navigate)).toBe(true);
+        expect(navigate).toHaveBeenCalledTimes(2);
     });
 
     it('registers with the navigator removal owner and continues the blocked action after discard', async () => {

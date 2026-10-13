@@ -11,6 +11,7 @@ export function getErrorMessage(err: unknown): string {
     if (err instanceof HappyError) {
         if (err.code === 'action_disabled') return t('common.disabled');
         if (err.code === 'approval_request_created') return t('approvals.status.open');
+        if (err.code === 'invalid_parameters' && err.message === err.code) return t('common.requestFailed');
     }
 
     // Its message is a machine reason code; the person needs to know what could not be reached.

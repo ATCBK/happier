@@ -45,7 +45,8 @@ export function useUnsavedChangesBeforeRemoveGuard(params: Readonly<{
         tag,
     } = params;
     const enabled = enabledParam ?? true;
-    const hosted = useDestinationInstanceKey() !== null;
+    const tabId = useDestinationInstanceKey();
+    const hosted = tabId !== null;
     const destinationFocused = useDestinationFocus();
     const [pendingContinuation, setPendingContinuation] = React.useState<Readonly<{
         action: unknown;
@@ -92,7 +93,9 @@ export function useUnsavedChangesBeforeRemoveGuard(params: Readonly<{
     useActiveUnsavedChangesGuard({
         navigation: null,
         guard,
-        enabled: destinationFocused && enabled,
+        enabled,
+        focused: destinationFocused,
+        tabId,
     });
 
     // Ownership is fixed for a mounted body; hosted views are outside the native Stack.

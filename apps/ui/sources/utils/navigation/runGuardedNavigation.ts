@@ -17,12 +17,21 @@ export type ActiveUnsavedChangesGuard = Readonly<{
 }>;
 
 let activeUnsavedChangesGuard: ActiveUnsavedChangesGuard | null = null;
+const mountedTabGuards = new Map<string, ActiveUnsavedChangesGuard>();
 let activeBrowserEntry: Readonly<{ href: string; state: unknown }> | null = null;
 let authorizedBrowserTraversal = false;
 const guardsInFlight = new WeakSet<RefLike<boolean>>();
 
 export function getActiveUnsavedChangesGuard(): ActiveUnsavedChangesGuard | null {
     return activeUnsavedChangesGuard;
+}
+
+/** Retained editors keep their guard until their tab body actually unmounts. */
+export function registerMountedTabUnsavedChangesGuard(tabId: string, guard: ActiveUnsavedChangesGuard): () => void {
+    mountedTabGuards.set(tabId, guard);
+    return () => {
+        if (mountedTabGuards.get(tabId) === guard) mountedTabGuards.delete(tabId);
+    };
 }
 
 export function setActiveUnsavedChangesGuard(guard: ActiveUnsavedChangesGuard): void {
@@ -167,4 +176,35 @@ export function runGuardedNavigation(navigate: () => void | Promise<void>, inten
     }
 
     return runUnsavedChangesGuard(guard, navigate, intent);
+}
+
+/** Settle every affected editor before the caller changes tab membership once. */
+export function runGuardedTabNavigation(
+    tabIds: readonly string[],
+    navigate: () => void | Promise<void>,
+    options: Readonly<{ includeActiveGuard?: boolean; isCurrent?: () => boolean }> = {},
+): true | Promise<boolean> {
+    const mountedEditors = tabIds.map(tabId => ({ tabId, dirtyRef: mountedTabGuards.get(tabId)?.isDirtyRef }));
+    const guards = [...new Set([
+        ...tabIds.map(tabId => mountedTabGuards.get(tabId)),
+        ...(options.includeActiveGuard ? [activeUnsavedChangesGuard] : []),
+    ].filter((guard): guard is ActiveUnsavedChangesGuard => guard != null))];
+    const proceed = (index: number): true | Promise<boolean> => {
+        if (options.isCurrent && !options.isCurrent()) return Promise.resolve(false);
+        if (mountedEditors.some(editor => mountedTabGuards.get(editor.tabId)?.isDirtyRef !== editor.dirtyRef)) {
+            return Promise.resolve(false);
+        }
+        const guard = guards[index];
+        if (!guard) {
+            const continuation = navigate();
+            return continuation ? continuation.then(() => true) : true;
+        }
+        let continued = false;
+        const result = runUnsavedChangesGuard(guard, () => { continued = true; });
+        if (result === true) return proceed(index + 1);
+        // A successful save may own its own continuation. Never turn that
+        // success into permission to execute the originally requested close.
+        return result.then(allowed => allowed && continued ? proceed(index + 1) : allowed);
+    };
+    return proceed(0);
 }

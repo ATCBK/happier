@@ -50,7 +50,7 @@ function isMachineLocked(machine: MachineNameInput): boolean {
     return machine.availability?.kind === 'locked';
 }
 
-function isMachineDisplayHydrating(machine: MachineNameInput): boolean {
+export function isMachineDisplayHydrating(machine: MachineNameInput): boolean {
     return machine.metadata === null && machine.availability === undefined;
 }
 

@@ -4,6 +4,7 @@ import {
     type ActiveUnsavedChangesGuard,
     clearActiveUnsavedChangesGuard,
     getActiveUnsavedChangesGuard,
+    registerMountedTabUnsavedChangesGuard,
     setActiveUnsavedChangesGuard,
 } from '@/utils/navigation/runGuardedNavigation';
 
@@ -37,11 +38,18 @@ export function useActiveUnsavedChangesGuard(params: Readonly<{
     navigation: unknown;
     guard: ActiveUnsavedChangesGuard | null;
     enabled?: boolean;
+    focused?: boolean;
+    tabId?: string | null;
 }>): void {
     const enabled = params.enabled ?? true;
 
     React.useEffect(() => {
-        if (!enabled) return;
+        if (!enabled || !params.guard || !params.tabId) return;
+        return registerMountedTabUnsavedChangesGuard(params.tabId, params.guard);
+    }, [enabled, params.guard, params.tabId]);
+
+    React.useEffect(() => {
+        if (!enabled || params.focused === false) return;
 
         const nav = params.navigation as NavigationLike | null;
         const guard = params.guard;
@@ -84,5 +92,5 @@ export function useActiveUnsavedChangesGuard(params: Readonly<{
             unsubscribeListener(blurSub);
             maybeClear();
         };
-    }, [enabled, params.guard, params.guard?.isDirtyRef.current, params.navigation]);
+    }, [enabled, params.focused, params.guard, params.guard?.isDirtyRef.current, params.navigation]);
 }

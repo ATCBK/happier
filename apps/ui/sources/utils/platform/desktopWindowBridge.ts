@@ -2,6 +2,7 @@ import { invokeDesktopHost, isDesktopHost, listenDesktopHostEvent } from '@/util
 
 export const DESKTOP_WINDOW_CHROME_POLICY_COMMAND = 'desktop_get_window_chrome_policy';
 export const DESKTOP_WINDOW_STATE_COMMAND = 'desktop_get_window_state';
+export const DESKTOP_WINDOW_SET_TITLE_COMMAND = 'desktop_set_window_title';
 export const DESKTOP_WINDOW_MINIMIZE_COMMAND = 'desktop_minimize_window';
 export const DESKTOP_WINDOW_TOGGLE_MAXIMIZE_COMMAND = 'desktop_toggle_window_maximize';
 export const DESKTOP_WINDOW_CLOSE_COMMAND = 'desktop_close_window';
@@ -112,6 +113,14 @@ async function getDesktopWindowStateForPolicy(
 
 export async function getDesktopWindowChromePolicy(): Promise<DesktopWindowChromePolicy> {
     return resolveDesktopWindowChromePolicy();
+}
+
+export async function setDesktopWindowTitle(title: string): Promise<void> {
+    if (!isDesktopHost()) {
+        return;
+    }
+
+    await invokeDesktopHost<void>(DESKTOP_WINDOW_SET_TITLE_COMMAND, { title });
 }
 
 export async function minimizeDesktopWindow(): Promise<void> {

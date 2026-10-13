@@ -7,9 +7,46 @@ async function loadRunGuardedNavigationModule() {
 }
 
 describe('runGuardedNavigation', () => {
+    const retireMountedGuards: (() => void)[] = [];
     afterEach(async () => {
+        retireMountedGuards.splice(0).forEach(retire => retire());
         const { clearActiveUnsavedChangesGuard } = await loadRunGuardedNavigationModule();
         clearActiveUnsavedChangesGuard();
+    });
+
+    it('retires a held close when a different mounted editor acquires the same tab', async () => {
+        const { registerMountedTabUnsavedChangesGuard, runGuardedTabNavigation } = await loadRunGuardedNavigationModule();
+        let resolveDecision!: (decision: UnsavedChangesDecision) => void;
+        const oldGuard = { isDirtyRef: { current: true }, tag: 'retired-editor',
+            requestDecision: () => new Promise<UnsavedChangesDecision>(resolve => { resolveDecision = resolve; }) };
+        const retire = registerMountedTabUnsavedChangesGuard('tab', oldGuard);
+        retireMountedGuards.push(retire);
+        const navigate = vi.fn();
+        const pending = runGuardedTabNavigation(['tab'], navigate);
+        await Promise.resolve();
+        retire();
+        const replacement = { isDirtyRef: { current: true }, tag: 'replacement-editor',
+            requestDecision: vi.fn(async (): Promise<UnsavedChangesDecision> => 'keepEditing') };
+        retireMountedGuards.push(registerMountedTabUnsavedChangesGuard('tab', replacement));
+        resolveDecision('discard');
+        expect(await pending).toBe(false);
+        expect(navigate).not.toHaveBeenCalled();
+        expect(replacement.isDirtyRef.current).toBe(true);
+    });
+
+    it('waits for all closing editors and stops the whole batch when a later editor refuses', async () => {
+        const { registerMountedTabUnsavedChangesGuard, runGuardedTabNavigation, setActiveUnsavedChangesGuard } = await loadRunGuardedNavigationModule();
+        const first = { isDirtyRef: { current: true }, tag: 'first-editor',
+            requestDecision: vi.fn(async (): Promise<UnsavedChangesDecision> => 'discard') };
+        const second = { isDirtyRef: { current: true }, tag: 'second-editor',
+            requestDecision: vi.fn(async (): Promise<UnsavedChangesDecision> => 'save'), onSave: async () => false };
+        retireMountedGuards.push(registerMountedTabUnsavedChangesGuard('first', first), registerMountedTabUnsavedChangesGuard('second', second));
+        setActiveUnsavedChangesGuard(first);
+        const navigate = vi.fn();
+        expect(await runGuardedTabNavigation(['first', 'second'], navigate, { includeActiveGuard: true })).toBe(false);
+        expect(navigate).not.toHaveBeenCalled();
+        expect(first.requestDecision).toHaveBeenCalledOnce();
+        expect(second.isDirtyRef.current).toBe(true);
     });
 
     it('runs navigation immediately when no guard is active', async () => {

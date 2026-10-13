@@ -1,4 +1,5 @@
 import { isTransientConnectivityError } from '@/sync/runtime/connectivity/transientConnectivityErrors';
+import { isActionAccountScopeChangedError } from '@/sync/domains/scope/actionAccountScopeError';
 
 type FireAndForgetOptions = Readonly<{
     tag?: string;
@@ -14,6 +15,7 @@ export function fireAndForget(promise: Promise<unknown> | null | undefined, opti
             if (options?.tag) {
                 // Recoverable connectivity and retired work are diagnostics, not developer error overlays.
                 const expected = isTransientConnectivityError(error)
+                    || isActionAccountScopeChangedError(error)
                     || (error instanceof Error && (error.name === 'AbortError' || error.name === 'StaleServerGenerationError'));
                 const report = expected ? console.info : console.error;
                 if (options.logError === false) {

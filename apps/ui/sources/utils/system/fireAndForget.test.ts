@@ -1,6 +1,7 @@
 import { describe, expect, it, vi } from 'vitest';
 import { fireAndForget } from './fireAndForget';
 import { RetryableServerResponseError } from '@/sync/runtime/connectivity/transientConnectivityErrors';
+import { WorkflowActionError } from '@/sync/domains/workflows/workflowActionError';
 
 describe('fireAndForget', () => {
     it.each([
@@ -9,6 +10,8 @@ describe('fireAndForget', () => {
         new TypeError('Network request failed'),
         Object.assign(new Error('cancelled'), { name: 'AbortError' }),
         new RetryableServerResponseError(503, 'temporarily unavailable'),
+        Object.assign(new Error('action_account_scope_changed'), { code: 'action_account_scope_changed' }),
+        new WorkflowActionError({ message: 'Account changed', rawCode: 'action_account_scope_changed' }),
     ])('records recoverable background failures without reporting a developer error: $name', async (error) => {
         const report = vi.spyOn(console, 'error').mockImplementation(() => {});
         const diagnostic = vi.spyOn(console, 'info').mockImplementation(() => {});

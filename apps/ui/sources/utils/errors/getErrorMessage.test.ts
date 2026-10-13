@@ -12,6 +12,9 @@ describe('getErrorMessage', () => {
     it('localizes Action refusal and pending approval without replacing a supplied refusal message', () => {
         expect(getErrorMessage(new HappyError('action_disabled', false, { code: 'action_disabled' }))).toBe('common.disabled');
         expect(getErrorMessage(new HappyError('approval_request_created', false, { code: 'approval_request_created' }))).toBe('approvals.status.open');
+        expect(getErrorMessage(new HappyError('invalid_parameters', false, { code: 'invalid_parameters' }))).toBe('common.requestFailed');
+        expect(getErrorMessage(new HappyError('Choose a mode offered by this Agent', false, { code: 'invalid_parameters' })))
+            .toBe('Choose a mode offered by this Agent');
         expect(getErrorMessage(new HappyError('This token cannot send to this session', false, { code: 'session_input_unauthorized' })))
             .toBe('This token cannot send to this session');
     });
