@@ -26,9 +26,11 @@ import { computeContentPublicKeyFingerprint } from '@happier-dev/protocol/machin
 import type { ProfileCatalogRecordV1, ProfileCatalogSnapshotV1 } from '@happier-dev/protocol/profiles/profileCatalogV1';
 import type { NotificationChannelCatalogSnapshotV1 } from '@happier-dev/protocol/account/settings/notificationChannelRecordV1';
 import type { AcpCatalogSnapshotV1 } from '@happier-dev/protocol/acp/catalog/catalogRowsV1';
+import type { McpServerCatalogSnapshotV1 } from '@happier-dev/protocol/mcp/servers/serverCatalogV1';
 import type { ProviderConnectionsCatalogSnapshotV1 } from '@happier-dev/protocol/providers/connections/connectionRowsV1';
 import type { ConnectedAccountCatalogSnapshotV1 } from '@happier-dev/protocol/connect/connectedAccountCatalogV1';
 import type { PromptLibraryCatalogSnapshotV1 } from '@happier-dev/protocol/prompts/library/promptLibraryCatalogV1';
+import { loadPromptLibraryCatalogV1 } from '@happier-dev/protocol/prompts/library/promptLibraryCatalogV1';
 import type { ConnectedAccountCatalogKeyV1 } from '@happier-dev/protocol/connect/connectedAccountConfigurationRowsV1';
 import { loadAiLaunchProfileArtifacts, resolveProfileCatalogAuthorityV1, removeTransferredProfileSourcesV1, listTransferredProfileIdsV1,
   readEffectiveProfileSecretBindingsV1 } from '@happier-dev/protocol/profiles/read';
@@ -38,7 +40,6 @@ import type { ArtifactSharingResourceV1 } from '@happier-dev/protocol/artifacts/
 import { deriveAccountMachineKeyFromRecoverySecret, type AccountScopedCryptoMaterial } from '@happier-dev/protocol/crypto/accountScopedCipher';
 import tweetnacl from 'tweetnacl';
 import { parseSavedSecretRefV1 } from '@happier-dev/protocol/account/settings/savedSecretReferenceV1';
-import { readServerEnabledBit } from '@happier-dev/protocol/features/serverEnabledBit';
 import { SavedSecretResourceMaterialsResponseV1Schema } from '@happier-dev/protocol/account/settings/savedSecretCatalogV1';
 import { SharedSavedSecretPromoteInputV1Schema, SharedSavedSecretPromoteOutputV1Schema,
   SharedSavedSecretCreateInputV1Schema, type SharedSavedSecretCreateInputV1,
@@ -62,15 +63,17 @@ import { createCliProviderConnectionsStore, createCliProviderConnectionsStoreFor
 import { createCliConnectedAccountCatalogStore } from '@/settings/connectedAccounts/connectedAccountCatalogStore';
 import { createCliRemoteHostStore, createCliRemoteHostStoreForOperation } from '@/settings/remoteHosts/remoteHostStore';
 import { createCliNotificationChannelStore } from '@/settings/notifications/notificationChannelStore';
+import { createCliPromptLibraryStore } from '@/settings/prompts/promptLibraryStore';
+import { openPromptLibraryContentV1, sealPromptLibraryContentV1 } from '@happier-dev/protocol/prompts/library/promptLibraryRowsV1';
 import { deriveSettingsSecretsReadKeysForCredentials } from './settingsSecretsKey';
 import { buildCurrentAccountStoredContentCompatibilityHttpHeaders } from '@/api/clientCompatibility/cliClientCompatibility';
 import { fetchServerFeaturesSnapshot } from '@/features/serverFeaturesClient';
 import { readStoredCredentials, type StoredCredentials } from '@/persistence';
+import { logger } from '@/ui/logger';
 import type { RpcHandlerContext } from '@/api/rpc/types';
 import {
   beginActiveSavedSecretCatalogRefresh,
   commitActiveSavedSecretCatalog,
-  disableActiveSavedSecretCatalog,
   getActiveAccountSettingsSnapshot,
   getActiveAccountSettingsSnapshotLifetimeToken,
   resolveActiveSavedSecretCatalogCollisionState,
@@ -125,6 +128,8 @@ export type SavedSecretOperationContextV1 = Readonly<{
   commitProfileCatalog(input: Readonly<{ expectedSettingsVersion: number; catalog: ProfileCatalogSnapshotV1 }>): Promise<boolean>;
   commitNotificationChannelCatalog(input: Readonly<{ expectedSettingsVersion: number; catalog: NotificationChannelCatalogSnapshotV1 }>): Promise<boolean>;
   commitAcpCatalog(input: Readonly<{ catalog: AcpCatalogSnapshotV1 }>): Promise<boolean>;
+  commitMcpCatalog(catalog: McpServerCatalogSnapshotV1): Promise<boolean>;
+  subscribeMcpCatalog(listener: () => void): () => void;
   commitProviderConnectionsCatalog(input: Readonly<{ expectedSettingsVersion: number; catalog: ProviderConnectionsCatalogSnapshotV1 }>): Promise<boolean>;
   commitConnectedAccountCatalog(input: Readonly<{ key: ConnectedAccountCatalogKeyV1; catalog: ConnectedAccountCatalogSnapshotV1 }>): Promise<boolean>;
   commitPromptLibraryCatalog(input: Readonly<{ expectedSettingsVersion: number; catalog: PromptLibraryCatalogSnapshotV1 }>): Promise<boolean>;
@@ -147,6 +152,14 @@ export function createInvocationSavedSecretOperationContextV1(input: Readonly<{
   let snapshot: ActiveAccountSettingsSnapshot | null = input.snapshot;
   let acpRevision = snapshot.acpCatalog?.status === 'ready' && typeof snapshot.acpCatalog.revision === 'number'
     ? snapshot.acpCatalog.revision : undefined;
+  let mcpRevision = snapshot.mcpServerCatalog?.status === 'ready' && typeof snapshot.mcpServerCatalog.revision === 'number'
+    ? snapshot.mcpServerCatalog.revision : undefined;
+  const mcpListeners = new Set<() => void>();
+  const notifyMcpCatalog = () => {
+    for (const listener of mcpListeners) {
+      try { listener(); } catch { logger.debug('[MCP] Captured catalog subscriber failed'); }
+    }
+  };
   const isCurrent = async () => {
     if (!snapshot) return false;
     let current = false;
@@ -154,6 +167,8 @@ export function createInvocationSavedSecretOperationContextV1(input: Readonly<{
     if (!current && snapshot) {
       withdrawSavedSecretCatalogInSnapshot(snapshot);
       snapshot = null;
+      notifyMcpCatalog();
+      mcpListeners.clear();
     }
     return current && snapshot !== null;
   };
@@ -202,6 +217,25 @@ export function createInvocationSavedSecretOperationContextV1(input: Readonly<{
       }
       if (!isDeepStrictEqual(snapshot.acpCatalog, catalog)) snapshot = { ...snapshot, acpCatalog: catalog };
       return true;
+    },
+    commitMcpCatalog: async (catalog: McpServerCatalogSnapshotV1) => {
+      if (!await isCurrent() || !snapshot) return false;
+      if (catalog.status === 'ready' && catalog.revision === 'absent'
+        && (mcpRevision !== undefined || catalog.sourceSettingsVersion !== snapshot.settingsVersion)) return false;
+      if (catalog.status === 'ready' && typeof catalog.revision === 'number') {
+        if (mcpRevision !== undefined && catalog.revision < mcpRevision) return false;
+        mcpRevision = catalog.revision;
+      }
+      if (!isDeepStrictEqual(snapshot.mcpServerCatalog, catalog)) {
+        snapshot = { ...snapshot, mcpServerCatalog: catalog };
+        notifyMcpCatalog();
+      }
+      return true;
+    },
+    subscribeMcpCatalog: (listener: () => void) => {
+      if (!snapshot) return () => undefined;
+      mcpListeners.add(listener);
+      return () => { mcpListeners.delete(listener); };
     },
     commitProviderConnectionsCatalog: async ({ catalog, expectedSettingsVersion }: Parameters<SavedSecretOperationContextV1['commitProviderConnectionsCatalog']>[0]) => {
       if (!await isCurrent() || !snapshot) return false;
@@ -288,16 +322,8 @@ export async function hydrateSavedSecretCatalog(input: Readonly<{
     if (context) return await context.isCurrent() && context.commitCatalog(catalog);
     return commitActiveSavedSecretCatalog({ scopeKey, lifetimeToken: lifetimeToken!, ...catalog });
   };
-  if (!input.serverFeatures || readServerEnabledBit(input.serverFeatures, 'teams') !== true) {
-    if (snapshot?.scopeKey === scopeKey) {
-      if (context) await commitCatalog({ resources: Object.freeze([]), state: 'disabled' });
-      else disableActiveSavedSecretCatalog({ scopeKey, lifetimeToken: lifetimeToken! });
-    }
-    return Object.freeze({
-      resources: Object.freeze([]),
-      state: 'disabled',
-    });
-  }
+  // The Home's resource owner authorizes personal and granted material.
+  // Teams availability controls Team audiences, not private resource access.
   if (!snapshot || snapshot.scopeKey !== scopeKey) throw new Error('saved_secret_account_snapshot_unavailable');
   // A refresh is an authorization observation boundary. Keep display metadata
   // for recovery, but retire all opened material before waiting on the Home.
@@ -539,7 +565,7 @@ export async function captureSavedSecretReferencesForOperation(input: Readonly<{
 }
 
 type SavedSecretDomainReferenceCatalogsV1 = Pick<SavedSecretReferenceCatalogsV1,
-  'mcp' | 'acp' | 'providerConnections' | 'connectedConfigurations' | 'connectedPurposes'>;
+  'mcp' | 'acp' | 'providerConnections' | 'connectedConfigurations' | 'connectedPurposes' | 'registrySources'>;
 type SavedSecretDomainReferenceCensusV1 = Record<keyof SavedSecretDomainReferenceCatalogsV1, number | 'absent'>;
 type SavedSecretSourceReferenceCatalogsV1 = SavedSecretDomainReferenceCatalogsV1 & Pick<SavedSecretReferenceCatalogsV1,
   'remoteHostRecords' | 'notificationChannels'>;
@@ -563,19 +589,20 @@ export async function captureSavedSecretReferenceCatalogsForOperation(input: Rea
   const connected = createCliConnectedAccountCatalogStore(input);
   const remoteHosts = context ? createCliRemoteHostStoreForOperation({ operationContext: context, signal: input.signal }) : createCliRemoteHostStore(input);
   const notifications = createCliNotificationChannelStore(input);
+  const prompts = createCliPromptLibraryStore(input);
   const storage = await mcp.readStorageContext();
   const otherStorage = await Promise.all([acp.readStorageContext(), providers.readStorageContext(), connected.readStorageContext(),
-    remoteHosts.readStorageContext(), notifications.readStorageContext()]);
+    remoteHosts.readStorageContext(), notifications.readStorageContext(), prompts.readStorageContext()]);
   if (otherStorage.some(value => value.mode !== storage.mode || !isDeepStrictEqual(value.material, storage.material))) {
     throw new Error('saved_secret_account_mode_or_identity_changed');
   }
-  const [mcpRow, acpRow, providerRow, configurationRow, purposeRow, remoteHostRow, notificationRow] = await Promise.all([
+  const [mcpRow, acpRow, providerRow, configurationRow, purposeRow, remoteHostRow, notificationRow, registryRow] = await Promise.all([
     mcp.readRow(), acp.readRow(), providers.readRow(), connected.readRow('configurations'), connected.readRow('purposes'),
-    remoteHosts.readRow(), notifications.readRow(),
+    remoteHosts.readRow(), notifications.readRow(), prompts.readRow('registry-sources'),
   ]);
   const catalogs: { -readonly [Key in keyof SavedSecretSourceReferenceCatalogsV1]: SavedSecretSourceReferenceCatalogsV1[Key] } = {};
   const census: SavedSecretDomainReferenceCensusV1 = { mcp: 'absent', acp: 'absent', providerConnections: 'absent',
-    connectedConfigurations: 'absent', connectedPurposes: 'absent' };
+    connectedConfigurations: 'absent', connectedPurposes: 'absent', registrySources: 'absent' };
   if (mcpRow.status === 'deleted') { census.mcp = mcpRow.revision; catalogs.mcp = null; }
   else if (mcpRow.status === 'present') {
     const opened = openMcpServerCatalogContentV1({ ...storage, content: mcpRow.content });
@@ -621,13 +648,21 @@ export async function captureSavedSecretReferenceCatalogsForOperation(input: Rea
     if (opened.status !== 'opened') throw new Error('saved_secret_reference_catalog_unavailable');
     notificationRevision = notificationRow.revision; catalogs.notificationChannels = opened.record;
   } else if (notificationRow.status !== 'absent') throw new Error('saved_secret_reference_catalog_unavailable');
+  if (registryRow.status === 'deleted') { census.registrySources = registryRow.revision; catalogs.registrySources = null; }
+  else if (registryRow.status === 'present') {
+    const opened = openPromptLibraryContentV1({ ...storage, key: 'registry-sources', content: registryRow.content });
+    if (opened.status !== 'opened' || opened.record.key !== 'registry-sources') throw new Error('saved_secret_reference_catalog_unavailable');
+    census.registrySources = registryRow.revision; catalogs.registrySources = opened.record.value;
+  } else if (registryRow.status !== 'absent') throw new Error('saved_secret_reference_catalog_unavailable');
   const references = listSavedSecretReferenceCatalogRefsV1({ ...catalogs, profileRecords: [] });
-  if (references.some(reference => parseSavedSecretRefV1(reference.secretId).kind !== 'shared_resource')) {
+  if (references.some(reference => reference.owner !== 'registrySource'
+    && parseSavedSecretRefV1(reference.secretId).kind !== 'shared_resource')) {
     throw new Error('saved_secret_reference_catalog_unavailable');
   }
   const admitted = await mcp.readStorageContext();
   mcp.assertCurrent(); acp.assertCurrent(); providers.assertCurrent(); connected.assertCurrent(); remoteHosts.assertCurrent();
   await notifications.assertCurrent();
+  prompts.assertCurrent();
   if (admitted.mode !== storage.mode || !isDeepStrictEqual(admitted.material, storage.material)
     || context && !await context.isCurrent()) throw new Error('saved_secret_account_mode_or_identity_changed');
   return { catalogs, census,
@@ -1027,6 +1062,8 @@ function prepareSavedSecretPromotion(input: SavedSecretPromotionPreparationV1, r
     content: sealConnectedAccountCatalogContentV1({ ...storage, record: { key: 'configurations', value: promoted.connectedConfigurations } }) };
   if (promoted.connectedPurposes && changed('connectedPurposes')) catalogMutations.connectedPurposes = { ...capture('connectedPurposes'),
     content: sealConnectedAccountCatalogContentV1({ ...storage, record: { key: 'purposes', value: promoted.connectedPurposes } }) };
+  if (promoted.registrySources && changed('registrySources')) catalogMutations.registrySources = { ...capture('registrySources'),
+    content: sealPromptLibraryContentV1({ ...storage, record: { key: 'registry-sources', value: promoted.registrySources } }) };
   return SharedSavedSecretPromoteInputV1Schema.parse({ ...preparedResource,
       expectedSettingsVersion: input.expectedSettingsVersion, nextSettings, referenceCensus: input.referenceCensus, profileMutations,
       ...(input.personalSecretId ? { personalSecretPromotions: [{ personalSecretId: input.personalSecretId, resourceId }] } : {}),
@@ -1265,6 +1302,26 @@ export async function importLegacySavedSecretsForOperation(input: SavedSecretCat
           pending = { status: 'pending', reason: 'outcome-unknown' }; break;
         }
         commitActiveAccountSettingsSnapshot({ ...current, profileCatalog: publishedCatalog });
+      }
+      if (mutation.catalogMutations?.registrySources) {
+        const prompts = createCliPromptLibraryStore({ credentials, operationContext: context, signal: input.signal });
+        const storage = await prompts.readStorageContext();
+        const publishedPrompts = await loadPromptLibraryCatalogV1({ ...storage, signal: input.signal, readRows: prompts.readRows });
+        const acknowledged = publishedPrompts.status === 'ready' || publishedPrompts.status === 'partial'
+          ? publishedPrompts.rows.find(row => row.record.key === 'registry-sources') : undefined;
+        const expectedRevision = mutation.catalogMutations.registrySources.expectedRevision;
+        if (!acknowledged || acknowledged.revision !== (expectedRevision === 'absent' ? 0 : expectedRevision + 1)
+          || acknowledged.record.key !== 'registry-sources' || !isDeepStrictEqual(acknowledged.record.value, promoted.registrySources)
+          || !await isCurrent()) { pending = { status: 'pending', reason: 'outcome-unknown' }; break; }
+        if (context) {
+          if (!await context.commitPromptLibraryCatalog({ expectedSettingsVersion: result.settingsVersion, catalog: publishedPrompts })) {
+            pending = { status: 'pending', reason: 'outcome-unknown' }; break;
+          }
+        } else {
+          const current = getActiveAccountSettingsSnapshot();
+          if (!current || current.settingsVersion !== result.settingsVersion) { pending = { status: 'pending', reason: 'outcome-unknown' }; break; }
+          commitActiveAccountSettingsSnapshot({ ...current, promptLibraryCatalog: publishedPrompts });
+        }
       }
       if (inline) {
         const admitted = await readSavedSecretCatalogForOperation({ expectedScopeKey: input.expectedScopeKey,

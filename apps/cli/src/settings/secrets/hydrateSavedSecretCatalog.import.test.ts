@@ -19,7 +19,8 @@ import { CONNECTED_ACCOUNT_CATALOG_ROWS_ROUTE_V1, sealConnectedAccountCatalogCon
 import { ACP_CATALOG_ROWS_ROUTE_V1 } from '@happier-dev/protocol/acp/catalog/catalogRowsV1';
 import { PROVIDER_CONNECTIONS_ROWS_ROUTE_V1 } from '@happier-dev/protocol/providers/connections/connectionRowsV1';
 import { MCP_SERVER_CATALOG_ROWS_ROUTE_V1 } from '@happier-dev/protocol/mcp/servers/serverRowsV1';
-import { PROMPT_LIBRARY_ROWS_ROUTE_V1 } from '@happier-dev/protocol/prompts/library/promptLibraryRowsV1';
+import { PROMPT_LIBRARY_ROWS_ROUTE_V1, sealPromptLibraryContentV1, openPromptLibraryContentV1 } from '@happier-dev/protocol/prompts/library/promptLibraryRowsV1';
+import { RegistrySourcesRecordV1Schema } from '@happier-dev/protocol/registries/registrySourcesV1';
 import { CONNECTED_PRESENTATION_ROWS_ROUTE_V1, CONNECTED_ACKNOWLEDGEMENTS_ROWS_ROUTE_V1 } from '@happier-dev/protocol/connect/connectedAccountPresentationRowsV1';
 import { REMOTE_HOST_ROWS_ROUTE_V1, REMOTE_HOST_ACCOUNT_CIPHER_KIND_V1, RemoteHostCatalogRecordV1Schema,
   sealRemoteHostCatalogContentV1, openRemoteHostCatalogContentV1 } from '@happier-dev/protocol/remoteHosts/remoteHostRecordV1';
@@ -132,6 +133,7 @@ describe('SavedSecret material-demand legacy import', () => {
         || path === `${CONNECTED_ACCOUNT_CATALOG_ROWS_ROUTE_V1}/purposes` || path === REMOTE_HOST_ROWS_ROUTE_V1
         || path === NOTIFICATION_CHANNELS_ROUTE_V1 || path === CONNECTED_PRESENTATION_ROWS_ROUTE_V1
         || path === CONNECTED_ACKNOWLEDGEMENTS_ROWS_ROUTE_V1) return { status: 200, data: { status: 'absent' } };
+      if (path === `${PROMPT_LIBRARY_ROWS_ROUTE_V1}/registry-sources`) return { status: 200, data: { status: 'absent' } };
       if (path === PROMPT_LIBRARY_ROWS_ROUTE_V1) return { status: 200, data: { status: 'listed', rows: [] } };
       if (path === '/v1/artifacts') return { status: 200, data: [] };
       if (path === '/v1/account/saved-secrets/resources/materials') return { status: 200, data: { resources } };
@@ -272,6 +274,7 @@ describe('SavedSecret material-demand legacy import', () => {
         || path === `${CONNECTED_ACCOUNT_CATALOG_ROWS_ROUTE_V1}/purposes` || path === REMOTE_HOST_ROWS_ROUTE_V1
         || path === NOTIFICATION_CHANNELS_ROUTE_V1 || path === CONNECTED_PRESENTATION_ROWS_ROUTE_V1
         || path === CONNECTED_ACKNOWLEDGEMENTS_ROWS_ROUTE_V1) return { status: 200, data: { status: 'absent' } };
+      if (path === `${PROMPT_LIBRARY_ROWS_ROUTE_V1}/registry-sources`) return { status: 200, data: { status: 'absent' } };
       if (path === PROMPT_LIBRARY_ROWS_ROUTE_V1) return { status: 200, data: { status: 'listed', rows: [] } };
       if (path === '/v1/artifacts') return { status: 200, data: [] };
       if (path === '/v1/account/saved-secrets/resources/materials') return { status: 200, data: { resources: historyUseWithdrawalObserved ? [] : [{
@@ -450,6 +453,7 @@ describe('SavedSecret material-demand legacy import', () => {
     ['plain', false, 'invocation-active-connected'], ['e2ee', false, 'invocation-active-connected'],
     ['plain', false, 'invocation-invalid-active-connected'],
     ['plain', false, 'invocation-active-reference-catalogs'], ['e2ee', false, 'invocation-active-reference-catalogs'],
+    ['plain', false, 'invocation-active-registry'], ['e2ee', false, 'invocation-active-registry'],
     ['plain', false, 'invocation-deleted-reference-catalogs'], ['e2ee', false, 'invocation-deleted-reference-catalogs'],
     ['plain', false, 'invocation-partial-notification'], ['e2ee', false, 'invocation-partial-notification'],
     ['plain', false, 'invocation-partial-remote-host'], ['e2ee', false, 'invocation-partial-remote-host'],
@@ -476,6 +480,7 @@ describe('SavedSecret material-demand legacy import', () => {
     const partialRemoteHost = custody === 'invocation-partial-remote-host';
     const activeReferenceCatalogs = custody === 'invocation-active-reference-catalogs' || partialNotification || partialRemoteHost;
     const deletedReferenceCatalogs = custody === 'invocation-deleted-reference-catalogs';
+    const activeRegistry = custody === 'invocation-active-registry';
     const inheritedRef = 'happier:shared-secret:v1:inherited';
     const maskedRef = 'happier:shared-secret:v1:masked';
     const remoteHostRecord = RemoteHostCatalogRecordV1Schema.parse({ v: 1, hosts: [{ id: 'host', name: 'Private host',
@@ -502,6 +507,12 @@ describe('SavedSecret material-demand legacy import', () => {
         encryptedValue: encryptSecretStringV1('fixture-private', deriveSettingsSecretsKeySetV1(material).writeKey,
           length => new Uint8Array(length).fill(12)) }
         : { _isSecretValue: true as const, value: 'fixture-private' }, createdAt: 1, updatedAt: 2 };
+    let registrySources = RegistrySourcesRecordV1Schema.parse({ v: 2, disabledSourceIds: [], sources: [{
+      id: 'registry:private', title: 'Private', format: 'git', kinds: ['skill'], url: 'https://github.com/acme/private',
+      enabled: false, addedAt: 1, token: { secretRef: legacy.id, header: { name: 'Authorization', scheme: 'Bearer' } } }] });
+    let registryRevision = 7;
+    const registryContent = () => sealPromptLibraryContentV1({ mode, material,
+      record: { key: 'registry-sources', value: registrySources } });
     const future = { id: 'future-material', name: 'Future', kind: 'token', createdAt: 1, updatedAt: 1,
       encryptedValue: { _isSecretValue: true, encryptedValue: { t: 'future-secret-envelope', c: 'opaque' } } };
     let raw: Readonly<Record<string, unknown>> = inference ? { inferenceOpenAIKey: 'fixture-private',
@@ -555,6 +566,10 @@ describe('SavedSecret material-demand legacy import', () => {
       expect(new URL(String(url)).origin).toBe('https://import-home.example');
       const path = new URL(String(url)).pathname;
       if (path === `${CONNECTED_ACCOUNT_CATALOG_ROWS_ROUTE_V1}/configurations`) return { status: 200, data: connectedConfigurationRow };
+      if (path === `${PROMPT_LIBRARY_ROWS_ROUTE_V1}/registry-sources`) return { status: 200, data: activeRegistry
+        ? { status: 'present', revision: registryRevision, content: registryContent() } : { status: 'absent' } };
+      if (path === PROMPT_LIBRARY_ROWS_ROUTE_V1) return { status: 200, data: { status: 'listed', rows: activeRegistry
+        ? [{ key: 'registry-sources', revision: registryRevision, content: registryContent() }] : [] } };
       if (path === REMOTE_HOST_ROWS_ROUTE_V1) return { status: 200, data: deletedReferenceCatalogs ? { status: 'deleted', revision: 8 } : activeReferenceCatalogs
         ? { status: 'present', revision: 8, content: remoteHostContent } : { status: 'absent' } };
       if (path === NOTIFICATION_CHANNELS_ROUTE_V1) return { status: 200, data: deletedReferenceCatalogs ? { status: 'deleted', revision: 9 } : activeReferenceCatalogs
@@ -609,6 +624,17 @@ describe('SavedSecret material-demand legacy import', () => {
         profiles: { referenceGuardRevision: 3, rows: nativeArtifact ? [{ id: 'p', revision: 2 }] : [] } });
       if (activeConnected) {
         expect(mutation.catalogMutations?.connectedConfigurations).toBeUndefined();
+      }
+      if (activeRegistry) {
+        expect(mutation.referenceCensus).toMatchObject({ catalogs: { registrySources: registryRevision } });
+        const registry = mutation.catalogMutations?.registrySources;
+        expect(registry).toMatchObject({ expectedRevision: registryRevision,
+          referencedSavedSecretIds: [`happier:shared-secret:v1:${mutation.resourceId}`],
+          savedSecretRevisions: [{ resourceId: mutation.resourceId, expectedRevision: 1 }] });
+        const opened = openPromptLibraryContentV1({ mode, material, key: 'registry-sources', content: registry?.content });
+        if (opened.status !== 'opened' || opened.record.key !== 'registry-sources') throw new Error('fixture_missing_registry_rewrite');
+        registrySources = opened.record.value;
+        registryRevision++;
       }
       if (nativeArtifact) {
         expect(mutation.referenceCensus.artifacts).toEqual([{ artifactId: 'selected', headerVersion: 2, bodyVersion: 4 }]);
@@ -715,6 +741,11 @@ describe('SavedSecret material-demand legacy import', () => {
     const resourceId = deriveSavedSecretImportResourceIdV1({ accountId: 'import-account',
       source: inference ? { kind: 'legacy-inference-openai-key' } : { kind: 'personal-saved-secret', secretId: legacy.id } });
     const ref = `happier:shared-secret:v1:${resourceId}`;
+    if (activeRegistry) {
+      expect(registrySources.sources[0].token).toEqual({ secretRef: ref, header: { name: 'Authorization', scheme: 'Bearer' } });
+      expect(firstSnapshot.promptLibraryCatalog).toMatchObject({ rows: [{ revision: 8,
+        record: { key: 'registry-sources', value: registrySources } }] });
+    }
     if (nativeArtifact) expect(applied[0]!.profileMutations[0]!.artifactRevision).toEqual({ artifactId: 'selected', headerVersion: 2, bodyVersion: 4 });
     if (inheritedArtifactBindings) {
       const rowMutation = applied[0]!.profileMutations[0]!;

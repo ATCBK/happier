@@ -18,6 +18,55 @@ import { ARTIFACT_PLAIN_DATA_KEY_MARKER, encodePlainArtifactStoredContent,
 
 afterEach(() => { vi.restoreAllMocks(); resetActiveAccountSettingsSnapshotForTests(); });
 
+it('migrates Profile seeds through captured Artifact HTTP and the strict update CAS without retiring entry identities', async () => {
+  const credentials = { token: 'profile-skill-migration', encryption: null };
+  setActiveAccountSettingsSnapshot({ source: 'network', settings: accountSettingsParse({}), settingsVersion: 7,
+    loadedAtMs: 1, settingsSecretsReadKeys: [], scopeKey: resolveAccountSettingsScopeKey(credentials) });
+  let record = ProfileRecordV1Schema.parse({ v: 1, id: 'profile', enabled: true, secretBindings: {},
+    definition: { kind: 'inline', profile: { v: 2, id: 'profile', name: 'Profile', createdAt: 1, updatedAt: 1 } },
+    promptStack: [{ id: 'legacy-skill', enabled: true, placement: 'skill_instructions', ref: { kind: 'bundle', artifactId: 'skill' } }],
+    skillSeeds: ['existing'] });
+  const retainedStack = record.promptStack;
+  let revision = 4;
+  let guard = 9;
+  const submitted: unknown[] = [];
+  // Only HTTP is replaced; Artifact opening, catalog migration, sealing and update admission stay real.
+  vi.spyOn(axios, 'get').mockImplementation(async input => {
+    const path = new URL(String(input)).pathname;
+    if (path.endsWith('/account/encryption')) return { status: 200, data: { mode: 'plain', updatedAt: 1 } };
+    if (path.endsWith('/currentness')) return { status: 200, data: {
+      mode: 'plain', version: 1, signingKeyFingerprint: null, contentKeyFingerprint: null, updatedAt: 1 } };
+    if (path.endsWith('/entity-rows/profiles')) return { status: 200, data: { status: 'listed',
+      rows: [{ id: record.id, revision, content: sealProfileRecordContentV1({ mode: 'plain', material: null, record }) }],
+      nextCursor: null, complete: true, diagnostics: [], referenceGuardRevision: guard, transferControl: { status: 'absent' } } };
+    if (path.endsWith('/reference-guard')) return { status: 200, data: { status: 'ready', revision: guard } };
+    if (path.endsWith('/transfer')) return { status: 200, data: { status: 'absent' } };
+    if (path === '/v2/account/settings') return { status: 200, data: { version: 7, content: { t: 'plain', v: {} } } };
+    if (path === '/v1/artifacts/skill') return { status: 200, data: { id: 'skill', ownerAccountId: 'account', access: 'owner',
+      encryptionMode: 'plain', header: encodePlainArtifactStoredContent({ v: 1, kind: 'prompt_bundle.v2', title: 'Skill', bundleSchemaId: 'skills.skill_md_v1' }),
+      body: encodePlainArtifactStoredContent({ body: JSON.stringify({ v: 1, entries: [{ path: 'SKILL.md', contentKind: 'utf8',
+        contentBase64: Buffer.from('---\nname: skill\ndescription: Profile skill\n---\nProfile skill').toString('base64') }], createdAtMs: 1, updatedAtMs: 1 }) }),
+      dataEncryptionKey: ARTIFACT_PLAIN_DATA_KEY_MARKER, headerVersion: 1, bodyVersion: 1, seq: 1, createdAt: 1, updatedAt: 1 } };
+    throw new Error(`Unexpected migration read: ${path}`);
+  });
+  vi.spyOn(axios, 'post').mockImplementation(async (_input, body) => {
+    const mutation = ProfileRowMutationV1Schema.parse(body);
+    submitted.push(mutation);
+    expect(mutation).toMatchObject({ operation: 'update', expectedRevision: revision, artifactRevision: null });
+    const opened = openProfileRecordContentV1({ mode: 'plain', material: null, expectedId: record.id, content: mutation.content });
+    if (opened.status !== 'opened') throw new Error('Expected a valid canonical Profile producer');
+    record = opened.record;
+    return { status: 200, data: { status: 'updated', revision: ++revision, cursor: 1, referenceGuardRevision: ++guard } };
+  });
+  const store = createCliProfileStore({ credentials });
+  expect(await store.readProfileCatalog()).toMatchObject({ status: 'ready', records: [{ record: { skillSeeds: ['existing'] } }] });
+  expect(submitted).toHaveLength(0);
+  expect(await store.readProfileCatalog({ migrateSkills: true })).toMatchObject({ status: 'ready', referenceGuardRevision: 10,
+    records: [{ revision: 5, record: { skillSeeds: ['existing', 'skill'], promptStack: retainedStack } }] });
+  expect(await store.readProfileCatalog({ migrateSkills: true })).toMatchObject({ status: 'ready', referenceGuardRevision: 10 });
+  expect(submitted).toHaveLength(1);
+});
+
 it.each(['plain', 'e2ee'] as const)('admits a captured lossless legacy clone and forwards its source CAS on the %s writer', async mode => {
   const material = { type: 'legacy' as const, secret: new Uint8Array(32).fill(7) };
   const credentials = { token: 'captured-legacy-clone', encryption: mode === 'e2ee' ? material : null };
@@ -258,12 +307,12 @@ it.each(['plain', 'e2ee'] as const)('preserves inherited inline bytes on %s edit
   });
   const store = createCliProfileStore({ credentials });
   await expect(store.writeRecord({ record, expectedRevision: 4, operation: 'update' })).resolves.toMatchObject({ status: 'updated', revision: 5 });
-  expect(persisted).toEqual([record]);
+  expect(persisted).toEqual([ProfileRecordV1Schema.parse(record)]);
   const createId = 'new-profile';
   const createRecord = { ...record, id: createId, definition: { kind: 'inline' as const,
     profile: { ...record.definition.profile, id: createId } } };
   await expect(store.writeRecord({ record: createRecord, expectedRevision: 'absent', operation: 'create' })).rejects.toBeInstanceOf(Error);
-  expect(persisted).toEqual([record]);
+  expect(persisted).toEqual([ProfileRecordV1Schema.parse(record)]);
   // An invalid new definition must not rely on the server to refuse its write.
   expect(submitted).toEqual([expect.objectContaining({ id, operation: 'update' })]);
 });

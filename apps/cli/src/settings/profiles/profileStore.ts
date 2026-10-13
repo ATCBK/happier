@@ -25,6 +25,7 @@ import type { ArtifactRevisionV1 } from '@happier-dev/protocol/artifacts/artifac
 import type { SavedSecretOperationContextV1 } from '@/settings/secrets/hydrateSavedSecretCatalog';
 import { parseSavedSecretCatalogReferenceV1 } from '@happier-dev/protocol/account/settings/savedSecretCatalogV1';
 import { readSavedSecretRevisionsFromSnapshotV1 } from '@/settings/secrets/savedSecretCatalog';
+import { resolveCliHomeTarget } from '@/server/homeTarget';
 
 /** Captured Home/Account transport shared by Profile hydration and typed Actions. */
 export function createCliProfileStore(input: Readonly<{ credentials: StoredCredentials; signal?: AbortSignal }>) {
@@ -106,11 +107,30 @@ function createCapturedCliProfileStore(input: Readonly<{
   const readTransfer = async () => ProfileTransferRowReadResponseV1Schema.parse(await request(PROFILE_TRANSFER_ROUTE_V1));
   const mutateRecord = async (mutation: ProfileRowMutationV1) => ProfileRowMutationResponseV1Schema.parse(await request(
     PROFILE_RECORDS_ROUTE_V1, ProfileRowMutationV1Schema.parse(mutation)));
-  const readProfileCatalogCapture = async () => {
+  const readProfileCatalogCapture = async (migrateSkills = false) => {
     const context = await readStorageContext();
     const settingsVersion = input.readSettingsVersion?.();
     const captured: { source: Awaited<ReturnType<typeof readSourceSnapshot>> | null } = { source: null };
     const catalog = await loadProfileCatalogV1({ ...context, signal: input.signal, readPage, readReferenceGuard, readTransfer,
+      ...(migrateSkills ? { skillMigration: {
+        readArtifact: ref => runWithServerHttpBaseUrl(base, async () => {
+          if (ref.serverId !== undefined && ref.serverId !== base
+            && ref.serverId !== input.credentials.requesterSessionCredentialScope?.serverId) {
+            const target = await resolveCliHomeTarget({ kind: 'saved_profile', profileRef: ref.serverId });
+            if (target.applicationUrl.replace(/\/+$/, '') !== base) return null;
+          }
+          await verifyCurrent();
+          const { createCredentialedAccountArtifactStore } = await import('@/api/artifacts/accountArtifactStore');
+          const artifact = await createCredentialedAccountArtifactStore(input.credentials).read(ref.artifactId, { signal: input.signal });
+          await verifyCurrent();
+          return artifact;
+        }),
+        writeRecord: async (record, expectedRevision) => {
+          const written = await store.writeRecord({ record, expectedRevision, operation: 'update' });
+          return written.status === 'updated' ? { status: 'updated' as const, revision: written.revision }
+            : { status: written.status === 'conflict' ? 'conflict' as const : 'unavailable' as const };
+        },
+      } } : {}),
       readSource: async () => {
         captured.source = await readSourceSnapshot();
         return captured.source.raw;
@@ -124,7 +144,7 @@ function createCapturedCliProfileStore(input: Readonly<{
         ? { status: 'unavailable', reason: 'reference-conflict' } : catalog;
     return { catalog: result, source: captured.source };
   };
-  const readProfileCatalog = async () => (await readProfileCatalogCapture()).catalog;
+  const readProfileCatalog = async (options?: Readonly<{ migrateSkills: true }>) => (await readProfileCatalogCapture(options?.migrateSkills)).catalog;
   const readSourceSnapshot = async () => {
     const context = await readStorageContext();
     const source = await readAccountSettingsV2Raw({ credentials: input.credentials, signal: input.signal, deps: {
@@ -141,7 +161,7 @@ function createCapturedCliProfileStore(input: Readonly<{
         randomBytes: (length) => new Uint8Array(randomBytes(length)) }) },
   });
   const readCatalog = async () => {
-    const { catalog, source } = await readProfileCatalogCapture();
+    const { catalog, source } = await readProfileCatalogCapture(true);
     if (catalog.status !== 'ready') return { catalog, artifactsById: new Map<string, ArtifactSharingResourceV1>() };
     const { createCredentialedAccountArtifactStore } = await import('@/api/artifacts/accountArtifactStore');
     const references = [...catalog.records.map(({ record }) => record),
@@ -155,7 +175,7 @@ function createCapturedCliProfileStore(input: Readonly<{
     }
     return { catalog, artifactsById };
   };
-  return {
+  const store = {
     assertCurrent,
     readStorageContext,
     readProfileCatalog,
@@ -179,7 +199,7 @@ function createCapturedCliProfileStore(input: Readonly<{
     readCatalog,
     writeRecord: async (value: Readonly<{ record: ProfileRecordV1; expectedRevision: number | 'absent'; operation: Exclude<ProfileRowMutationV1['operation'], 'remove'>;
       expectedArtifactRevision?: ArtifactRevisionV1;
-      savedSecretRevisions?: ProfileRowMutationV1['savedSecretRevisions']; legacyCloneSource?: ProfileRowMutationV1['legacyCloneSource'] }>) => {
+      savedSecretRevisions?: ProfileRowMutationV1['savedSecretRevisions']; legacyCloneSource?: ProfileRowMutationV1['legacyCloneSource'] }>): Promise<ReturnType<typeof ProfileRowMutationResponseV1Schema.parse>> => {
       let record = parseProfileRecordForMutationV1({ operation: value.operation, record: value.record });
       if (value.operation === 'clone-legacy') {
         const capture = value.legacyCloneSource;
@@ -266,6 +286,7 @@ function createCapturedCliProfileStore(input: Readonly<{
         referencedSavedSecretIds: [], settingsCleanup: sealSettingsCleanup(source, raw) });
     },
   };
+  return store;
 }
 
 export type CliProfileStore = ReturnType<typeof createCliProfileStore>;

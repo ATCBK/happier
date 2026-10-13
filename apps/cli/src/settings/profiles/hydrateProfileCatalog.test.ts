@@ -279,7 +279,11 @@ it.each(['applied', 'conflict'] as const)('cleans transferred source and retaine
     if (path.endsWith('/reference-guard')) return { status: 200, data: { status: 'ready', revision: rows.length ? 0 : 'absent' } };
     if (path.endsWith('/transfer')) return { status: 200, data: control };
     if (path === '/v2/account/settings') return { status: 200, data: { content: { t: 'plain', v: raw }, version: settingsVersion } };
-    if (path === '/v1/account/entity-rows/prompt-library') return { status: 404, data: {} };
+    // The history owner captures every private catalog before normalizing; this
+    // predecessor fixture has no catalog besides the transferred Profiles.
+    if (path.startsWith('/v1/account/entity-rows/') && path !== '/v1/account/entity-rows/profiles') {
+      return { status: 404, data: {} };
+    }
     if (path === '/v2/account/settings/history') return { status: 200, data: { snapshots: [{
       version: 7, contentKind: 'plain', byteLength: 100, createdAt: '2026-01-01T00:00:00.000Z' }] } };
     if (path === '/v2/account/settings/history/7') return { status: 200, data: {

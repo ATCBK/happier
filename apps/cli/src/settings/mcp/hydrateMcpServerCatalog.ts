@@ -16,6 +16,18 @@ type PendingRefresh = {
 const pending = new Map<string, PendingRefresh>();
 const refreshAfterInFlight = new Set<string>();
 
+/** One failure classification for Active and captured Account publication. */
+export function projectMcpServerCatalogRefreshFailure(input: Readonly<{
+  error: unknown; current: boolean; signal?: AbortSignal;
+}>): McpServerCatalogSnapshotV1 {
+  const code = input.error instanceof Error && 'code' in input.error ? input.error.code : undefined;
+  return { status: 'unavailable', reason: input.signal?.aborted ? 'cancelled'
+    : !input.current || code === 'scope-retired' ? 'scope-retired'
+    : code === 'unauthorized' || code === 'forbidden' || code === 'unsupported' || code === 'account-mode-mismatch' ? code
+    : code === 'account_storage_currentness_unavailable' || code === 'account_encryption_currentness_unavailable' ? 'encryption-material-unavailable'
+    : input.error instanceof Error && input.error.name === 'ZodError' ? 'invalid-stored-content' : 'unreachable' };
+}
+
 function refresh(input: RefreshInput, captured?: CapturedAccount, afterChange = false): Promise<McpServerCatalogSnapshotV1> {
   const scopeKey = captured?.scopeKey ?? resolveAccountSettingsScopeKey(input.credentials);
   const lifetimeToken = captured?.lifetimeToken ?? getActiveAccountSettingsSnapshotLifetimeToken();
@@ -64,12 +76,7 @@ function refresh(input: RefreshInput, captured?: CapturedAccount, afterChange = 
         });
         catalog = await Promise.race([maintenance, admission]);
       } catch (error) {
-        const code = error instanceof Error && 'code' in error ? error.code : undefined;
-        catalog = { status: 'unavailable', reason: requestInput.signal?.aborted ? 'cancelled'
-          : !current() || code === 'scope-retired' ? 'scope-retired'
-          : code === 'unauthorized' || code === 'forbidden' || code === 'unsupported' || code === 'account-mode-mismatch' ? code
-          : code === 'account_storage_currentness_unavailable' || code === 'account_encryption_currentness_unavailable' ? 'encryption-material-unavailable'
-          : error instanceof Error && error.name === 'ZodError' ? 'invalid-stored-content' : 'unreachable' };
+        catalog = projectMcpServerCatalogRefreshFailure({ error, current: current(), signal: requestInput.signal });
       }
       if (!current()) return { status: 'unavailable', reason: 'scope-retired' };
       if (refreshAfterInFlight.delete(key)) { requestInput = { credentials: input.credentials }; continue; }

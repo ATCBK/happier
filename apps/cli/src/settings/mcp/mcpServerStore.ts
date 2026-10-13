@@ -6,6 +6,7 @@ import { AccountSettingsV2GetResponseSchema, AccountSettingsV2UpdateResponseSche
 import { commitMcpServerCatalogMutationV1, loadMcpServerCatalogV1, readRetainedMcpServerCatalogSourceV1, type McpServerCatalogMutationV1,
   type McpServerCatalogSnapshotV1 } from '@happier-dev/protocol/mcp/servers/serverCatalogV1';
 import { parseSavedSecretRefV1 } from '@happier-dev/protocol/account/settings/savedSecretReferenceV1';
+import { readPluginMcpServerMetadata } from '@/mcp/runtime/pluginMcpServerItems';
 import { MCP_SERVER_CATALOG_ROWS_ROUTE_V1, McpServerCatalogRowReadResponseV1Schema,
   McpServerCatalogRowMutationV1Schema, McpServerCatalogRowMutationResponseV1Schema, sealMcpServerCatalogContentV1,
   listMcpServerCatalogSavedSecretRefsV1, type McpServerCatalogV1 } from '@happier-dev/protocol/mcp/servers/serverRowsV1';
@@ -59,6 +60,8 @@ export function createCliMcpServerStoreForOperation(input: Readonly<{
     base: context.serverHttpBaseUrl,
     signal: input.signal, hasPendingCleanup: input.hasPendingCleanup, operationContext: context, assertCurrent, readSnapshot: context.readSnapshot,
     verifyCurrent: async () => { if (!await context.isCurrent()) throw Object.assign(new Error('Captured MCP Account retired'), { code: 'scope-retired' }); },
+    publishCatalog: async catalog => { if (!await context.commitMcpCatalog(catalog)) throw Object.assign(new Error('Captured MCP Account retired'), { code: 'scope-retired' }); },
+    prepareMutationPublication: async () => async () => { await createCliMcpServerStoreForOperation(input).readCatalogForOperation(); },
     publishSource: async snapshot => { await context.replaceAccountSettings(snapshot); } });
 }
 
@@ -67,6 +70,7 @@ function createCapturedStore(input: Readonly<{
   hasPendingCleanup?: () => boolean;
   assertCurrent(): void; verifyCurrent?(): Promise<void>; readSnapshot(): ActiveAccountSettingsSnapshot | null;
   prepareMutationPublication?(): Promise<() => Promise<void>>;
+  publishCatalog?(catalog: McpServerCatalogSnapshotV1): Promise<void>;
   publishSource(snapshot: ActiveAccountSettingsSnapshot): Promise<void>;
 }>) {
   const base = input.base.replace(/\/+$/, '');
@@ -153,6 +157,7 @@ function createCapturedStore(input: Readonly<{
         await verifyCurrent();
         if (admitted.mode !== context.mode) throw Object.assign(new Error('Account mode changed'), { code: 'account-mode-mismatch' });
         admittedCatalog = catalog;
+        await input.publishCatalog?.(catalog);
         onReady?.(catalog);
       },
       transfer: {
@@ -196,6 +201,7 @@ function createCapturedStore(input: Readonly<{
     // Maintenance may attach cleanup metadata, but cannot invalidate the
     // immutable first-ready capture merely by returning a different object.
     if (result.status !== 'ready' || admittedCatalog === undefined) admittedCatalog = result;
+    await input.publishCatalog?.(result);
     return result;
   };
   /** Return the admitted row while the same captured loader retains optional maintenance to terminal. */
@@ -221,8 +227,13 @@ function createCapturedStore(input: Readonly<{
         code: 'mcp_catalog_unavailable', reason: snapshot.status === 'unavailable' ? snapshot.reason : snapshot.status });
       if (expectedRevision !== undefined && snapshot.revision !== expectedRevision) return { status: 'conflict' as const,
         revision: snapshot.revision };
+      const pluginItemIds = change.kind === 'plugin-defaults'
+        || change.kind === 'rules-change' && change.serverIds.some(id => id.startsWith('plugin:'))
+        || change.kind === 'tools-change' && change.serverId.startsWith('plugin:')
+        ? (await readPluginMcpServerMetadata()).map(item => item.id) : [];
+      await verifyCurrent();
       return commitMcpServerCatalogMutationV1({ catalog: snapshot.catalog, revision: snapshot.revision, change, scope,
-        ctx: { nowMs: Date.now(), newId: randomUUID },
+        ctx: { nowMs: Date.now(), newId: randomUUID, pluginItemIds },
         writeCatalog: async value => {
           const publishMutation = await input.prepareMutationPublication?.();
           const result = await writeCatalog(value);

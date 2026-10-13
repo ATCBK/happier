@@ -51,6 +51,16 @@ export type ActiveAccountSettingsSnapshotListener = (
   next: ActiveAccountSettingsSnapshot | null,
 ) => void;
 
+/** Host-private captured reader; current invocation producers expose their owning holder. */
+export type AccountSettingsSnapshotResolver = ((input?: Readonly<{
+  secretReferenceOverlay?: import('@happier-dev/protocol').SecretReferenceOverlayV1;
+  mcpServerCatalog?: boolean;
+  savedSecretReferences?: readonly import('@/settings/secrets/hydrateSavedSecretCatalog').SavedSecretOperationReferenceV1[];
+  signal?: AbortSignal;
+}>) => Promise<ActiveAccountSettingsSnapshot | null>) & Readonly<{
+  readOperationContext?: () => import('@/settings/secrets/hydrateSavedSecretCatalog').SavedSecretOperationContextV1 | null;
+}>;
+
 export type ActiveAccountSettingsSnapshotCommit = Readonly<{
   snapshot: ActiveAccountSettingsSnapshot;
   didCommit: boolean;
@@ -200,6 +210,7 @@ export function commitActiveAcpCatalog(input: Readonly<{
     && input.catalog.revision < published.acpCatalog.revision) return false;
   const unchanged = published?.scopeKey === input.scopeKey && isDeepStrictEqual(published.acpCatalog, input.catalog);
   const catalog = unchanged ? published!.acpCatalog! : input.catalog;
+  if (unchanged && previous.acpCatalog === catalog && published?.settings === previous.settings) return true;
   const next = { ...previous, acpCatalog: catalog };
   active = next;
   if (unchanged && published?.settings === next.settings) published = next;
@@ -267,32 +278,53 @@ export type ActiveAccountPromptStackSources =
   | Readonly<{ status: 'unavailable'; reason: string }>;
 
 /** Current process-local source port for the canonical four-layer resolver. */
-export function readActiveAccountPromptStackSources(input: Readonly<{
-  scopeKey: string;
-  lifetimeToken: number;
+type AccountPromptStackSourceSelection = Readonly<{
   surface: 'coding' | 'voice';
   profileId?: string | null;
+  /** Retained Session exclusions need row identity even when that Profile is now disabled. */
+  profilePurpose?: 'active_context' | 'retained_exclusions';
   /** The canonical opened selection read, captured within this same Account lifetime. */
   profilesSnapshot?: AccountSettingsProfilesSnapshot;
+}>;
+
+export function readActiveAccountPromptStackSources(input: AccountPromptStackSourceSelection & Readonly<{
+  scopeKey: string;
+  lifetimeToken: number;
 }>): ActiveAccountPromptStackSources {
   if (!active || !isActiveAccountSettingsSnapshotLifetimeCurrent(input)) {
     return { status: 'unavailable', reason: 'scope-retired' };
   }
-  if (!active.promptLibraryCatalog) return { status: 'unavailable', reason: 'catalog-unobserved' };
-  const read = readPromptLibraryCatalogRecordV1({ catalog: active.promptLibraryCatalog, key: input.surface,
-    rawSettings: active.source === 'none' ? undefined : active.rawSettings });
+  return readAccountPromptStackSources(active, input);
+}
+
+/** The same row custody reader serves active and privately captured Accounts. */
+export function readAccountPromptStackSources(snapshot: ActiveAccountSettingsSnapshot,
+  input: AccountPromptStackSourceSelection): ActiveAccountPromptStackSources {
+  if (!snapshot.promptLibraryCatalog) return { status: 'unavailable', reason: 'catalog-unobserved' };
+  const read = readPromptLibraryCatalogRecordV1({ catalog: snapshot.promptLibraryCatalog, key: input.surface,
+    rawSettings: snapshot.source === 'none' ? undefined : snapshot.rawSettings });
   if (read.status !== 'ready') return read;
   if (read.record.key !== 'coding' && read.record.key !== 'voice') return { status: 'unavailable', reason: 'invalid-stored-content' };
   const accountEntries = read.record.value.entries;
+  const profile = readAccountProfilePromptStackSources(snapshot, input);
+  return profile.status === 'ready' ? { ...profile, accountEntries } : profile;
+}
+
+/** Selected Profile custody does not depend on an optional Account surface row. */
+export function readAccountProfilePromptStackSources(snapshot: ActiveAccountSettingsSnapshot,
+  input: Pick<AccountPromptStackSourceSelection, 'profileId' | 'profilePurpose' | 'profilesSnapshot'>):
+  Readonly<{ status: 'ready'; profileEntries: readonly PromptStackEntryV1[] }> | Readonly<{ status: 'unavailable'; reason: string }> {
   let profileEntries: readonly PromptStackEntryV1[] = [];
   let useRetainedProfileStack = Boolean(input.profileId);
-  if (input.profileId && active.profileCatalog) {
-    const catalog = active.profileCatalog;
+  if (input.profileId && snapshot.profileCatalog) {
+    const catalog = snapshot.profileCatalog;
     if (catalog.status !== 'ready') return { status: 'unavailable', reason: catalog.status === 'unavailable' ? catalog.reason : 'profile-catalog-incomplete' };
     if (catalog.authority === 'active' || catalog.source === 'destination') {
       const selected = catalog.records.find(({ record }) => record.id === input.profileId);
       if (selected) {
-        if (!selected.record.enabled) return { status: 'unavailable', reason: 'profile-target-unavailable' };
+        if (!selected.record.enabled && input.profilePurpose !== 'retained_exclusions') {
+          return { status: 'unavailable', reason: 'profile-target-unavailable' };
+        }
         profileEntries = selected.record.promptStack;
       } else {
         const visible = input.profilesSnapshot?.visibleProfiles.filter(profile => profile.id === input.profileId);
@@ -310,12 +342,12 @@ export function readActiveAccountPromptStackSources(input: Readonly<{
     }
   }
   if (useRetainedProfileStack && input.profileId) {
-    if (active.source === 'none' || !active.rawSettings) return { status: 'unavailable', reason: 'source-unavailable' };
-    const retained = readRetainedPromptLibraryInventoryV1(active.rawSettings);
+    if (snapshot.source === 'none' || !snapshot.rawSettings) return { status: 'unavailable', reason: 'source-unavailable' };
+    const retained = readRetainedPromptLibraryInventoryV1(snapshot.rawSettings);
     if (retained.diagnostics.some(({ key }) => key === 'coding' || key === 'voice')) return { status: 'unavailable', reason: 'invalid-stored-content' };
     profileEntries = retained.profileStacksById[input.profileId] ?? [];
   }
-  return { status: 'ready', accountEntries, profileEntries };
+  return { status: 'ready', profileEntries };
 }
 
 type AccountCatalogFacet = typeof accountCatalogFields[number];
@@ -329,6 +361,8 @@ function commitActiveAccountCatalog<Key extends AccountCatalogFacet>(input: Acco
   if (!previous || !isActiveAccountSettingsSnapshotLifetimeCurrent(input)) return false;
   const incumbent = published?.scopeKey === input.scopeKey ? published[input.facet] : undefined;
   const unchanged = incumbent !== undefined && JSON.stringify(incumbent) === JSON.stringify(input.catalog);
+  // Finishing a readable catalog phase must not withdraw consumers of that same snapshot.
+  if (unchanged && previous[input.facet] === incumbent && published?.settings === previous.settings) return true;
   const next: ActiveAccountSettingsSnapshot = { ...previous, [input.facet]: unchanged ? incumbent : input.catalog };
   active = next;
   if (unchanged && published?.settings === next.settings) published = next;

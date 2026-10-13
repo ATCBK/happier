@@ -2,7 +2,8 @@ import axios from 'axios';
 import { loadPromptLibraryCatalogV1, readPromptLibraryCatalogRecordV1, type PromptLibraryCatalogSnapshotV1 } from '@happier-dev/protocol/prompts/library/promptLibraryCatalogV1';
 import { applyRoleOverrideMutationV1, type RoleOverrideMutationV1 } from '@happier-dev/protocol/prompts/roles/roleOverrideRecordV1';
 import { PROMPT_LIBRARY_ROWS_ROUTE_V1, PromptLibraryRowsListResponseV1Schema, PromptLibraryRowMutationV1Schema,
-  PromptLibraryRowMutationResponseV1Schema, sealPromptLibraryContentV1, type PromptLibraryRecordV1 } from '@happier-dev/protocol/prompts/library/promptLibraryRowsV1';
+  PromptLibraryRowMutationResponseV1Schema, PromptLibraryRowReadResponseV1Schema, sealPromptLibraryContentV1,
+  type PromptLibraryCatalogKeyV1, type PromptLibraryRecordV1 } from '@happier-dev/protocol/prompts/library/promptLibraryRowsV1';
 import { resolveCliAccountStorageContext } from '@/api/client/accountKvJsonTransport';
 import { resolveServerHttpBaseUrl, runWithServerHttpBaseUrl } from '@/api/client/serverHttpBaseUrl';
 import { buildCurrentAccountStoredContentCompatibilityHttpHeaders } from '@/api/clientCompatibility/cliClientCompatibility';
@@ -21,6 +22,10 @@ import { fetchAccountEncryptionCurrentness } from '@/api/client/connectedService
 import { sealAccountScopedBlobCiphertext } from '@happier-dev/protocol/crypto/accountScopedCipher';
 import { randomBytes } from 'node:crypto';
 import type { SavedSecretOperationContextV1 } from '@/settings/secrets/hydrateSavedSecretCatalog';
+import { resolveCliHomeTarget } from '@/server/homeTarget';
+import { captureSavedSecretReferencesForOperation } from '@/settings/secrets/hydrateSavedSecretCatalog';
+import { listSavedSecretReferenceCatalogRefsV1 } from '@happier-dev/protocol/account/settings/savedSecretMutationOwner';
+import { parseSavedSecretRefV1 } from '@happier-dev/protocol/account/settings/savedSecretReferenceV1';
 
 /** Captures the incumbent Home/Account/key lifetime, without a parallel Settings publication. */
 export function createCliPromptLibraryStore(input: Readonly<{
@@ -82,10 +87,26 @@ export function createCliPromptLibraryStore(input: Readonly<{
     await assertCredentialCurrent();
     return context;
   };
+  const readRows = async () => PromptLibraryRowsListResponseV1Schema.parse(await request(PROMPT_LIBRARY_ROWS_ROUTE_V1));
   const readPromptLibraryCatalog = async (onReady?: (catalog: PromptLibraryCatalogSnapshotV1) => void | Promise<void>) => {
     const context = await readStorageContext();
     const catalog = await loadPromptLibraryCatalogV1({ ...context, signal: input.signal,
-      readRows: async () => PromptLibraryRowsListResponseV1Schema.parse(await request(PROMPT_LIBRARY_ROWS_ROUTE_V1)),
+      readRows,
+      skillMigration: {
+        writeRecord,
+        readArtifact: ref => runWithServerHttpBaseUrl(base, async () => {
+          if (ref.serverId !== undefined && ref.serverId !== base
+            && ref.serverId !== input.credentials.requesterSessionCredentialScope?.serverId) {
+            const target = await resolveCliHomeTarget({ kind: 'saved_profile', profileRef: ref.serverId });
+            // The current captured Account can only migrate its own Home's skills.
+            if (target.applicationUrl.replace(/\/+$/, '') !== base) return null;
+          }
+          await assertCredentialCurrent();
+          const result = await createCredentialedAccountArtifactStore(input.credentials).read(ref.artifactId, { signal: input.signal });
+          await assertCredentialCurrent();
+          return result;
+        }),
+      },
       ...(onReady ? { onReadyBeforeCleanup: async (catalog: PromptLibraryCatalogSnapshotV1) => {
         const admitted = await readStorageContext();
         assertCurrent();
@@ -164,8 +185,13 @@ export function createCliPromptLibraryStore(input: Readonly<{
   const writeRecord = async (value: Readonly<{ record: PromptLibraryRecordV1; expectedRevision: number | 'absent'; sourceSettingsVersion?: number }>) => {
       const context = await readStorageContext();
       if (value.expectedRevision === 'absent' && value.sourceSettingsVersion === undefined) throw new Error('source-currentness-unavailable');
+      const references=value.record.key==='registry-sources'?listSavedSecretReferenceCatalogRefsV1({profileRecords:[],registrySources:value.record.value}).map(ref=>ref.secretId):[];
+      const proofs=references.length?await runWithServerHttpBaseUrl(base,()=>captureSavedSecretReferencesForOperation({expectedScopeKey:scopeKey,
+        references:references.filter(ref=>parseSavedSecretRefV1(ref).kind==='shared_resource'),operationContext:operation,signal:input.signal})):null;
+      await assertCredentialCurrent();
       const mutation = PromptLibraryRowMutationV1Schema.parse({ expectedRevision: value.expectedRevision,
         content: sealPromptLibraryContentV1({ ...context, record: value.record }),
+        ...(proofs?{referencedSavedSecretIds:references,savedSecretRevisions:proofs.savedSecretRevisions}:{}),
         ...(value.sourceSettingsVersion === undefined ? {} : { sourceSettingsVersion: value.sourceSettingsVersion }) });
       const response = PromptLibraryRowMutationResponseV1Schema.safeParse(await request(
         `${PROMPT_LIBRARY_ROWS_ROUTE_V1}/${encodeURIComponent(value.record.key)}`, mutation));
@@ -173,7 +199,10 @@ export function createCliPromptLibraryStore(input: Readonly<{
       return response.data;
   };
   return {
-    assertCurrent, readStorageContext, readPromptLibraryCatalog, readSourceSnapshot, writeRecord,
+    assertCurrent, readStorageContext, readPromptLibraryCatalog, readSourceSnapshot, writeRecord, readRows,
+    /** Raw census reads never activate destinations or run retained-source maintenance. */
+    readRow: async (key: PromptLibraryCatalogKeyV1) => PromptLibraryRowReadResponseV1Schema.parse(
+      await request(`${PROMPT_LIBRARY_ROWS_ROUTE_V1}/${encodeURIComponent(key)}`)),
     mutateRoleOverride: async (mutation: RoleOverrideMutationV1): Promise<void> => {
       // Resolve the publication owner before issuing effects, so withdrawal after the receipt is synchronous.
       const { refreshActivePromptLibraryCatalogAfterChange } = await import('./hydratePromptLibraryCatalog');

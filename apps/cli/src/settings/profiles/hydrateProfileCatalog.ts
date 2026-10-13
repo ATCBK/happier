@@ -53,13 +53,13 @@ function refreshCapturedProfileCatalog(input: Parameters<typeof refreshActivePro
       : commitActiveProfileCatalog({ scopeKey, lifetimeToken, catalog });
   };
   let work!: Promise<ProfileCatalogSnapshotV1>;
-  work = (async () => {
+  work = (async (): Promise<ProfileCatalogSnapshotV1> => {
     while (true) {
       if (!context) reloadAfterPending.delete(key);
       let catalog: ProfileCatalogSnapshotV1;
       try {
         if (context && !await context.isCurrent()) return { status: 'unavailable', reason: 'scope-retired' };
-        catalog = await store.readProfileCatalog();
+        catalog = await store.readProfileCatalog({ migrateSkills: true });
         if (catalog.status === 'ready' && catalog.source === 'legacy') {
           const source = await store.readSourceSnapshot();
           const { createCredentialedAccountArtifactStore } = await import('@/api/artifacts/accountArtifactStore');
@@ -97,7 +97,7 @@ function refreshCapturedProfileCatalog(input: Parameters<typeof refreshActivePro
                 return { status: 'ready' as const, resourcesByRef };
               },
             });
-            if (result.status === 'active' || result.status === 'not-required') catalog = await store.readProfileCatalog();
+            if (result.status === 'active' || result.status === 'not-required') catalog = await store.readProfileCatalog({ migrateSkills: true });
           } finally {
             await lease?.release();
           }

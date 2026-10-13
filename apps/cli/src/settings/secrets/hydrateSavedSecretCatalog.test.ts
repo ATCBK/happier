@@ -323,7 +323,7 @@ describe('Saved Secret catalog hydration', () => {
     expect(getActiveAccountSettingsSnapshot()).toBe(ambient);
   });
 
-  it('hydrates under the Teams master feature even when credential resources are disabled', async () => {
+  it.each([true, false, null])('hydrates Home-authorized material with Teams enabled=%s', async (teamsEnabled) => {
     const token = 'account-token';
     const resourceId = 'resource-1';
     const ref = formatSavedSecretCatalogReferenceV1({ kind: 'shared_resource', id: resourceId });
@@ -374,7 +374,7 @@ describe('Saved Secret catalog hydration', () => {
       },
     });
 
-    await hydrateSavedSecretCatalog({ token, serverFeatures: serverFeatures(true, false) });
+    await hydrateSavedSecretCatalog({ token, serverFeatures: teamsEnabled === null ? null : serverFeatures(teamsEnabled, false) });
 
     const snapshot = getActiveAccountSettingsSnapshot();
     if (!snapshot) throw new Error('expected active Account snapshot');
@@ -696,7 +696,7 @@ describe('Saved Secret catalog hydration', () => {
     expect([...resourceDataKey]).toEqual(new Array(32).fill(0));
   });
 
-  it('clears shared material without affecting personal Saved Secrets when Teams is disabled', async () => {
+  it('withdraws revoked material at the Home refresh without affecting legacy personal secrets when Teams is disabled', async () => {
     const token = 'account-token';
     const settingsKey = new Uint8Array(32).fill(17);
     const resourceDataKey = new Uint8Array(32).fill(23);
@@ -737,16 +737,16 @@ describe('Saved Secret catalog hydration', () => {
       }],
     });
 
+    vi.mocked(axios.get).mockResolvedValue({ status: 200, data: { resources: [] } });
     const hydrated = await hydrateSavedSecretCatalog({
       token,
       serverFeatures: serverFeatures(false, true),
     });
 
-    expect(hydrated).toEqual({ resources: [], state: 'disabled' });
-    expect(axios.get).not.toHaveBeenCalled();
+    expect(hydrated).toEqual({ resources: [], state: 'ready' });
     const snapshot = getActiveAccountSettingsSnapshot();
     if (!snapshot) throw new Error('expected active Account snapshot');
-    expect(snapshot.savedSecretCatalogState).toBe('disabled');
+    expect(snapshot.savedSecretCatalogState).toBe('ready');
     expect(snapshot.savedSecretResources).toEqual([]);
     expect([...resourceDataKey]).toEqual(new Array(32).fill(0));
     expect(createSavedSecretMaterializerFromSnapshotV1(snapshot).resolve('personal-secret')).toMatchObject({

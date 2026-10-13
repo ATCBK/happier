@@ -10,8 +10,12 @@ import { createDeferred } from '@/testkit/async/deferred';
 import { prepareActiveAccountRoleOverrides, refreshActivePromptLibraryCatalog } from './hydratePromptLibraryCatalog';
 import { getActiveAccountSettingsSnapshotLifetimeToken } from '@/settings/accountSettings/activeAccountSettingsSnapshot';
 import { createCliPromptLibraryStore } from './promptLibraryStore';
+import { createInvocationSavedSecretOperationContextV1 } from '@/settings/secrets/hydrateSavedSecretCatalog';
+import { runWithServerHttpBaseUrl } from '@/api/client/serverHttpBaseUrl';
+import { FeaturesResponseSchema } from '@happier-dev/protocol';
+import { sealSavedSecretResourceStoredContentV1 } from '@happier-dev/protocol/account/settings/savedSecretResourceContentV1';
 
-afterEach(() => { vi.restoreAllMocks(); resetActiveAccountSettingsSnapshotForTests(); });
+afterEach(() => { vi.restoreAllMocks(); vi.unstubAllGlobals(); resetActiveAccountSettingsSnapshotForTests(); });
 
 function seedAccount(token: string) {
   const credentials = { token: token.split('.').length === 3 ? token
@@ -35,6 +39,33 @@ function readPublishedRole() {
 }
 
 describe('CLI prompt catalog acknowledged mutation publication', () => {
+  it('sends current private-resource proofs only for a token-bearing registry row',async()=>{
+    const base='https://registry-proof-home.example.invalid';
+    const credentials=runWithServerHttpBaseUrl(base,()=>seedAccount('proof-owner'));
+    const snapshot=getActiveAccountSettingsSnapshot();if(!snapshot)throw new Error('Missing Account fixture');
+    const operationContext=createInvocationSavedSecretOperationContextV1({credentials,snapshot,serverHttpBaseUrl:base,isCurrent:async()=>true});
+    const ref='happier:shared-secret:v1:proof-secret';const sent:unknown[]=[];
+    vi.spyOn(axios,'get').mockImplementation(async url=>{
+      const path=new URL(String(url)).pathname;
+      if(path==='/v1/account/encryption/currentness')return {status:200,data:{mode:'plain',version:1,settingsVersion:7,signingKeyFingerprint:null,contentKeyFingerprint:null,updatedAt:1}};
+      expect(String(url)).toBe(base+'/v1/account/saved-secrets/resources/materials');
+      return {status:200,data:{resources:[{resourceId:'proof-secret',encryptionMode:'plain',recipientEnvelope:null,
+        entry:{ref,source:'shared_resource',relationship:'owner',name:'Proof',kind:'token',revision:7,materialStatus:'ready',capabilities:{use:true,rename:true,rotate:true,manageAccess:true,delete:true}},
+        storedContent:sealSavedSecretResourceStoredContentV1({resourceId:'proof-secret',mode:'plain',content:{v:1,name:'Proof',kind:'token',value:'private-proof-value'}})}]}};
+    });
+    vi.spyOn(axios,'post').mockImplementation(async(url,body)=>{
+      expect(String(url)).toBe(base+'/v1/account/entity-rows/prompt-library/registry-sources');
+      sent.push(PromptLibraryRowMutationV1Schema.parse(body));return {status:200,data:{status:'updated',revision:2,cursor:2}};
+    });
+    vi.stubGlobal('fetch',async(url:unknown)=>{expect(String(url)).toBe(base+'/v1/features/authenticated');
+      return Response.json(FeaturesResponseSchema.parse({features:{teams:{enabled:true}},capabilities:{}}));});
+    const store=createCliPromptLibraryStore({credentials,operationContext});
+    await store.writeRecord({expectedRevision:1,record:{key:'registry-sources',value:{v:2,disabledSourceIds:[],sources:[{id:'proof-source',title:'Proof',format:'git',kinds:['skill'],url:'https://github.com/a/b',enabled:true,addedAt:0,token:{secretRef:ref}}]}}});
+    expect(sent[0]).toMatchObject({referencedSavedSecretIds:[ref],savedSecretRevisions:[{resourceId:'proof-secret',expectedRevision:7}]});
+    expect(JSON.stringify(sent)).not.toContain('private-proof-value');
+    await store.writeRecord({expectedRevision:2,record:{key:'registry-sources',value:{v:2,disabledSourceIds:[],sources:[]}}});
+    expect(sent[1]).not.toHaveProperty('referencedSavedSecretIds');expect(sent[1]).not.toHaveProperty('savedSecretRevisions');
+  });
   it('requires a new Role row observation after invalidation during source maintenance', async () => {
     const credentials = seedAccount('prompt-refresh-during-maintenance');
     const incumbent = getActiveAccountSettingsSnapshot()!;

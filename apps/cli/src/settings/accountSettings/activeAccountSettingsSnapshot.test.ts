@@ -8,6 +8,7 @@ import { DEFAULT_PROVIDER_SETTINGS_V1 } from '@happier-dev/protocol/providers/se
 import { readProviderSettingsForCli } from '@/providers/settings/read';
 import { DEFAULT_PROVIDER_CONNECTIONS_CATALOG_V1 } from '@happier-dev/protocol/providers/connections/connectionRowsV1';
 import { McpServerCatalogV1Schema } from '@happier-dev/protocol/mcp/servers/serverRowsV1';
+import type { PromptLibraryCatalogSnapshotV1 } from '@happier-dev/protocol/prompts/library/promptLibraryCatalogV1';
 
 import {
     clearActiveAccountSettingsSnapshot,
@@ -82,14 +83,28 @@ describe('active account settings snapshot publication', () => {
     const first = { status: 'ready' as const, record: { v: 1 as const, definitions: [] }, revision: 1 };
     try {
       expect(activeAccountSettingsSnapshot.commitActiveAcpCatalog({ ...bound, catalog: first })).toBe(true);
+      const ready = getActiveAccountSettingsSnapshot();
       expect(activeAccountSettingsSnapshot.commitActiveAcpCatalog({ ...bound, catalog: { ...first } })).toBe(true);
+      expect(getActiveAccountSettingsSnapshot()).toBe(ready);
       expect(observed).toHaveLength(1);
       expect(getActiveAccountSettingsSnapshot()?.settings).toBe(preferences);
       expect(getActiveAccountSettingsSnapshot()?.settingsVersion).toBe(7);
       activeAccountSettingsSnapshot.beginActiveAcpCatalogRefresh(bound);
+      const loading = getActiveAccountSettingsSnapshot();
+      expect(loading).not.toBe(ready);
       expect(activeAccountSettingsSnapshot.readActiveAcpCatalog()).toEqual({ status: 'loading' });
-      expect(activeAccountSettingsSnapshot.commitActiveAcpCatalog({ ...bound, catalog: { ...first, revision: 2 } })).toBe(true);
+      const newer = { ...first, revision: 2 };
+      expect(activeAccountSettingsSnapshot.commitActiveAcpCatalog({ ...bound, catalog: newer })).toBe(true);
+      const current = getActiveAccountSettingsSnapshot();
+      expect(current).not.toBe(loading);
+      expect(current?.acpCatalog).toBe(newer);
       expect(observed).toHaveLength(2);
+      expect(activeAccountSettingsSnapshot.commitActiveAcpCatalog({ ...bound, catalog: { ...newer } })).toBe(true);
+      expect(getActiveAccountSettingsSnapshot()).toBe(current);
+      expect(activeAccountSettingsSnapshot.commitActiveAcpCatalog({ ...bound, catalog: first })).toBe(false);
+      expect(activeAccountSettingsSnapshot.commitActiveAcpCatalog({ ...bound,
+        catalog: { ...first, revision: 'absent', sourceSettingsVersion: 8 } })).toBe(false);
+      expect(getActiveAccountSettingsSnapshot()).toBe(current);
       clearActiveAccountSettingsSnapshot();
       setActiveAccountSettingsSnapshot(snapshot({ scopeKey: 'scope-acp', version: 7, timing: 'after_runtime_idle' }));
       expect(activeAccountSettingsSnapshot.commitActiveAcpCatalog({ ...bound, catalog: first })).toBe(false);
@@ -232,6 +247,7 @@ describe('active account settings snapshot publication', () => {
     expect(listener).toHaveBeenCalledTimes(1);
     expect(activeAccountSettingsSnapshot.commitActiveProviderConnectionsCatalog({ scopeKey: 'scope-a', lifetimeToken,
       catalog: { ...ready } })).toBe(true);
+    expect(getActiveAccountSettingsSnapshot()).toBe(current);
     expect(getActiveAccountSettingsSnapshot()!.providerConnectionsCatalog).toBe(ready);
     expect(listener).toHaveBeenCalledTimes(1);
     clearActiveAccountSettingsSnapshot();
@@ -239,6 +255,46 @@ describe('active account settings snapshot publication', () => {
     expect(activeAccountSettingsSnapshot.commitActiveProviderConnectionsCatalog({ scopeKey: 'scope-a', lifetimeToken, catalog: ready })).toBe(false);
     expect(getActiveAccountSettingsSnapshot()!.providerConnectionsCatalog).toBeUndefined();
     unsubscribe();
+  });
+
+  it('retains an unchanged ready prompt snapshot while publishing loading, changed catalog and Settings transitions', () => {
+    setActiveAccountSettingsSnapshot(snapshot({ scopeKey: 'scope-prompt', version: 1, timing: 'after_runtime_idle' }));
+    const bound = { scopeKey: 'scope-prompt', lifetimeToken: getActiveAccountSettingsSnapshotLifetimeToken() };
+    const catalog: Extract<PromptLibraryCatalogSnapshotV1,
+      { status: 'ready' }> = { status: 'ready', rows: [], tombstones: [], diagnostics: [] };
+    activeAccountSettingsSnapshot.commitActivePromptLibraryCatalog({ ...bound, catalog });
+    const ready = getActiveAccountSettingsSnapshot();
+    activeAccountSettingsSnapshot.commitActivePromptLibraryCatalog({ ...bound, catalog: { ...catalog } });
+    expect(getActiveAccountSettingsSnapshot()).toBe(ready);
+
+    activeAccountSettingsSnapshot.beginActivePromptLibraryCatalogRefresh(bound);
+    const loading = getActiveAccountSettingsSnapshot();
+    expect(loading).not.toBe(ready);
+    expect(loading?.promptLibraryCatalog).toEqual({ status: 'loading' });
+    activeAccountSettingsSnapshot.commitActivePromptLibraryCatalog({ ...bound, catalog: { ...catalog } });
+    const readmitted = getActiveAccountSettingsSnapshot();
+    expect(readmitted).not.toBe(loading);
+    expect(readmitted?.promptLibraryCatalog).toBe(catalog);
+
+    activeAccountSettingsSnapshot.commitActivePromptLibraryCatalog({ ...bound,
+      catalog: { ...catalog, tombstones: [{ key: 'coding', revision: 2 }] } });
+    const changed = getActiveAccountSettingsSnapshot();
+    expect(changed).not.toBe(readmitted);
+    expect(changed?.promptLibraryCatalog).toMatchObject({ tombstones: [{ key: 'coding', revision: 2 }] });
+
+    setActiveAccountSettingsSnapshot(snapshot({ scopeKey: 'scope-prompt', version: 2, timing: 'after_foreground_ready' }));
+    const settingsChanged = getActiveAccountSettingsSnapshot();
+    expect(settingsChanged).not.toBe(changed);
+    const retained = settingsChanged?.promptLibraryCatalog;
+    if (!retained) throw new Error('Prompt catalog was not retained');
+    activeAccountSettingsSnapshot.commitActivePromptLibraryCatalog({ ...bound, catalog: retained });
+    expect(getActiveAccountSettingsSnapshot()).toBe(settingsChanged);
+    clearActiveAccountSettingsSnapshot();
+    setActiveAccountSettingsSnapshot(snapshot({ scopeKey: 'scope-prompt', version: 2, timing: 'after_foreground_ready' }));
+    const replacement = getActiveAccountSettingsSnapshot();
+    expect(activeAccountSettingsSnapshot.commitActivePromptLibraryCatalog({ ...bound, catalog })).toBe(false);
+    expect(getActiveAccountSettingsSnapshot()).toBe(replacement);
+    expect(replacement?.promptLibraryCatalog).toBeUndefined();
   });
 
   it('does not grant synchronous Role authority before the destination row census', () => {
