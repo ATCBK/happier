@@ -31,10 +31,9 @@ import { AgentsIndex } from '../pages/AgentsIndex';
  *      The released build offers four different ones.
  *
  * Note the ONE reading of the unreleased registry below. It is deliberate and
- * it is the only legitimate use of it on this site: advertised UPCOMING agents
- * must exist in the unreleased set and not in the shipped set. The site need not
- * advertise every development contribution. Discovery never decides what the
- * site may claim is shipped.
+ * it is the only legitimate use of it on this site: the unreleased set MINUS
+ * the shipped set is exactly the definition of UPCOMING. It is never used to
+ * decide what the site may claim.
  *
  * It is read off disk rather than imported, for the same reason the released
  * tree is — see unreleasedTree.ts. A static import assumed this site sits in
@@ -44,7 +43,7 @@ import { AgentsIndex } from '../pages/AgentsIndex';
 const unreleasedAgentIds = readUnreleasedAgentIds();
 const unreleasedOnly = (unreleasedAgentIds ?? []).filter((id) => !isShippedAgentId(id));
 
-describe('upcoming claims are backed by the unreleased registry', () => {
+describe('the upcoming set is computed, not asserted', () => {
     /**
      * The guard's own guard, matching agents.test.ts: a cross-tree check that
      * cannot find the other tree is a check that did not happen.
@@ -52,21 +51,20 @@ describe('upcoming claims are backed by the unreleased registry', () => {
     it('can see the unreleased tree', () => {
         expect(
             resolveUnreleasedTreeRoot(),
-            `The unreleased checkout was not found. Upcoming claims must be backed by the ` +
-                `unreleased registry, so without it this file cannot verify those claims. ` +
+            `The unreleased checkout was not found. UPCOMING is defined as the unreleased ` +
+                `registry minus the shipped one, so without it this file cannot tell an ` +
+                `unreleased agent from a shipped one and every assertion below is empty. ` +
                 `Point ${UNRELEASED_TREE_ENV_VAR} at the unreleased checkout.`,
         ).not.toBeNull();
     });
 
-    it('advertises only agents in the unreleased registry and outside the shipped one', () => {
+    it('derives upcoming from the unreleased registry minus the shipped one', () => {
         if (!unreleasedAgentIds) return; // reported by the test above
-        for (const agent of UPCOMING_AGENTS) {
-            expect(
-                unreleasedOnly,
-                `UPCOMING_AGENTS advertises '${agent.id}', which must exist in the unreleased ` +
-                    `registry and not in the shipped one.`,
-            ).toContain(agent.id);
-        }
+        expect(
+            UPCOMING_AGENTS.map((a) => a.id).sort(),
+            'UPCOMING_AGENTS is out of step with the registries. Everything in the unreleased ' +
+                'tree and not in the release belongs here, labelled; nothing else does.',
+        ).toEqual([...unreleasedOnly].sort());
     });
 
     it('never lets an unreleased agent into a shipped-facing collection', () => {
