@@ -62,11 +62,10 @@ test.describe('ui e2e: new-session formSheet responsiveness', () => {
     let ui: StartedUiWeb | null = null;
     let uiBaseUrl: string | null = null;
     let daemon: StartedDaemon | null = null;
-    // Captured by the first (serial) test once the account is ready; later tests reuse the session.
-    let authStorageState: Awaited<ReturnType<BrowserContext['storageState']>> | null = null;
+    let authStorageState: AuthStorageState | null = null;
 
-    test.beforeAll(async () => {
-        test.setTimeout(540_000);
+    test.beforeAll(async ({ browser }) => {
+        test.setTimeout(900_000);
         await mkdir(suiteDir, { recursive: true });
         await mkdir(cliHomeDir, { recursive: true });
 
@@ -87,6 +86,27 @@ test.describe('ui e2e: new-session formSheet responsiveness', () => {
             },
         });
         uiBaseUrl = normalizeLoopbackBaseUrl(ui.baseUrl);
+
+        // Authenticate once so every test can open its own context from the saved session.
+        const authContext = await browser.newContext();
+        try {
+            const page = await authContext.newPage();
+            await gotoDomContentLoadedWithRetries(page, `${uiBaseUrl}/?happier_hmr=0`, 240_000);
+            daemon = await authenticateAndStartDaemon({
+                page,
+                testDir: suiteDir,
+                cliHomeDir,
+                serverUrl: server.baseUrl,
+                uiBaseUrl,
+                terminalConnectUrlTimeoutMs: 180_000,
+                daemonStartupTimeoutMs: 180_000,
+            });
+            await gotoDomContentLoadedWithRetries(page, `${uiBaseUrl}/?happier_hmr=0`, 240_000);
+            await ensureAccountReadyForConnect({ page, timeoutMs: 120_000, clickCreateAccount: false });
+            authStorageState = await authContext.storageState();
+        } finally {
+            await authContext.close();
+        }
     });
 
     test.afterAll(async () => {
@@ -96,39 +116,26 @@ test.describe('ui e2e: new-session formSheet responsiveness', () => {
         await server?.stop().catch(() => {});
     });
 
-    test('opens from the sessions surface and closes through the stable cancel affordance', async ({ page }) => {
+    test('opens from the sessions surface and closes through the stable cancel affordance', async ({ browser }) => {
         test.setTimeout(180_000);
-        if (!server || !uiBaseUrl) throw new Error('missing server/ui fixtures');
+        if (!uiBaseUrl || !authStorageState) throw new Error('missing ui/auth fixtures');
 
-        await gotoDomContentLoadedWithRetries(page, `${uiBaseUrl}/?happier_hmr=0`, 240_000);
-        daemon = await authenticateAndStartDaemon({
-            page,
-            testDir: suiteDir,
-            cliHomeDir,
-            serverUrl: server.baseUrl,
-            uiBaseUrl,
-            terminalConnectUrlTimeoutMs: 180_000,
-            daemonStartupTimeoutMs: 180_000,
-        });
-        await gotoDomContentLoadedWithRetries(page, `${uiBaseUrl}/?happier_hmr=0`, 240_000);
+        const context = await browser.newContext({ storageState: authStorageState });
+        try {
+            const page = await openNewSessionFromSessionsSurface(context, uiBaseUrl);
 
-        await ensureAccountReadyForConnect({ page, timeoutMs: 120_000, clickCreateAccount: false });
-        authStorageState = await page.context().storageState();
-        const startNewSession = await waitForVisibleByTestId(page, startNewSessionTestIds, 120_000);
-        await startNewSession.click();
+            await page.getByTestId('new-session-composer-input').fill('formsheet responsiveness smoke');
+            await expect(page.getByTestId('new-session-composer-input')).toHaveValue('formsheet responsiveness smoke');
+            await expect(page.getByTestId('new-session-composer-send')).toBeVisible({ timeout: 60_000 });
 
-        await page.waitForURL((url) => url.pathname.endsWith('/new'), { timeout: 60_000 });
-        await expect(page.getByTestId('new-session-composer-input')).toBeVisible({ timeout: 60_000 });
+            await expect(page.getByTestId('new-session-cancel')).toBeVisible({ timeout: 60_000 });
+            await page.getByTestId('new-session-cancel').click();
 
-        await page.getByTestId('new-session-composer-input').fill('formsheet responsiveness smoke');
-        await expect(page.getByTestId('new-session-composer-input')).toHaveValue('formsheet responsiveness smoke');
-        await expect(page.getByTestId('new-session-composer-send')).toBeVisible({ timeout: 60_000 });
-
-        await expect(page.getByTestId('new-session-cancel')).toBeVisible({ timeout: 60_000 });
-        await page.getByTestId('new-session-cancel').click();
-
-        await page.waitForURL((url) => !url.pathname.endsWith('/new'), { timeout: 60_000 });
-        await expect(page.getByTestId('new-session-composer-input')).toHaveCount(0);
+            await page.waitForURL((url) => !url.pathname.endsWith('/new'), { timeout: 60_000 });
+            await expect(page.getByTestId('new-session-composer-input')).toHaveCount(0);
+        } finally {
+            await context.close();
+        }
     });
 
     test('settles the composer height in one step when a large prompt is pasted', async ({ browser }) => {
@@ -141,16 +148,8 @@ test.describe('ui e2e: new-session formSheet responsiveness', () => {
             viewport: { width: 1440, height: 900 },
         });
         try {
-            const page = await context.newPage();
-            await gotoDomContentLoadedWithRetries(page, `${uiBaseUrl}/?happier_hmr=0`, 240_000);
-            // The entry button can be replaced while the restored session list hydrates.
-            await expect(async () => {
-                const startNewSession = await waitForVisibleByTestId(page, startNewSessionTestIds, 10_000);
-                await startNewSession.click({ timeout: 5_000 });
-                await page.waitForURL((url) => url.pathname.endsWith('/new'), { timeout: 5_000 });
-            }).toPass({ timeout: 120_000 });
+            const page = await openNewSessionFromSessionsSurface(context, uiBaseUrl);
             const composer = page.getByTestId('new-session-composer-input');
-            await expect(composer).toBeVisible({ timeout: 60_000 });
             await composer.focus();
 
             const largePrompt = Array.from(
@@ -174,6 +173,21 @@ test.describe('ui e2e: new-session formSheet responsiveness', () => {
         }
     });
 });
+
+type AuthStorageState = Awaited<ReturnType<BrowserContext['storageState']>>;
+
+async function openNewSessionFromSessionsSurface(context: BrowserContext, uiBaseUrl: string): Promise<Page> {
+    const page = await context.newPage();
+    await gotoDomContentLoadedWithRetries(page, `${uiBaseUrl}/?happier_hmr=0`, 240_000);
+    // The entry button can be replaced while the restored session list hydrates.
+    await expect(async () => {
+        const startNewSession = await waitForVisibleByTestId(page, startNewSessionTestIds, 10_000);
+        await startNewSession.click({ timeout: 5_000 });
+        await page.waitForURL((url) => url.pathname.endsWith('/new'), { timeout: 5_000 });
+    }).toPass({ timeout: 120_000 });
+    await expect(page.getByTestId('new-session-composer-input')).toBeVisible({ timeout: 60_000 });
+    return page;
+}
 
 type ComposerHeightTrace = Readonly<{
     inputHeights: readonly number[];
