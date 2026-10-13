@@ -1,7 +1,7 @@
-import { mkdtemp, readFile, rename, rm, writeFile } from 'node:fs/promises';
+import { mkdir, mkdtemp, readFile, rename, rm, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { dirname, join } from 'node:path';
-import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it } from 'vitest';
+import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it, vi } from 'vitest';
 import {
     buildConnectedServiceCredentialRecord,
     QualifiedConnectedAccountCredentialSnapshotV4Schema,
@@ -15,7 +15,7 @@ import {
     ConnectedServiceBindingsV2Schema,
     type QualifiedConnectedAccountCredentialMetadataV4,
 } from '@happier-dev/protocol';
-import type { AgentExecutionRunOpenRequest } from '@happier-dev/plugin-sdk/agents/runtime';
+import type { AgentExecutionRunOpenRequest, AgentRuntime, AgentSessionOpenRequest, AgentSessionRuntimeEvent } from '@happier-dev/plugin-sdk/agents/runtime';
 import type { JsonValue } from '@happier-dev/plugin-sdk';
 import type { ExecService, PluginProcessResult } from '@happier-dev/plugin-sdk/exec';
 import type { PluginJsonRpcClient, PluginProtocolClientHandle } from '@happier-dev/plugin-sdk/exec/protocol-clients';
@@ -29,7 +29,12 @@ import { ConnectedServiceRuntimeRegistry } from '../runtimeRegistry/registry';
 import { resolveQualifiedPurposeBindingSnapshotForAgentSpawn } from '../requestAuth/prepareConnectedAccountRequestAuthForSpawn';
 import { createLazyExecutionRunHostRuntime } from '@/agent/runtime/bridges/executionRun/hostRuntime/lazy';
 import { createNativeAgentExecutionRunContextLeaseFactory, createNativeAgentExecutionRunHostRuntime } from '@/agent/runtime/bridges/executionRun/nativeAgentExecutionRun';
-import { resolveBackendEngineAdapterResolution } from '@/agent/runtime/registry/engineRegistry';
+import { resolveBackendEngineAdapterResolution, resolveCliEngineRegistry } from '@/agent/runtime/registry/engineRegistry';
+import type { NativeAgentSessionInteractionHostBinding } from '@/agent/runtime/registry/engineRegistryTypes';
+import { createExecutionRunRuntime } from '@/agent/runtime/bridges/executionRun/runtime/create';
+import { createExecutionRunPermissionHandler } from '@/agent/executionRuns/policy/executionRunPermissionDecision';
+import { reloadConfiguration } from '@/configuration';
+import { writeDaemonState } from '@/persistence';
 import { ExecutionRunRejectedStartError } from '@/agent/runtime/bridges/executionRun/errors';
 import { resolveExecutablePluginRuntimeRegistry } from '@/plugins/runtime/resolveExecutablePluginRuntimeRegistry';
 import { acquireAuthoritativePluginRuntimeRegistryLease } from '@/plugins/runtime/reload/runtimeLease';
@@ -40,7 +45,7 @@ import { createQualifiedConnectedAccountEstablishedRuntimeOwner } from '../quali
 import { createConnectedAccountRequestAuthSubjectRegistry } from '../requestAuth/ConnectedAccountRequestAuthSubjectRegistry';
 import { readConnectedServiceChildSelectionsFromEnv } from '../connectedServiceChildEnvironment';
 import { HAPPIER_CONNECTED_SERVICE_SELECTIONS_ENV_KEY, serializeConnectedServiceChildSelectionValues } from '../connectedServiceChildEnvironment';
-import { getConnectedServiceRuntimeAuthAdapter } from '../catalogHooks';
+import { getConnectedServiceRuntimeAuthAdapter, classifyConnectedServiceRuntimeFailureForTarget } from '../catalogHooks';
 import { resolveConnectedServiceAuthForSpawn } from '../resolveConnectedServiceAuthForSpawn';
 import { resolveConnectedServiceMaterializedRootDir } from '../materialize/resolveConnectedServiceMaterializedRootDir';
 import { createDaemonQualifiedConnectedAccountAuthGroupSwitchCoordinator } from '../runtimeAuth/createDaemonQualifiedConnectedAccountAuthGroupSwitchCoordinator';
@@ -54,6 +59,11 @@ import { createDaemonControlApp } from '@/daemon/controlServer';
 import { requestExecutionRunConnectedServiceRuntimeAuthRefresh } from '@/daemon/controlClient';
 import { deriveConnectedServiceRunMaterializeToken } from './capabilityToken';
 import { SPAWN_SESSION_ERROR_CODES } from '@happier-dev/protocol';
+import * as runtimeRecovery from '../runtimeAuth/handleConnectedServiceRuntimeAuthFailure';
+import { ConnectedServiceRuntimeAuthSwitchAttemptTracker } from '../runtimeAuth/ConnectedServiceRuntimeAuthSwitchAttemptTracker';
+import { ConnectedServiceTemporaryThrottleRetryScheduler } from '../runtimeAuth/temporaryThrottleRetryScheduler';
+import { createRecoveryIntentFileStore } from '../recoveryScheduler/recoveryIntentFileStore';
+import { connectedServiceRecoveryScopeKey } from '../runtimeRegistry/target';
 
 const service = { pluginId: 'happier.agent.codex', localId: 'openai-codex' } as const;
 const serviceId = 'happier.agent.codex/openai-codex';
@@ -117,6 +127,15 @@ async function createScenario() {
     const root = await mkdtemp(join(tmpdir(), 'happier-run-model-proof-'));
     const baseDir = join(root, 'materialized');
     const credentials = { token: 'test-server-token', encryption: null };
+    let nowMs = 1_000;
+    let recoveryResumePromptMode: 'off' | 'standard' | 'custom' = 'standard';
+    let recoveryCustomResumePrompt: string | null = null;
+    let reportArmed: (() => void) | null = null;
+    const switchAttempts = new ConnectedServiceRuntimeAuthSwitchAttemptTracker({ nowMs: () => nowMs, windowMs: 3_600_000 });
+    const recoveryScheduler = new ConnectedServiceTemporaryThrottleRetryScheduler({ nowMs: () => nowMs, random: () => 0.5,
+        store: createRecoveryIntentFileStore(join(root, 'recovery.json')),
+        onStateChange: (_key, intent) => { if (intent?.scope?.kind === 'run' && intent.status === 'waiting') reportArmed?.(); },
+        resume: async () => { throw new Error('Run recovery must not resume a Session'); } });
     let currentGroup = QualifiedConnectedAccountGroupV4Schema.parse({
         v: 1, ref: { service, groupId: 'pool' }, incarnation: 'pool-row', displayName: 'Pool',
         policy: { autoSwitch: true, maxSwitchesPerTurn: 1, maxSwitchesPerSessionHour: 1 },
@@ -222,7 +241,7 @@ async function createScenario() {
     const engine = await resolveBackendEngineAdapterResolution('codex');
     if (!engine) throw new Error('Admitted Codex engine unavailable');
     const coordinator = createDaemonQualifiedConnectedAccountAuthGroupSwitchCoordinator({
-        token: credentials.token, quotaFreshnessMs: 60_000, nowMs: () => 1_000,
+        token: credentials.token, quotaFreshnessMs: 60_000, nowMs: () => nowMs,
         api: {
             readGroup: async () => currentGroup, listAccounts: async () => accounts,
             setActiveAccount: async (input) => {
@@ -265,8 +284,33 @@ async function createScenario() {
         },
     });
     const bridge = createExecutionRunConnectedServicesBridge({
+        recordRuntimeTurnCompleted: async ({ runId }) => {
+            const lifecycle = { sessionId: connectedServiceRecoveryScopeKey({ kind: 'run', runId }),
+                event: 'assistant_message_end' as const, terminalStatus: 'completed' as const };
+            switchAttempts.recordTurnLifecycle(lifecycle);
+            await recoveryScheduler.recordTurnLifecycle({ ...lifecycle, observedAtMs: nowMs });
+        },
+        classifyRuntimeFailure: classifyConnectedServiceRuntimeFailureForTarget,
+        recoverRuntimeFailure: (input) => {
+            const key = { sessionId: connectedServiceRecoveryScopeKey({ kind: 'run', runId: input.runId }),
+                serviceId: input.selection.serviceId, groupId: input.selection.kind === 'group' ? input.selection.groupId : '',
+                profileId: input.classification.profileId, credentialRevision: input.classification.expectedCredentialRevision };
+            return runtimeRecovery.recoverConnectedServiceRuntimeFailure({
+            scope: { kind: 'run', runId: input.runId }, selection: input.selection, classification: input.classification,
+            refreshCredential: input.refreshCredential,
+            switchesThisTurn: switchAttempts.resolveSwitchesThisTurn({ ...key, reportedSwitchesThisTurn: 0 }),
+            sessionSwitchesThisHour: switchAttempts.countRecordedSwitchesInWindow({ ...key, windowMs: 3_600_000 }),
+            isCurrent: input.isCurrent, signal: input.signal, temporaryThrottleScheduler: recoveryScheduler, nowMs: () => nowMs,
+            continuation: { interruptedOriginId: input.interruptedOriginId, resumePromptMode: recoveryResumePromptMode,
+                customResumePrompt: recoveryCustomResumePrompt, recoveryKind: input.classification.kind },
+            switchCoordinator: { switchAfterClassifiedFailure: async (failure) => {
+                const result = await coordinator.switchAfterClassifiedFailure({ ...failure, serviceId: service });
+                switchAttempts.recordSwitchResult({ ...key, resultStatus: result.status });
+                return result;
+            } },
+        }); },
         resolveAuthForSpawn: (input) => resolveConnectedServiceAuthForSpawn({ ...input,
-            activeServerDir: join(root, 'server'), baseDir, credentials, api, nowMs: () => 1_000,
+            activeServerDir: join(root, 'server'), baseDir, credentials, api, nowMs: () => nowMs,
             processEnv: { NODE_ENV: 'test', HOME: root, CODEX_HOME: join(root, 'native-source') },
             qualifiedConnectedAccountApi: { readGroup: async () => currentGroup, listAccounts: async () => accounts },
         }),
@@ -280,7 +324,10 @@ async function createScenario() {
                 groupGeneration: selection.generation, credentialRevision: selection.credentialRevision!, isCurrent },
         }),
         registerRunTargets: (input) => { runtimeTargetRegistry.registerRunTarget({ ...input, pid: input.runnerPid }); },
-        unregisterRunTargets: (runKey) => runtimeTargetRegistry.unregisterRunKey(runKey),
+        unregisterRunTargets: (runKey) => { runtimeTargetRegistry.unregisterRunKey(runKey); },
+        finishRunRecovery: async (runKey) => {
+            switchAttempts.clearSession(connectedServiceRecoveryScopeKey({ kind: 'run', runId: runKey }));
+            await recoveryScheduler.finishRun(runKey); },
         getRunRuntimeTarget: (runKey) => runtimeTargetRegistry.getRunTargetByRunKey(runKey),
         adoptRunCredentialRevision: (input) => runtimeTargetRegistry.adoptExactCredentialRevisionForRun(input),
         resolveRunCredentialRevisionTarget: (input) => runtimeTargetRegistry.resolveExactRunCredentialRevisionTarget(input),
@@ -334,9 +381,18 @@ async function createScenario() {
             return { entered, resume: () => { resume(); providerGate = null; providerEntered = null; } };
         },
         runtimeRegistry: runtimeLease.registry,
+        switchAttempts,
+        recoveryScheduler,
+        nextRecoveryArmed: () => new Promise<void>((resolve) => { reportArmed = resolve; }),
+        setRecoveryClock: (value: number) => { nowMs = value; },
+        setRecoveryContinuation: (mode: 'off' | 'standard' | 'custom', prompt: string | null = null) => { recoveryResumePromptMode = mode; recoveryCustomResumePrompt = prompt; },
+        exhaustPoolUntil: (resetAtMs: number) => { currentGroup = QualifiedConnectedAccountGroupV4Schema.parse({ ...currentGroup,
+            members: currentGroup.members.map((member) => ({ ...member, state: { ...member.state, cooldownUntilMs: resetAtMs } })) }); },
         group: () => currentGroup, revokeRunner: () => { runnerCurrent = false; },
         advanceGroupGeneration() { currentGroup = QualifiedConnectedAccountGroupV4Schema.parse({ ...currentGroup, generation: currentGroup.generation + 1 }); },
         reset() {
+            nowMs = 1_000; reportArmed = null;
+            recoveryResumePromptMode = 'standard'; recoveryCustomResumePrompt = null;
             currentGroup = initialGroup; runnerCurrent = true; commits.length = 0; credentialReads.length = 0;
             for (const [profileId, record] of initialRecords) {
                 records.set(profileId, record); credentialRevisions.set(profileId, revision); credentialMetadata.set(profileId, { scopes: [] });
@@ -347,6 +403,7 @@ async function createScenario() {
         async close() {
             await bridge.releaseForRunnerExit({ runnerPid, runnerIdentity });
             await runtimeLease.release();
+            recoveryScheduler.dispose();
             await pluginReloadController.shutdown({ timeoutMs: 5_000 });
             await rm(root, { recursive: true, force: true });
         },
@@ -359,6 +416,323 @@ describe('composed finite Run model recovery', () => {
     beforeEach(() => { scenario.reset(); });
     afterEach(async () => { await scenario?.release(); });
     afterAll(async () => { await scenario?.close(); });
+    it.each(['captured', 'evidence-only'] as const)('recovers %s capacity through real Run materialization, HTTP, shared policy and scheduler without changing pool or parent authority', async (source) => {
+        const materialized = await scenario.materialize();
+        const parentId = 'actual-parent-session';
+        scenario.runtimeTargetRegistry.registerTarget({ pid: 9898, sessionId: parentId, agentId: 'codex',
+            connectedServicesBindingsRaw: materialized.connectedServicesBindings,
+            connectedServiceSelectionsEnv: materialized.env });
+        const parent = scenario.runtimeTargetRegistry.getBySessionId(parentId);
+        const classification = { ...scenario.classification(materialized), kind: 'capacity' as const, limitCategory: 'capacity' as const,
+            quotaScope: 'provider' as const, providerLimitId: null, retryAfterMs: 10_000,
+            ...(source === 'evidence-only' ? { profileId: null, groupId: null, groupGeneration: null, expectedCredentialRevision: null } : {}) };
+        const app = createDaemonControlApp({ getChildren: () => [], machineId: 'fixture-machine', controlToken: 'master',
+            stopSession: async () => ({ status: 'not_found' }),
+            spawnSession: async () => ({ type: 'error', errorCode: SPAWN_SESSION_ERROR_CODES.UNEXPECTED, errorMessage: 'unused' }),
+            requestShutdown() {}, onHappySessionWebhook() {}, verifyRunMaterializeToken: (token) => token === 'run-token',
+            recoverConnectedServiceRuntimeFailureForExecutionRun: scenario.bridge.recoverRuntimeFailure });
+        try {
+            const armed = scenario.nextRecoveryArmed();
+            const response = app.inject({ method: 'POST', url: '/connected-service-run/recover-runtime-failure',
+                headers: { 'x-happier-daemon-token': 'run-token' }, payload: { runId, runnerPid, activationId: materialized.activationId,
+                    nativeResumeId: 'provider-thread', interruptedOriginId: 'failed-turn', classification } });
+            const first = await Promise.race([armed.then(() => 'waiting'), response.then(() => 'terminal')]);
+            expect(first).toBe('waiting');
+            const key = connectedServiceRecoveryScopeKey({ kind: 'run', runId });
+            expect(scenario.recoveryScheduler.read(key)).toMatchObject({ nextRetryAtMs: 11_000, scope: { kind: 'run', runId } });
+            scenario.setRecoveryClock(11_000);
+            await scenario.recoveryScheduler.wake({ sessionId: key, reason: 'timer' });
+            expect((await response).json()).toEqual({ status: 'continue', input: 'Continue where you left off', rematerialize: false });
+            expect(scenario.commits).toEqual([]);
+            expect(scenario.runtimeTargetRegistry.getBySessionId(parentId)).toBe(parent);
+        } finally { scenario.runtimeTargetRegistry.unregisterPid(9898); await app.close(); }
+    });
+    it('rotates account quota while retaining native partial state and the Run lifetime switch budget during recovery materialization', async () => {
+        const first = await scenario.materialize();
+        const nativeResumeId = '019fea40-8040-7d00-9b7e-9b8f3b5cfca8';
+        const relativeRollout = join('sessions', '2026', '09', '07', `rollout-2026-09-07T12-00-00-${nativeResumeId}.jsonl`);
+        const partialState = JSON.stringify({ type: 'session_meta', payload: { id: nativeResumeId, cwd: scenario.root } }) + '\n';
+        await mkdir(dirname(join(first.env.CODEX_HOME!, relativeRollout)), { recursive: true });
+        await writeFile(join(first.env.CODEX_HOME!, relativeRollout), partialState, 'utf8');
+        const result = await scenario.bridge.recoverRuntimeFailure({ runId, runnerPid, activationId: first.activationId,
+            nativeResumeId, interruptedOriginId: 'partially-completed-turn', classification: {
+                ...scenario.classification(first), kind: 'usage_limit', limitCategory: 'usage_limit', quotaScope: 'account', providerLimitId: null,
+                resetsAtMs: 60_000,
+            } }, new AbortController().signal);
+        expect(result).toEqual({ status: 'continue', input: 'Usage limits are lifted. Continue where you left off.', rematerialize: true });
+        expect(scenario.commits).toEqual(['second']);
+        const replaced = await scenario.bridge.materialize({ runId, runnerPid, agentId: 'codex', cwd: scenario.root, modelId,
+            connectedServices: first.connectedServicesBindings,
+            recovery: { activationId: first.activationId, nativeResumeId } });
+        expect(replaced.ok).toBe(true);
+        if (!replaced.ok) throw new Error(replaced.errorMessage);
+        expect(await readFile(join(replaced.env.CODEX_HOME!, relativeRollout), 'utf8')).toBe(partialState);
+        expect(JSON.parse(await readFile(join(replaced.env.CODEX_HOME!, 'auth.json'), 'utf8')).tokens.account_id).toBe('test-account-second');
+        const armed = scenario.nextRecoveryArmed();
+        const controller = new AbortController();
+        const next = scenario.bridge.recoverRuntimeFailure({ runId, runnerPid, activationId: replaced.activationId,
+            nativeResumeId, interruptedOriginId: 'continuation-failed-turn', classification: {
+                ...scenario.classification(replaced), kind: 'usage_limit', limitCategory: 'usage_limit', quotaScope: 'account', providerLimitId: null,
+            } }, controller.signal);
+        expect(await Promise.race([armed.then(() => 'waiting'), next.then(() => 'terminal')])).toBe('waiting');
+        expect(scenario.commits).toEqual(['second']);
+        controller.abort();
+        expect(await next).toMatchObject({ status: 'failed' });
+        const attempted = { sessionId: connectedServiceRecoveryScopeKey({ kind: 'run', runId }), serviceId, groupId: 'pool',
+            profileId: 'first', credentialRevision: revision };
+        expect(scenario.switchAttempts.resolveSwitchesThisTurn({ ...attempted, reportedSwitchesThisTurn: 0 })).toBe(1);
+        expect(await scenario.bridge.completeRuntimeTurn({ runId, runnerPid, activationId: replaced.activationId })).toEqual({ ok: true, accepted: true });
+        expect(scenario.switchAttempts.resolveSwitchesThisTurn({ ...attempted, reportedSwitchesThisTurn: 0 })).toBe(0);
+        expect(scenario.switchAttempts.countRecordedSwitchesInWindow({ ...attempted, windowMs: 3_600_000 })).toBe(1);
+    });
+
+    it('resets the retained Run capacity streak only after an exact successful native turn', async () => {
+        const materialized = await scenario.materialize();
+        const request = { runId, runnerPid, activationId: materialized.activationId };
+        const key = connectedServiceRecoveryScopeKey({ kind: 'run', runId });
+        const app = createDaemonControlApp({ getChildren: () => [], machineId: 'fixture-machine', controlToken: 'master',
+            stopSession: async () => ({ status: 'not_found' }),
+            spawnSession: async () => ({ type: 'error', errorCode: SPAWN_SESSION_ERROR_CODES.UNEXPECTED, errorMessage: 'unused' }),
+            requestShutdown: () => {}, onHappySessionWebhook: () => {}, verifyRunMaterializeToken: token => token === 'scoped',
+            completeConnectedServiceRuntimeTurnForExecutionRun: scenario.bridge.completeRuntimeTurn,
+        });
+        const complete = (payload = request, token = 'scoped') => app.inject({ method: 'POST',
+            url: '/connected-service-run/runtime-turn-completed', headers: { 'x-happier-daemon-token': token }, payload });
+        try {
+            expect((await complete()).statusCode).toBe(200);
+            const armed = scenario.nextRecoveryArmed();
+            const recovery = scenario.bridge.recoverRuntimeFailure({ ...request, nativeResumeId: 'native-partial',
+                interruptedOriginId: 'failed-turn', classification: { ...scenario.classification(materialized),
+                    kind: 'capacity', limitCategory: 'capacity', quotaScope: 'provider', providerLimitId: null, retryAfterMs: 10_000,
+                } }, new AbortController().signal);
+            expect(await Promise.race([armed.then(() => 'waiting'), recovery.then(() => 'terminal')])).toBe('waiting');
+            scenario.setRecoveryClock(11_000);
+            await scenario.recoveryScheduler.wake({ sessionId: key, reason: 'timer' });
+            expect(await recovery).toMatchObject({ status: 'continue' });
+            expect(scenario.recoveryScheduler.read(key)).toMatchObject({ capacityFailureCount: 1 });
+            expect((await complete(request, 'master')).statusCode).toBe(401);
+            expect((await complete({ ...request, activationId: '00000000-0000-4000-8000-000000000000' })).json()).toEqual({ ok: true, accepted: false });
+            expect(scenario.recoveryScheduler.read(key)).not.toBeNull();
+            expect((await complete()).json()).toEqual({ ok: true, accepted: true });
+            expect(scenario.recoveryScheduler.read(key)).toBeNull();
+        } finally { await app.close(); }
+    });
+
+    it('waits at exhausted pool reset and cancels only the exact Run recovery', async () => {
+        const materialized = await scenario.materialize();
+        scenario.exhaustPoolUntil(20_000);
+        const classification = { ...scenario.classification(materialized), kind: 'usage_limit' as const,
+            limitCategory: 'usage_limit' as const, quotaScope: 'account' as const, providerLimitId: null, resetsAtMs: 20_000 };
+        const request = { runId, runnerPid, activationId: materialized.activationId, nativeResumeId: 'provider-thread', interruptedOriginId: 'turn', classification };
+        const controller = new AbortController();
+        const armed = scenario.nextRecoveryArmed();
+        const recovery = scenario.bridge.recoverRuntimeFailure(request, controller.signal);
+        const stage = await Promise.race([armed.then(() => 'waiting'), recovery.then(() => 'terminal')]);
+        expect(stage).toBe('waiting');
+        const key = connectedServiceRecoveryScopeKey({ kind: 'run', runId });
+        expect(scenario.recoveryScheduler.read(key)).toMatchObject({ nextRetryAtMs: 20_000 });
+        scenario.setRecoveryClock(19_999);
+        await scenario.recoveryScheduler.wake({ sessionId: key, reason: 'timer' });
+        expect(scenario.recoveryScheduler.read(key)?.status).toBe('waiting');
+        scenario.setRecoveryClock(20_000);
+        await scenario.recoveryScheduler.wake({ sessionId: key, reason: 'timer' });
+        expect(await recovery).toMatchObject({ status: 'continue', rematerialize: true });
+        expect(scenario.commits).toEqual([]);
+        const cancellationArmed = scenario.nextRecoveryArmed();
+        const cancellation = scenario.bridge.recoverRuntimeFailure({ ...request, interruptedOriginId: 'cancelled-turn', classification: {
+            ...classification, kind: 'capacity', limitCategory: 'capacity', quotaScope: 'provider', resetsAtMs: null,
+        } }, controller.signal);
+        await cancellationArmed;
+        controller.abort();
+        expect(await cancellation).toMatchObject({ status: 'failed' });
+        expect(scenario.group().generation).toBe(7);
+    });
+
+    it('binds retained Run creation to daemon capacity recovery and continues partial work without replay', async () => {
+        const composedRunId = 'composed-create-recovery';
+        const opened: AgentSessionOpenRequest[] = [];
+        const prompts: string[] = [];
+        let failProviderTurn: (() => void) | undefined;
+        type NativeEvent = AgentSessionRuntimeEvent extends infer Event
+            ? Event extends AgentSessionRuntimeEvent ? Omit<Event, 'sequence' | 'sessionId' | 'emittedAtMs'> : never : never;
+        // Only the external native Agent is replaced. Registry selection, Run creation,
+        // native host lifecycle, HTTP auth, classification and recovery all remain real.
+        const nativeRuntime: AgentRuntime = { sessions: { async open(request, context) {
+            expect(context.services.sessions.current).toBeNull();
+            expect(context.services.availability('sessions').status).toBe('unavailable');
+            await expect(async () => context.services.sessions.get('unrelated-session')).rejects.toMatchObject({ code: 'plugin_host_access_declaration_missing' });
+            expect(context.session.services.auth).toBeDefined();
+            await expect(context.session.services.auth!.services.refreshRuntimeAuth({ serviceId: 'openai-codex' }))
+                .resolves.toMatchObject({ status: 'unavailable', reason: 'runtime_auth_selection_unavailable' });
+            opened.push(request);
+            let sequence = 0;
+            let listener: ((event: AgentSessionRuntimeEvent) => void) | undefined;
+            const publish = (event: NativeEvent) => listener?.({ ...event, sequence: ++sequence,
+                sessionId: request.sessionId, emittedAtMs: 1000 } as AgentSessionRuntimeEvent);
+            return {
+                watch(handler) {
+                    listener = handler;
+                    publish({ kind: 'provider-session-id', providerSessionId: 'native-partial-thread' });
+                    return { dispose() { listener = undefined; } };
+                },
+                async send(input) {
+                    prompts.push(input.input.text);
+                    const turnId = input.delivery.turnId;
+                    publish({ kind: 'input-accepted', inputIds: input.inputIds, delivery: input.delivery });
+                    publish({ kind: 'turn-start', turnId, startedBy: 'host' });
+                    if (input.input.text !== 'Continue where you left off') {
+                        publish({ kind: 'message-delta', turnId, channel: 'assistant', text: 'partial work already committed' });
+                        failProviderTurn = () => publish({ kind: 'turn-failed', turnId,
+                            diagnostic: { code: 'server_overloaded', message: 'Service temporarily overloaded', severity: 'error' } });
+                    } else {
+                        publish({ kind: 'message-delta', turnId, channel: 'assistant', text: 'continued partial work' });
+                        publish({ kind: 'turn-complete', turnId });
+                    }
+                    return { status: 'admitted' as const };
+                },
+                async cancel({ turnId }) { publish({ kind: 'turn-cancelled', turnId, cause: 'user' }); return { status: 'requested' as const, turnId }; },
+                async updateConfiguration() { return { status: 'applied' as const }; },
+                async compact() { return { status: 'admitted' as const }; },
+                async dispose() {},
+            };
+        } } };
+        const sourceCustody = scenario.runtimeRegistry.readPluginSourceCustody?.('happier.agent.codex');
+        if (!sourceCustody) throw new Error('Admitted Codex source custody unavailable');
+        const sourceLease = scenario.runtimeRegistry.agentRuntimesByAgentId.get('codex');
+        if (!sourceLease || !scenario.runtimeRegistry.createAgentInvocationServices) throw new Error('Admitted Codex service factory unavailable');
+        let preparedSessionId: string | null = null;
+        const registry = await resolveCliEngineRegistry({ backendId: 'codex', happyHomeDir: scenario.root,
+            requireRunnerAgentSessionRuntimeSource: true,
+            runnerAgentSessionRuntimeSource: {
+                agentContribution: scenario.engine.agent,
+                identity: { pluginId: 'happier.agent.codex', pluginVersion: '1.0.0', agentId: 'codex', backendId: 'codex',
+                    occurrenceId: sourceLease.occurrenceId, sourceCustody, isCurrent: sourceLease.isCurrent },
+                prepareForSession: async ({ sessionId }) => { preparedSessionId = sessionId; },
+                createRuntime: async () => {
+                    if (preparedSessionId !== 'actual-parent-session') throw new Error('Native source has not claimed its parent Session');
+                    return nativeRuntime;
+                },
+                createInvocationServices: scenario.runtimeRegistry.createAgentInvocationServices.bind(scenario.runtimeRegistry),
+                authorizeNewTurn: async () => ({ status: 'admitted' as const }),
+            },
+        });
+        const parentSession: NativeAgentSessionInteractionHostBinding['session'] = {
+            sessionId: 'actual-parent-session', getMetadataSnapshot: () => ({ path: scenario.root, machineId: 'fixture-machine' }),
+            updateMetadata: vi.fn<NativeAgentSessionInteractionHostBinding['session']['updateMetadata']>(),
+            updateAgentState: vi.fn<NativeAgentSessionInteractionHostBinding['session']['updateAgentState']>(),
+            enqueueAgentMessageCommitted: vi.fn<NativeAgentSessionInteractionHostBinding['session']['enqueueAgentMessageCommitted']>(),
+        };
+        const app = createDaemonControlApp({ getChildren: () => [], machineId: 'fixture-machine', controlToken: 'composed-control',
+            stopSession: async () => ({ status: 'not_found' }),
+            spawnSession: async () => ({ type: 'error', errorCode: SPAWN_SESSION_ERROR_CODES.UNEXPECTED, errorMessage: 'unused' }),
+            requestShutdown() {}, onHappySessionWebhook() {},
+            verifyRunMaterializeToken: token => token === deriveConnectedServiceRunMaterializeToken('composed-control'),
+            materializeConnectedServicesForExecutionRun: scenario.bridge.materialize,
+            recoverConnectedServiceRuntimeFailureForExecutionRun: scenario.bridge.recoverRuntimeFailure,
+            completeConnectedServiceRuntimeTurnForExecutionRun: scenario.bridge.completeRuntimeTurn,
+            releaseConnectedServicesForExecutionRun: scenario.bridge.release,
+        });
+        let host: ReturnType<typeof createExecutionRunRuntime> | undefined;
+        vi.stubEnv('HAPPIER_HOME_DIR', scenario.root);
+        reloadConfiguration();
+        try {
+            const address = new URL(await app.listen({ host: '127.0.0.1', port: 0 }));
+            writeDaemonState({ pid: process.pid, httpPort: Number(address.port), controlToken: 'composed-control',
+                startedAt: 1, startedWithCliVersion: '0.3.0' });
+            host = createExecutionRunRuntime({ cwd: scenario.root, runId: composedRunId, scope: 'session_owned',
+                backendId: 'codex', engineRegistry: registry, happyHomeDir: scenario.root,
+                controllerOccurrenceId: 'composed-controller', callId: 'composed-call', sidechainId: 'composed-sidechain',
+                permissionMode: 'read_only', modelId,
+                connectedServices: { v: 2, bindingsByServiceId: { [serviceId]: { source: 'connected', selection: 'group', groupId: 'pool' } } },
+                start: { intent: 'delegate', runClass: 'long_lived', retentionPolicy: 'resumable', ioMode: 'streaming' },
+                sessionInteractionHost: { session: parentSession, machineId: 'fixture-machine',
+                    permissionHandler: createExecutionRunPermissionHandler({ permissionMode: 'read_only', backendId: 'codex' }) },
+            });
+            const messages: string[] = [];
+            host.subscribeMessages(message => { if (message.type === 'model-output' && message.textDelta) messages.push(message.textDelta); });
+            const { runtimeId } = await host.provisionRuntime();
+            await host.deliverInput(runtimeId, { text: 'original charged work' });
+            const waiting = scenario.nextRecoveryArmed();
+            const completion = host.waitForTurnCompletion!();
+            failProviderTurn!();
+            expect(await Promise.race([waiting.then(() => 'waiting'), completion.then(() => 'completed', () => 'failed')])).toBe('waiting');
+            expect(opened.map(request => request.kind)).toEqual(['create']);
+            expect(prompts).toEqual(['original charged work']);
+            const key = connectedServiceRecoveryScopeKey({ kind: 'run', runId: composedRunId });
+            const scheduled = scenario.recoveryScheduler.read(key);
+            expect(scheduled).toMatchObject({ scope: { kind: 'run', runId: composedRunId }, status: 'waiting' });
+            expect(scheduled?.nextRetryAtMs).toBeGreaterThan(1000);
+            if (scheduled?.nextRetryAtMs == null) throw new Error('Run recovery did not schedule a retry');
+            scenario.setRecoveryClock(scheduled.nextRetryAtMs);
+            await scenario.recoveryScheduler.wake({ sessionId: key, reason: 'timer' });
+            await completion;
+            expect(opened).toHaveLength(2);
+            expect(opened[1]).toMatchObject({ kind: 'resume', providerSessionId: 'native-partial-thread' });
+            expect(prompts).toEqual(['original charged work', 'Continue where you left off']);
+            expect(messages.join('')).toContain('partial work already committed');
+            expect(messages.join('')).toContain('continued partial work');
+            expect(scenario.group().activeConnectedAccountId).toBe('first');
+            expect(scenario.commits).toEqual([]);
+            expect(scenario.recoveryScheduler.read(key)).toBeNull();
+
+            await host.deliverInput(runtimeId, { text: 'unrelated charged work' });
+            const waitingAgain = scenario.nextRecoveryArmed();
+            const completionAgain = host.waitForTurnCompletion!();
+            failProviderTurn!();
+            expect(await Promise.race([waitingAgain.then(() => 'waiting'), completionAgain.then(() => 'completed', () => 'failed')])).toBe('waiting');
+            const scheduledAgain = scenario.recoveryScheduler.read(key);
+            expect(scheduledAgain).toMatchObject({ capacityFailureCount: 1, status: 'waiting' });
+            if (scheduledAgain?.nextRetryAtMs == null) throw new Error('Second Run recovery did not schedule a retry');
+            expect(scheduledAgain.nextRetryAtMs - scheduled.nextRetryAtMs).toBe(scheduled.nextRetryAtMs - 1000);
+            scenario.setRecoveryClock(scheduledAgain.nextRetryAtMs);
+            await scenario.recoveryScheduler.wake({ sessionId: key, reason: 'timer' });
+            await completionAgain;
+            expect(prompts).toEqual(['original charged work', 'Continue where you left off',
+                'unrelated charged work', 'Continue where you left off']);
+            expect(scenario.recoveryScheduler.read(key)).toBeNull();
+        } finally {
+            await host?.dispose();
+            await app.close();
+            vi.unstubAllEnvs();
+            reloadConfiguration();
+        }
+    });
+    it('applies ordinary account recovery when automatic continuation is off', async () => {
+        const materialized = await scenario.materialize();
+        scenario.setRecoveryContinuation('off');
+        const result = await scenario.bridge.recoverRuntimeFailure({ runId, runnerPid, activationId: materialized.activationId,
+            nativeResumeId: 'provider-thread', interruptedOriginId: 'failed-turn', classification: {
+                ...scenario.classification(materialized), kind: 'usage_limit', limitCategory: 'usage_limit', quotaScope: 'account', providerLimitId: null,
+            } }, new AbortController().signal);
+        expect(result).toEqual({ status: 'failed', reason: 'continuation_disabled' });
+        expect(scenario.commits).toEqual(['second']);
+    });
+
+    it.each(['capacity', 'exhausted'] as const)('arms ordinary %s policy without parking an off-mode failed Run until reset', async (failureKind) => {
+        const materialized = await scenario.materialize();
+        scenario.setRecoveryContinuation('off');
+        if (failureKind === 'exhausted') scenario.exhaustPoolUntil(20_000);
+        const app = createDaemonControlApp({ getChildren: () => [], machineId: 'fixture-machine', controlToken: 'master',
+            stopSession: async () => ({ status: 'not_found' }),
+            spawnSession: async () => ({ type: 'error', errorCode: SPAWN_SESSION_ERROR_CODES.UNEXPECTED, errorMessage: 'unused' }),
+            requestShutdown() {}, onHappySessionWebhook() {}, verifyRunMaterializeToken: token => token === 'scoped',
+            recoverConnectedServiceRuntimeFailureForExecutionRun: scenario.bridge.recoverRuntimeFailure });
+        try {
+            // The external clock deliberately never reaches the scheduler's next retry.
+            const response = await app.inject({ method: 'POST', url: '/connected-service-run/recover-runtime-failure',
+                headers: { 'x-happier-daemon-token': 'scoped' }, payload: { runId, runnerPid, activationId: materialized.activationId,
+                    nativeResumeId: 'native-partial-checkpoint', interruptedOriginId: 'off-failed-turn', classification: {
+                        ...scenario.classification(materialized), kind: failureKind === 'capacity' ? 'capacity' : 'usage_limit',
+                        limitCategory: failureKind === 'capacity' ? 'capacity' : 'usage_limit',
+                        quotaScope: failureKind === 'capacity' ? 'provider' : 'account', providerLimitId: null,
+                        resetsAtMs: failureKind === 'capacity' ? null : 20_000,
+                    } } });
+            expect(response.json()).toEqual({ status: 'failed', reason: 'continuation_disabled' });
+            expect(scenario.recoveryScheduler.read(connectedServiceRecoveryScopeKey({ kind: 'run', runId }))).toMatchObject({ status: 'waiting' });
+            expect(scenario.commits).toEqual([]);
+        } finally { await app.close(); }
+    });
+
     it.each([0, 2, 3])('preserves accepted work or recovers %i explicit rejected members through the composed corridor', async (rejectCount) => {
         let active: Materialization | null = null;
         const requests: AgentExecutionRunOpenRequest[] = [];
@@ -547,6 +921,28 @@ describe('composed finite Run model recovery', () => {
         return { runId: requestedRunId, runnerPid, activationId: materialized.activationId, serviceId,
             refreshAttemptId: attemptId, expectedCredentialRevision: expectedRevision, selection: identity };
     }
+
+    it('refreshes an emitted auth-expired Run failure before pool recovery and continues the retained native checkpoint', async () => {
+        const materialized = await scenario.materialize();
+        createRefreshCoordinator();
+        const app = createDaemonControlApp({ getChildren: () => [], machineId: 'fixture-machine', controlToken: 'master',
+            stopSession: async () => ({ status: 'not_found' }),
+            spawnSession: async () => ({ type: 'error', errorCode: SPAWN_SESSION_ERROR_CODES.UNEXPECTED, errorMessage: 'unused' }),
+            requestShutdown() {}, onHappySessionWebhook() {}, verifyRunMaterializeToken: token => token === 'scoped',
+            recoverConnectedServiceRuntimeFailureForExecutionRun: scenario.bridge.recoverRuntimeFailure });
+        try {
+            const response = await app.inject({ method: 'POST', url: '/connected-service-run/recover-runtime-failure',
+                headers: { 'x-happier-daemon-token': 'scoped' }, payload: { runId, runnerPid, activationId: materialized.activationId,
+                    nativeResumeId: 'native-partial-checkpoint', interruptedOriginId: 'auth-expired-native-turn', classification: {
+                        ...scenario.classification(materialized), kind: 'auth_expired', limitCategory: 'auth_invalid', quotaScope: 'account', providerLimitId: null,
+                    } } });
+            expect(response.json()).toEqual({ status: 'continue', input: 'Continue where you left off', rematerialize: false });
+            expect(scenario.providerExchanges()).toBe(1);
+            expect(scenario.commits).toEqual([]);
+            expect(JSON.parse(await readFile(join(materialized.env.CODEX_HOME!, 'auth.json'), 'utf8')).tokens.access_token).toBe('refreshed-access-1');
+            expect(scenario.runtimeTargetRegistry.getRunTargetByRunKey(runId)?.activeBindings[0]?.credentialRevision).toBe('csr_bbbbbbbbbbbbbbbbbbbbbb');
+        } finally { await app.close(); }
+    });
 
     it('settles native refresh proof only after the exact retained Run home adopts the CAS revision', async () => {
         const materialized = await scenario.materialize();

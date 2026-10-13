@@ -8,6 +8,12 @@ import type { CatalogAgentId } from '@/agent/catalog/ids';
 import type { RequesterWorkAttributionV1 } from '../../lifecycle/requesterWorkAttribution';
 import type { ConnectedServiceChildSelection } from '../connectedServiceChildEnvironment';
 
+export type ConnectedServiceRecoveryScope = Readonly<{ kind: 'session'; sessionId: string }> | Readonly<{ kind: 'run'; runId: string }>;
+
+export function connectedServiceRecoveryScopeKey(scope: ConnectedServiceRecoveryScope): string {
+  return scope.kind === 'session' ? scope.sessionId : `run:${scope.runId}`;
+}
+
 export type ConnectedServiceRuntimeBoundProfile = Readonly<{
   serviceId: ConnectedAccountServiceKey;
   profileId: string;

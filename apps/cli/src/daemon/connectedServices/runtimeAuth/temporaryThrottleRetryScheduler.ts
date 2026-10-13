@@ -8,6 +8,7 @@ import {
   type DurableBackoffRecoveryStore,
 } from '../recoveryScheduler/DurableBackoffRecoveryScheduler';
 import { createRecoveryIntentFileStore } from '../recoveryScheduler/recoveryIntentFileStore';
+import { connectedServiceRecoveryScopeKey, type ConnectedServiceRecoveryScope } from '../runtimeRegistry/target';
 import {
   ConnectedServiceRuntimeAuthFailureKindSchema,
   type ConnectedServiceRuntimeAuthFailureKind,
@@ -25,6 +26,8 @@ export type ConnectedServiceTemporaryThrottleContinuationIntent = Readonly<{
 export type ConnectedServiceTemporaryThrottleRetryIntent = Readonly<{
   v: 1;
   sessionId: string;
+  /** sessionId is the durable scheduler's opaque key; scope is the runtime authority. */
+  scope?: ConnectedServiceRecoveryScope;
   serviceId: string;
   profileId: string | null;
   groupId: string | null;
@@ -62,6 +65,7 @@ type ConnectedServiceTemporaryThrottleRetrySchedulerDeps = Readonly<{
 
 type EnableTemporaryThrottleRetryInput = Readonly<{
   sessionId: string;
+  scope?: ConnectedServiceRecoveryScope;
   serviceId: string;
   profileId: string | null;
   groupId: string | null;
@@ -151,9 +155,14 @@ function normalizeIntent(value: unknown): ConnectedServiceTemporaryThrottleRetry
     || maxAttempts === null
   ) return null;
   const continuation = normalizeContinuationIntent(record.continuation);
+  const rawScope = record.scope;
+  const scope = rawScope && typeof rawScope === 'object' && !Array.isArray(rawScope)
+    ? rawScope as Record<string, unknown> : null;
+  if (scope && (scope.kind !== 'run' || !normalizeString(scope.runId) || sessionId !== connectedServiceRecoveryScopeKey({ kind: 'run', runId: normalizeString(scope.runId) }))) return null;
   return {
     v: 1,
     sessionId,
+    ...(scope ? { scope: { kind: 'run' as const, runId: normalizeString(scope.runId) } } : {}),
     serviceId,
     profileId: normalizeString(record.profileId) || null,
     groupId: normalizeString(record.groupId) || null,
@@ -210,6 +219,7 @@ export class ConnectedServiceTemporaryThrottleRetryScheduler {
   readonly #random: () => number;
   readonly #hasDurableStore: boolean;
   readonly #scheduler: DurableBackoffRecoveryScheduler<ConnectedServiceTemporaryThrottleRetryIntent>;
+  readonly #runWaiters = new Map<string, (result: Readonly<{ status: 'resumed' | 'cancelled' | 'unavailable' }>) => void>();
 
   constructor(private readonly deps: ConnectedServiceTemporaryThrottleRetrySchedulerDeps) {
     this.#nowMs = deps.nowMs;
@@ -219,17 +229,24 @@ export class ConnectedServiceTemporaryThrottleRetryScheduler {
     const sourceStore = deps.store === undefined
       ? createDefaultTemporaryThrottleRetryStore()
       : deps.store;
-    const store: DurableBackoffRecoveryStore<ConnectedServiceTemporaryThrottleRetryIntent> | null = sourceStore && deps.onStateChange ? {
+    const settleRunWaiter = (key: string, intent: ConnectedServiceTemporaryThrottleRetryIntent | null) => {
+      if (intent?.scope?.kind !== 'run') return;
+      if (intent.status === 'awaiting_outcome') this.#runWaiters.get(key)?.({ status: 'resumed' });
+      else if (intent.status === 'cancelled' || intent.status === 'exhausted') this.#runWaiters.get(key)?.({ status: 'cancelled' });
+    };
+    const store: DurableBackoffRecoveryStore<ConnectedServiceTemporaryThrottleRetryIntent> | null = sourceStore ? {
       ...sourceStore,
       write: async (sessionId: string, intent: ConnectedServiceTemporaryThrottleRetryIntent) => {
         const previous = normalizeIntent(sourceStore.readAuthoritative?.(sessionId) ?? sourceStore.read(sessionId));
         await sourceStore.write(sessionId, intent);
         await deps.onStateChange?.(sessionId, intent, previous);
+        settleRunWaiter(sessionId, intent);
       },
       ...(sourceStore.remove ? { remove: async (sessionId: string) => {
         const previous = normalizeIntent(sourceStore.readAuthoritative?.(sessionId) ?? sourceStore.read(sessionId));
         await sourceStore.remove!(sessionId);
         await deps.onStateChange?.(sessionId, null, previous);
+        if (previous?.scope?.kind === 'run') this.#runWaiters.get(sessionId)?.({ status: 'cancelled' });
       } } : {}),
       ...(sourceStore.transact ? { transact: async <TResult>(sessionId: string, transaction: Parameters<NonNullable<typeof sourceStore.transact>>[1]): Promise<TResult> => {
         let previous: ConnectedServiceTemporaryThrottleRetryIntent | null = null;
@@ -237,7 +254,9 @@ export class ConnectedServiceTemporaryThrottleRetryScheduler {
           previous = current.intent;
           return transaction(current);
         });
-        await deps.onStateChange?.(sessionId, normalizeIntent(sourceStore.readAuthoritative?.(sessionId) ?? sourceStore.read(sessionId)), previous);
+        const current = normalizeIntent(sourceStore.readAuthoritative?.(sessionId) ?? sourceStore.read(sessionId));
+        await deps.onStateChange?.(sessionId, current, previous);
+        settleRunWaiter(sessionId, current);
         return result as TResult;
       } } : {}),
     } : sourceStore;
@@ -277,7 +296,11 @@ export class ConnectedServiceTemporaryThrottleRetryScheduler {
         lastError: input.lastError,
       }),
       recover: async (intent, context) => {
-        const result = await deps.resume(intent, { sessionId: context.sessionId }).catch((error: unknown) => {
+        const runWaiter = intent.scope?.kind === 'run' ? this.#runWaiters.get(context.sessionId) : null;
+        if (intent.scope?.kind === 'run' && !runWaiter) return { status: 'superseded', reason: 'run_waiter_unavailable' };
+        const result = await (runWaiter
+          ? Promise.resolve({ status: 'continued' as const })
+          : deps.resume(intent, { sessionId: context.sessionId })).catch((error: unknown) => {
           if (intent.continuation?.recoveryKind !== 'capacity') throw error;
           return { status: 'retry' as const, lastError: error instanceof Error ? error.message : 'temporary_throttle_resume_failed' };
         });
@@ -307,7 +330,7 @@ export class ConnectedServiceTemporaryThrottleRetryScheduler {
             wakeResult: { status: 'terminal' },
           };
         }
-        if (intent.continuation?.recoveryKind === 'capacity') {
+        if (runWaiter || intent.continuation?.recoveryKind === 'capacity') {
           return { status: 'pending', intent: { ...intent, status: 'awaiting_outcome', nextRetryAtMs: null }, wakeResult: { status: 'resumed' } };
         }
         return { status: 'success', wakeResult: { status: 'resumed' } };
@@ -342,6 +365,7 @@ export class ConnectedServiceTemporaryThrottleRetryScheduler {
     const intent: ConnectedServiceTemporaryThrottleRetryIntent = {
       v: 1,
       sessionId,
+      ...(input.scope?.kind === 'run' ? { scope: input.scope } : {}),
       serviceId,
       profileId: normalizeString(input.profileId) || null,
       groupId: normalizeString(input.groupId) || null,
@@ -403,6 +427,39 @@ export class ConnectedServiceTemporaryThrottleRetryScheduler {
     return this.#scheduler.read(sessionId);
   }
 
+  async finishRun(runId: string): Promise<void> {
+    const sessionId = connectedServiceRecoveryScopeKey({ kind: 'run', runId });
+    this.#runWaiters.get(sessionId)?.({ status: 'cancelled' });
+    await this.#scheduler.transact({ sessionId, transaction: () => ({ intent: null, result: undefined }) });
+  }
+
+  async waitForRecovery(input: Omit<EnableTemporaryThrottleRetryInput, 'sessionId' | 'scope'> & Readonly<{
+    scope: Extract<ConnectedServiceRecoveryScope, { kind: 'run' }>;
+  }>, signal: AbortSignal): Promise<Readonly<{ status: 'resumed' | 'cancelled' | 'unavailable' }>> {
+    if (signal.aborted) return { status: 'cancelled' };
+    const sessionId = connectedServiceRecoveryScopeKey(input.scope);
+    if (this.#runWaiters.has(sessionId)) return { status: 'unavailable' };
+    let settle!: (result: Readonly<{ status: 'resumed' | 'cancelled' | 'unavailable' }>) => void;
+    const completed = new Promise<Readonly<{ status: 'resumed' | 'cancelled' | 'unavailable' }>>((resolve) => { settle = resolve; });
+    this.#runWaiters.set(sessionId, settle);
+    let armed: ConnectedServiceTemporaryThrottleRetryIntent | null = null;
+    const cancel = () => {
+      settle({ status: 'cancelled' });
+      if (armed) void this.cancel({ sessionId, issueFingerprint: armed.issueFingerprint, armedAtMs: armed.armedAtMs });
+    };
+    signal.addEventListener('abort', cancel, { once: true });
+    try {
+      const enabled = await this.enable({ ...input, sessionId });
+      armed = this.read(sessionId);
+      if (signal.aborted) cancel();
+      if (enabled.status === 'unsupported' || enabled.status === 'cancelled' || enabled.status === 'exhausted') settle({ status: 'unavailable' });
+      return await completed;
+    } finally {
+      signal.removeEventListener('abort', cancel);
+      if (this.#runWaiters.get(sessionId) === settle) this.#runWaiters.delete(sessionId);
+    }
+  }
+
   hydrate(options: Readonly<{ schedule?: boolean }> = {}): ReadonlyArray<ConnectedServiceTemporaryThrottleRetryIntent> {
     return this.#scheduler.hydrate(options);
   }
@@ -461,6 +518,8 @@ export class ConnectedServiceTemporaryThrottleRetryScheduler {
   }
 
   dispose(): void {
+    for (const waiter of this.#runWaiters.values()) waiter({ status: 'cancelled' });
+    this.#runWaiters.clear();
     this.#scheduler.dispose();
   }
 }

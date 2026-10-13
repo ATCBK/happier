@@ -24,6 +24,8 @@ import type {
 } from './verifyResumeReachableTypes';
 import { REACHABILITY_CHECK_NOT_IMPLEMENTED_REASON } from './verifyResumeReachableTypes';
 import { verifyDeclaredResumeFileReachability } from './stateSharing/verifyDeclaredResumeFileReachability';
+import type { ConnectedServiceRuntimeTarget } from './runtimeRegistry/target';
+import { sanitizeConnectedServiceRuntimeFailureClassification } from './runtimeAuth/sanitizeConnectedServiceRuntimeFailureClassification';
 
 export async function getConnectedServiceMaterializedHomeFreshness(
   agentId: CatalogAgentId,
@@ -63,6 +65,23 @@ export async function getConnectedServiceRuntimeAuthAdapter(
 ): Promise<ConnectedServiceProviderRuntimeAuthAdapter | null> {
   return await readCurrentCatalogHook(agentId, (entry) =>
     entry.getConnectedServiceRuntimeAuthAdapter?.() ?? Promise.resolve(null));
+}
+
+export async function classifyConnectedServiceRuntimeFailureForTarget(input: Readonly<{
+  target: ConnectedServiceRuntimeTarget; diagnostic: unknown;
+}>) {
+  const agentId = resolveCatalogAgentId(input.target.agentId);
+  if (!agentId) return null;
+  const adapter = await getConnectedServiceRuntimeAuthAdapter(agentId);
+  if (!adapter) return null;
+  for (const selection of input.target.connectedServiceSelections) {
+    const classification = sanitizeConnectedServiceRuntimeFailureClassification(adapter.classifyRuntimeAuthFailure({
+      target: { agentId, targetId: input.target.materializationKey }, error: input.diagnostic,
+      selection: { ...selection },
+    }));
+    if (classification?.serviceId === selection.serviceId) return classification;
+  }
+  return null;
 }
 
 export async function getConnectedServiceStateSharingDescriptor(

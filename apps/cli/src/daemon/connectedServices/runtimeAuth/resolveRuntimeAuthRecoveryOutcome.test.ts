@@ -68,6 +68,17 @@ describe('resolveRuntimeAuthRecoveryProof', () => {
 });
 
 describe('isLocallyCompleteWithoutProof', () => {
+  it('recognizes only settled temporary handoff and exact superseding adoption as continuation progress, never provider proof', () => {
+    const temporary = { status: 'temporary_retry_armed', recovery: { status: 'resumed' } };
+    const adopted = { status: 'switch_attempted', result: { status: 'superseded_after_apply', adoptedProfileId: 'replacement',
+      adoptedGeneration: 2, adoptedCredentialRevision: 'csr_abcdefghijklmnopqrstuv' } };
+    expect(isLocallyCompleteWithoutProof(temporary)).toBe(true);
+    expect(isLocallyCompleteWithoutProof(adopted)).toBe(true);
+    expect(isProvenRuntimeAuthRecoverySuccess(temporary)).toBe(false);
+    expect(isProvenRuntimeAuthRecoverySuccess(adopted)).toBe(false);
+    expect(isLocallyCompleteWithoutProof({ status: 'temporary_retry_armed', recovery: { status: 'waiting' } })).toBe(false);
+    expect(isLocallyCompleteWithoutProof({ status: 'switch_attempted', result: { status: 'superseded_after_apply' } })).toBe(false);
+  });
   it('flags credential_refreshed as intermediate (not terminal)', () => {
     expect(isLocallyCompleteWithoutProof({ status: 'credential_refreshed' })).toBe(true);
   });

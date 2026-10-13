@@ -25,6 +25,8 @@ export const CONNECTED_SERVICE_RUN_RELEASE_PATH = '/connected-service-run/releas
 export const CONNECTED_SERVICE_RUN_GENERATION_CURRENT_PATH = '/connected-service-run/generation-current';
 export const CONNECTED_SERVICE_RUN_REJECTED_START_PATH = '/connected-service-run/rejected-start';
 export const CONNECTED_SERVICE_RUN_REFRESH_RUNTIME_AUTH_PATH = '/connected-service-run/refresh-runtime-auth';
+export const CONNECTED_SERVICE_RUN_RECOVER_RUNTIME_FAILURE_PATH = '/connected-service-run/recover-runtime-failure';
+export const CONNECTED_SERVICE_RUN_RUNTIME_TURN_COMPLETED_PATH = '/connected-service-run/runtime-turn-completed';
 export const CONNECTED_SERVICE_APPLIED_PARENT_SELECTION_PATH = '/connected-service-run/applied-parent-selection';
 export const ConnectedServiceAppliedParentSelectionRequestSchema = z.object({
     sessionId: z.string().trim().min(1), runnerPid: z.number().int().positive(), agentId: z.string().trim().min(1),
@@ -48,6 +50,8 @@ export const ConnectedServiceRunMaterializeRequestSchema = z.object({
     connectedServices: ConnectedServiceBindingsV2IngressSchema,
     cwd: z.string().trim().min(1),
     modelId: z.string().trim().min(1).optional(),
+    /** Exact retained activation replacement; never a fresh launch or parent Session resume. */
+    recovery: z.object({ activationId: z.string().uuid(), nativeResumeId: z.string().trim().min(1) }).strict().optional(),
 });
 export type ConnectedServiceRunMaterializeRequest = z.infer<typeof ConnectedServiceRunMaterializeRequestSchema>;
 
@@ -57,6 +61,9 @@ export const ConnectedServiceRunReleaseRequestSchema = z.object({
     activationId: z.string().uuid(),
 });
 export type ConnectedServiceRunReleaseRequest = z.infer<typeof ConnectedServiceRunReleaseRequestSchema>;
+export const ConnectedServiceRunRuntimeTurnCompletedRequestSchema = ConnectedServiceRunReleaseRequestSchema.strict();
+export const ConnectedServiceRunRuntimeTurnCompletedResultSchema = z.object({ ok: z.literal(true), accepted: z.boolean() }).strict();
+export type ConnectedServiceRunRuntimeTurnCompletedHandler = (input: ConnectedServiceRunReleaseRequest) => Promise<z.infer<typeof ConnectedServiceRunRuntimeTurnCompletedResultSchema>>;
 
 export const ConnectedServiceRunRuntimeAuthRefreshRequestSchema = ConnectedServiceRunReleaseRequestSchema.extend({
     serviceId: ConnectedServiceRuntimeAuthRefreshServiceIdSchema,
@@ -71,6 +78,29 @@ export type ConnectedServiceRunRuntimeAuthRefreshRequest = z.infer<typeof Connec
 export type ConnectedServiceRunRuntimeAuthRefreshHandler = (
     input: ConnectedServiceRunRuntimeAuthRefreshRequest,
 ) => Promise<ConnectedServiceDaemonAuthBridgeRefreshResult>;
+
+export const ConnectedServiceRunRuntimeFailureRecoveryRequestSchema = ConnectedServiceRunReleaseRequestSchema.extend({
+    nativeResumeId: z.string().trim().min(1),
+    interruptedOriginId: z.string().trim().min(1),
+    classification: z.unknown().transform((value, ctx) => {
+        const classification = sanitizeConnectedServiceRuntimeFailureClassification(value);
+        if (!classification) {
+            ctx.addIssue({ code: z.ZodIssueCode.custom, message: 'Invalid connected service classification' });
+            return z.NEVER;
+        }
+        return classification;
+    }).optional(),
+    diagnostic: z.unknown().optional(),
+}).strict().refine((input) => input.classification !== undefined || input.diagnostic !== undefined);
+export type ConnectedServiceRunRuntimeFailureRecoveryRequest = z.infer<typeof ConnectedServiceRunRuntimeFailureRecoveryRequestSchema>;
+export const ConnectedServiceRunRuntimeFailureRecoveryResultSchema = z.union([
+    z.object({ status: z.literal('continue'), input: z.string().min(1), rematerialize: z.boolean() }).strict(),
+    z.object({ status: z.literal('failed'), reason: z.string().optional() }).strict(),
+]);
+export type ConnectedServiceRunRuntimeFailureRecoveryResult = z.infer<typeof ConnectedServiceRunRuntimeFailureRecoveryResultSchema>;
+export type ConnectedServiceRunRuntimeFailureRecoveryHandler = (
+    input: ConnectedServiceRunRuntimeFailureRecoveryRequest, signal: AbortSignal,
+) => Promise<ConnectedServiceRunRuntimeFailureRecoveryResult>;
 export const ConnectedServiceRunGenerationCurrentRequestSchema = z.object({
     runId: z.string().trim().min(1),
     runnerPid: z.number().int().positive(),

@@ -15,6 +15,7 @@ import {
 } from '@happier-dev/plugin-sdk/connected-accounts';
 
 import type { CatalogAgentId } from '@/agent/catalog/ids';
+import { logger } from '@/utils/logger';
 import { resolveAgentContributionQualifiedId } from '@/plugins/projection/registry/agentRoutingIdentity';
 import type { AgentSpawnQualifiedPurposeBindingSnapshot } from '@/daemon/connectedServices/requestAuth/prepareConnectedAccountRequestAuthForSpawn';
 import { resolveQualifiedPurposeBindingSnapshotForAgentSpawn } from '@/daemon/connectedServices/requestAuth/prepareConnectedAccountRequestAuthForSpawn';
@@ -335,7 +336,15 @@ async function materializeQualifiedConnectedAccountLaunchForSpawn(params: Readon
           signal: signalController.signal,
         });
         signalController.signal.throwIfAborted();
-        if (!binding) throw new Error('Connected Account native-home binding is unavailable');
+        if (!binding) {
+          const error = new Error('Connected Account native-home binding is unavailable');
+          logger.infoFile('[CONNECTED ACCOUNT] Native-home binding rejected', {
+            phase: 'binding_read', agentId: params.agentId, purposeKey,
+            sessionId: params.purposeBindingSessionId,
+            materializationKey: params.materializationKey, error,
+          });
+          throw error;
+        }
         const expected = expectedAccountsByPurposeKey.get(purposeKey);
         if (expected && !sameQualifiedConnectedAccountRef(expected, binding.account)) {
           throw new Error('Connected Account native-home binding changed');
@@ -543,7 +552,16 @@ async function materializeQualifiedConnectedAccountLaunchForSpawn(params: Readon
           ))) continue;
           if (!connectedAccountsOwner) throw new Error('Connected Account launch authority is unavailable');
           const expectedAccount = expectedAccountsByPurposeKey.get(qualifiedPurposeKey(scope.purpose));
-          if (!expectedAccount) throw new Error('Connected Account native-home binding is unavailable');
+          if (!expectedAccount) {
+            const error = new Error('Connected Account native-home binding is unavailable');
+            logger.infoFile('[CONNECTED ACCOUNT] Native-home binding rejected', {
+              phase: 'expected_account', agentId: params.agentId,
+              purposeKey: qualifiedPurposeKey(scope.purpose),
+              sessionId: params.purposeBindingSessionId,
+              materializationKey: params.materializationKey, error,
+            });
+            throw error;
+          }
           const materialization = await connectedAccountsOwner.materialize({
             purpose: scope.purpose,
             serviceRefs: scope.serviceRefs,

@@ -1,10 +1,12 @@
 import {
     buildProviderAccountUsageRecordId,
+    QualifiedProviderAccountUsageWriteV4Schema,
     type ConnectedServiceUsageSourceV1,
     type ProviderAccountUsageRecordKeyV1,
     type ProviderAccountUsageSnapshotV1,
 } from '@happier-dev/protocol';
-import { describe, expect, it, vi } from 'vitest';
+import axios from 'axios';
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
 import type { QualifiedProviderAccountUsagePersistenceTarget } from './persistence';
 import type { ProviderAccountUsageAdoptionV1 } from './adoption';
@@ -13,6 +15,7 @@ import {
     recordProviderAccountUsageSnapshotForSession,
 } from './recordProviderAccountUsageSnapshotForSession';
 import { createProviderAccountUsageStore } from './store';
+import { createProviderAccountUsagePersistenceScheduler, type ProviderAccountUsagePersistenceScheduler } from './persistence';
 
 function createRecordKey(accountSubjectId = 'acct_123'): ProviderAccountUsageRecordKeyV1 {
     return {
@@ -87,10 +90,32 @@ function createTarget(
     };
 }
 
-const enqueued = {
-    status: 'enqueued' as const,
-    enqueue: 'accepted' as const,
-};
+const schedulers: ProviderAccountUsagePersistenceScheduler[] = [];
+const writes: ReturnType<typeof QualifiedProviderAccountUsageWriteV4Schema.parse>[] = [];
+
+beforeEach(() => {
+    // HTTP is the boundary; the recorder, store, queue, envelope and V4 writer stay real.
+    vi.spyOn(axios, 'post').mockImplementation(async (_url, body) => {
+        writes.push(QualifiedProviderAccountUsageWriteV4Schema.parse(body));
+        return { status: 200, data: { success: true, source: { status: 'linked' } } };
+    });
+});
+
+afterEach(() => {
+    for (const scheduler of schedulers.splice(0)) scheduler.dispose();
+    writes.length = 0;
+    vi.restoreAllMocks();
+});
+
+function createPersistence(): ProviderAccountUsagePersistenceScheduler {
+    const scheduler = createProviderAccountUsagePersistenceScheduler({
+        api: { getAccountEncryptionMode: async () => 'plain' },
+        credentials: { token: 'token', encryption: null },
+        now: () => 2_000, fingerprintKey: new Uint8Array(32).fill(3),
+    });
+    schedulers.push(scheduler);
+    return scheduler;
+}
 
 describe('recordProviderAccountUsageSnapshotForSession', () => {
     it('persists the last valid subscription with a failed subscription refresh', async () => {
@@ -113,7 +138,7 @@ describe('recordProviderAccountUsageSnapshotForSession', () => {
                 lastRefreshError: { observedAtMs: 2_000, code: 'network' as const },
             },
         };
-        const persistence = { recordInBandSnapshot: vi.fn(async () => enqueued) };
+        const persistence = createPersistence();
         await recordProviderAccountUsageSnapshotForSession({
             getChildren: () => [{ happySessionId: 'sess_1' }],
             store, persistence, sessionId: 'sess_1', snapshot: failed,
@@ -127,10 +152,10 @@ describe('recordProviderAccountUsageSnapshotForSession', () => {
             ...previous.subscription,
             lastRefreshError: failed.subscription.lastRefreshError,
         };
-        expect(persistence.recordInBandSnapshot).toHaveBeenCalledWith(
-            expect.objectContaining({ subscription: expectedSubscription }),
-            { targets: [createTarget()] },
-        );
+        await persistence.flush(1_000);
+        expect(writes).toEqual([expect.objectContaining({ snapshot: { ...failed, subscription: expectedSubscription },
+            source: createTarget().source, expectedCredentialRevision: createTarget().expectedCredentialRevision,
+            expectedConfigurationRevision: createTarget().expectedConfigurationRevision })]);
         expect(store.resolveRecordId(previous.recordId)?.subscription).toEqual(expectedSubscription);
     });
 
@@ -138,9 +163,7 @@ describe('recordProviderAccountUsageSnapshotForSession', () => {
         const snapshot = createSnapshot(createRecordKey('acct_live'));
         const target = createTarget();
         const store = createProviderAccountUsageStore();
-        const persistence = {
-            recordInBandSnapshot: vi.fn(async () => enqueued),
-        };
+        const persistence = createPersistence();
 
         await expect(recordProviderAccountUsageSnapshotForSession({
             getChildren: () => [{ happySessionId: 'sess_1' }],
@@ -167,10 +190,10 @@ describe('recordProviderAccountUsageSnapshotForSession', () => {
         });
 
         expect(store.resolveBySource(profileSource)?.recordId).toBe(snapshot.recordId);
-        expect(persistence.recordInBandSnapshot).toHaveBeenCalledWith(
-            snapshot,
-            { targets: [target] },
-        );
+        await persistence.flush(1_000);
+        expect(writes).toEqual([expect.objectContaining({ snapshot, source: target.source,
+            expectedCredentialRevision: target.expectedCredentialRevision,
+            expectedConfigurationRevision: target.expectedConfigurationRevision })]);
     });
 
     it('does not let stale credential evidence advance a qualified account-usage record', async () => {
@@ -183,9 +206,7 @@ describe('recordProviderAccountUsageSnapshotForSession', () => {
             state: 'error_last_known_good' as const,
         };
         store.recordSnapshot(qualifiedSnapshot, { sources: [profileSource] });
-        const persistence = {
-            recordInBandSnapshot: vi.fn(async () => enqueued),
-        };
+        const persistence = createPersistence();
 
         await expect(recordProviderAccountUsageSnapshotForSession({
             getChildren: () => [{ happySessionId: 'sess_1' }],
@@ -204,18 +225,14 @@ describe('recordProviderAccountUsageSnapshotForSession', () => {
         });
 
         expect(store.resolveRecordId(staleSnapshot.recordId)).toEqual(qualifiedSnapshot);
-        expect(persistence.recordInBandSnapshot).not.toHaveBeenCalled();
+        await persistence.flush(1_000);
+        expect(writes).toEqual([]);
     });
 
     it('keeps an unqualified observation local and does not publish a durable record id', async () => {
         const snapshot = createSnapshot(createRecordKey('acct_unproved'));
         const store = createProviderAccountUsageStore();
-        const persistence = {
-            recordInBandSnapshot: vi.fn(async () => ({
-                status: 'not_persisted' as const,
-                reason: 'no_current_qualified_source' as const,
-            })),
-        };
+        const persistence = createPersistence();
         const publishRecordId = vi.fn(async () => {});
 
         await expect(recordProviderAccountUsageSnapshotForSession({
@@ -234,30 +251,18 @@ describe('recordProviderAccountUsageSnapshotForSession', () => {
 
         expect(store.resolveRecordId(snapshot.recordId)).toEqual(snapshot);
         expect(store.resolveBySource(profileSource)).toBeNull();
-        expect(persistence.recordInBandSnapshot).toHaveBeenCalledWith(
-            snapshot,
-            { targets: [] },
-        );
+        await persistence.flush(1_000);
+        expect(writes).toEqual([]);
         expect(publishRecordId).not.toHaveBeenCalled();
     });
 
     it('does not advance the local store before qualified persistence takes custody', async () => {
         const snapshot = createSnapshot();
         const target = createTarget();
-        const store = {
-            recordSnapshot: vi.fn((recorded: ProviderAccountUsageSnapshotV1) => ({
-                status: 'snapshot_advanced' as const,
-                recordId: recorded.recordId,
-                snapshotAdvanced: true,
-                sourceLinked: false,
-            })),
-            resolveRecordId: vi.fn(() => snapshot),
-        };
-        const persistence = {
-            recordInBandSnapshot: vi.fn()
-                .mockRejectedValueOnce(new Error('persistence unavailable'))
-                .mockResolvedValueOnce(enqueued),
-        };
+        const store = createProviderAccountUsageStore();
+        const persistence = createPersistence();
+        // Real shutdown refuses queued custody; a new scheduler is the resumed owner.
+        persistence.dispose();
         const input = {
             getChildren: () => [{ happySessionId: 'sess_1' }],
             store,
@@ -268,19 +273,21 @@ describe('recordProviderAccountUsageSnapshotForSession', () => {
         } as const;
 
         await expect(recordProviderAccountUsageSnapshotForSession(input))
-            .rejects.toThrow('persistence unavailable');
-        expect(store.recordSnapshot).not.toHaveBeenCalled();
+            .rejects.toThrow('provider_account_usage_persistence_disposed');
+        expect(store.resolveRecordId(snapshot.recordId)).toBeNull();
+        expect(writes).toEqual([]);
 
-        await expect(recordProviderAccountUsageSnapshotForSession(input)).resolves.toEqual({
+        const resumedPersistence = createPersistence();
+        await expect(recordProviderAccountUsageSnapshotForSession({ ...input, persistence: resumedPersistence })).resolves.toEqual({
             status: 'snapshot_advanced',
             recordId: snapshot.recordId,
             persisted: true,
         });
-        expect(store.recordSnapshot).toHaveBeenCalledOnce();
-        expect(persistence.recordInBandSnapshot).toHaveBeenLastCalledWith(
-            snapshot,
-            { targets: [target] },
-        );
+        expect(store.resolveRecordId(snapshot.recordId)).toEqual(snapshot);
+        await resumedPersistence.flush(1_000);
+        expect(writes).toEqual([expect.objectContaining({ snapshot, source: target.source,
+            expectedCredentialRevision: target.expectedCredentialRevision,
+            expectedConfigurationRevision: target.expectedConfigurationRevision })]);
     });
 
     it('does not commit an adoption unless a V4 persistence target accepts custody', async () => {
@@ -297,26 +304,20 @@ describe('recordProviderAccountUsageSnapshotForSession', () => {
             proof: { kind: 'provider_account_id_match' },
             observedAtMs: 2_000,
         };
-        const unavailablePersistence = {
-            recordInBandSnapshot: vi.fn(async () => ({
-                status: 'not_persisted' as const,
-                reason: 'no_current_qualified_source' as const,
-            })),
-        };
+        // Without a target resolver the real scheduler receives targets: []
+        // and returns not_persisted, preserving the adoption refusal contract.
+        const persistence = createPersistence();
 
         await expect(recordProviderAccountUsageAdoptionForSession({
             getChildren: () => [{ happySessionId: 'sess_1' }],
             store,
-            persistence: unavailablePersistence,
+            persistence,
             sessionId: 'sess_1',
             adoption,
         })).rejects.toThrow('persistence target unavailable');
         expect(store.resolveRecordId(provisionalSnapshot.recordId)).toEqual(provisionalSnapshot);
         expect(store.resolveRecordId(adoption.toRecordId)).toBeNull();
 
-        const persistence = {
-            recordInBandSnapshot: vi.fn(async () => enqueued),
-        };
         const target = createTarget();
         await expect(recordProviderAccountUsageAdoptionForSession({
             getChildren: () => [{ happySessionId: 'sess_1' }],
@@ -334,21 +335,17 @@ describe('recordProviderAccountUsageSnapshotForSession', () => {
             toRecordId: adoption.toRecordId,
             persisted: true,
         });
-        expect(persistence.recordInBandSnapshot).toHaveBeenCalledWith(
-            expect.objectContaining({ recordId: adoption.toRecordId }),
-            { targets: [target] },
-        );
+        await persistence.flush(1_000);
+        expect(writes).toEqual([expect.objectContaining({ recordId: adoption.toRecordId, source: target.source,
+            expectedCredentialRevision: target.expectedCredentialRevision,
+            expectedConfigurationRevision: target.expectedConfigurationRevision })]);
+        expect(store.resolveBySource(profileSource)?.recordId).toBe(adoption.toRecordId);
     });
 
     it('returns session_not_found without local or durable mutations', async () => {
         const snapshot = createSnapshot();
-        const store = {
-            recordSnapshot: vi.fn(),
-            resolveRecordId: vi.fn(() => null),
-        };
-        const persistence = {
-            recordInBandSnapshot: vi.fn(async () => enqueued),
-        };
+        const store = createProviderAccountUsageStore();
+        const persistence = createPersistence();
 
         await expect(recordProviderAccountUsageSnapshotForSession({
             getChildren: () => [{ happySessionId: 'other' }],
@@ -358,7 +355,8 @@ describe('recordProviderAccountUsageSnapshotForSession', () => {
             sessionId: 'sess_1',
             snapshot,
         })).resolves.toEqual({ status: 'session_not_found' });
-        expect(store.recordSnapshot).not.toHaveBeenCalled();
-        expect(persistence.recordInBandSnapshot).not.toHaveBeenCalled();
+        expect(store.resolveRecordId(snapshot.recordId)).toBeNull();
+        await persistence.flush(1_000);
+        expect(writes).toEqual([]);
     });
 });

@@ -1,5 +1,10 @@
 import type { ConnectedServiceAuthGroupSwitchCoordinator } from '../accountGroups/switching/ConnectedServiceAuthGroupSwitchCoordinator';
 import type { ConnectedServiceRuntimeFailureClassification } from './types';
+import type { ConnectedServiceDaemonAuthBridgeRefreshResult } from '../daemonAuthBridgeTypes';
+import { connectedServiceRecoveryScopeKey, type ConnectedServiceRecoveryScope, type ConnectedServiceRuntimeTarget } from '../runtimeRegistry/target';
+import type { ConnectedServiceTemporaryThrottleRetryScheduler, ConnectedServiceTemporaryThrottleContinuationIntent } from './temporaryThrottleRetryScheduler';
+import { continueConnectedServiceRecoveryForScope } from '../continuation/continuationResumePrompt';
+import { resolveRuntimeAuthRecoveryResultDisposition } from './resolveRuntimeAuthRecoveryResultDisposition';
 import {
     decideConnectedServiceRecovery,
     type ConnectedServiceRecoveryPolicyDecision,
@@ -18,10 +23,27 @@ type RuntimeSelection =
         activeProfileId: string;
     }>;
 
+/** A binding is supplied only by the scope's existing runtime authority. */
+export function applyConnectedServiceRuntimeAuthFailureSourceBinding(
+    classification: ConnectedServiceRuntimeFailureClassification,
+    binding: Readonly<{ serviceId: string; profileId: string; groupId: string | null; generation: number | null;
+        credentialRevision: ConnectedServiceRuntimeFailureClassification['expectedCredentialRevision'] }>,
+): ConnectedServiceRuntimeFailureClassification {
+    return { ...classification, serviceId: binding.serviceId, profileId: binding.profileId, groupId: binding.groupId,
+        groupGeneration: binding.generation, expectedCredentialRevision: binding.credentialRevision };
+}
+
+export function readConnectedServiceRuntimeAuthFailureSourceBinding(target: ConnectedServiceRuntimeTarget, serviceId: string) {
+    const binding = target.activeBindings.find((candidate) => candidate.serviceId === serviceId);
+    return binding ? { serviceId: binding.serviceId, groupId: binding.groupId, profileId: binding.profileId,
+        generation: binding.groupGeneration, credentialRevision: binding.credentialRevision } : null;
+}
+
 type SwitchCoordinatorLike = Pick<ConnectedServiceAuthGroupSwitchCoordinator, 'switchAfterClassifiedFailure'>;
 type TemporaryThrottleRecoveryLike = Readonly<{
     enable(input: Readonly<{
         sessionId: string;
+        scope?: ConnectedServiceRecoveryScope;
         issueFingerprint: string;
         retryAfterMs?: number | null;
         resetAtMs?: number | null;
@@ -35,6 +57,22 @@ type TemporaryThrottleRecoveryLike = Readonly<{
         maxAttempts?: number;
     }>>;
 }>;
+
+/** Credential preparation precedes pool policy for both authoritative runtime scopes. */
+export async function prepareConnectedServiceRuntimeCredentialRecovery<Refresh extends Readonly<{ status: string; runtimeAuthDisposition?: string }>, Result>(input: Readonly<{
+    scope: ConnectedServiceRecoveryScope;
+    classification: ConnectedServiceRuntimeFailureClassification;
+    activeProfileId: string | null;
+    refresh?: ((scope: ConnectedServiceRecoveryScope) => Promise<Refresh>) | null;
+    onRefreshed: (refresh: Refresh, scope: ConnectedServiceRecoveryScope, activeProfileId: string) => Promise<Result>;
+}>): Promise<Readonly<{ status: 'prepared'; result: Result }> | Readonly<{ status: 'policy'; refreshFailed: boolean }>> {
+    if (input.classification.kind !== 'auth_expired' || !input.activeProfileId || !input.refresh) return { status: 'policy', refreshFailed: false };
+    const refresh = await input.refresh(input.scope);
+    // A refresh whose member was superseded must use ordinary current group adoption.
+    if (refresh.runtimeAuthDisposition === 'superseded_by_current_group') return { status: 'policy', refreshFailed: false };
+    if (refresh.status === 'refreshed') return { status: 'prepared', result: await input.onRefreshed(refresh, input.scope, input.activeProfileId) };
+    return { status: 'policy', refreshFailed: true };
+}
 
 type RuntimeRecoveryActionRequired = Readonly<{
     status: 'recovery_action_required';
@@ -169,11 +207,13 @@ function buildTemporaryThrottleIssueFingerprint(input: Readonly<{
 
 export async function handleConnectedServiceRuntimeAuthFailure(input: Readonly<{
     sessionId?: string;
+    scope?: ConnectedServiceRecoveryScope;
     selection: RuntimeSelection | null;
     classification: ConnectedServiceRuntimeFailureClassification | null;
     switchesThisTurn: number;
     sessionSwitchesThisHour?: number;
     allowCurrentProfileRetry?: boolean;
+    expectedFailureSource?: Parameters<SwitchCoordinatorLike['switchAfterClassifiedFailure']>[0]['expectedFailureSource'];
     switchCoordinator: SwitchCoordinatorLike;
     temporaryThrottleRecovery?: TemporaryThrottleRecoveryLike | null;
 }>): Promise<
@@ -205,7 +245,8 @@ export async function handleConnectedServiceRuntimeAuthFailure(input: Readonly<{
         });
         const retryAfterMs = input.classification.retryAfterMs ?? null;
         const resetAtMs = input.classification.resetsAtMs;
-        if (!input.sessionId) {
+        const recoveryKey = input.scope ? connectedServiceRecoveryScopeKey(input.scope) : input.sessionId;
+        if (!recoveryKey) {
             return temporaryRetryUnavailable({
                 serviceId: input.classification.serviceId,
                 profileId,
@@ -227,7 +268,8 @@ export async function handleConnectedServiceRuntimeAuthFailure(input: Readonly<{
             });
         }
         const recovery = await input.temporaryThrottleRecovery.enable({
-            sessionId: input.sessionId,
+            sessionId: recoveryKey,
+            ...(input.scope ? { scope: input.scope } : {}),
             serviceId: input.classification.serviceId,
             profileId,
             groupId,
@@ -253,7 +295,7 @@ export async function handleConnectedServiceRuntimeAuthFailure(input: Readonly<{
         }
         return {
             status: 'temporary_retry_armed',
-            sessionId: input.sessionId,
+            sessionId: input.sessionId ?? '',
             serviceId: input.classification.serviceId,
             profileId,
             groupId,
@@ -287,7 +329,7 @@ export async function handleConnectedServiceRuntimeAuthFailure(input: Readonly<{
     }
 
     const result = await input.switchCoordinator.switchAfterClassifiedFailure({
-        ...(input.sessionId ? { sessionId: input.sessionId } : {}),
+        ...(input.scope?.kind !== 'run' && input.sessionId ? { sessionId: input.sessionId } : {}),
         serviceId: input.selection.serviceId,
         groupId: input.selection.groupId,
         reason: input.classification.kind,
@@ -301,9 +343,81 @@ export async function handleConnectedServiceRuntimeAuthFailure(input: Readonly<{
         planType: input.classification.planType,
         switchesThisTurn: input.switchesThisTurn,
         sessionSwitchesThisHour: input.sessionSwitchesThisHour,
+        ...(input.expectedFailureSource ? { expectedFailureSource: input.expectedFailureSource } : {}),
         ...(input.allowCurrentProfileRetry === undefined
             ? {}
             : { allowCurrentProfileRetry: input.allowCurrentProfileRetry }),
     });
     return { status: 'switch_attempted', result };
+}
+
+/** Consumes the shared policy and scheduler for a retained runtime continuation. */
+export async function recoverConnectedServiceRuntimeFailure(input: Readonly<{
+    scope: Extract<ConnectedServiceRecoveryScope, { kind: 'run' }>;
+    selection: RuntimeSelection;
+    classification: ConnectedServiceRuntimeFailureClassification;
+    switchesThisTurn: number;
+    sessionSwitchesThisHour?: number;
+    switchCoordinator: SwitchCoordinatorLike;
+    temporaryThrottleScheduler: Pick<ConnectedServiceTemporaryThrottleRetryScheduler, 'waitForRecovery' | 'enable'>;
+    continuation: ConnectedServiceTemporaryThrottleContinuationIntent;
+    signal: AbortSignal;
+    isCurrent(): boolean;
+    nowMs(): number;
+    refreshCredential?: () => Promise<ConnectedServiceDaemonAuthBridgeRefreshResult>;
+}>): Promise<Readonly<{ status: 'continue'; input: string; rematerialize: boolean }> | Readonly<{ status: 'failed'; reason: string }>> {
+    if (!input.isCurrent() || input.signal.aborted) return { status: 'failed', reason: 'runtime_recovery_stale' };
+    const schedulerInput = (timing: Readonly<{ issueFingerprint: string; retryAfterMs?: number | null; resetAtMs?: number | null }>) => ({
+        ...timing, scope: input.scope, continuation: input.continuation,
+        serviceId: input.selection.serviceId,
+        profileId: input.selection.kind === 'group' ? input.selection.activeProfileId : input.selection.profileId,
+        groupId: input.selection.kind === 'group' ? input.selection.groupId : null,
+    });
+    const arm = async (timing: Parameters<typeof schedulerInput>[0]) => await input.temporaryThrottleScheduler.enable({
+        ...schedulerInput(timing), sessionId: connectedServiceRecoveryScopeKey(input.scope),
+    });
+    const wait = async (timing: Parameters<typeof schedulerInput>[0]) => {
+        const outcome = await input.temporaryThrottleScheduler.waitForRecovery(schedulerInput(timing), input.signal);
+        return outcome.status === 'resumed' && input.isCurrent() && !input.signal.aborted;
+    };
+    let rematerialize = false;
+    let failureReason = 'runtime_recovery_stale';
+    const continuation = await continueConnectedServiceRecoveryForScope({ ...input.continuation,
+        scope: input.scope, interruption: 'provider_failed_turn',
+        prepare: async ({ continuationEnabled }) => {
+            const credential = await prepareConnectedServiceRuntimeCredentialRecovery({ scope: input.scope, classification: input.classification,
+                activeProfileId: input.selection.kind === 'group' ? input.selection.activeProfileId : input.selection.profileId,
+                refresh: input.refreshCredential,
+                onRefreshed: async (refresh) => ({ status: 'credential_refreshed' as const, refresh }),
+            });
+            const result = credential.status === 'prepared' ? credential.result : await handleConnectedServiceRuntimeAuthFailure({ ...input,
+                temporaryThrottleRecovery: { enable: async (timing) => continuationEnabled ? ({
+                    status: await wait(timing) ? 'resumed' : 'unsupported', nextRetryAtMs: null, attemptCount: 0,
+                }) : await arm(timing) },
+            });
+            const disposition = resolveRuntimeAuthRecoveryResultDisposition({ result,
+                classificationFailureKind: input.classification.kind, classificationResetsAtMs: input.classification.resetsAtMs,
+                nowMs: input.nowMs() });
+            if (disposition?.kind === 'durable_wait') {
+                failureReason = 'runtime_recovery_cancelled';
+                const timing = { issueFingerprint: `runtime-wait:${input.classification.serviceId}:${input.classification.groupId}:${input.continuation.interruptedOriginId}`,
+                    resetAtMs: disposition.nextRetryAtMs };
+                if (continuationEnabled) {
+                    if (!await wait(timing)) return false;
+                } else await arm(timing);
+                rematerialize = true;
+            } else if (disposition?.kind === 'local_completion') rematerialize = disposition.targetChanged;
+            else if (disposition?.kind === 'temporary_retry_handoff'
+                && (disposition.ready || (!continuationEnabled && disposition.status === 'temporary_retry_armed'))) rematerialize = false;
+            else if (disposition?.kind !== 'provider_outcome_proven') {
+                failureReason = disposition?.kind === 'terminal' ? disposition.reason : result.status;
+                return false;
+            }
+            return input.isCurrent() && !input.signal.aborted;
+        },
+        deliver: async ({ prompt }) => ({ status: 'continue' as const, input: prompt, rematerialize }),
+    });
+    return continuation.status === 'delivered' ? continuation.value : {
+        status: 'failed', reason: continuation.status === 'disabled' ? 'continuation_disabled' : failureReason,
+    };
 }

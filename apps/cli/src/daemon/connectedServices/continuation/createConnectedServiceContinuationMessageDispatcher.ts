@@ -5,14 +5,10 @@ import type { SessionContinuationResumePromptModeV1 } from '@happier-dev/protoco
 import type { StoredCredentials } from '@/persistence';
 import { sendSessionMessage } from '@/session/services/sendSessionMessage';
 
-import { buildContinuationResumePrompt } from './continuationResumePrompt';
+import { continueConnectedServiceRecoveryForScope, type ConnectedServiceContinuationInterruption } from './continuationResumePrompt';
 import type { ConnectedServiceRuntimeAuthFailureKind } from '../runtimeAuth/types';
 
-export type ConnectedServiceContinuationInterruption =
-  | 'none'
-  | 'clean_boundary'
-  | 'forced_turn_cancelled'
-  | 'provider_failed_turn';
+export type { ConnectedServiceContinuationInterruption } from './continuationResumePrompt';
 
 type ConnectedServiceContinuationMessageDispatcherDeps = Readonly<{
   credentials: StoredCredentials;
@@ -78,23 +74,20 @@ export function createConnectedServiceContinuationMessageDispatcher(
       | Readonly<{ status: 'not_interrupted' | 'disabled' | 'suppressed_newer_user_input' }>
       | Readonly<{ status: 'enqueued'; localId: string }>
     > {
-      if (input.interruption === 'none' || input.interruption === 'clean_boundary') {
-        return { status: 'not_interrupted' };
-      }
-      if (input.resumePromptMode === 'off') {
-        return { status: 'disabled' };
-      }
-      const prompt = buildContinuationResumePrompt({
+      const continuation = await continueConnectedServiceRecoveryForScope({
+        scope: { kind: 'session', sessionId: input.sessionId },
+        interruption: input.interruption,
         resumePromptMode: input.resumePromptMode,
         customResumePrompt: input.customResumePrompt,
         recoveryKind: input.recoveryKind,
+        deliver: async ({ prompt }) => {
+          const localId = createContinuationLocalId(input.sessionId, input.attemptId, input.interruptedOriginId);
+          const sent = await this.sendContinuationPrompt({ sessionId: input.sessionId, prompt, localId, isCurrent: input.isCurrent });
+          return sent.suppressed ? { status: 'suppressed_newer_user_input' as const } : { status: 'enqueued' as const, localId };
+        },
       });
-      const localId = createContinuationLocalId(input.sessionId, input.attemptId, input.interruptedOriginId);
-      const sent = await this.sendContinuationPrompt({ sessionId: input.sessionId, prompt, localId, isCurrent: input.isCurrent });
-      if (sent.suppressed) {
-        return { status: 'suppressed_newer_user_input' };
-      }
-      return { status: 'enqueued', localId };
+      if (continuation.status === 'delivered') return continuation.value;
+      return { status: continuation.status === 'disabled' ? 'disabled' : 'not_interrupted' };
     },
   };
 }

@@ -68,6 +68,24 @@ async function harness(refresh: (request: ConnectedServiceDaemonAuthBridgeRefres
 }
 
 describe('execution Run runtime auth refresh HTTP authority', () => {
+    it('admits failure recovery only through the retained Run activation, never parent Session fields', async () => {
+        const h = await harness(async () => ({ status: 'refreshed', result: {} }));
+        try {
+            const failure = { ...h.request, serviceId: undefined, refreshAttemptId: undefined, selection: undefined, expectedCredentialRevision: undefined,
+                nativeResumeId: 'native-checkpoint', interruptedOriginId: 'turn', classification: {
+                    kind: 'capacity', serviceId: selection.serviceId, profileId: selection.activeProfileId, groupId: selection.groupId,
+                    groupGeneration: selection.generation, expectedCredentialRevision: revision, limitCategory: 'capacity', quotaScope: 'provider',
+                    resetsAtMs: null, retryAfterMs: null, providerLimitId: null, action: null, planType: null, rateLimits: null, source: 'structured_provider_error',
+                } };
+            const postFailure = (payload: unknown, token = 'scoped') => h.app.inject({ method: 'POST', url: '/connected-service-run/recover-runtime-failure',
+                headers: { 'x-happier-daemon-token': token }, payload });
+            expect((await postFailure(failure, 'master')).statusCode).toBe(401);
+            expect((await postFailure({ ...failure, parentSessionId: 'invented' })).statusCode).toBe(400);
+            const response = await postFailure(failure);
+            expect(response.statusCode).toBe(200);
+            expect(response.json()).toMatchObject({ status: 'failed' });
+        } finally { await h.app.close(); }
+    });
     it('uses real Run scope and rejects master control authority', async () => {
         const requests: ConnectedServiceDaemonAuthBridgeRefreshRequest[] = [];
         const h = await harness(async (request) => { requests.push(request); return { status: 'refreshed', result: { proof: 'fresh' } }; });

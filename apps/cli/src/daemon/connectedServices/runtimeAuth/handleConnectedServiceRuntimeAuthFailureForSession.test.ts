@@ -8,8 +8,53 @@ import {
 import type { RuntimeAuthRecoveryIntent } from './RuntimeAuthRecoveryScheduler';
 import type { ConnectedServiceRuntimeFailureClassification } from './types';
 import { HAPPIER_CONNECTED_SERVICE_SELECTIONS_ENV_KEY } from '../connectedServiceChildEnvironment';
+import { ConnectedServiceRuntimeRegistry } from '../runtimeRegistry/registry';
+import { readConnectedServiceRuntimeAuthFailureSourceBinding, applyConnectedServiceRuntimeAuthFailureSourceBinding } from './handleConnectedServiceRuntimeAuthFailure';
 
 describe('handleConnectedServiceRuntimeAuthFailureForSession', () => {
+    it('clears successful turn switch attempts while preserving the hourly budget and other runtime scopes', () => {
+        const tracker = new ConnectedServiceRuntimeAuthSwitchAttemptTracker({ nowMs: () => 1_000, windowMs: 60_000 });
+        const key = { sessionId: 'session', serviceId: 'happier.agent.codex/openai-codex', groupId: 'pool', profileId: 'current' };
+        tracker.recordSwitchResult({ ...key, resultStatus: 'switched' });
+        tracker.recordSwitchResult({ ...key, sessionId: 'other', resultStatus: 'switched' });
+        tracker.recordTurnLifecycle({ sessionId: key.sessionId, event: 'assistant_message_end', terminalStatus: 'failed' });
+        expect(tracker.resolveSwitchesThisTurn({ ...key, reportedSwitchesThisTurn: 0 })).toBe(1);
+        tracker.recordTurnLifecycle({ sessionId: key.sessionId, event: 'assistant_message_end', terminalStatus: 'completed' });
+        expect(tracker.resolveSwitchesThisTurn({ ...key, reportedSwitchesThisTurn: 0 })).toBe(0);
+        expect(tracker.countRecordedSwitchesInWindow({ ...key, windowMs: 3_600_000 })).toBe(1);
+        expect(tracker.resolveSwitchesThisTurn({ ...key, sessionId: 'other', reportedSwitchesThisTurn: 0 })).toBe(1);
+    });
+    it('qualifies evidence-only native failure against the current registered Session member, never stale launch auth', async () => {
+        const serviceId = 'happier.agent.claude/claude-subscription';
+        const tracked = { startedBy: 'daemon' as const, pid: 111, happySessionId: 'session', spawnOptions: {
+            directory: '/project', environmentVariables: { [HAPPIER_CONNECTED_SERVICE_SELECTIONS_ENV_KEY]: JSON.stringify([
+                { kind: 'group', serviceId, groupId: 'pool', activeProfileId: 'old', fallbackProfileId: 'old', generation: 1 },
+            ]) },
+        } };
+        const registry = new ConnectedServiceRuntimeRegistry();
+        registry.registerTarget({ pid: tracked.pid, sessionId: tracked.happySessionId, agentId: 'claude',
+            connectedServicesBindingsRaw: { v: 2, bindingsByServiceId: { [serviceId]: {
+                source: 'connected', selection: 'group', groupId: 'pool', profileId: 'old',
+            } } },
+            connectedServiceSelectionsEnv: { [HAPPIER_CONNECTED_SERVICE_SELECTIONS_ENV_KEY]: JSON.stringify([
+                { kind: 'group', serviceId, groupId: 'pool', activeProfileId: 'current', fallbackProfileId: 'old', generation: 2,
+                    credentialRevision: 'csr_abcdefghijklmnopqrstuv' },
+            ]) } });
+        const classification: ConnectedServiceRuntimeFailureClassification = { kind: 'usage_limit', serviceId, profileId: null, groupId: null,
+            quotaScope: 'account', groupGeneration: null, expectedCredentialRevision: null, resetsAtMs: null, planType: null,
+            rateLimits: null, source: 'structured_provider_error' };
+        const resolveRegisteredRuntimeAuthFailureSource = async () => {
+            const target = registry.getBySessionId(tracked.happySessionId);
+            return target ? readConnectedServiceRuntimeAuthFailureSourceBinding(target, serviceId) : null;
+        };
+        const authorization = await authorizeConnectedServiceRuntimeAuthFailureSource({ getChildren: () => [tracked],
+            sessionId: tracked.happySessionId, classification, resolveRegisteredRuntimeAuthFailureSource });
+        expect(authorization).toMatchObject({ status: 'authorized', sourceBinding: { profileId: 'current', generation: 2 } });
+        if (authorization.status === 'authorized' && authorization.sourceBinding) {
+            expect(applyConnectedServiceRuntimeAuthFailureSourceBinding(classification, { ...authorization.sourceBinding,
+                credentialRevision: 'csr_abcdefghijklmnopqrstuv' })).toMatchObject({ profileId: 'current', groupId: 'pool', groupGeneration: 2 });
+        }
+    });
     it('authorizes a provider-qualified shared-auth failure from the live group member instead of stale launch metadata', async () => {
         const tracked = {
             startedBy: 'daemon' as const,
@@ -29,7 +74,7 @@ describe('handleConnectedServiceRuntimeAuthFailureForSession', () => {
             sessionId: tracked.happySessionId,
             classification: {
                 kind: 'usage_limit',
-                serviceId: 'claude-subscription',
+                serviceId: 'happier.agent.claude/claude-subscription',
                 profileId: 'launch-profile',
                 groupId: 'claude',
                 groupGeneration: 7,
@@ -44,7 +89,7 @@ describe('handleConnectedServiceRuntimeAuthFailureForSession', () => {
         })).resolves.toMatchObject({
             status: 'authorized',
             sourceBinding: {
-                serviceId: 'claude-subscription',
+                serviceId: 'happier.agent.claude/claude-subscription',
                 groupId: 'claude',
                 profileId: 'live-profile',
                 generation: null,
@@ -55,8 +100,8 @@ describe('handleConnectedServiceRuntimeAuthFailureForSession', () => {
     });
 
     it.each([
-        'openai-codex',
-        'claude-subscription',
+        'happier.agent.codex/openai-codex',
+        'happier.agent.claude/claude-subscription',
     ] as const)('uses generic host currentness, not service id, for %s source authorization', async (
         serviceId,
     ) => {
@@ -97,7 +142,7 @@ describe('handleConnectedServiceRuntimeAuthFailureForSession', () => {
             sessionId: 'sess_reattached_exact_runtime',
             classification: {
                 kind: 'usage_limit',
-                serviceId: 'openai-codex',
+                serviceId: 'happier.agent.codex/openai-codex',
                 profileId: 'primary',
                 groupId: 'main',
                 groupGeneration: 7,
@@ -109,7 +154,7 @@ describe('handleConnectedServiceRuntimeAuthFailureForSession', () => {
                 recoveryAction: { kind: 'quota_recovery_required' },
             },
             resolveRegisteredRuntimeAuthFailureSource: async () => ({
-                serviceId: 'openai-codex',
+                serviceId: 'happier.agent.codex/openai-codex',
                 groupId: 'main',
                 profileId: 'primary',
                 generation: 7,
@@ -130,7 +175,7 @@ describe('handleConnectedServiceRuntimeAuthFailureForSession', () => {
                 environmentVariables: {
                     [HAPPIER_CONNECTED_SERVICE_SELECTIONS_ENV_KEY]: JSON.stringify([{
                         kind: 'group',
-                        serviceId: 'openai-codex',
+                        serviceId: 'happier.agent.codex/openai-codex',
                         groupId: 'main',
                         activeProfileId: 'spawn-profile',
                         fallbackProfileId: 'spawn-profile',
@@ -142,7 +187,7 @@ describe('handleConnectedServiceRuntimeAuthFailureForSession', () => {
             },
         };
         const resolveRegisteredRuntimeAuthFailureSource = vi.fn(async () => ({
-            serviceId: 'openai-codex' as const,
+            serviceId: 'happier.agent.codex/openai-codex' as const,
             groupId: 'main',
             profileId: 'live-profile',
             generation: 8,
@@ -157,7 +202,7 @@ describe('handleConnectedServiceRuntimeAuthFailureForSession', () => {
             sessionId: tracked.happySessionId,
             classification: {
                 kind: 'usage_limit',
-                serviceId: 'openai-codex',
+                serviceId: 'happier.agent.codex/openai-codex',
                 profileId: 'live-profile',
                 groupId: 'main',
                 groupGeneration: 8,
@@ -175,7 +220,7 @@ describe('handleConnectedServiceRuntimeAuthFailureForSession', () => {
         expect(result).toMatchObject({
             status: 'authorized',
             sourceBinding: {
-                serviceId: 'openai-codex',
+                serviceId: 'happier.agent.codex/openai-codex',
                 groupId: 'main',
                 profileId: 'live-profile',
                 generation: 8,
@@ -188,7 +233,7 @@ describe('handleConnectedServiceRuntimeAuthFailureForSession', () => {
 
     it('terminally supersedes a modern report that mismatches the registered exact binding', async () => {
         const resolveCurrentRuntimeAuthFailureSource = vi.fn(async () => ({
-            serviceId: 'openai-codex' as const,
+            serviceId: 'happier.agent.codex/openai-codex' as const,
             groupId: 'main',
             profileId: 'registered-profile',
             generation: 8,
@@ -204,7 +249,7 @@ describe('handleConnectedServiceRuntimeAuthFailureForSession', () => {
             sessionId: 'sess_registered_mismatch',
             classification: {
                 kind: 'usage_limit',
-                serviceId: 'openai-codex',
+                serviceId: 'happier.agent.codex/openai-codex',
                 profileId: 'reported-profile',
                 groupId: 'main',
                 groupGeneration: 8,
@@ -216,7 +261,7 @@ describe('handleConnectedServiceRuntimeAuthFailureForSession', () => {
                 recoveryAction: { kind: 'quota_recovery_required' },
             },
             resolveRegisteredRuntimeAuthFailureSource: async () => ({
-                serviceId: 'openai-codex',
+                serviceId: 'happier.agent.codex/openai-codex',
                 groupId: 'main',
                 profileId: 'registered-profile',
                 generation: 8,
@@ -235,7 +280,7 @@ describe('handleConnectedServiceRuntimeAuthFailureForSession', () => {
 
     it('terminally supersedes report A when exact current B disproves a matching stale registry A', async () => {
         const resolveCurrentRuntimeAuthFailureSource = vi.fn(async () => ({
-            serviceId: 'openai-codex' as const,
+            serviceId: 'happier.agent.codex/openai-codex' as const,
             groupId: 'main',
             profileId: 'current-profile',
             generation: 7,
@@ -252,7 +297,7 @@ describe('handleConnectedServiceRuntimeAuthFailureForSession', () => {
             sessionId: 'sess_exact_current_disproves_registry',
             classification: {
                 kind: 'usage_limit',
-                serviceId: 'openai-codex',
+                serviceId: 'happier.agent.codex/openai-codex',
                 profileId: 'reported-profile',
                 groupId: 'main',
                 groupGeneration: 7,
@@ -264,7 +309,7 @@ describe('handleConnectedServiceRuntimeAuthFailureForSession', () => {
                 recoveryAction: { kind: 'quota_recovery_required' },
             },
             resolveRegisteredRuntimeAuthFailureSource: async () => ({
-                serviceId: 'openai-codex',
+                serviceId: 'happier.agent.codex/openai-codex',
                 groupId: 'main',
                 profileId: 'reported-profile',
                 generation: 7,
@@ -282,7 +327,7 @@ describe('handleConnectedServiceRuntimeAuthFailureForSession', () => {
 
     it('keeps the settled binding authoritative when a newer attempted generation was not acknowledged', async () => {
         const resolveCurrentRuntimeAuthFailureSource = vi.fn(async () => ({
-            serviceId: 'openai-codex' as const,
+            serviceId: 'happier.agent.codex/openai-codex' as const,
             groupId: 'main',
             profileId: 'live-profile',
             generation: 8,
@@ -300,7 +345,7 @@ describe('handleConnectedServiceRuntimeAuthFailureForSession', () => {
             sessionId: 'sess_stale_bootstrap',
             classification: {
                 kind: 'usage_limit',
-                serviceId: 'openai-codex',
+                serviceId: 'happier.agent.codex/openai-codex',
                 profileId: 'live-profile',
                 groupId: 'main',
                 groupGeneration: 8,
@@ -312,7 +357,7 @@ describe('handleConnectedServiceRuntimeAuthFailureForSession', () => {
                 recoveryAction: { kind: 'quota_recovery_required' },
             },
             resolveRegisteredRuntimeAuthFailureSource: async () => ({
-                serviceId: 'openai-codex',
+                serviceId: 'happier.agent.codex/openai-codex',
                 groupId: 'main',
                 profileId: 'bootstrap-profile',
                 generation: 7,
@@ -343,7 +388,7 @@ describe('handleConnectedServiceRuntimeAuthFailureForSession', () => {
             sessionId: 'sess_registry_unavailable',
             classification: {
                 kind: 'auth_expired',
-                serviceId: 'openai-codex',
+                serviceId: 'happier.agent.codex/openai-codex',
                 profileId: 'primary',
                 groupId: 'main',
                 groupGeneration: 7,
@@ -368,7 +413,7 @@ describe('handleConnectedServiceRuntimeAuthFailureForSession', () => {
                 environmentVariables: {
                     [HAPPIER_CONNECTED_SERVICE_SELECTIONS_ENV_KEY]: JSON.stringify([{
                         kind: 'group',
-                        serviceId: 'openai-codex',
+                        serviceId: 'happier.agent.codex/openai-codex',
                         groupId: 'main',
                         activeProfileId: 'spawn-profile',
                         fallbackProfileId: 'spawn-profile',
@@ -380,7 +425,7 @@ describe('handleConnectedServiceRuntimeAuthFailureForSession', () => {
             },
         };
         const resolveRegisteredRuntimeAuthFailureSource = vi.fn(async () => ({
-            serviceId: 'openai-codex' as const,
+            serviceId: 'happier.agent.codex/openai-codex' as const,
             groupId: 'main',
             profileId: 'live-profile',
             generation: 8,
@@ -392,7 +437,7 @@ describe('handleConnectedServiceRuntimeAuthFailureForSession', () => {
             sessionId: tracked.happySessionId,
             classification: {
                 kind: 'auth_expired',
-                serviceId: 'openai-codex',
+                serviceId: 'happier.agent.codex/openai-codex',
                 profileId: 'live-profile',
                 groupId: 'main',
                 groupGeneration: 8,
@@ -428,7 +473,7 @@ describe('handleConnectedServiceRuntimeAuthFailureForSession', () => {
             sessionId: 'sess_reattached_auth_expired',
             classification: {
                 kind: 'auth_expired',
-                serviceId: 'openai-codex',
+                serviceId: 'happier.agent.codex/openai-codex',
                 profileId: 'primary',
                 groupId: 'main',
                 groupGeneration: 7,
@@ -448,14 +493,14 @@ describe('handleConnectedServiceRuntimeAuthFailureForSession', () => {
 
     it('authorizes a predecessor quota report without a revision when the live resolver proves the exact current tuple', async () => {
         const resolveCurrentRuntimeAuthFailureSource = vi.fn(async () => ({
-            serviceId: 'openai-codex' as const,
+            serviceId: 'happier.agent.codex/openai-codex' as const,
             groupId: 'main',
             profileId: 'primary',
             generation: 7,
             credentialRevision: 'csr_abcdefghijklmnopqrstuv',
         }));
         const resolveRegisteredRuntimeAuthFailureSource = vi.fn(async () => ({
-            serviceId: 'openai-codex' as const,
+            serviceId: 'happier.agent.codex/openai-codex' as const,
             groupId: 'main',
             profileId: 'primary',
             generation: 7,
@@ -472,7 +517,7 @@ describe('handleConnectedServiceRuntimeAuthFailureForSession', () => {
             sessionId: 'sess_reattached_predecessor',
             classification: {
                 kind: 'usage_limit',
-                serviceId: 'openai-codex',
+                serviceId: 'happier.agent.codex/openai-codex',
                 profileId: 'primary',
                 groupId: 'main',
                 groupGeneration: 7,
@@ -495,7 +540,7 @@ describe('handleConnectedServiceRuntimeAuthFailureForSession', () => {
 
     it('adopts the current generation for a predecessor report after exact same-identity proof', async () => {
         const resolveCurrentRuntimeAuthFailureSource = vi.fn(async () => ({
-            serviceId: 'openai-codex' as const,
+            serviceId: 'happier.agent.codex/openai-codex' as const,
             groupId: 'main',
             profileId: 'primary',
             generation: 8,
@@ -513,7 +558,7 @@ describe('handleConnectedServiceRuntimeAuthFailureForSession', () => {
             sessionId: 'sess_predecessor_generation',
             classification: {
                 kind: 'usage_limit',
-                serviceId: 'openai-codex',
+                serviceId: 'happier.agent.codex/openai-codex',
                 profileId: 'primary',
                 groupId: 'main',
                 groupGeneration: 7,
@@ -527,7 +572,7 @@ describe('handleConnectedServiceRuntimeAuthFailureForSession', () => {
                 recoveryAction: { kind: 'quota_recovery_required' },
             },
             resolveRegisteredRuntimeAuthFailureSource: async () => ({
-                serviceId: 'openai-codex',
+                serviceId: 'happier.agent.codex/openai-codex',
                 groupId: 'main',
                 profileId: 'primary',
                 generation: 8,
@@ -554,7 +599,7 @@ describe('handleConnectedServiceRuntimeAuthFailureForSession', () => {
             excluded: [],
         }));
         const resolveRegisteredRuntimeAuthFailureSource = vi.fn(async () => ({
-            serviceId: 'openai-codex' as const,
+            serviceId: 'happier.agent.codex/openai-codex' as const,
             groupId: 'main',
             profileId: 'primary',
             generation: 7,
@@ -572,7 +617,7 @@ describe('handleConnectedServiceRuntimeAuthFailureForSession', () => {
                     environmentVariables: {
                         [HAPPIER_CONNECTED_SERVICE_SELECTIONS_ENV_KEY]: JSON.stringify([{
                             kind: 'group',
-                            serviceId: 'openai-codex',
+                            serviceId: 'happier.agent.codex/openai-codex',
                             groupId: 'main',
                             activeProfileId: 'stale-predecessor',
                             fallbackProfileId: 'primary',
@@ -589,7 +634,7 @@ describe('handleConnectedServiceRuntimeAuthFailureForSession', () => {
             recoveryInvocationSource: 'scheduler_retry',
             classification: {
                 kind: 'usage_limit',
-                serviceId: 'openai-codex',
+                serviceId: 'happier.agent.codex/openai-codex',
                 profileId: 'primary',
                 groupId: 'main',
                 groupGeneration: 7,
@@ -608,7 +653,7 @@ describe('handleConnectedServiceRuntimeAuthFailureForSession', () => {
         expect(resolveRegisteredRuntimeAuthFailureSource).toHaveBeenCalledOnce();
         expect(switchAfterClassifiedFailure).toHaveBeenCalledOnce();
         expect(switchAfterClassifiedFailure).toHaveBeenCalledWith(expect.objectContaining({
-            serviceId: 'openai-codex',
+            serviceId: 'happier.agent.codex/openai-codex',
             groupId: 'main',
             observedProfileId: 'primary',
             allowCurrentProfileRetry: true,
@@ -643,7 +688,7 @@ describe('handleConnectedServiceRuntimeAuthFailureForSession', () => {
             sessionId: 'sess_newer_registered_generation',
             classification: {
                 kind: 'usage_limit',
-                serviceId: 'openai-codex',
+                serviceId: 'happier.agent.codex/openai-codex',
                 profileId: 'primary',
                 groupId: 'main',
                 groupGeneration: 6,
@@ -655,7 +700,7 @@ describe('handleConnectedServiceRuntimeAuthFailureForSession', () => {
                 recoveryAction: { kind: 'quota_recovery_required' },
             },
             resolveRegisteredRuntimeAuthFailureSource: async () => ({
-                serviceId: 'openai-codex',
+                serviceId: 'happier.agent.codex/openai-codex',
                 groupId: 'main',
                 generation: 7,
                 ...registeredTarget,
@@ -666,7 +711,7 @@ describe('handleConnectedServiceRuntimeAuthFailureForSession', () => {
             expect(result).toMatchObject({
                 status: 'authorized',
                 sourceBinding: {
-                    serviceId: 'openai-codex',
+                    serviceId: 'happier.agent.codex/openai-codex',
                     groupId: 'main',
                     profileId: 'primary',
                     generation: 7,
@@ -762,7 +807,7 @@ describe('handleConnectedServiceRuntimeAuthFailureForSession', () => {
             recoveryInvocationSource: 'scheduler_retry',
             classification: {
                 kind: 'usage_limit',
-                serviceId: 'openai-codex',
+                serviceId: 'happier.agent.codex/openai-codex',
                 profileId: 'primary',
                 groupId: 'main',
                 groupGeneration: 6,
@@ -774,7 +819,7 @@ describe('handleConnectedServiceRuntimeAuthFailureForSession', () => {
                 recoveryAction: { kind: 'quota_recovery_required' },
             },
             resolveRegisteredRuntimeAuthFailureSource: async () => ({
-                serviceId: 'openai-codex',
+                serviceId: 'happier.agent.codex/openai-codex',
                 groupId: 'main',
                 profileId: 'primary',
                 generation: 7,
@@ -797,9 +842,9 @@ describe('handleConnectedServiceRuntimeAuthFailureForSession', () => {
             sessionId: tracked.happySessionId,
             action: 'hot_applied',
             normalizedBindings: {
-                v: 1,
+                v: 2,
                 bindingsByServiceId: {
-                    'openai-codex': {
+                    'happier.agent.codex/openai-codex': {
                         source: 'connected',
                         selection: 'group',
                         groupId: 'main',
@@ -833,7 +878,7 @@ describe('handleConnectedServiceRuntimeAuthFailureForSession', () => {
                     environmentVariables: {
                         [HAPPIER_CONNECTED_SERVICE_SELECTIONS_ENV_KEY]: JSON.stringify([{
                             kind: 'group',
-                            serviceId: 'openai-codex',
+                            serviceId: 'happier.agent.codex/openai-codex',
                             groupId: 'main',
                             activeProfileId: 'primary',
                             fallbackProfileId: 'primary',
@@ -845,7 +890,7 @@ describe('handleConnectedServiceRuntimeAuthFailureForSession', () => {
                 },
             }],
             resolveRegisteredRuntimeAuthFailureSource: async () => ({
-                serviceId: 'openai-codex',
+                serviceId: 'happier.agent.codex/openai-codex',
                 groupId: 'main',
                 profileId: 'primary',
                 generation: 7,
@@ -857,7 +902,7 @@ describe('handleConnectedServiceRuntimeAuthFailureForSession', () => {
             switchesThisTurn: 0,
             classification: {
                 kind: 'usage_limit' as const,
-                serviceId: 'openai-codex',
+                serviceId: 'happier.agent.codex/openai-codex',
                 profileId: 'primary',
                 groupId: 'main',
                 groupGeneration: 7,
@@ -883,7 +928,7 @@ describe('handleConnectedServiceRuntimeAuthFailureForSession', () => {
             excluded: [],
         }));
         const refreshDiagnostic = {
-            serviceId: 'claude-subscription' as const,
+            serviceId: 'happier.agent.claude/claude-subscription' as const,
             profileId: 'primary',
             reason: 'runtime_auth_failure' as const,
             status: 'refreshed' as const,
@@ -906,7 +951,7 @@ describe('handleConnectedServiceRuntimeAuthFailureForSession', () => {
                 connectedServices: {
                     v: 1 as const,
                     bindingsByServiceId: {
-                        'claude-subscription': {
+                        'happier.agent.claude/claude-subscription': {
                             source: 'connected' as const,
                             selection: 'group' as const,
                             groupId: 'claude',
@@ -925,7 +970,7 @@ describe('handleConnectedServiceRuntimeAuthFailureForSession', () => {
             switchesThisTurn: 0,
             classification: {
                 kind: 'auth_expired' as const,
-                serviceId: 'claude-subscription',
+                serviceId: 'happier.agent.claude/claude-subscription',
                 profileId: 'primary',
                 groupId: 'claude',
                 expectedCredentialRevision: 'csr_aaaaaaaaaaaaaaaaaaaaaa',
@@ -938,7 +983,7 @@ describe('handleConnectedServiceRuntimeAuthFailureForSession', () => {
 
         await expect(handleConnectedServiceRuntimeAuthFailureForSession(input)).resolves.toEqual({
             status: 'credential_refreshed',
-            serviceId: 'claude-subscription',
+            serviceId: 'happier.agent.claude/claude-subscription',
             profileId: 'primary',
             groupId: 'claude',
             refresh: {
@@ -950,7 +995,7 @@ describe('handleConnectedServiceRuntimeAuthFailureForSession', () => {
         });
 
         expect(refreshConnectedServiceCredentialForRuntimeAuthFailure).toHaveBeenCalledWith({
-            serviceId: 'claude-subscription',
+            serviceId: 'happier.agent.claude/claude-subscription',
             profileId: 'primary',
             sessionId: 'sess_claude_group',
         });
@@ -958,11 +1003,11 @@ describe('handleConnectedServiceRuntimeAuthFailureForSession', () => {
         expect(continueAfterRuntimeAuthSwitch).toHaveBeenCalledWith(expect.objectContaining({
             tracked: trackedSession,
             sessionId: 'sess_claude_group',
-            attemptId: 'connected-service-auth-switch|hot_applied|claude-subscription:group:claude:primary:',
+            attemptId: 'connected-service-auth-switch|hot_applied|happier.agent.claude/claude-subscription:group:claude:primary:',
             normalizedBindings: {
-                v: 1,
+                v: 2,
                 bindingsByServiceId: {
-                    'claude-subscription': {
+                    'happier.agent.claude/claude-subscription': {
                         source: 'connected',
                         selection: 'group',
                         groupId: 'claude',
@@ -974,7 +1019,7 @@ describe('handleConnectedServiceRuntimeAuthFailureForSession', () => {
         }));
         const continuationCall = continueAfterRuntimeAuthSwitch.mock.calls[0]?.[0];
         expect(continuationCall).toBeDefined();
-        expect([...continuationCall!.serviceIds]).toEqual(['claude-subscription']);
+        expect([...continuationCall!.serviceIds]).toEqual(['happier.agent.claude/claude-subscription']);
     });
 
     it('switches to another group member when the active credential cannot be refreshed', async () => {
@@ -988,7 +1033,7 @@ describe('handleConnectedServiceRuntimeAuthFailureForSession', () => {
             status: 'refresh_failed' as const,
             credential: null,
             diagnostic: {
-                serviceId: 'openai-codex' as const,
+                serviceId: 'happier.agent.codex/openai-codex' as const,
                 profileId: 'primary',
                 reason: 'runtime_auth_failure' as const,
                 status: 'refresh_failed' as const,
@@ -1009,7 +1054,7 @@ describe('handleConnectedServiceRuntimeAuthFailureForSession', () => {
                     connectedServices: {
                         v: 1 as const,
                         bindingsByServiceId: {
-                            'openai-codex': {
+                            'happier.agent.codex/openai-codex': {
                                 source: 'connected' as const,
                                 selection: 'group' as const,
                                 groupId: 'main',
@@ -1025,7 +1070,7 @@ describe('handleConnectedServiceRuntimeAuthFailureForSession', () => {
             switchesThisTurn: 0,
             classification: {
                 kind: 'auth_expired' as const,
-                serviceId: 'openai-codex',
+                serviceId: 'happier.agent.codex/openai-codex',
                 profileId: 'primary',
                 groupId: 'main',
                 resetsAtMs: null,
@@ -1059,7 +1104,7 @@ describe('handleConnectedServiceRuntimeAuthFailureForSession', () => {
             credential: null,
             runtimeAuthDisposition: 'superseded_by_current_group' as const,
             diagnostic: {
-                serviceId: 'claude-subscription' as const,
+                serviceId: 'happier.agent.claude/claude-subscription' as const,
                 profileId: 'primary',
                 reason: 'runtime_auth_failure' as const,
                 status: 'refreshed' as const,
@@ -1080,7 +1125,7 @@ describe('handleConnectedServiceRuntimeAuthFailureForSession', () => {
                     connectedServices: {
                         v: 1 as const,
                         bindingsByServiceId: {
-                            'claude-subscription': {
+                            'happier.agent.claude/claude-subscription': {
                                 source: 'connected' as const,
                                 selection: 'group' as const,
                                 groupId: 'claude',
@@ -1097,7 +1142,7 @@ describe('handleConnectedServiceRuntimeAuthFailureForSession', () => {
             switchesThisTurn: 0,
             classification: {
                 kind: 'auth_expired' as const,
-                serviceId: 'claude-subscription',
+                serviceId: 'happier.agent.claude/claude-subscription',
                 profileId: 'primary',
                 groupId: 'claude',
                 resetsAtMs: null,
@@ -1120,7 +1165,7 @@ describe('handleConnectedServiceRuntimeAuthFailureForSession', () => {
         expect(continueAfterRuntimeAuthSwitch).toHaveBeenCalledWith(expect.objectContaining({
             sessionId: 'sess_claude_group',
             action: 'hot_applied',
-            attemptId: 'connected-service-auth-switch|hot_applied|claude-subscription:group:claude:backup:2',
+            attemptId: 'connected-service-auth-switch|hot_applied|happier.agent.claude/claude-subscription:group:claude:backup:2',
         }));
     });
 
@@ -1136,7 +1181,7 @@ describe('handleConnectedServiceRuntimeAuthFailureForSession', () => {
             status: 'refresh_failed' as const,
             credential: null,
             diagnostic: {
-                serviceId: 'openai-codex' as const,
+                serviceId: 'happier.agent.codex/openai-codex' as const,
                 profileId: 'primary',
                 reason: 'runtime_auth_failure' as const,
                 status: 'refresh_failed' as const,
@@ -1157,7 +1202,7 @@ describe('handleConnectedServiceRuntimeAuthFailureForSession', () => {
                     connectedServices: {
                         v: 1 as const,
                         bindingsByServiceId: {
-                            'openai-codex': {
+                            'happier.agent.codex/openai-codex': {
                                 source: 'connected' as const,
                                 selection: 'group' as const,
                                 groupId: 'main',
@@ -1173,7 +1218,7 @@ describe('handleConnectedServiceRuntimeAuthFailureForSession', () => {
             switchesThisTurn: 0,
             classification: {
                 kind: 'auth_expired' as const,
-                serviceId: 'openai-codex',
+                serviceId: 'happier.agent.codex/openai-codex',
                 profileId: 'primary',
                 groupId: 'main',
                 resetsAtMs: null,
@@ -1185,7 +1230,7 @@ describe('handleConnectedServiceRuntimeAuthFailureForSession', () => {
             status: 'recovery_action_required',
             action: {
                 kind: 'reconnect_profile',
-                serviceId: 'openai-codex',
+                serviceId: 'happier.agent.codex/openai-codex',
                 profileId: 'primary',
                 groupId: 'main',
                 reason: 'auth_expired',
@@ -1213,7 +1258,7 @@ describe('handleConnectedServiceRuntimeAuthFailureForSession', () => {
             status: 'refreshed' as const,
             credential: null,
             diagnostic: {
-                serviceId: 'claude-subscription' as const,
+                serviceId: 'happier.agent.claude/claude-subscription' as const,
                 profileId: 'primary',
                 reason: 'runtime_auth_failure' as const,
                 status: 'refreshed' as const,
@@ -1225,7 +1270,7 @@ describe('handleConnectedServiceRuntimeAuthFailureForSession', () => {
         const pendingIntent: RuntimeAuthRecoveryIntent = {
             v: 1,
             sessionId: 'sess_claude_group',
-            serviceId: 'claude-subscription',
+            serviceId: 'happier.agent.claude/claude-subscription',
             profileId: 'primary',
             groupId: 'claude',
             status,
@@ -1236,7 +1281,7 @@ describe('handleConnectedServiceRuntimeAuthFailureForSession', () => {
             switchesThisTurn: 0,
             classification: {
                 kind: 'auth_expired',
-                serviceId: 'claude-subscription',
+                serviceId: 'happier.agent.claude/claude-subscription',
                 profileId: 'primary',
                 groupId: 'claude',
                 resetsAtMs: null,
@@ -1263,7 +1308,7 @@ describe('handleConnectedServiceRuntimeAuthFailureForSession', () => {
                     connectedServices: {
                         v: 1 as const,
                         bindingsByServiceId: {
-                            'claude-subscription': {
+                            'happier.agent.claude/claude-subscription': {
                                 source: 'connected' as const,
                                 selection: 'group' as const,
                                 groupId: 'claude',
@@ -1282,7 +1327,7 @@ describe('handleConnectedServiceRuntimeAuthFailureForSession', () => {
             switchesThisTurn: 0,
             classification: {
                 kind: 'auth_expired' as const,
-                serviceId: 'claude-subscription',
+                serviceId: 'happier.agent.claude/claude-subscription',
                 profileId: 'primary',
                 groupId: 'claude',
                 resetsAtMs: null,
@@ -1294,7 +1339,7 @@ describe('handleConnectedServiceRuntimeAuthFailureForSession', () => {
 
         await expect(handleConnectedServiceRuntimeAuthFailureForSession(input)).resolves.toMatchObject({
             status: 'credential_refreshed',
-            serviceId: 'claude-subscription',
+            serviceId: 'happier.agent.claude/claude-subscription',
             profileId: 'primary',
             groupId: 'claude',
             restartRequested: false,
@@ -1315,7 +1360,7 @@ describe('handleConnectedServiceRuntimeAuthFailureForSession', () => {
             status: 'refreshed' as const,
             credential: null,
             diagnostic: {
-                serviceId: 'claude-subscription' as const,
+                serviceId: 'happier.agent.claude/claude-subscription' as const,
                 profileId: 'primary',
                 reason: 'runtime_auth_failure' as const,
                 status: 'refreshed' as const,
@@ -1335,7 +1380,7 @@ describe('handleConnectedServiceRuntimeAuthFailureForSession', () => {
                     connectedServices: {
                         v: 1,
                         bindingsByServiceId: {
-                            'claude-subscription': {
+                            'happier.agent.claude/claude-subscription': {
                                 source: 'connected',
                                 selection: 'group',
                                 groupId: 'claude',
@@ -1351,7 +1396,7 @@ describe('handleConnectedServiceRuntimeAuthFailureForSession', () => {
             switchesThisTurn: 0,
             classification: {
                 kind: 'account_changed',
-                serviceId: 'claude-subscription',
+                serviceId: 'happier.agent.claude/claude-subscription',
                 profileId: 'primary',
                 groupId: 'claude',
                 resetsAtMs: null,
@@ -1363,7 +1408,7 @@ describe('handleConnectedServiceRuntimeAuthFailureForSession', () => {
             status: 'recovery_action_required',
             action: {
                 kind: 'reconnect_profile',
-                serviceId: 'claude-subscription',
+                serviceId: 'happier.agent.claude/claude-subscription',
                 profileId: 'primary',
                 groupId: 'claude',
                 reason: 'account_changed',
@@ -1393,7 +1438,7 @@ describe('handleConnectedServiceRuntimeAuthFailureForSession', () => {
                     connectedServices: {
                         v: 1,
                         bindingsByServiceId: {
-                            'openai-codex': {
+                            'happier.agent.codex/openai-codex': {
                                 source: 'connected',
                                 selection: 'group',
                                 groupId: 'group-1',
@@ -1410,7 +1455,7 @@ describe('handleConnectedServiceRuntimeAuthFailureForSession', () => {
             classification: {
                 kind: 'usage_limit',
                 limitCategory: 'usage_limit',
-                serviceId: 'openai-codex',
+                serviceId: 'happier.agent.codex/openai-codex',
                 profileId: 'primary',
                 groupId: null,
                 resetsAtMs: null,
@@ -1434,7 +1479,7 @@ describe('handleConnectedServiceRuntimeAuthFailureForSession', () => {
 
         expect(switchAfterClassifiedFailure).toHaveBeenCalledWith(expect.objectContaining({
             sessionId: 'sess_1',
-            serviceId: 'openai-codex',
+            serviceId: 'happier.agent.codex/openai-codex',
             groupId: 'group-1',
             reason: 'usage_limit',
             observedProfileId: 'primary',
@@ -1480,7 +1525,7 @@ describe('handleConnectedServiceRuntimeAuthFailureForSession', () => {
                     connectedServices: {
                         v: 1,
                         bindingsByServiceId: {
-                            'openai-codex': {
+                            'happier.agent.codex/openai-codex': {
                                 source: 'connected',
                                 selection: 'group',
                                 groupId: 'group-1',
@@ -1491,7 +1536,7 @@ describe('handleConnectedServiceRuntimeAuthFailureForSession', () => {
                     environmentVariables: {
                         [HAPPIER_CONNECTED_SERVICE_SELECTIONS_ENV_KEY]: JSON.stringify([{
                             kind: 'group',
-                            serviceId: 'openai-codex',
+                            serviceId: 'happier.agent.codex/openai-codex',
                             groupId: 'group-1',
                             activeProfileId: 'active-now',
                             fallbackProfileId: 'primary',
@@ -1507,7 +1552,7 @@ describe('handleConnectedServiceRuntimeAuthFailureForSession', () => {
             classification: {
                 kind: 'usage_limit',
                 limitCategory: 'usage_limit',
-                serviceId: 'openai-codex',
+                serviceId: 'happier.agent.codex/openai-codex',
                 profileId: 'primary',
                 groupId: 'group-1',
                 resetsAtMs: null,
@@ -1547,7 +1592,7 @@ describe('handleConnectedServiceRuntimeAuthFailureForSession', () => {
                     connectedServices: {
                         v: 1,
                         bindingsByServiceId: {
-                            'openai-codex': {
+                            'happier.agent.codex/openai-codex': {
                                 source: 'connected',
                                 selection: 'group',
                                 groupId: 'group-1',
@@ -1562,7 +1607,7 @@ describe('handleConnectedServiceRuntimeAuthFailureForSession', () => {
             switchesThisTurn: 0,
             classification: {
                 kind: 'usage_limit',
-                serviceId: 'openai-codex',
+                serviceId: 'happier.agent.codex/openai-codex',
                 profileId: 'primary',
                 groupId: 'group-1',
                 resetsAtMs: null,
@@ -1579,7 +1624,7 @@ describe('handleConnectedServiceRuntimeAuthFailureForSession', () => {
 
         expect(switchAfterClassifiedFailure).toHaveBeenCalledWith(expect.objectContaining({
             sessionId: 'sess_1',
-            serviceId: 'openai-codex',
+            serviceId: 'happier.agent.codex/openai-codex',
             groupId: 'group-1',
             reason: 'usage_limit',
             observedProfileId: 'primary',
@@ -1604,7 +1649,7 @@ describe('handleConnectedServiceRuntimeAuthFailureForSession', () => {
                 connectedServices: {
                     v: 1 as const,
                     bindingsByServiceId: {
-                        'openai-codex': {
+                        'happier.agent.codex/openai-codex': {
                             source: 'connected' as const,
                             selection: 'group' as const,
                             groupId: 'group-1',
@@ -1622,7 +1667,7 @@ describe('handleConnectedServiceRuntimeAuthFailureForSession', () => {
             switchesThisTurn: 0,
             classification: {
                 kind: 'usage_limit' as const,
-                serviceId: 'openai-codex',
+                serviceId: 'happier.agent.codex/openai-codex',
                 profileId: 'primary',
                 groupId: 'group-1',
                 resetsAtMs: null,
@@ -1670,7 +1715,7 @@ describe('handleConnectedServiceRuntimeAuthFailureForSession', () => {
                     environmentVariables: {
                         [HAPPIER_CONNECTED_SERVICE_SELECTIONS_ENV_KEY]: JSON.stringify([{
                             kind: 'group',
-                            serviceId: 'openai-codex',
+                            serviceId: 'happier.agent.codex/openai-codex',
                             groupId: 'group-1',
                             activeProfileId: 'current',
                             fallbackProfileId: 'current',
@@ -1687,7 +1732,7 @@ describe('handleConnectedServiceRuntimeAuthFailureForSession', () => {
             switchesThisTurn: 0,
             classification: {
                 kind: 'usage_limit' as const,
-                serviceId: 'openai-codex',
+                serviceId: 'happier.agent.codex/openai-codex',
                 profileId: 'stale_member',
                 groupId: 'group-1',
                 resetsAtMs: null,
@@ -1733,7 +1778,7 @@ describe('handleConnectedServiceRuntimeAuthFailureForSession', () => {
                     environmentVariables: {
                         [HAPPIER_CONNECTED_SERVICE_SELECTIONS_ENV_KEY]: JSON.stringify([{
                             kind: 'group',
-                            serviceId: 'openai-codex',
+                            serviceId: 'happier.agent.codex/openai-codex',
                             groupId: 'group-1',
                             activeProfileId: 'current',
                             fallbackProfileId: 'current',
@@ -1752,7 +1797,7 @@ describe('handleConnectedServiceRuntimeAuthFailureForSession', () => {
             recoveryInvocationSource: 'scheduler_retry',
             classification: {
                 kind: 'usage_limit' as const,
-                serviceId: 'openai-codex',
+                serviceId: 'happier.agent.codex/openai-codex',
                 profileId: 'stale_member',
                 groupId: 'group-1',
                 resetsAtMs: null,
@@ -1791,7 +1836,7 @@ describe('handleConnectedServiceRuntimeAuthFailureForSession', () => {
                     environmentVariables: {
                         [HAPPIER_CONNECTED_SERVICE_SELECTIONS_ENV_KEY]: JSON.stringify([{
                             kind: 'group',
-                            serviceId: 'openai-codex',
+                            serviceId: 'happier.agent.codex/openai-codex',
                             groupId: 'group-1',
                             activeProfileId: 'current',
                             fallbackProfileId: 'current',
@@ -1807,7 +1852,7 @@ describe('handleConnectedServiceRuntimeAuthFailureForSession', () => {
             recoveryInvocationSource: 'scheduler_retry',
             classification: {
                 kind: 'usage_limit' as const,
-                serviceId: 'openai-codex',
+                serviceId: 'happier.agent.codex/openai-codex',
                 profileId: 'current',
                 groupId: 'group-1',
                 resetsAtMs: null,
@@ -1841,7 +1886,7 @@ describe('handleConnectedServiceRuntimeAuthFailureForSession', () => {
                 environmentVariables: {
                     [HAPPIER_CONNECTED_SERVICE_SELECTIONS_ENV_KEY]: JSON.stringify([{
                         kind: 'group',
-                        serviceId: 'openai-codex',
+                        serviceId: 'happier.agent.codex/openai-codex',
                         groupId: 'group-1',
                         activeProfileId: 'current',
                         fallbackProfileId: 'current',
@@ -1860,7 +1905,7 @@ describe('handleConnectedServiceRuntimeAuthFailureForSession', () => {
             switchesThisTurn: 0,
             classification: {
                 kind: 'usage_limit' as const,
-                serviceId: 'openai-codex',
+                serviceId: 'happier.agent.codex/openai-codex',
                 profileId: 'current',
                 groupId: 'group-1',
                 resetsAtMs: null,
@@ -1905,7 +1950,7 @@ describe('handleConnectedServiceRuntimeAuthFailureForSession', () => {
                     connectedServices: {
                         v: 1,
                         bindingsByServiceId: {
-                            'openai-codex': {
+                            'happier.agent.codex/openai-codex': {
                                 source: 'connected',
                                 selection: 'group',
                                 groupId: 'group-1',
@@ -1921,7 +1966,7 @@ describe('handleConnectedServiceRuntimeAuthFailureForSession', () => {
             switchesThisTurn: 0,
             classification: {
                 kind: 'usage_limit',
-                serviceId: 'openai-codex',
+                serviceId: 'happier.agent.codex/openai-codex',
                 profileId: 'primary',
                 groupId: null,
                 resetsAtMs: null,
@@ -1933,7 +1978,7 @@ describe('handleConnectedServiceRuntimeAuthFailureForSession', () => {
         });
         expect(switchAttemptTracker.resolveSwitchesThisTurn({
             sessionId: 'sess_1',
-            serviceId: 'openai-codex',
+            serviceId: 'happier.agent.codex/openai-codex',
             groupId: 'group-1',
             profileId: 'primary',
             credentialRevision: null,
@@ -1950,7 +1995,7 @@ describe('handleConnectedServiceRuntimeAuthFailureForSession', () => {
                     connectedServices: {
                         v: 1,
                         bindingsByServiceId: {
-                            'openai-codex': {
+                            'happier.agent.codex/openai-codex': {
                                 source: 'connected',
                                 selection: 'group',
                                 groupId: 'group-1',
@@ -1966,7 +2011,7 @@ describe('handleConnectedServiceRuntimeAuthFailureForSession', () => {
             switchesThisTurn: 0,
             classification: {
                 kind: 'usage_limit',
-                serviceId: 'openai-codex',
+                serviceId: 'happier.agent.codex/openai-codex',
                 profileId: 'primary',
                 groupId: null,
                 resetsAtMs: null,
@@ -1987,7 +2032,7 @@ describe('handleConnectedServiceRuntimeAuthFailureForSession', () => {
                     connectedServices: {
                         v: 1,
                         bindingsByServiceId: {
-                            'openai-codex': {
+                            'happier.agent.codex/openai-codex': {
                                 source: 'connected',
                                 selection: 'group',
                                 groupId: 'group-1',
@@ -2003,7 +2048,7 @@ describe('handleConnectedServiceRuntimeAuthFailureForSession', () => {
             switchesThisTurn: 0,
             classification: {
                 kind: 'usage_limit',
-                serviceId: 'openai-codex',
+                serviceId: 'happier.agent.codex/openai-codex',
                 profileId: 'backup',
                 groupId: null,
                 resetsAtMs: null,
@@ -2016,7 +2061,7 @@ describe('handleConnectedServiceRuntimeAuthFailureForSession', () => {
 
         expect(first).toMatchObject({ status: 'switch_attempted' });
         expect(switchAfterClassifiedFailure).toHaveBeenNthCalledWith(2, expect.objectContaining({
-            serviceId: 'openai-codex',
+            serviceId: 'happier.agent.codex/openai-codex',
             groupId: 'group-1',
             switchesThisTurn: 1,
             sessionSwitchesThisHour: 1,
@@ -2030,14 +2075,14 @@ describe('handleConnectedServiceRuntimeAuthFailureForSession', () => {
             result: { status: 'switched' },
         });
         expect(switchAfterClassifiedFailure).toHaveBeenNthCalledWith(3, expect.objectContaining({
-            serviceId: 'openai-codex',
+            serviceId: 'happier.agent.codex/openai-codex',
             groupId: 'group-1',
             switchesThisTurn: 0,
             sessionSwitchesThisHour: 1,
         }));
     });
 
-    it('prefers the canonical active group selection from tracked child env over the spawn fallback profile', async () => {
+    it('refuses to qualify unattributed evidence from immutable child launch selections', async () => {
         const switchAfterClassifiedFailure = vi.fn(async () => ({
             status: 'switched' as const,
             activeProfileId: 'secondary',
@@ -2096,15 +2141,12 @@ describe('handleConnectedServiceRuntimeAuthFailureForSession', () => {
                 source: 'structured_provider_error',
             },
         })).resolves.toEqual({
-            status: 'switch_attempted',
-            result: { status: 'switched', activeProfileId: 'secondary', generation: 3 },
+            status: 'recovery_superseded', reason: 'source_tuple_unavailable',
+            serviceId: 'gemini',
+            groupId: null, profileId: null,
         });
 
-        expect(switchAfterClassifiedFailure).toHaveBeenCalledWith(expect.objectContaining({
-            serviceId: 'gemini',
-            groupId: 'group-1',
-            observedProfileId: 'backup',
-        }));
+        expect(switchAfterClassifiedFailure).not.toHaveBeenCalled();
         expect(emitSessionEvent).not.toHaveBeenCalled();
     });
 
@@ -2118,7 +2160,7 @@ describe('handleConnectedServiceRuntimeAuthFailureForSession', () => {
             connectedServices: {
                 v: 2 as const,
                 bindingsByServiceId: {
-                    'openai-codex': {
+                    'happier.agent.codex/openai-codex': {
                         source: 'connected' as const,
                         selection: 'group' as const,
                         groupId: 'group-1',
@@ -2137,7 +2179,7 @@ describe('handleConnectedServiceRuntimeAuthFailureForSession', () => {
             classification: {
                 kind: 'usage_limit',
                 limitCategory: 'usage_limit',
-                serviceId: 'openai-codex',
+                serviceId: 'happier.agent.codex/openai-codex',
                 profileId: 'primary',
                 groupId: null,
                 resetsAtMs: null,
@@ -2157,7 +2199,7 @@ describe('handleConnectedServiceRuntimeAuthFailureForSession', () => {
         expect(resolveInactiveSession).toHaveBeenCalledWith({ sessionId: 'sess_1' });
         expect(switchAfterClassifiedFailure).toHaveBeenCalledWith(expect.objectContaining({
             sessionId: 'sess_1',
-            serviceId: 'openai-codex',
+            serviceId: 'happier.agent.codex/openai-codex',
             groupId: 'group-1',
             observedProfileId: 'primary',
             reason: 'usage_limit',
@@ -2186,7 +2228,7 @@ describe('handleConnectedServiceRuntimeAuthFailureForSession', () => {
                     connectedServices: {
                         v: 2,
                         bindingsByServiceId: {
-                            'openai-codex': {
+                            'happier.agent.codex/openai-codex': {
                                 source: 'connected',
                                 selection: 'group',
                                 groupId: 'group-1',
@@ -2205,7 +2247,7 @@ describe('handleConnectedServiceRuntimeAuthFailureForSession', () => {
             classification: {
                 kind: 'usage_limit',
                 limitCategory: 'usage_limit',
-                serviceId: 'openai-codex',
+                serviceId: 'happier.agent.codex/openai-codex',
                 profileId: 'primary',
                 groupId: null,
                 resetsAtMs: null,
@@ -2224,7 +2266,7 @@ describe('handleConnectedServiceRuntimeAuthFailureForSession', () => {
 
         expect(switchAfterClassifiedFailure).toHaveBeenCalledWith(expect.objectContaining({
             sessionId: 'sess_1',
-            serviceId: 'openai-codex',
+            serviceId: 'happier.agent.codex/openai-codex',
             groupId: 'group-1',
             reason: 'usage_limit',
             observedProfileId: 'primary',
@@ -2253,7 +2295,7 @@ describe('handleConnectedServiceRuntimeAuthFailureForSession', () => {
                     connectedServices: {
                         v: 2,
                         bindingsByServiceId: {
-                            'openai-codex': {
+                            'happier.agent.codex/openai-codex': {
                                 source: 'connected',
                                 selection: 'group',
                                 groupId: 'group-1',
@@ -2267,7 +2309,7 @@ describe('handleConnectedServiceRuntimeAuthFailureForSession', () => {
                     connectedServices: {
                         v: 1,
                         bindingsByServiceId: {
-                            'openai-codex': {
+                            'happier.agent.codex/openai-codex': {
                                 source: 'connected',
                                 selection: 'profile',
                                 profileId: 'primary',
@@ -2277,7 +2319,7 @@ describe('handleConnectedServiceRuntimeAuthFailureForSession', () => {
                     environmentVariables: {
                         [HAPPIER_CONNECTED_SERVICE_SELECTIONS_ENV_KEY]: JSON.stringify([{
                             kind: 'profile',
-                            serviceId: 'openai-codex',
+                            serviceId: 'happier.agent.codex/openai-codex',
                             profileId: 'primary',
                         }]),
                     },
@@ -2289,7 +2331,7 @@ describe('handleConnectedServiceRuntimeAuthFailureForSession', () => {
             classification: {
                 kind: 'usage_limit',
                 limitCategory: 'usage_limit',
-                serviceId: 'openai-codex',
+                serviceId: 'happier.agent.codex/openai-codex',
                 profileId: 'primary',
                 groupId: null,
                 resetsAtMs: null,
@@ -2308,7 +2350,7 @@ describe('handleConnectedServiceRuntimeAuthFailureForSession', () => {
 
         expect(switchAfterClassifiedFailure).toHaveBeenCalledWith(expect.objectContaining({
             sessionId: 'sess_1',
-            serviceId: 'openai-codex',
+            serviceId: 'happier.agent.codex/openai-codex',
             groupId: 'group-1',
             reason: 'usage_limit',
             observedProfileId: 'primary',
@@ -2334,7 +2376,7 @@ describe('handleConnectedServiceRuntimeAuthFailureForSession', () => {
                     connectedServices: {
                         v: 1,
                         bindingsByServiceId: {
-                            'openai-codex': {
+                            'happier.agent.codex/openai-codex': {
                                 source: 'connected',
                                 selection: 'group',
                                 groupId: 'group-1',
@@ -2352,7 +2394,7 @@ describe('handleConnectedServiceRuntimeAuthFailureForSession', () => {
             classification: {
                 kind: 'usage_limit',
                 limitCategory: 'usage_limit',
-                serviceId: 'openai-codex',
+                serviceId: 'happier.agent.codex/openai-codex',
                 profileId: 'primary',
                 groupId: 'group-1',
                 resetsAtMs: null,
@@ -2372,12 +2414,12 @@ describe('handleConnectedServiceRuntimeAuthFailureForSession', () => {
         expect(continueAfterRuntimeAuthSwitch).toHaveBeenCalledWith(expect.objectContaining({
             tracked: expect.objectContaining({ happySessionId: 'sess_1' }),
             sessionId: 'sess_1',
-            attemptId: 'connected-service-auth-switch|hot_applied|openai-codex:group:group-1:backup:2',
+            attemptId: 'connected-service-auth-switch|hot_applied|happier.agent.codex/openai-codex:group:group-1:backup:2',
             action: 'hot_applied',
             normalizedBindings: {
-                v: 1,
+                v: 2,
                 bindingsByServiceId: {
-                    'openai-codex': {
+                    'happier.agent.codex/openai-codex': {
                         source: 'connected',
                         selection: 'group',
                         groupId: 'group-1',
@@ -2407,7 +2449,7 @@ describe('handleConnectedServiceRuntimeAuthFailureForSession', () => {
                     connectedServices: {
                         v: 1,
                         bindingsByServiceId: {
-                            'claude-subscription': {
+                            'happier.agent.claude/claude-subscription': {
                                 source: 'connected',
                                 selection: 'group',
                                 groupId: 'claude',
@@ -2424,7 +2466,7 @@ describe('handleConnectedServiceRuntimeAuthFailureForSession', () => {
             classification: {
                 kind: 'usage_limit',
                 limitCategory: 'usage_limit',
-                serviceId: 'claude-subscription',
+                serviceId: 'happier.agent.claude/claude-subscription',
                 profileId: 'primary',
                 groupId: 'claude',
                 expectedCredentialRevision: 'csr_aaaaaaaaaaaaaaaaaaaaaa',
@@ -2479,7 +2521,7 @@ describe('handleConnectedServiceRuntimeAuthFailureForSession', () => {
                     connectedServices: {
                         v: 1,
                         bindingsByServiceId: {
-                            'openai-codex': {
+                            'happier.agent.codex/openai-codex': {
                                 source: 'connected',
                                 selection: 'group',
                                 groupId: 'group-1',
@@ -2497,7 +2539,7 @@ describe('handleConnectedServiceRuntimeAuthFailureForSession', () => {
             classification: {
                 kind: 'auth_expired',
                 limitCategory: 'auth_invalid',
-                serviceId: 'openai-codex',
+                serviceId: 'happier.agent.codex/openai-codex',
                 profileId: 'primary',
                 groupId: 'group-1',
                 resetsAtMs: null,
@@ -2516,7 +2558,7 @@ describe('handleConnectedServiceRuntimeAuthFailureForSession', () => {
 
         expect(settleSupersedingRuntimeGroupGeneration).toHaveBeenCalledWith({
             sessionId: 'sess_1',
-            serviceId: 'openai-codex',
+            serviceId: 'happier.agent.codex/openai-codex',
             groupId: 'group-1',
             fromProfileId: 'primary',
             result: expect.objectContaining({ status: 'superseded_after_apply', activeProfileId: 'current', generation: 3 }),
@@ -2525,7 +2567,7 @@ describe('handleConnectedServiceRuntimeAuthFailureForSession', () => {
         expect(continueAfterRuntimeAuthSwitch).toHaveBeenCalledWith(expect.objectContaining({
             sessionId: 'sess_1',
             action: 'hot_applied',
-            attemptId: 'connected-service-auth-switch|hot_applied|openai-codex:group:group-1:current:3',
+            attemptId: 'connected-service-auth-switch|hot_applied|happier.agent.codex/openai-codex:group:group-1:current:3',
         }));
     });
 
@@ -2549,7 +2591,7 @@ describe('handleConnectedServiceRuntimeAuthFailureForSession', () => {
                     connectedServices: {
                         v: 1,
                         bindingsByServiceId: {
-                            'openai-codex': {
+                            'happier.agent.codex/openai-codex': {
                                 source: 'connected',
                                 selection: 'group',
                                 groupId: 'group-1',
@@ -2560,7 +2602,7 @@ describe('handleConnectedServiceRuntimeAuthFailureForSession', () => {
                     environmentVariables: {
                         [HAPPIER_CONNECTED_SERVICE_SELECTIONS_ENV_KEY]: JSON.stringify([{
                             kind: 'group',
-                            serviceId: 'openai-codex',
+                            serviceId: 'happier.agent.codex/openai-codex',
                             groupId: 'group-1',
                             activeProfileId: 'backup',
                             fallbackProfileId: 'primary',
@@ -2577,7 +2619,7 @@ describe('handleConnectedServiceRuntimeAuthFailureForSession', () => {
             classification: {
                 kind: 'usage_limit',
                 limitCategory: 'usage_limit',
-                serviceId: 'openai-codex',
+                serviceId: 'happier.agent.codex/openai-codex',
                 profileId: 'primary',
                 groupId: 'group-1',
                 resetsAtMs: null,
@@ -2595,14 +2637,14 @@ describe('handleConnectedServiceRuntimeAuthFailureForSession', () => {
         });
 
         expect(switchAfterClassifiedFailure).toHaveBeenCalledWith(expect.objectContaining({
-            serviceId: 'openai-codex',
+            serviceId: 'happier.agent.codex/openai-codex',
             groupId: 'group-1',
             observedProfileId: 'primary',
             switchesThisTurn: 0,
         }));
         expect(continueAfterRuntimeAuthSwitch).toHaveBeenCalledWith(expect.objectContaining({
             sessionId: 'sess_1',
-            attemptId: 'connected-service-auth-switch|hot_applied|openai-codex:group:group-1:backup:2',
+            attemptId: 'connected-service-auth-switch|hot_applied|happier.agent.codex/openai-codex:group:group-1:backup:2',
             action: 'hot_applied',
         }));
         expect(emitSessionEvent).not.toHaveBeenCalled();
@@ -2618,7 +2660,7 @@ describe('handleConnectedServiceRuntimeAuthFailureForSession', () => {
         const pendingIntent: RuntimeAuthRecoveryIntent = {
             v: 1,
             sessionId: 'sess_1',
-            serviceId: 'openai-codex',
+            serviceId: 'happier.agent.codex/openai-codex',
             profileId: null,
             groupId: 'group-1',
             status: 'resumed_awaiting_proof',
@@ -2630,7 +2672,7 @@ describe('handleConnectedServiceRuntimeAuthFailureForSession', () => {
             classification: {
                 kind: 'usage_limit',
                 limitCategory: 'usage_limit',
-                serviceId: 'openai-codex',
+                serviceId: 'happier.agent.codex/openai-codex',
                 profileId: 'primary',
                 groupId: 'group-1',
                 resetsAtMs: null,
@@ -2662,7 +2704,7 @@ describe('handleConnectedServiceRuntimeAuthFailureForSession', () => {
                     connectedServices: {
                         v: 1,
                         bindingsByServiceId: {
-                            'openai-codex': {
+                            'happier.agent.codex/openai-codex': {
                                 source: 'connected',
                                 selection: 'group',
                                 profileId: 'primary',
@@ -2679,7 +2721,7 @@ describe('handleConnectedServiceRuntimeAuthFailureForSession', () => {
             classification: {
                 kind: 'usage_limit',
                 limitCategory: 'usage_limit',
-                serviceId: 'openai-codex',
+                serviceId: 'happier.agent.codex/openai-codex',
                 profileId: 'primary',
                 groupId: 'group-1',
                 resetsAtMs: null,
@@ -2699,7 +2741,7 @@ describe('handleConnectedServiceRuntimeAuthFailureForSession', () => {
         expect(continueAfterRuntimeAuthSwitch).toHaveBeenCalledOnce();
         expect(continueAfterRuntimeAuthSwitch).toHaveBeenCalledWith(expect.objectContaining({
             sessionId: 'sess_1',
-            attemptId: 'connected-service-auth-switch|hot_applied|openai-codex:group:group-1:backup:5',
+            attemptId: 'connected-service-auth-switch|hot_applied|happier.agent.codex/openai-codex:group:group-1:backup:5',
             action: 'hot_applied',
         }));
     });
@@ -2714,7 +2756,7 @@ describe('handleConnectedServiceRuntimeAuthFailureForSession', () => {
         const pendingIntent: RuntimeAuthRecoveryIntent = {
             v: 1,
             sessionId: 'sess_1',
-            serviceId: 'openai-codex',
+            serviceId: 'happier.agent.codex/openai-codex',
             profileId: null,
             groupId: 'group-1',
             status: 'resumed_awaiting_proof',
@@ -2726,7 +2768,7 @@ describe('handleConnectedServiceRuntimeAuthFailureForSession', () => {
             classification: {
                 kind: 'usage_limit',
                 limitCategory: 'usage_limit',
-                serviceId: 'openai-codex',
+                serviceId: 'happier.agent.codex/openai-codex',
                 profileId: 'primary',
                 groupId: 'group-1',
                 resetsAtMs: null,
@@ -2765,7 +2807,7 @@ describe('handleConnectedServiceRuntimeAuthFailureForSession', () => {
                     connectedServices: {
                         v: 1,
                         bindingsByServiceId: {
-                            'openai-codex': {
+                            'happier.agent.codex/openai-codex': {
                                 source: 'connected',
                                 selection: 'group',
                                 profileId: 'primary',
@@ -2782,7 +2824,7 @@ describe('handleConnectedServiceRuntimeAuthFailureForSession', () => {
             classification: {
                 kind: 'usage_limit',
                 limitCategory: 'usage_limit',
-                serviceId: 'openai-codex',
+                serviceId: 'happier.agent.codex/openai-codex',
                 profileId: 'primary',
                 groupId: 'group-1',
                 resetsAtMs: null,
@@ -2802,7 +2844,7 @@ describe('handleConnectedServiceRuntimeAuthFailureForSession', () => {
         expect(continueAfterRuntimeAuthSwitch).toHaveBeenCalledOnce();
         expect(continueAfterRuntimeAuthSwitch).toHaveBeenCalledWith(expect.objectContaining({
             sessionId: 'sess_1',
-            attemptId: 'connected-service-auth-switch|hot_applied|openai-codex:group:group-1:backup:2',
+            attemptId: 'connected-service-auth-switch|hot_applied|happier.agent.codex/openai-codex:group:group-1:backup:2',
             action: 'hot_applied',
         }));
     });

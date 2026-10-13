@@ -17,6 +17,7 @@ import {
   resolveConnectedServiceGenerationApplicationScope,
   resolveConnectedServicePredictiveSoftSwitchCapability,
 } from './catalogHooks';
+import { verifyProviderActivityOutcome } from './recovery/verifyProviderActivityOutcome';
 
 describe('connected-service catalog hooks', () => {
   let runtime!: ResolvedExecutablePluginRuntimeRegistry;
@@ -290,6 +291,41 @@ describe('connected-service catalog hooks', () => {
     })).resolves.toEqual({ mode: 'hot_apply' });
   });
 
+  it('classifies Gemini numeric provider failure through the declared runtime auth adapter', async () => {
+    const geminiAdapter = await getConnectedServiceRuntimeAuthAdapter('gemini');
+    expect(geminiAdapter?.classifyRuntimeAuthFailure({
+      target: { agentId: 'gemini', targetId: 'run-gemini' },
+      error: { code: 'acp_turn_failed', details: { requestErrorCode: 429 } },
+      selection: { kind: 'group', serviceId: 'happier.agent.gemini/gemini-account',
+        groupId: 'current-group', activeProfileId: 'current-profile', generation: 3,
+        credentialRevision: 'csr_abcdefghijklmnopqrstuv' },
+    })).toMatchObject({ kind: 'rate_limit', limitCategory: 'rate_limit',
+      serviceId: 'happier.agent.gemini/gemini-account', groupId: 'current-group', profileId: 'current-profile',
+      groupGeneration: 3, expectedCredentialRevision: 'csr_abcdefghijklmnopqrstuv' });
+  });
+
+  it('verifies Gemini provider activity against the actual qualified runtime selection', async () => {
+    const selection = {
+      kind: 'profile' as const,
+      serviceId: 'happier.agent.gemini/gemini-account' as const,
+      profileId: 'work',
+      credentialRevision: 'csr_abcdefghijklmnopqrstuv',
+    };
+    const raw = JSON.stringify([selection]);
+    await expect(verifyProviderActivityOutcome({
+      target: {
+        agentId: 'gemini', runtimeIdentityKey: 'runtime-gemini',
+        connectedServiceSelections: [selection],
+        connectedServiceSelectionsEnv: { HAPPIER_CONNECTED_SERVICE_SELECTIONS_JSON: raw },
+      },
+      reportedSelectionsEnvRaw: raw,
+      event: 'assistant_message_end',
+    })).resolves.toEqual({ status: 'verified', targets: [{
+      serviceId: selection.serviceId, profileId: 'work', groupId: null,
+      groupGeneration: null, credentialRevision: selection.credentialRevision,
+    }] });
+  });
+
   it('loads focused runtime auth adapters from Agent registration', async () => {
     await expect(getConnectedServiceRuntimeAuthAdapter('claude')).resolves.toMatchObject({
       classifyRuntimeAuthFailure: expect.any(Function),
@@ -309,7 +345,7 @@ describe('connected-service catalog hooks', () => {
       target: { agentId: 'gemini' },
       selections: [{
         kind: 'profile',
-        serviceId: 'gemini',
+        serviceId: 'happier.agent.gemini/gemini-account',
         profileId: 'work',
         credentialRevision: 'csr_abcdefghijklmnopqrstuv',
       }],
@@ -317,7 +353,7 @@ describe('connected-service catalog hooks', () => {
     })).resolves.toMatchObject({
       status: 'verified',
       targets: [expect.objectContaining({
-        serviceId: 'gemini',
+        serviceId: 'happier.agent.gemini/gemini-account',
         profileId: 'work',
         credentialRevision: 'csr_abcdefghijklmnopqrstuv',
       })],

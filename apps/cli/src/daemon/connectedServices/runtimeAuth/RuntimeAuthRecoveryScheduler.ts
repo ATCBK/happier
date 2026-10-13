@@ -19,8 +19,6 @@ import {
   type ProviderOutcomeProofKind,
 } from '../recovery/providerOutcomeProof';
 import {
-  isLocallyCompleteWithoutProof,
-  isProvenRuntimeAuthRecoverySuccess,
   readRuntimeAuthRecoverySwitchResult,
   resolveRuntimeAuthRecoveryProof,
 } from './resolveRuntimeAuthRecoveryOutcome';
@@ -424,18 +422,6 @@ function mapRuntimeFailureKindToDaemonWorkErrorKind(
   }
 }
 
-// Provider-outcome proof gate. A switch event, auth-store adoption, credential
-// refresh, observed-generation bump, or restart request is a recovery PHASE, not
-// proof the provider can authenticate. Recovery is cleared as recovered only with
-// deterministic proof (verified account adoption, or a genuinely fresh candidate)
-// — see resolveRuntimeAuthRecoveryOutcome. Local-only completions
-// (credential_refreshed, generic ok:true, unverified switch / observed_generation)
-// are NOT success; they are intermediate and stay pending under the backoff
-// lifecycle (see isLocallyCompleteWithoutProof in recover()).
-function isSuccessfulRecoveryResult(result: unknown): boolean {
-  return isProvenRuntimeAuthRecoverySuccess(result);
-}
-
 // Handler verdict: the replayed recovery no longer applies (e.g. the group already moved
 // off the failing profile). The scheduler removes the durable record so the same key can
 // re-arm on a genuine future failure — see `DurableBackoffRecoveryResult`'s `superseded`.
@@ -447,17 +433,6 @@ function readRuntimeAuthRecoverySupersededReason(result: unknown): string | null
 
 function isTerminalRecoveryResult(result: unknown): boolean {
   return resolveTerminalRecoveryReason(result) !== null;
-}
-
-// HF-5 (A1-MED-1): a wake whose recovery armed the SAME-SESSION temporary backoff-resume path
-// (or reported it unavailable) hands ownership to that path. The durable record must be removed
-// with a SUPERSEDED outcome — never settled terminal by the unknown-status catch-all — so the
-// key re-arms fresh on a genuine future failure.
-function readTemporaryRetryWakeStatus(result: unknown): string | null {
-  const status = asRecord(result)?.status;
-  return status === 'temporary_retry_armed' || status === 'temporary_retry_unavailable'
-    ? status
-    : null;
 }
 
 function isUntargetedProviderOutcomeProofWaitRefresh(input: Readonly<{
@@ -1135,7 +1110,8 @@ export class RuntimeAuthRecoveryScheduler implements RuntimeAuthRecoverySchedule
               ...intent, terminalReason: 'usage_limit_continuation_cancelled',
             } };
           }
-          if (isSuccessfulRecoveryResult(result)) {
+          const disposition = resolveRuntimeAuthRecoveryDisposition({ result, intent, nowMs: this.#nowMs() });
+          if (disposition?.kind === 'provider_outcome_proven') {
             return {
               status: 'success' as const,
               intent: settleVisibleTransition(intent, 'recovered', 'provider_outcome_proven'),
@@ -1145,15 +1121,9 @@ export class RuntimeAuthRecoveryScheduler implements RuntimeAuthRecoverySchedule
           if (supersededReason) {
             return { status: 'superseded' as const, reason: supersededReason };
           }
-          const temporaryRetryStatus = readTemporaryRetryWakeStatus(result);
-          if (temporaryRetryStatus) {
-            return { status: 'superseded' as const, reason: temporaryRetryStatus };
+          if (disposition?.kind === 'temporary_retry_handoff') {
+            return { status: 'superseded' as const, reason: disposition.status };
           }
-          const disposition = resolveRuntimeAuthRecoveryDisposition({
-            result,
-            intent,
-            nowMs: this.#nowMs(),
-          });
           if (disposition?.kind === 'durable_wait') {
             return {
               status: 'wait' as const,
@@ -1169,7 +1139,7 @@ export class RuntimeAuthRecoveryScheduler implements RuntimeAuthRecoverySchedule
               },
             };
           }
-          if (isLocallyCompleteWithoutProof(result)) {
+          if (disposition?.kind === 'local_completion') {
             const pendingTarget = readPendingProofTarget(result);
             const continuationRevision = continuingAfterReset
               ? ConnectedServiceCredentialRevisionV1Schema.safeParse(asRecord(result)?.credentialRevision).data
@@ -1925,6 +1895,7 @@ export class RuntimeAuthRecoveryScheduler implements RuntimeAuthRecoverySchedule
           });
           return { intent: waiting, result: waiting };
         }
+        if (disposition.kind !== 'terminal') return { intent: current, result: null };
         const terminal = settleVisibleTransition({
           ...current,
           status: 'cancelled',

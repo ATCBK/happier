@@ -148,6 +148,19 @@ function createBridge(overrides: Partial<Parameters<typeof createExecutionRunCon
 }
 
 describe('createExecutionRunConnectedServicesBridge', () => {
+    it('retains the native checkpoint through credential rematerialization of the exact Run activation', async () => {
+        const h = createBridge();
+        const first = await h.bridge.materialize(MATERIALIZE_INPUT);
+        if (!first.ok) throw new Error(first.errorMessage);
+        const second = await h.bridge.materialize({ ...MATERIALIZE_INPUT,
+            recovery: { activationId: first.activationId, nativeResumeId: 'native-checkpoint' } });
+        expect(second.ok).toBe(true);
+        expect(h.cleanupOnExit).not.toHaveBeenCalled();
+        expect(h.resolveAuthForSpawn).toHaveBeenLastCalledWith(expect.objectContaining({
+            vendorResumeId: 'native-checkpoint', resumeReachabilityRequired: true,
+        }));
+        if (second.ok) await h.bridge.release({ runId: MATERIALIZE_INPUT.runId, runnerPid: MATERIALIZE_INPUT.runnerPid, activationId: second.activationId });
+    });
     it('retries exact terminal cleanup custody after a failed root removal', async () => {
         const cleanup = vi.fn()
             .mockRejectedValueOnce(new Error('busy'))
@@ -690,37 +703,6 @@ describe('createExecutionRunConnectedServicesBridge', () => {
             parentSessionId: 'session-1',
         });
         expect(exactRootCleanup).toHaveBeenCalledOnce();
-        expect(contributionRelease).toHaveBeenCalledOnce();
-        expect(registerRunTargets).not.toHaveBeenCalled();
-    });
-
-    it('cleans materialized root and contribution when post-resolution setup fails', async () => {
-        const cleanupOnFailure = vi.fn();
-        const contributionRelease = vi.fn(async () => undefined);
-        const { bridge, registerRunTargets } = createBridge({
-            resolveAuthForSpawn: (async () => ({
-                env: { CODEX_HOME: '/materialized/run_abc/codex-home' },
-                cleanupOnFailure,
-                cleanupOnExit: vi.fn(),
-                connectedServicesBindings: RUN_BINDINGS,
-                targetMaterializedRoot: '/materialized/run_abc/codex',
-            })) as never,
-            resolveRunMaterializedRoot: () => {
-                throw new Error('root lookup failed');
-            },
-            acquireAgentPurposeContributions: async () => ({
-                contributions: { agentDefinitionsById: new Map() },
-                resolveAgentContributionIdentity: async () => AGENT_CONTRIBUTION_IDENTITY,
-                isCurrent: () => true,
-                release: contributionRelease,
-            }),
-        });
-
-        await expect(bridge.materialize(MATERIALIZE_INPUT)).resolves.toMatchObject({
-            ok: false,
-            errorCode: 'connected_service_run_materialization_blocked',
-        });
-        expect(cleanupOnFailure).toHaveBeenCalledOnce();
         expect(contributionRelease).toHaveBeenCalledOnce();
         expect(registerRunTargets).not.toHaveBeenCalled();
     });

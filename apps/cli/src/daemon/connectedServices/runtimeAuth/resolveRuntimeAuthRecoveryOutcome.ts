@@ -112,12 +112,15 @@ export function isLocallyCompleteWithoutProof(result: unknown): boolean {
   if (isProvenRuntimeAuthRecoverySuccess(result)) return false;
   const outer = isRecord(result) ? result : null;
   if (!outer) return false;
+  if (outer.status === 'temporary_retry_armed') return isRecord(outer.recovery) && outer.recovery.status === 'resumed';
   if (outer.status === 'credential_refreshed' || outer.status === 'continuation_enqueued') return true;
   const inner = readRuntimeAuthRecoverySwitchResult(result);
   if (!inner) return false;
   if (outer.status !== 'switch_attempted') return false;
   return inner.status === 'switched'
     || inner.status === 'observed_generation'
+    || (inner.status === 'superseded_after_apply' && readString(inner.adoptedProfileId) !== null
+      && typeof inner.adoptedGeneration === 'number' && readString(inner.adoptedCredentialRevision) !== null)
     || inner.status === 'credential_refreshed'
     || inner.ok === true;
 }

@@ -94,15 +94,33 @@ export class ConnectedServiceRuntimeAuthSwitchAttemptTracker {
         return 0;
     }
 
-    clearSession(sessionIdRaw: string): void {
-        const sessionId = normalizeString(sessionIdRaw);
-        if (!sessionId) return;
+    private clearTurnAttempts(sessionId: string): void {
         const prefix = `${sessionId}\0`;
         for (const key of this.attemptsByKey.keys()) {
             if (key.startsWith(prefix)) this.attemptsByKey.delete(key);
         }
+    }
+
+    clearSession(sessionIdRaw: string): void {
+        const sessionId = normalizeString(sessionIdRaw);
+        if (!sessionId) return;
+        this.clearTurnAttempts(sessionId);
+        const prefix = `${sessionId}\0`;
         for (const key of this.sessionSwitchTimestampsByKey.keys()) {
             if (key.startsWith(prefix)) this.sessionSwitchTimestampsByKey.delete(key);
         }
+    }
+
+    recordTurnLifecycle(input: Readonly<{
+        sessionId: string;
+        event: 'prompt_or_steer' | 'task_started' | 'assistant_message_end' | 'turn_cancelled';
+        terminalStatus?: 'completed' | 'failed';
+    }>): void {
+        // A successful turn closes its failure edges, not the runtime's hourly budget.
+        // Failed/forced-cancelled recovery attempts still belong to their charged turn.
+        if (input.event !== 'assistant_message_end' || input.terminalStatus !== 'completed') return;
+        const sessionId = normalizeString(input.sessionId);
+        if (!sessionId) return;
+        this.clearTurnAttempts(sessionId);
     }
 }

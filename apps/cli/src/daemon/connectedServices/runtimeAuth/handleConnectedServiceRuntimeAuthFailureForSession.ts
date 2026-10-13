@@ -6,7 +6,7 @@ import {
   SESSION_SWITCH_LIMIT_WINDOW_MS,
   type ConnectedServiceAuthGroupSwitchResult,
 } from '../accountGroups/switching/ConnectedServiceAuthGroupSwitchCoordinator';
-import { handleConnectedServiceRuntimeAuthFailure } from './handleConnectedServiceRuntimeAuthFailure';
+import { handleConnectedServiceRuntimeAuthFailure, applyConnectedServiceRuntimeAuthFailureSourceBinding, prepareConnectedServiceRuntimeCredentialRecovery } from './handleConnectedServiceRuntimeAuthFailure';
 import type { ConnectedServiceRuntimeAuthSwitchAttemptTracker } from './ConnectedServiceRuntimeAuthSwitchAttemptTracker';
 import type { ConnectedServiceRuntimeFailureClassification } from './types';
 import type {
@@ -160,15 +160,9 @@ export function applyAuthorizedRuntimeAuthFailureSourceBinding(
 ): ConnectedServiceRuntimeFailureClassification {
   if (authorization?.status !== 'authorized' || !authorization.sourceBinding) return classification;
   const binding = authorization.sourceBinding;
-  return {
-    ...classification,
-    serviceId: binding.serviceId,
-    groupId: binding.groupId,
-    profileId: binding.profileId,
-    groupGeneration: binding.generation,
-    expectedCredentialRevision:
-      binding.credentialRevision as ConnectedServiceRuntimeFailureClassification['expectedCredentialRevision'],
-  };
+  return applyConnectedServiceRuntimeAuthFailureSourceBinding(classification, {
+    ...binding, credentialRevision: binding.credentialRevision as ConnectedServiceRuntimeFailureClassification['expectedCredentialRevision'],
+  });
 }
 
 export async function authorizeConnectedServiceRuntimeAuthFailureSource(input: Readonly<{
@@ -223,6 +217,20 @@ export async function authorizeConnectedServiceRuntimeAuthFailureSource(input: R
     && classification.profileId !== null
     && classification.groupGeneration !== null
     && classification.groupGeneration !== undefined;
+  // Fresh native evidence without credential attribution is qualified by the
+  // current registered process. A scheduler replay retains its failed source.
+  if (classification && tracked && input.recoveryInvocationSource !== 'scheduler_retry'
+    && classification.profileId === null && classification.groupId === null
+    && classification.groupGeneration == null && classification.expectedCredentialRevision == null) {
+    const binding = await input.resolveRegisteredRuntimeAuthFailureSource?.({ sessionId: input.sessionId, tracked, classification });
+    if (binding && binding.serviceId === classification.serviceId && binding.credentialRevision !== null
+      && (binding.groupId === null || binding.generation !== null)
+      && findTrackedSession(input.getChildren(), input.sessionId) === tracked) {
+      return { status: 'authorized', tracked, inactive, sourceBinding: binding };
+    }
+    return { status: 'recovery_superseded', reason: 'source_tuple_unavailable', serviceId: classification.serviceId,
+      groupId: classification.groupId, profileId: classification.profileId };
+  }
   // A complete modern report identifies the credential actually used by the provider
   // operation. Hot apply can make that identity newer than immutable spawn metadata.
   // Reattached/untracked and quota reports additionally require exact current authority.
@@ -315,7 +323,8 @@ export async function authorizeConnectedServiceRuntimeAuthFailureSource(input: R
       registeredBinding.profileId !== classification.profileId
       || registeredBinding.credentialRevision !== classification.expectedCredentialRevision
     );
-  if (registeredBindingProvesNewerGroupTarget) {
+  if (registeredBindingProvesNewerGroupTarget
+    && !(input.recoveryInvocationSource === 'scheduler_retry' && registeredBinding.profileId === classification.profileId)) {
     // The report still belongs to the old credential, so it must not penalize or rotate the
     // replacement. For a fresh daemon report, the exact newer registered target is also enough
     // proof to continue the interrupted origin through the existing deduplicated dispatcher.
@@ -642,12 +651,6 @@ async function continueAfterRuntimeAuthTargetAdoption(input: Readonly<{
   });
 }
 
-function isActiveProfileRefreshRuntimeFailure(
-  classification: ConnectedServiceRuntimeFailureClassification,
-): boolean {
-  return classification.kind === 'auth_expired';
-}
-
 function requiresProfileReconnectWithoutGroupSwitch(
   classification: ConnectedServiceRuntimeFailureClassification,
 ): boolean {
@@ -797,6 +800,7 @@ export async function handleConnectedServiceRuntimeAuthFailureForSession(input: 
     : null;
   if (!classification) {
     return await handleConnectedServiceRuntimeAuthFailure({
+      scope: { kind: 'session', sessionId: input.sessionId },
       sessionId: input.sessionId,
       selection: null,
       classification,
@@ -827,6 +831,7 @@ export async function handleConnectedServiceRuntimeAuthFailureForSession(input: 
   if (!selection || !isGroupRuntimeRecoverySelection(selection)) {
     if (!input.switchCoordinator) {
       return await handleConnectedServiceRuntimeAuthFailure({
+        scope: { kind: 'session', sessionId: input.sessionId },
         sessionId: input.sessionId,
         selection,
         classification,
@@ -836,6 +841,7 @@ export async function handleConnectedServiceRuntimeAuthFailureForSession(input: 
       });
     }
     return await handleConnectedServiceRuntimeAuthFailure({
+      scope: { kind: 'session', sessionId: input.sessionId },
       sessionId: input.sessionId,
       selection,
       classification,
@@ -854,6 +860,7 @@ export async function handleConnectedServiceRuntimeAuthFailureForSession(input: 
 
   if (classification.kind === 'temporary_throttle') {
     return await handleConnectedServiceRuntimeAuthFailure({
+      scope: { kind: 'session', sessionId: input.sessionId },
       sessionId: input.sessionId,
       selection: {
         kind: 'group',
@@ -901,42 +908,34 @@ export async function handleConnectedServiceRuntimeAuthFailureForSession(input: 
     });
   }
 
-  let activeCredentialRefreshFailed = false;
-  if (
-    isActiveProfileRefreshRuntimeFailure(classification)
-    && input.refreshConnectedServiceCredentialForRuntimeAuthFailure
-    && activeProfileId
-  ) {
-    const refresh = await input.refreshConnectedServiceCredentialForRuntimeAuthFailure({
+  const credentialPreparation = await prepareConnectedServiceRuntimeCredentialRecovery({
+    scope: { kind: 'session', sessionId: input.sessionId }, classification, activeProfileId,
+    refresh: input.refreshConnectedServiceCredentialForRuntimeAuthFailure && activeProfileId ? async () => await input.refreshConnectedServiceCredentialForRuntimeAuthFailure!({
       serviceId: selection.serviceId,
       profileId: activeProfileId,
       sessionId: input.sessionId,
-    });
-    if (refresh.runtimeAuthDisposition === 'superseded_by_current_group') {
-      // The refresh was real, but canonical group truth already moved this session to another
-      // member. Let the existing group-generation consumer adopt that truth; do not report the
-      // stale member as recovered or create a second continuation/restart path.
-    } else if (refresh.status === 'refreshed') {
+    }) : null,
+    onRefreshed: async (refresh, _scope, refreshedProfileId) => {
       await continueAfterRuntimeAuthTargetAdoption({
         tracked,
         sessionId: input.sessionId,
         serviceId: selection.serviceId,
         groupId: activeGroupId,
-        profileId: activeProfileId,
+        profileId: refreshedProfileId,
         continueAfterRuntimeAuthSwitch: input.continueAfterRuntimeAuthSwitch ?? null,
       });
       return {
-        status: 'credential_refreshed',
+        status: 'credential_refreshed' as const,
         serviceId: selection.serviceId,
-        profileId: activeProfileId,
+        profileId: refreshedProfileId,
         groupId: activeGroupId,
         refresh,
         restartRequested: false,
       };
-    } else {
-      activeCredentialRefreshFailed = true;
-    }
-  }
+    },
+  });
+  if (credentialPreparation.status === 'prepared') return credentialPreparation.result;
+  const activeCredentialRefreshFailed = credentialPreparation.refreshFailed;
 
   if (!input.switchCoordinator) {
     if (activeCredentialRefreshFailed) {
@@ -975,6 +974,7 @@ export async function handleConnectedServiceRuntimeAuthFailureForSession(input: 
       });
 
       return await handleConnectedServiceRuntimeAuthFailure({
+        scope: { kind: 'session', sessionId: input.sessionId },
         sessionId: input.sessionId,
         selection: {
           kind: 'group',

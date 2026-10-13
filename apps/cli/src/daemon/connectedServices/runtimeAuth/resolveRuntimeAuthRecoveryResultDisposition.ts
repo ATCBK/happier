@@ -2,6 +2,8 @@ import { isTerminalProviderOutcomeProof } from '../recovery/providerOutcomeProof
 import {
     readRuntimeAuthRecoverySwitchResult,
     resolveRuntimeAuthRecoveryProof,
+    isLocallyCompleteWithoutProof,
+    isProvenRuntimeAuthRecoverySuccess,
 } from './resolveRuntimeAuthRecoveryOutcome';
 
 function isRecord(value: unknown): value is Readonly<Record<string, unknown>> {
@@ -31,6 +33,9 @@ const WAITABLE_FAILURE_REASONS: ReadonlySet<string> = new Set([
 ]);
 
 export type RuntimeAuthRecoveryResultDisposition =
+    | Readonly<{ kind: 'provider_outcome_proven' }>
+    | Readonly<{ kind: 'local_completion'; targetChanged: boolean }>
+    | Readonly<{ kind: 'temporary_retry_handoff'; status: 'temporary_retry_armed' | 'temporary_retry_unavailable'; ready: boolean }>
     | Readonly<{
         kind: 'durable_wait';
         nextRetryAtMs: number;
@@ -83,6 +88,11 @@ export function resolveRuntimeAuthRecoveryResultDisposition(input: Readonly<{
     const switchResult = readRuntimeAuthRecoverySwitchResult(input.result);
     if (!switchResult) return null;
     const additionalCandidates = input.additionalWaitCandidatesMs ?? [];
+    if (isProvenRuntimeAuthRecoverySuccess(input.result)) return { kind: 'provider_outcome_proven' };
+    const outer = isRecord(input.result) ? input.result : null;
+    if (outer?.status === 'temporary_retry_armed' || outer?.status === 'temporary_retry_unavailable') {
+        return { kind: 'temporary_retry_handoff', status: outer.status, ready: isLocallyCompleteWithoutProof(input.result) };
+    }
 
     if (switchResult.status === 'no_eligible_member' && switchResult.groupExhausted === true) {
         const transientAlternative = Array.isArray(switchResult.excluded)
@@ -152,6 +162,7 @@ export function resolveRuntimeAuthRecoveryResultDisposition(input: Readonly<{
     }
     const proof = resolveRuntimeAuthRecoveryProof(input.result);
     if (isTerminalProviderOutcomeProof(proof)) return { kind: 'terminal', reason: proof };
+    if (isLocallyCompleteWithoutProof(input.result)) return { kind: 'local_completion', targetChanged: outer?.status === 'switch_attempted' };
     const status = readString(switchResult.status);
     if (
         status === 'auto_switch_disabled'

@@ -26,10 +26,14 @@ import {
 } from '../runtimeAuth/sanitizeConnectedServiceDiagnosticString';
 import { HAPPIER_CONNECTED_SERVICE_SELECTIONS_ENV_KEY, readConnectedServiceChildSelectionsFromEnv, type ConnectedServiceChildSelection } from '../connectedServiceChildEnvironment';
 import { ConnectedServiceRunRejectedStartRequestSchema, ConnectedServiceRunRuntimeAuthRefreshRequestSchema,
+    ConnectedServiceRunRuntimeTurnCompletedRequestSchema, type ConnectedServiceRunRuntimeTurnCompletedHandler,
+    ConnectedServiceRunRuntimeFailureRecoveryRequestSchema, type ConnectedServiceRunRuntimeFailureRecoveryHandler,
     type ConnectedServiceRunRuntimeAuthRefreshHandler, type ConnectedServiceRunRejectedStartHandler } from './materializeContract';
 import { refreshConnectedServiceRuntimeAuthForTarget, resolveCurrentRefreshSelection, type ResolveDaemonAuthBridge } from '../sessionRuntimeAuthRefresh';
 import { runtimeTargetOwnsConnectedServiceRuntimeAuthRefreshSelection } from '../runtimeAuthRefreshAuthorization';
 import type { ConnectedServiceRuntimeTarget } from '../runtimeRegistry/target';
+import type { ConnectedServiceRuntimeFailureClassification } from '../runtimeAuth/types';
+import { applyConnectedServiceRuntimeAuthFailureSourceBinding, readConnectedServiceRuntimeAuthFailureSourceBinding } from '../runtimeAuth/handleConnectedServiceRuntimeAuthFailure';
 import type { ConnectedServiceRuntimeRegistry } from '../runtimeRegistry/registry';
 import type { RequesterSessionRuntimeContext } from '../../sessionEncryption/requesterSessionCredentials';
 import { ConnectedServiceCredentialRevisionV1Schema } from '@happier-dev/protocol/connect/connected-service-schemas';
@@ -130,6 +134,14 @@ export async function registerExecutionRunConnectedServicesTarget(input: Readonl
 }
 
 export type CreateExecutionRunConnectedServicesBridgeDeps = Readonly<{
+    recordRuntimeTurnCompleted?: (input: Readonly<{ runId: string }>) => Promise<void>;
+    classifyRuntimeFailure?: (input: Readonly<{ target: ConnectedServiceRuntimeTarget; diagnostic: unknown }>) => Promise<ConnectedServiceRuntimeFailureClassification | null>;
+    recoverRuntimeFailure?: (input: Readonly<{
+        runId: string; parentSessionId: string; nativeResumeId: string; interruptedOriginId: string;
+        selection: ConnectedServiceChildSelection; classification: ConnectedServiceRuntimeFailureClassification;
+        refreshCredential(): ReturnType<ConnectedServiceRunRuntimeAuthRefreshHandler>;
+        isCurrent(): boolean; signal: AbortSignal;
+    }>) => ReturnType<ConnectedServiceRunRuntimeFailureRecoveryHandler>;
     getRunRuntimeTarget?: (runKey: string) => ConnectedServiceRuntimeTarget | null;
     adoptRunCredentialRevision?: ConnectedServiceRuntimeRegistry['adoptExactCredentialRevisionForRun'];
     resolveRunCredentialRevisionTarget?: ConnectedServiceRuntimeRegistry['resolveExactRunCredentialRevisionTarget'];
@@ -142,7 +154,9 @@ export type CreateExecutionRunConnectedServicesBridgeDeps = Readonly<{
     }>) => ReturnType<ConnectedServiceAuthGroupSwitchCoordinator<QualifiedConnectedAccountServiceRef>['switchAfterClassifiedFailure']>;
     resolveAuthForSpawn: ResolveAuthForSpawn;
     registerRunTargets: (registration: ExecutionRunTargetRegistration) => void | Promise<void>;
-    unregisterRunTargets: (runKey: string) => void;
+    unregisterRunTargets: (runKey: string) => void | Promise<void>;
+    /** Run lifetime ends independently from an activation's target retirement. */
+    finishRunRecovery?: (runKey: string) => Promise<void>;
     resolveRunMaterializedRoot: (input: Readonly<{
         runKey: string;
         agentId: CatalogAgentId;
@@ -199,6 +213,8 @@ export type ExecutionRunConnectedServicesBridge = Readonly<{
     release: ConnectedServiceRunReleaseHandler;
     recoverRejectedStart: ConnectedServiceRunRejectedStartHandler;
     refreshRuntimeAuth: ConnectedServiceRunRuntimeAuthRefreshHandler;
+    recoverRuntimeFailure: ConnectedServiceRunRuntimeFailureRecoveryHandler;
+    completeRuntimeTurn: ConnectedServiceRunRuntimeTurnCompletedHandler;
     adoptLiveMaterialization: (input: Readonly<{
         runId: string;
         runnerPid: number;
@@ -321,6 +337,7 @@ export function createExecutionRunConnectedServicesBridge(
             beforeAdmission?: boolean;
             skipFilesystem?: boolean;
             clearTerminalReceipt?: boolean;
+            preserveRecovery?: boolean;
         }> = {},
     ): Promise<boolean> => {
         entry.cleanupPromise ??= (async () => {
@@ -329,8 +346,9 @@ export function createExecutionRunConnectedServicesBridge(
             entry.purposeBindingLease?.dispose();
             if (entry.targetsMayBeRegistered) {
                 entry.targetsMayBeRegistered = false;
-                deps.unregisterRunTargets(entry.runKey);
+                await deps.unregisterRunTargets(entry.runKey);
             }
+            if (!options.preserveRecovery) await deps.finishRunRecovery?.(entry.runKey);
             if (
                 entry.requestAuthCapability
                 && !entry.requestAuthCapabilityRetired
@@ -877,10 +895,25 @@ export function createExecutionRunConnectedServicesBridge(
                     'Execution-run connected services runner identity is not current',
                 );
             }
-            if (!(await cleanupPriorRunKey(runKey))) {
+            const recoveryEntry = input.recovery ? retainedCleanupByRunKey.get(runKey) : null;
+            if (input.recovery && (!recoveryEntry || recoveryEntry.activationId !== input.recovery.activationId
+                || recoveryEntry.runnerPid !== input.runnerPid || recoveryEntry.runnerIdentity !== runner.identity
+                || recoveryEntry.agentId !== agentId || !recoveryEntry.authorityActive || recoveryEntry.retiring || !recoveryEntry.isCurrent())) {
+                return blocked('Execution-run recovery activation is not current');
+            }
+            // The existing materializer copies this Run's private state from its retained root
+            // before promotion. Retire credentials/capabilities while keeping that checkpoint.
+            if (!(recoveryEntry ? await cleanupEntry(recoveryEntry, { skipFilesystem: true, preserveRecovery: true }) : await cleanupPriorRunKey(runKey))) {
                 return blocked(
                     'Previous run materialization cleanup failed',
                 );
+            }
+            if (recoveryEntry) {
+                // Keep the existing cleanup-only custody if replacement fails before admission.
+                // A later exact release still removes this owned root; it grants no new auth.
+                recoveryEntry.authorityActive = false;
+                recoveryEntry.cleanupPromise = null;
+                retainedCleanupByRunKey.set(runKey, recoveryEntry);
             }
 
             const pendingMaterialization: PendingRunMaterialization = {
@@ -925,8 +958,8 @@ export function createExecutionRunConnectedServicesBridge(
                         connectedServicesBindingsRaw: input.connectedServices,
                         materializationKey: runKey,
                         sessionDirectory: input.cwd,
-                        vendorResumeId: null,
-                        resumeReachabilityRequired: false,
+                        vendorResumeId: input.recovery?.nativeResumeId ?? null,
+                        resumeReachabilityRequired: input.recovery !== undefined,
                         ...(input.modelId ? { modelId: input.modelId } : {}),
                         resolveQualifiedPurposeBindingSnapshot: (bindings) =>
                             resolveQualifiedPurposeBindingSnapshotForAgentSpawn({
@@ -1167,6 +1200,76 @@ export function createExecutionRunConnectedServicesBridge(
         }
     };
 
+    const completeRuntimeTurn: ConnectedServiceRunRuntimeTurnCompletedHandler = async (raw) => {
+        const parsed = ConnectedServiceRunRuntimeTurnCompletedRequestSchema.safeParse(raw);
+        const recordRuntimeTurnCompleted = deps.recordRuntimeTurnCompleted;
+        if (!parsed.success || !recordRuntimeTurnCompleted) return { ok: true, accepted: false };
+        const input = parsed.data;
+        return await withRunKeyMutation(input.runId, async () => {
+            const entry = retainedCleanupByRunKey.get(input.runId);
+            const runner = deps.captureRunnerIdentity({ runnerPid: input.runnerPid });
+            if (!entry || !runner || !entry.authorityActive || entry.retiring
+                || entry.activationId !== input.activationId || entry.runnerPid !== input.runnerPid
+                || runner.identity !== entry.runnerIdentity || !runner.isCurrent() || !entry.isCurrent()
+                || !deps.getRunRuntimeTarget?.(input.runId)) return { ok: true, accepted: false };
+            await recordRuntimeTurnCompleted({ runId: input.runId });
+            return { ok: true, accepted: true };
+        });
+    };
+
+    const recoverRuntimeFailure: ConnectedServiceRunRuntimeFailureRecoveryHandler = async (raw, signal) => {
+        const parsed = ConnectedServiceRunRuntimeFailureRecoveryRequestSchema.safeParse(raw);
+        if (!parsed.success || signal.aborted) return { status: 'failed', reason: 'runtime_recovery_invalid' };
+        const input = parsed.data;
+        const entry = retainedCleanupByRunKey.get(input.runId);
+        const runner = deps.captureRunnerIdentity({ runnerPid: input.runnerPid });
+        let target = deps.getRunRuntimeTarget?.(input.runId);
+        const isCurrent = () => Boolean(!signal.aborted && entry && target && entry.authorityActive && !entry.retiring
+            && retainedCleanupByRunKey.get(input.runId) === entry && entry.activationId === input.activationId
+            && entry.runnerPid === input.runnerPid && runner?.identity === entry.runnerIdentity
+            && runner.isCurrent() && entry.isCurrent() && deps.getRunRuntimeTarget?.(input.runId) === target);
+        if (!entry || !runner || !target || !isCurrent()) return { status: 'failed', reason: 'runtime_recovery_stale' };
+        try {
+            let failure = input.classification ?? (deps.classifyRuntimeFailure
+                ? await deps.classifyRuntimeFailure({ target, diagnostic: input.diagnostic }) : null);
+            const binding = failure ? readConnectedServiceRuntimeAuthFailureSourceBinding(target, failure.serviceId) : null;
+            if (failure && binding && binding.credentialRevision !== null
+                && (binding.groupId === null || binding.generation !== null)
+                && failure.profileId === null && failure.groupId === null
+                && failure.groupGeneration == null && failure.expectedCredentialRevision == null) {
+                failure = applyConnectedServiceRuntimeAuthFailureSourceBinding(failure, binding);
+            }
+            const selection = failure ? target.connectedServiceSelections.find((candidate) => candidate.serviceId === failure.serviceId) : null;
+            const profileId = selection?.kind === 'group' ? selection.activeProfileId : selection?.profileId;
+            if (!failure || !selection || !profileId || failure.profileId !== profileId
+                || failure.groupId !== (selection.kind === 'group' ? selection.groupId : null)
+                || (failure.groupGeneration != null && (selection.kind !== 'group' || failure.groupGeneration !== selection.generation))
+                || (failure.expectedCredentialRevision != null && failure.expectedCredentialRevision !== selection.credentialRevision)
+                || !deps.recoverRuntimeFailure || !isCurrent()) return { status: 'failed', reason: 'runtime_recovery_source_unavailable' };
+            const result = await deps.recoverRuntimeFailure({ runId: input.runId, parentSessionId: runner.parentSessionId,
+                nativeResumeId: input.nativeResumeId, interruptedOriginId: input.interruptedOriginId, selection,
+                classification: binding ? applyConnectedServiceRuntimeAuthFailureSourceBinding(failure, binding) : failure, isCurrent, signal,
+                refreshCredential: async () => {
+                    if (!isCurrent() || !target || !binding?.credentialRevision) return { status: 'unavailable', reason: 'runtime_recovery_stale' };
+                    const current = resolveCurrentRefreshSelection({ target, serviceId: selection.serviceId });
+                    if (!current) return { status: 'unavailable', reason: 'runtime_recovery_stale' };
+                    const refreshed = await refreshRuntimeAuth({ runId: input.runId, runnerPid: input.runnerPid, activationId: input.activationId,
+                        serviceId: selection.serviceId, selection: current.selection, expectedCredentialRevision: binding.credentialRevision,
+                        refreshAttemptId: `runtime-auth-failure:${input.interruptedOriginId}`, reason: 'runtime_auth_failure',
+                    });
+                    if (refreshed.status === 'refreshed') {
+                        const revision = ConnectedServiceCredentialRevisionV1Schema.safeParse(refreshed.result.credentialRevision);
+                        const accepted = revision.success ? deps.resolveRunCredentialRevisionTarget?.({ runKey: input.runId, target,
+                            serviceId: selection.serviceId, expectedCredentialRevision: binding.credentialRevision, credentialRevision: revision.data }) : null;
+                        if (!accepted) return { status: 'unavailable', reason: 'runtime_recovery_stale' };
+                        target = accepted;
+                    }
+                    return refreshed;
+                } });
+            return isCurrent() ? result : { status: 'failed', reason: 'runtime_recovery_stale' };
+        } catch { return { status: 'failed', reason: 'runtime_recovery_failed' }; }
+    };
+
     const recoverRejectedStart: ConnectedServiceRunRejectedStartHandler = async (raw) => {
         const parsed = ConnectedServiceRunRejectedStartRequestSchema.safeParse(raw);
         if (!parsed.success) return blocked('Invalid rejected-start evidence');
@@ -1349,6 +1452,8 @@ export function createExecutionRunConnectedServicesBridge(
         materialize,
         release,
         recoverRejectedStart,
+        recoverRuntimeFailure,
+        completeRuntimeTurn,
         refreshRuntimeAuth,
         adoptLiveMaterialization,
         cleanupTerminalMaterialization,

@@ -212,8 +212,9 @@ describe('createQualifiedConnectedAccountEstablishedRuntimeOwner', () => {
     });
     const purpose = { consumer: { pluginId: 'happier.mcp', localId: 'remote-bridge' }, purpose: 'mcp-server' };
     const binding = { purpose, target: { kind: 'account' as const, account: mcpAccount } };
-    const lease = purposes.activatePurposeBindings({ subject: { kind: 'operation', operationId: 'scope-challenge',
-      consumer: purpose.consumer, isCurrent: () => true }, purposes: [purpose], bindings: [binding] });
+    const lease = purposes.activatePurposeBindings({ subject: { kind: 'mcp_request_auth', operationId: 'scope-challenge',
+      serverId: mcpAccount.accountId, resource: 'https://mcp.example.test/api', isCurrent: () => true },
+      purposes: [purpose], bindings: [binding] });
     const subject = scopeConnectedAccountPurposeBindingLease({ lease, subjectId: lease.subjectId, parentSessionId: 'requester-session',
       uses: [{ purpose, materialization: { kind: 'httpHeaders', origin: 'https://mcp.example.test', headerNames: ['authorization'] } }],
       registerRedaction: () => {} });

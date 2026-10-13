@@ -25,6 +25,53 @@ function createMemoryStore() {
 }
 
 describe('ConnectedServiceTemporaryThrottleRetryScheduler', () => {
+  it('waits and cancels a Run independently of its parent Session through the same recovery owner', async () => {
+    vi.useFakeTimers();
+    const { store, persisted } = createMemoryStore();
+    const scheduler = new ConnectedServiceTemporaryThrottleRetryScheduler({ nowMs: () => Date.now(), store, random: () => 0.5,
+      resume: async () => ({ status: 'continued' }) });
+    const continuation = { interruptedOriginId: 'turn', resumePromptMode: 'standard' as const, customResumePrompt: null, recoveryKind: 'capacity' as const };
+    try {
+      await scheduler.enable({ sessionId: 'parent', serviceId: 'service', profileId: 'member', groupId: null, issueFingerprint: 'capacity', continuation });
+      const controller = new AbortController();
+      const wait = scheduler.waitForRecovery({ scope: { kind: 'run', runId: 'child' }, serviceId: 'service', profileId: 'member', groupId: null,
+        issueFingerprint: 'capacity', continuation }, controller.signal);
+      await vi.advanceTimersByTimeAsync(0);
+      expect([...persisted.values()]).toContainEqual(expect.objectContaining({ scope: { kind: 'run', runId: 'child' }, status: 'waiting' }));
+      controller.abort();
+      await expect(wait).resolves.toEqual({ status: 'cancelled' });
+      expect(scheduler.read('parent')?.status).toBe('waiting');
+      const resumed = scheduler.waitForRecovery({ scope: { kind: 'run', runId: 'another-child' }, serviceId: 'service', profileId: 'member', groupId: null,
+        issueFingerprint: 'capacity', continuation }, new AbortController().signal);
+      await vi.advanceTimersByTimeAsync(5_000);
+      await expect(resumed).resolves.toEqual({ status: 'resumed' });
+    } finally { scheduler.dispose(); vi.useRealTimers(); }
+  });
+  it('publishes a Run continuation only after the shared scheduler settles its awaiting-outcome state', async () => {
+    vi.useFakeTimers();
+    const memory = createMemoryStore();
+    let release!: () => void;
+    const publication = new Promise<void>((resolve) => { release = resolve; });
+    let publishing = false;
+    const scheduler = new ConnectedServiceTemporaryThrottleRetryScheduler({ nowMs: () => Date.now(), random: () => 0.5,
+      store: { ...memory.store, write: async (key, intent) => {
+        if (intent.status === 'awaiting_outcome') { publishing = true; await publication; }
+        memory.store.write(key, intent);
+      } }, resume: async () => ({ status: 'continued' }) });
+    let settled = false;
+    const pending = scheduler.waitForRecovery({ scope: { kind: 'run', runId: 'child' }, serviceId: 'service', profileId: 'member', groupId: null,
+      issueFingerprint: 'capacity', continuation: { interruptedOriginId: 'turn', resumePromptMode: 'standard', customResumePrompt: null, recoveryKind: 'capacity' } },
+      new AbortController().signal).then((result) => { settled = true; return result; });
+    try {
+      await vi.advanceTimersByTimeAsync(5_000);
+      expect(publishing).toBe(true);
+      expect(settled).toBe(false);
+      release();
+      await expect(pending).resolves.toEqual({ status: 'resumed' });
+      await scheduler.finishRun('child');
+      expect(memory.persisted.size).toBe(0);
+    } finally { release(); scheduler.dispose(); vi.useRealTimers(); }
+  });
   it('rejects cancellation of a replaced occurrence inside the durable owner transaction', async () => {
     const directory = await mkdtemp(join(tmpdir(), 'capacity-recovery-'));
     const scheduler = new ConnectedServiceTemporaryThrottleRetryScheduler({ nowMs: () => 1_000, store: createRecoveryIntentFileStore(join(directory, 'intents.json')), random: () => 0.5, resume: async () => ({ status: 'continued' }) });
