@@ -8,6 +8,11 @@ import { getEquivalentActionIdForBuiltInTool } from './actionToolCatalog';
 import { parseTrustedHappierToolsShellBridgeCommand } from './runtime/buildHappierToolsShellBridgeCommand';
 
 const ACTION_IDS = new Set<ActionId>(listActionSpecs().map((spec) => spec.id as ActionId));
+const PLAN_REVERSIBLE_SESSION_ACTION_IDS = new Set<ActionId>([
+  'session.mode.set',
+  'session.goal.set',
+  'session.goal.clear',
+]);
 
 function normalizeToolName(raw: unknown): string {
   return String(raw ?? '').trim();
@@ -68,8 +73,11 @@ export function resolveProviderPermissionForHappierAction(params: Readonly<{
   if (!actionId) return { decision: null, actionId: null };
 
   const spec = getActionSpec(actionId);
+  const planModeSelfControl = params.permissionMode === 'plan'
+    && PLAN_REVERSIBLE_SESSION_ACTION_IDS.has(actionId);
   const permissionCeilingDeniesAction =
     (params.permissionMode === 'read-only' || params.permissionMode === 'plan')
+    && !planModeSelfControl
     && spec.sideEffectClass !== 'none'
     && spec.sideEffectClass !== 'read';
 

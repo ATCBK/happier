@@ -110,6 +110,22 @@ describe('resolveProviderPermissionForHappierAction', () => {
     },
   );
 
+  it('keeps plan mode reversible through its own session mode and goal controls', () => {
+    for (const actionId of ['session.mode.set', 'session.goal.set', 'session.goal.clear'] as const) {
+      expect(resolveProviderPermissionForHappierAction({
+        toolName: 'happier_action_execute',
+        input: { actionId },
+        permissionMode: 'plan',
+      })).toEqual({ decision: 'approved', actionId });
+
+      expect(resolveProviderPermissionForHappierAction({
+        toolName: 'happier_action_execute',
+        input: { actionId },
+        permissionMode: 'read-only',
+      })).toEqual({ decision: 'denied', actionId });
+    }
+  });
+
   it('leaves unknown and non-Happier provider tools with the provider permission owner', () => {
     expect(resolveProviderPermissionForHappierAction({
       toolName: 'happier_action_execute',
