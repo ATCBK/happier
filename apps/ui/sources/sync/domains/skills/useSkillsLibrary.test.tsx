@@ -31,7 +31,7 @@ afterEach(() => {
 
 it('publishes the rail library and rules while native inventory is pending, then fills Machine facts without rereading the library', async () => {
     const catalog = createPromptLibraryCatalogBoundary({ records: [{ key: 'skill-rules', value: { v: 1, rules: [
-        { id: 'first-party:happier:happier', skillId: 'happier:happier', target: { t: 'allMachines' }, enabled: true, createdAt: 1, updatedAt: 1 },
+        { id: 'rail-on', skillId: 'rail-skill', target: { t: 'allMachines' }, enabled: true, createdAt: 1, updatedAt: 1 },
     ] } }] });
     let libraryReads = 0;
     const home = await createPlainArtifactHomeFixture('https://skills-pending-native.test', {
@@ -46,6 +46,12 @@ it('publishes the rail library and rules while native inventory is pending, then
         endpoints: [{ kind: 'https', url: 'https://skills-pending-native.test' }] } });
     if (!qualifiedHome.serverIdentityId) throw new Error('Expected qualified Home');
     const scope = { serverId: qualifiedHome.serverIdentityId, accountId: 'artifact-account' };
+    const header = PromptBundleArtifactHeaderV1Schema.parse({ v: 1, kind: 'prompt_bundle.v2', title: 'rail-skill', bundleSchemaId: 'skills.skill_md_v1' });
+    const body = PromptBundleBodyV1Schema.parse({ v: 1, createdAtMs: 1, updatedAtMs: 1, entries: [{ path: 'SKILL.md', contentKind: 'utf8',
+        contentBase64: encodeBase64(new TextEncoder().encode('---\nname: rail-skill\n---\nReview the current diff.')) }] });
+    expect((await home.boundary.handle('/v1/artifacts', { method: 'POST', body: JSON.stringify({ id: 'rail-skill',
+        header: encodePlainArtifactStoredContent(header), body: encodePlainArtifactStoredContent({ body: JSON.stringify(body) }),
+        dataEncryptionKey: ARTIFACT_PLAIN_DATA_KEY_MARKER }) }))?.status).toBe(200);
     const deferred = createDeferred<unknown>();
     nativeScan.mockReset(); nativeScan.mockReturnValue(deferred.promise);
     let scanSettled = false;
@@ -54,12 +60,12 @@ it('publishes the rail library and rules while native inventory is pending, then
     }).finally(() => { scanSettled = true; });
     storage.setState({ settingsScope: scope, profileScope: scope, isDataReady: true, artifactsLoaded: false, machines: {},
         machineListByServerId: { [scope.serverId]: [] }, machineListStatusByServerId: { [scope.serverId]: 'loading' } });
-    const hook = await renderHook(() => ({ library: useSkillsLibrary(), reach: useReachProjection('skill', 'happier:happier') }));
+    const hook = await renderHook(() => ({ library: useSkillsLibrary(), reach: useReachProjection('skill', 'rail-skill') }));
     try {
         await vi.waitFor(() => expect(nativeScan).toHaveBeenCalled());
         await vi.waitFor(() => expect(hook.getCurrent().library.status).toBe('ready'), { timeout: 10_000 });
         expect(scanSettled).toBe(false);
-        expect(hook.getCurrent().library.items).toMatchObject([{ skillId: 'happier:happier', rules: [{ enabled: true }] }]);
+        expect(hook.getCurrent().library.items.find(item => item.skillId === 'rail-skill')).toMatchObject({ rules: [{ enabled: true }] });
         expect(hook.getCurrent().reach).toEqual([]);
         const rows = hook.getCurrent().library.items;
         const readsBeforeMachine = libraryReads;
