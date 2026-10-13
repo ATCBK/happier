@@ -82,7 +82,7 @@ the public surface; it does not create a separate stability tier per export.
 | `@happier-dev/plugin-sdk/protocol` | Validator-neutral JSON schema algebra for reusable feature protocols. | `import { defineProtocolObject } from '@happier-dev/plugin-sdk/protocol';` |
 | `@happier-dev/plugin-sdk/contributions` | Cross-plugin contribution protocols, points, operation roles, and authoring bindings. | `import { defineContributionProtocol } from '@happier-dev/plugin-sdk/contributions';` |
 | `@happier-dev/plugin-sdk/providers` | Model-provider contribution, binding, and projection types. | `import type * as Providers from '@happier-dev/plugin-sdk/providers';` |
-| `@happier-dev/plugin-sdk/resources` | Prompt-asset, prompt-registry, and manifest-declared Resource contracts; see the workflow guide below. | `import type * as Resources from '@happier-dev/plugin-sdk/resources';` |
+| `@happier-dev/plugin-sdk/resources` | Prompt-asset and manifest-declared Resource contracts; see the workflow guide below. Registry browsing uses the canonical registry Actions. | `import type * as Resources from '@happier-dev/plugin-sdk/resources';` |
 | `@happier-dev/plugin-sdk/reviews` | Daemon-realm review contribution, comment, and scope types. | `import type * as Reviews from '@happier-dev/plugin-sdk/reviews';` |
 | `@happier-dev/plugin-sdk/scm` | Daemon-realm source-control contribution and service types. | `import type * as Scm from '@happier-dev/plugin-sdk/scm';` |
 | `@happier-dev/plugin-sdk/scm/backend` | Daemon-realm SCM backend adapter contracts. | `import type * as ScmBackend from '@happier-dev/plugin-sdk/scm/backend';` |
@@ -137,10 +137,11 @@ or a second Resource owner. Its exports serve three related author workflows:
    host owns byte admission, digest/currentness, and `readResource` as the
    snapshot authority. `ResourcesService` is the daemon invocation-service
    type for describing, reading, and watching one declared Resource.
-2. **Prompt assets and registries:** `PromptAsset*` and `PromptRegistry*`
-   types describe prompt-library content, adapters, discovery, and mutation.
-   They are not UI Resource subscriptions and do not create a parallel content
-   reader.
+2. **Prompt assets:** `PromptAsset*` types describe external prompt assets and
+   their mutation contracts. In 0.3 development source, registry discovery and
+   library skill changes instead use the typed host Actions; the retired
+   `PromptRegistry*` adapter types are not a registry extension API. Neither
+   path creates a parallel UI Resource reader.
 3. **Runtime UI Resource consumption:** UI code uses its bound host API's
    `readResource` and, for genuinely dynamic Resources, `watchResource`. The
    UI-side `ResourceContent` and `ResourceSubscriptionEvent` types live at

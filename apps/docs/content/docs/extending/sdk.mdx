@@ -108,8 +108,9 @@ Automatic transport uses a Session viewer socket for plain Sessions and for
 E2EE Sessions with a content credential. A bearer-only E2EE credential uses
 daemon-opened Action content, which crosses the Account server in plaintext; socket
 content stays E2EE. A content-opening failure never silently switches transports.
-Permission responses preserve the same decision vocabulary on both transports;
-the Action transport does not support `abort()`. The Action transport holds a
+Permission responses preserve the same decision vocabulary on both transports.
+`abort()` cancels the current turn without stopping the Session process; the
+Action transport uses `session.turn.cancel`. The Action transport holds a
 `transcript.follow` request until the daemon receives a Home Session notification;
 it opens no SDK viewer socket and runs no idle polling timer. Revision hints travel
 with the Action response, and reconnect reloads authoritative history. The existing
@@ -449,7 +450,7 @@ await happier.machine('machine-id').actions.search({ query: 'session', limit: 5 
 
 // Fluent Session creation on a daemon-local endpoint uses its current machine.
 const created = await happier.sessions.spawn({
-  directory: '/path/to/project',
+  directory: { kind: 'path', path: '/path/to/project' },
   agent: 'codex',
   initialMessage: 'Inspect the failing tests.',
 });
@@ -596,7 +597,7 @@ import { HappierSessionInitialInputError } from '@happier-dev/sdk';
 
 try {
   const session = await happier.machine('machine-id').sessions.spawn({
-    directory: '/path/to/project',
+    directory: { kind: 'path', path: '/path/to/project' },
     agent: 'codex',
     initialMessage: 'Inspect the failing tests.',
   });
@@ -711,6 +712,120 @@ the remaining spawn fields, such as `directory`, `agentTarget`, and an optional
 `creationKey`.
 
 ## Call the HTTP API
+
+### Backend HTTP quickstart
+
+Use this sequence from a trusted backend with an API Token created by a present
+user. Keep the token in backend secret storage. These are development-source
+contracts; the selected machine must run a connected daemon with the Agent
+installed and the requested Actions enabled.
+
+1. Discover machines with `GET /v1/machines`, authenticated with
+   `Authorization: Bearer <API Token>`. Choose one active, persistent, unrevoked
+   machine explicitly. The server does not choose a default for you.
+2. POST the following envelope to `/v1/actions/session.spawn_new`, replacing
+   `machine-id` with that machine. This raw Action uses a qualified Agent target;
+   discover available targets rather than assuming Claude is installed.
+
+```json
+{
+  "v": 1,
+  "requestId": "backend-spawn-1",
+  "target": { "kind": "machine", "machineId": "machine-id" },
+  "input": {
+    "creationKey": "backend-job-1",
+    "directory": { "kind": "managed" },
+    "agentTarget": {
+      "kind": "agent",
+      "identity": { "pluginId": "happier.agent.claude", "localId": "claude" }
+    },
+    "permissionMode": "read-only"
+  }
+}
+```
+
+Inspect `execution.ok` first. For a successful creation result, check
+`execution.result.type === 'success'` and retain `execution.result.sessionId`.
+Keep `creationKey` stable if you retry uncertain creation; `requestId` correlates
+the call and is not a substitute for that creation identity. A managed directory
+is selected by the daemon, so your backend supplies no execution-machine path.
+
+3. POST to `/v1/actions/session.message.send`, substituting the returned Session
+   ID in both places. Keep `localId` stable when retrying this same message:
+
+```json
+{
+  "v": 1,
+  "requestId": "backend-send-1",
+  "target": { "kind": "session", "sessionId": "session-id" },
+  "input": {
+    "sessionId": "session-id",
+    "message": "Read the connected data and summarize the result.",
+    "localId": "backend-input-1",
+    "wait": true
+  }
+}
+```
+
+`wait: true` observes this admitted turn. Inspect the typed result before
+assuming the turn completed; a lost response does not justify a fresh message ID.
+
+4. POST to `/v1/actions/session.transcript.get` to read the opened history:
+
+```json
+{
+  "v": 1,
+  "requestId": "backend-history-1",
+  "target": { "kind": "session", "sessionId": "session-id" },
+  "input": { "sessionId": "session-id", "limit": 20 }
+}
+```
+
+Use the returned cursor to page through history. Read the Action's discovered
+schema for its full result, rather than treating transcript rows as plain text.
+These literal JSON envelopes describe the plain HTTP path. For an E2EE Account,
+follow [Protect whole requests and results](#protect-whole-requests-and-results)
+or use the encryption-capable SDK; never reinterpret an encrypted envelope as
+plain data.
+
+### Trigger a workflow with a scoped token
+
+For a backend that only starts an existing Automation, create a token restricted
+to `workflow.trigger.run_now` and its execution machine. This is a complete grant
+value, not a token-creation request:
+
+```json
+{
+  "v": 1,
+  "actions": { "families": [], "ids": ["workflow.trigger.run_now"] },
+  "targets": { "sessions": [], "machines": ["machine-id"] },
+  "approve": false,
+  "origins": [],
+  "models": null,
+  "permissionModes": null,
+  "create": null
+}
+```
+
+POST to `/v1/actions/workflow.trigger.run_now` with that token:
+
+```json
+{
+  "v": 1,
+  "requestId": "backend-brief-1",
+  "target": { "kind": "machine", "machineId": "machine-id" },
+  "input": { "automationId": "brief-automation-id", "idempotencyKey": "brief-occurrence-1" }
+}
+```
+
+Reuse `idempotencyKey` for retries of the same manual occurrence. The token grant
+scopes Actions and machine/Session targets; it has no automation-ID selector.
+Have the trusted backend select the intended `automationId`, and do not describe
+this grant as authorizing exactly one Automation. Granting an Action does not
+waive its approval policy. An unattended integration needs an owner-configured
+policy permitting this effect; it cannot use `approve: false` to approve itself.
+See [Email agent recipes](/extending/email-agent-recipes) for scheduled briefs
+and signed failure alerts.
 
 The v1 protocol has one relative path:
 

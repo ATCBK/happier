@@ -27,7 +27,7 @@ The core rule is:
 
 ## The library
 
-Open **Settings → Prompts & Skills** to manage your reusable content.
+Open **Settings → Prompts** to manage your reusable content.
 
 The library currently supports two item types:
 
@@ -201,7 +201,7 @@ Tags are lighter-weight than folders and work well for:
 
 Templates are Happier-native slash shortcuts built from saved prompts.
 
-Open **Settings → Prompts & Skills → Templates** to create them.
+Open **Settings → Prompts → Templates** to create them.
 
 Each template maps:
 
@@ -239,7 +239,7 @@ This is the user-facing name for what the implementation internally stores as or
 
 Open:
 
-- **Settings → Prompts & Skills → Context**
+- **Settings → Prompts → Context**
 
 You can attach prompts or skills to:
 
@@ -353,7 +353,7 @@ Use profile additions for:
 
 ## External assets
 
-Open **Settings → Prompts & Skills → External assets** when you want to inspect or manage prompt-related files that live on a real machine.
+Open **Settings → Prompts → External assets** when you want to inspect or manage prompt-related files that live on a real machine.
 
 This screen is machine-aware and, for project-scoped assets, workspace-aware.
 
@@ -414,38 +414,10 @@ This is deliberate. The library and the machine copy are related, but Happier st
 
 ## Registries
 
-Open **Settings → Prompts & Skills → Registries** to browse installable skill catalogs.
-
-Current registry concepts:
-
-- built-in **`skills.sh`**
-- configurable **Git sources**
-- adapter-driven future registry types
-
-### `skills.sh`
-
-Happier integrates with the actual public `skills.sh` registry surface instead of only scanning the CLI repo.
-
-In practice:
-
-- browsing the built-in `skills.sh` source shows real public skills
-- searching uses the upstream `skills.sh` search API
-- opening an item shows details before you import or install it
-
-### Git sources
-
-Git sources let you add:
-
-- a repository URL, or
-- a local checkout path
-
-Happier scans those sources for skill bundles and exposes them through the same registry UI as built-in sources.
-
-This is useful for:
-
-- private team skill repos
-- local experiments
-- curated internal catalogs
+Open **Settings → Prompts → Registries** to browse skill catalogs.
+The [registry source guide](/extending/registries) owns source management,
+Git/`skills.sh`/Claude marketplace support, Account ownership and platform
+requirements. Registry failures do not remove skills already in your library.
 
 ## Import vs install vs export
 
@@ -462,7 +434,12 @@ Examples:
 
 ### Install
 
-Take a registry item, import it into the library, and also install it to a selected external machine target.
+The retained registry screen can import an item into the library and also
+install it to a selected external machine target. In 0.3 development source,
+the `skills.install` Action imports into the Account library; external delivery
+is a separate machine operation. Registry imports keep the exact reviewed
+commit, including executable file modes, rather than following a moving branch
+between review and import.
 
 Result:
 

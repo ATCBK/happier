@@ -18,8 +18,8 @@ clear answer about whether a feature is available, it treats it as unavailable.
 That is why a feature can seem to vanish when a server is unreachable, and why
 a misconfigured self-hosted server hides features rather than half-enabling them.
 
-There are 144 features in the catalog. 22 of them have a switch you can
-reach; the other 122 are decided before you get there.
+There are 143 features in the catalog. 22 of them have a switch you can
+reach; the other 121 are decided before you get there.
 
 ## Features you can turn on yourself
 
@@ -71,7 +71,7 @@ behaviour but still needs the server to advertise the capability.
 | `agents.claude.unifiedTerminal.tuiRuntimeControl` | Claude unified terminal TUI runtime-control controller (live model/effort/permission-mode controls). Falls back to restart/unsupported outcomes when disabled. | client | `agents.claude.unifiedTerminal` | — |
 | `agents.codex.appServer.goals` | Codex app-server native session goal controls and work-state projection (provider-specific sub-gate under the generalized agents.goals umbrella). | client | — | — |
 | `agents.codex.appServer.permissionProfiles` | Codex app-server native permission profiles and runtime policy edits. | client | `sessions.direct` | — |
-| `agents.codex.appServer.plugins` | Codex app-server readonly vendor plugin catalog and structured mentions. | client | `sessions.direct`, `prompts.skills.registries` | — |
+| `agents.codex.appServer.plugins` | Codex app-server readonly vendor plugin catalog and structured mentions. | client | `sessions.direct` | — |
 | `agents.codex.appServer.structuredInput` | Codex app-server structured turn inputs for text, images, skills, and vendor plugin mentions. | client | `sessions.direct`, `attachments.uploads` | — |
 | `agents.goals` | Generalized agent session goal controls and work-state goal projection (umbrella over provider-specific goal sub-gates). | client | — | — |
 | `app.analytics` | Anonymous analytics and instrumentation (PostHog). | client | — | — |
@@ -145,7 +145,6 @@ behaviour but still needs the server to advertise the capability.
 | `plugins.webhooks` | Durable public webhook ingress for plugin-contributed Actions. | server | `plugins` | `HAPPIER_FEATURE_PLUGINS_WEBHOOKS__ENABLED` |
 | `prompts.assets.external` | External prompt assets import/export surfaces and daemon adapters. | client | `prompts.library` | — |
 | `prompts.library` | Prompt library (docs + skills bundles) stored as artifacts. | client | — | — |
-| `prompts.skills.registries` | Prompt/skills registries and marketplace integrations (registry-of-registries). | client | `prompts.library`, `prompts.assets.external` | — |
 | `providers` | First-class model-provider connections, catalogs, and agent bindings. | server | — | `HAPPIER_FEATURE_PROVIDERS__ENABLED` |
 | `providers.localDiscovery` | Machine-local provider discovery through the local-services listener inventory. | server | `providers`, `localServices.inventory` | `HAPPIER_FEATURE_PROVIDERS_LOCAL_DISCOVERY__ENABLED` |
 | `providers.localModelManagement` | Explicit, bounded local model-management actions for trusted provider contributions. | server | `providers` | `HAPPIER_FEATURE_PROVIDERS_LOCAL_MODEL_MANAGEMENT__ENABLED` |

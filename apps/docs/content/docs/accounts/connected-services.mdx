@@ -121,8 +121,15 @@ Selected-account launches keep token and authentication settings private while
 inheriting the configured skills, hooks and MCP settings. The default shared-state
 policy links only ACP conversation and artifact directories, so account changes
 can use the same history. Choosing isolated state, or being unable to establish
-shared links, prevents cross-account resume before cutover. Discovery probes use
-temporary isolated conversation state without changing the saved sharing policy.
+shared links, prevents cross-account resume before cutover. Account-selected discovery
+probes use temporary isolated conversation state without changing the saved sharing
+policy. With machine-local authentication, successful ACP discovery can leave empty
+conversations in the native history.
+
+When switching an account's existing isolated history to shared state, differing
+copies of the same conversation are preserved as separate files. Antigravity
+continues to load the native shared copy under the original conversation ID; the
+imported `.happier-import-*` copy is not automatically merged or selected.
 
 Each ACP process needs its own restart to consume changed credentials. Account
 usage comes from Google's selected-account quota response; the context indicator

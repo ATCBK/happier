@@ -9,9 +9,12 @@
     "mcp-hosts",
     "happier-tools",
     "prompts-and-skills",
+    "registries",
     "installables",
     "subagents",
     "agent-autonomy",
-    "channels"
+    "channels",
+    "email-channel",
+    "email-agent-recipes"
   ]
 }

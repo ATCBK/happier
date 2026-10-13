@@ -77,6 +77,21 @@ Set `declaration.mark` to that value alongside your contribution's existing
 kind, roles and execution declaration. Bundled OpenAI, xAI, ElevenLabs and Codex
 use this same public contract.
 
+For a conversation service, add an optional localized `declaration.description`
+to explain what it offers in the Service gallery:
+
+```ts
+description: {
+  key: 'voice.service.description',
+  fallback: 'Talk with your assistant using this service.',
+},
+```
+
+Use your plugin's translations for the key, or a literal string. The description
+belongs to the service, so it stays visible when the service offers several
+billing choices. Older declarations may omit it. This field is part of the
+0.3 development contract.
+
 `VoiceServiceMark` also accepts `{ kind: 'connected_service', serviceId: 'openai' }`
 or `{ kind: 'agent', agentId: 'codex' }`. The public
 `VoiceServiceMarkSchema` validates the same shapes for installed and bundled

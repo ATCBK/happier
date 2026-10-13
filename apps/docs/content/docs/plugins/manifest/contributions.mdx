@@ -23,6 +23,7 @@ description: Contribution families that a plugin can declare for projection and 
 | `scmBackends` | Local repository and working-tree integration | `scmBackends.<id>.runtime` |
 | `settings` | Typed settings descriptors | `context.services.settings` in invoked handlers |
 | `workflows` | Reusable, read-only Workflow definitions shown under From plugins | `workflows.<id>`: `title`, optional `description`, and `definition` |
+| `registrySources` | Data-only catalogs shown alongside built-in and personal sources | `registrySources.<id>`: `title`, `format`, `kinds`, `url`, optional `path` and `ref` |
 | `openableContentViewers` | Declarative matching for host-opened content and its plugin-owned viewer | direct same-plugin `contributes.ui.views` destination |
 | MCP servers | Hosted or managed MCP server descriptors | `mcp.servers.<id>.runtime` when dynamic |
 | MCP discovery | Runtime MCP discovery | `mcp.discoverySources.<id>.discover` |
@@ -181,9 +182,56 @@ feature protocol remains the one authoring owner. See
 [Cross-plugin contributions](/plugins/guides/cross-plugin-contributions) for
 the ordinary target and contributor workflow.
 
+### Email transports in development
+
+The 0.3 development Email plugin owns the targeted `transports` point on
+`happier.channel.email`. A contributor consumes
+`EmailTransportsContributionProtocolV1` from
+`@happier-dev/email-transports-protocol/v1`, binds its own Actions with each
+`protocol.operations.<role>.bind(localId)`, and places
+`protocol.contribute({ operations })` under
+`contributesTo['happier.channel.email'].transports.<contributionId>`.
+
+`listSince`, `fetchRaw`, `submitRaw` and `connectionTest` are required;
+`findSent` is optional. Their declarations supply plugin-only surfaces and the
+canonical input/result and danger metadata. Raw MIME crosses this seam as
+`mimeBase64`; checkpoints stay transport-owned and opaque. The transport returns
+protocol outcomes, while the Email core owns MIME parsing, sender trust, content
+shaping and the core-selected recipient envelope. Require the host-stamped Email
+core caller before I/O and retain operation-handle lifecycle fencing.
+
+The first-party `imap-smtp` transport uses this same point. A new transport adds
+protocol access without duplicating email semantics or Channels delivery custody.
+See [Email channel](/extending/email-channel#add-an-email-transport) for the
+operator-facing boundary and setup. This is a source contract, not a published
+SDK/package availability claim.
+
 ## Descriptor-first families
 
 Settings, UI surfaces, managed dependencies, notification categories, agent runtime capabilities, and projected display metadata should be descriptor-first. The manifest describes them; executable code only handles the dynamic behavior the descriptor references.
+
+### Registry sources in development
+
+In **0.3 development / Developer Preview authoring**, `definePlugin` accepts a
+`registrySources` record keyed by plugin-local id. Each declaration supplies a
+`title`, credential-free HTTPS `url`, `format`, and nonempty, format-compatible
+`kinds` array.
+Formats are `git`, `claude-marketplace`, `mcp-registry`, `acp-registry`, or
+`happier-catalog`; item kinds are `skill`, `mcpServer`, `agent`, or `plugin`.
+Git declarations may additionally select `path` and `ref`.
+
+These are descriptors, not executable adapters: there is no activation callback
+or registry registration API. The host projects admitted declarations through
+the existing lazy contribution catalog and merges them with built-in sources
+and the Account's personal `registry-sources` row. Users may disable a supplied
+source, but cannot edit or remove its plugin-owned declaration. Removing its
+supplier removes the source from discovery.
+
+Do not embed tokens, npm profiles, or credentials in a declaration. Catalog
+reads use the canonical registry Actions and fetch-placement owner; declaring
+a URL neither grants credential access nor installs the catalog's contents.
+See [Prompts and skills](/extending/prompts-and-skills#registries) and
+[Marketplace integration](/plugins/packaging/marketplace) for consumption.
 
 ### Workflow definitions
 

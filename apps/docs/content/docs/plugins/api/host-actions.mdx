@@ -197,7 +197,7 @@ No field hints are published. Use the typed input accepted by `execute`.
 **Set your name** — Set what people should call you on this Home. Empty clears the name.
 
 - Safety: `danger`; side effect: `write`.
-- Approval: `required` result; `blocking` flow.
+- Approval: `required` result; `deferred` flow.
 - Request admission: `account_automation` — subject to surface, access, grant and approval policy.
 - Decision/effect authority: `account_automation` — subject to applicable approval and target decision authority.
 - Also surfaced on: `ui`, `agent`, `cli`, `api`.
@@ -338,7 +338,7 @@ No field hints are published. Use the typed input accepted by `execute`.
 **Set your username** — Set your own username when this Home’s Friends policy permits it.
 
 - Safety: `danger`; side effect: `write`.
-- Approval: `required` result; `blocking` flow.
+- Approval: `required` result; `deferred` flow.
 - Request admission: `account_automation` — subject to surface, access, grant and approval policy.
 - Decision/effect authority: `account_automation` — subject to applicable approval and target decision authority.
 - Also surfaced on: `ui`, `agent`, `cli`, `api`.
@@ -396,6 +396,7 @@ No field hints are published. Use the typed input accepted by `execute`.
 - `operationId` (text, required): Operation id
 - `waitForTerminal` (boolean): Wait for completion
 - `includeSetupReview` (boolean): Include setup review
+- `refreshSetupReview` (boolean): Refresh setup review
 
 ## `action.operations.list`
 
@@ -491,6 +492,23 @@ No field hints are published. Use the typed input accepted by `execute`.
 ### Input guidance
 
 - `backendId` (text, required): Id
+
+## `agents.acp.backends.installFromRegistry`
+
+**Install registry ACP agent** — Add or update a pinned registry agent and optionally install it on the selected machines.
+
+- Safety: `danger`; side effect: `write`.
+- Approval: `required` result; `blocking` flow.
+- Request admission: `account_automation` — subject to surface, access, grant and approval policy.
+- Decision/effect authority: `account_automation` — subject to applicable approval and target decision authority.
+- Also surfaced on: `ui`, `agent`, `mcp`, `cli`, `api`.
+
+### Input guidance
+
+- `fromRegistry.sourceId` (text, required): Registry source
+- `fromRegistry.itemId` (text, required): Agent id
+- `fromRegistry.version` (text, required): Version
+- `installOn` (text_list): Install on machines
 
 ## `agents.acp.backends.upsert`
 
@@ -3308,48 +3326,6 @@ No field hints are published. Use the typed input accepted by `execute`.
 
 No field hints are published. Use the typed input accepted by `execute`.
 
-## `daemon.promptAssets.discover`
-
-**Discover prompt assets** — Discover provider-native prompt assets through the daemon prompt asset adapter registry.
-
-- Safety: `safe`; side effect: `read`.
-- Approval: `required` result; `blocking` flow.
-- Request admission: `account_automation` — subject to surface, access, grant and approval policy.
-- Decision/effect authority: `account_automation` — subject to applicable approval and target decision authority.
-- Also surfaced on: `rpc`, `api`.
-
-### Input guidance
-
-No field hints are published. Use the typed input accepted by `execute`.
-
-## `daemon.promptRegistry.install`
-
-**Install prompt registry asset** — Install a prompt registry item through bundle-capable prompt asset adapters.
-
-- Safety: `danger`; side effect: `danger`.
-- Approval: `optional` result; `deferred` flow.
-- Request admission: `account_automation` — subject to surface, access, grant and approval policy.
-- Decision/effect authority: `account_automation` — subject to applicable approval and target decision authority.
-- Also surfaced on: `rpc`, `api`.
-
-### Input guidance
-
-No field hints are published. Use the typed input accepted by `execute`.
-
-## `daemon.promptRegistry.scanSource`
-
-**Scan prompt registry source** — Scan a configured prompt registry source through the daemon prompt registry adapter registry.
-
-- Safety: `safe`; side effect: `read`.
-- Approval: `required` result; `blocking` flow.
-- Request admission: `account_automation` — subject to surface, access, grant and approval policy.
-- Decision/effect authority: `account_automation` — subject to applicable approval and target decision authority.
-- Also surfaced on: `rpc`, `api`.
-
-### Input guidance
-
-No field hints are published. Use the typed input accepted by `execute`.
-
 ## `devices.simulator.input.button`
 
 **Press simulator hardware button** — Press a device button on the simulator, such as Home or volume.
@@ -5216,7 +5192,7 @@ No field hints are published. Use the typed input accepted by `execute`.
 
 ## `localServices.publicPreview.create`
 
-**Create public local service preview** — Create a public exposure for a local service preview (requires confirmation).
+**Create public local service preview** — Create a public exposure for a local service preview (asks first by default; the user can change approval policy).
 
 - Safety: `danger`; side effect: `danger`.
 - Approval: `required` result; `blocking` flow.
@@ -6940,6 +6916,34 @@ No field hints are published. Use the typed input accepted by `execute`.
 - `expectedPolicy` (json, required): Reviewed work policy
 - `policy` (json, required): New work policy
 
+## `mcp.found.adopt`
+
+**Add a found MCP server** — No additional description is published.
+
+- Safety: `danger`; side effect: `write`.
+- Approval: `required` result; `blocking` flow.
+- Request admission: `account_automation` — subject to surface, access, grant and approval policy.
+- Decision/effect authority: `account_automation` — subject to applicable approval and target decision authority.
+- Also surfaced on: `ui`, `cli`, `agent`, `mcp`, `rpc`, `api`.
+
+### Input guidance
+
+No field hints are published. Use the typed input accepted by `execute`.
+
+## `mcp.found.list`
+
+**Detect MCP servers on a machine** — No additional description is published.
+
+- Safety: `safe`; side effect: `read`.
+- Approval: `none` result; `deferred` flow.
+- Request admission: `account_automation` — subject to surface, access, grant and approval policy.
+- Decision/effect authority: `account_automation` — subject to applicable approval and target decision authority.
+- Also surfaced on: `ui`, `cli`, `agent`, `mcp`, `rpc`, `api`.
+
+### Input guidance
+
+No field hints are published. Use the typed input accepted by `execute`.
+
 ## `mcp.rules.set`
 
 **Change where MCP servers are on** — No additional description is published.
@@ -6997,12 +7001,12 @@ No field hints are published. Use the typed input accepted by `execute`.
 
 No field hints are published. Use the typed input accepted by `execute`.
 
-## `mcp.servers.list`
+## `mcp.servers.import`
 
-**List MCP servers** — No additional description is published.
+**Import MCP servers** — No additional description is published.
 
-- Safety: `safe`; side effect: `read`.
-- Approval: `none` result; `deferred` flow.
+- Safety: `danger`; side effect: `write`.
+- Approval: `required` result; `blocking` flow.
 - Request admission: `account_automation` — subject to surface, access, grant and approval policy.
 - Decision/effect authority: `account_automation` — subject to applicable approval and target decision authority.
 - Also surfaced on: `ui`, `cli`, `agent`, `mcp`, `rpc`, `api`.
@@ -7011,9 +7015,9 @@ No field hints are published. Use the typed input accepted by `execute`.
 
 No field hints are published. Use the typed input accepted by `execute`.
 
-## `mcp.servers.probe`
+## `mcp.servers.list`
 
-**Detect MCP servers on a machine** — No additional description is published.
+**List MCP servers** — No additional description is published.
 
 - Safety: `safe`; side effect: `read`.
 - Approval: `none` result; `deferred` flow.
@@ -7056,6 +7060,34 @@ No field hints are published. Use the typed input accepted by `execute`.
 ## `mcp.servers.test`
 
 **Test MCP server connection** — No additional description is published.
+
+- Safety: `danger`; side effect: `write`.
+- Approval: `required` result; `blocking` flow.
+- Request admission: `account_automation` — subject to surface, access, grant and approval policy.
+- Decision/effect authority: `account_automation` — subject to applicable approval and target decision authority.
+- Also surfaced on: `ui`, `cli`, `agent`, `mcp`, `rpc`, `api`.
+
+### Input guidance
+
+No field hints are published. Use the typed input accepted by `execute`.
+
+## `mcp.servers.tools.list`
+
+**List MCP server tools** — No additional description is published.
+
+- Safety: `safe`; side effect: `read`.
+- Approval: `none` result; `deferred` flow.
+- Request admission: `account_automation` — subject to surface, access, grant and approval policy.
+- Decision/effect authority: `account_automation` — subject to applicable approval and target decision authority.
+- Also surfaced on: `ui`, `cli`, `agent`, `mcp`, `rpc`, `api`.
+
+### Input guidance
+
+No field hints are published. Use the typed input accepted by `execute`.
+
+## `mcp.servers.tools.set`
+
+**Set MCP server tool settings** — No additional description is published.
 
 - Safety: `danger`; side effect: `write`.
 - Approval: `required` result; `blocking` flow.
@@ -7834,13 +7866,13 @@ No field hints are published. Use the typed input accepted by `execute`.
 
 ## `plugins.install`
 
-**Install plugin** — Install a local plugin source and optionally enable the dev reload loop.
+**Install plugin** — Install an exact marketplace or local plugin through daemon-owned review; headless callers receive the pending review.
 
 - Safety: `danger`; side effect: `write`.
 - Approval: `optional` result; `deferred` flow.
 - Request admission: `human_approval` — eligible host Agent, MCP and plugin callers may request human approval; API-token callers receive `present_user_required`.
 - Decision/effect authority: `present_user` — approval and the authorized effect require host-stamped present-user authority; request admission does not authorize self-approval.
-- Also surfaced on: `agent`, `mcp`, `cli`.
+- Also surfaced on: `ui`, `agent`, `mcp`, `cli`.
 
 ### Input guidance
 
@@ -8336,7 +8368,7 @@ No field hints are published. Use the typed input accepted by `execute`.
 
 ## `projects.prepare`
 
-**Set up a project** — Use the authenticated Account and exact Project workspace. Setup-effect human consent is separate from configurable Action invocation approval.
+**Set up a project** — Use the authenticated Account and exact Project workspace. Setup-effect review follows the projects.prepare approval policy. A waiver permits only this invocation and does not grant remembered setup trust; only the user can grant that trust.
 
 - Safety: `danger`; side effect: `external`.
 - Approval: `required` result; `blocking` flow.
@@ -8354,7 +8386,7 @@ No field hints are published. Use the typed input accepted by `execute`.
 
 ## `projects.script.run`
 
-**Run a project script** — Run the selected Script on the exact qualified checkout through current declaration and worker policy. Read projects.inspect and projects.worker.preferences.get first; primary-only declarations cannot run on workers. An explicit invocation choice precedes the per-script override and saved checkout default; Ask requires a deliberate exact target choice. Setup-effect human consent is separate from configurable Action approval. Acceptance returns an exact-target operation, not completion: inspect action.operations.get and projects.execution.output.read for queue, copy, setup, output and exit facts. After possible acceptance or unknown outcome inspect that same target; do not repeat Run or fall back because it is busy, offline, failed or Stop is unconfirmed.
+**Run a project script** — Run the selected Script on the exact qualified checkout through current declaration and worker policy. Read projects.inspect and projects.worker.preferences.get first; primary-only declarations cannot run on workers. An explicit invocation choice precedes the per-script override and saved checkout default; Ask requires a deliberate exact target choice. Setup-effect review follows the separate projects.prepare approval policy; waiving Run does not waive setup review. Only the user can grant remembered setup trust. Acceptance returns an exact-target operation, not completion: inspect action.operations.get and projects.execution.output.read for queue, copy, setup, output and exit facts. After possible acceptance or unknown outcome inspect that same target; do not repeat Run or fall back because it is busy, offline, failed or Stop is unconfirmed.
 
 - Safety: `danger`; side effect: `external`.
 - Approval: `required` result; `blocking` flow.
@@ -8505,7 +8537,7 @@ No field hints are published. Use the typed input accepted by `execute`.
 
 ## `projects.trust.list`
 
-**List trusted projects** — Use the authenticated Account and exact Project workspace. Setup-effect human consent is separate from configurable Action invocation approval.
+**List trusted projects** — Use the authenticated Account and exact Project workspace. Setup-effect review follows the projects.prepare approval policy. A waiver permits only this invocation and does not grant remembered setup trust; only the user can grant that trust.
 
 - Safety: `safe`; side effect: `read`.
 - Approval: `required` result; `blocking` flow.
@@ -8519,7 +8551,7 @@ No field hints are published. Use the typed input accepted by `execute`.
 
 ## `projects.trust.revoke`
 
-**Stop trusting a project** — Use the authenticated Account and exact Project workspace. Setup-effect human consent is separate from configurable Action invocation approval.
+**Stop trusting a project** — Use the authenticated Account and exact Project workspace. Setup-effect review follows the projects.prepare approval policy. A waiver permits only this invocation and does not grant remembered setup trust; only the user can grant that trust.
 
 - Safety: `danger`; side effect: `write`.
 - Approval: `required` result; `blocking` flow.
@@ -8702,25 +8734,6 @@ No field hints are published. Use the typed input accepted by `execute`.
 - `targetName` (text): Skill name
 - `installMode` (select): Install mode
 
-## `prompt_bundle.create`
-
-**Create prompt bundle** — Create a prompt bundle with its reviewed files in the Happier prompt library.
-
-- Safety: `danger`; side effect: `write`.
-- Approval: `none` result; `deferred` flow.
-- Request admission: `account_automation` — subject to surface, access, grant and approval policy.
-- Decision/effect authority: `account_automation` — subject to applicable approval and target decision authority.
-- Also surfaced on: `ui`, `voice`, `agent`, `mcp`, `cli`, `api`.
-
-### Input guidance
-
-- `title` (text, required): Title
-- `bundleSchemaId` (text, required): Bundle schema
-- `createFolder` (json): New folder
-- `entries` (json, required): Files
-- `folderId` (text): Folder id
-- `tags` (text_list): Tags
-
 ## `prompt_bundle.update`
 
 **Update prompt bundle** — Update a skill bundle stored in the Happier prompt library.
@@ -8817,7 +8830,7 @@ No field hints are published. Use the typed input accepted by `execute`.
 
 **Install prompt registry skill** — Import a skill bundle from a registry and optionally export it to an external skills location.
 
-- Safety: `danger`; side effect: not classified.
+- Safety: `danger`; side effect: `external`.
 - Approval: `none` result; `deferred` flow.
 - Request admission: `account_automation` — subject to surface, access, grant and approval policy.
 - Decision/effect authority: `account_automation` — subject to applicable approval and target decision authority.
@@ -8828,7 +8841,6 @@ No field hints are published. Use the typed input accepted by `execute`.
 - `machineId` (text, required): Machine id
 - `sourceId` (text, required): Source id
 - `itemId` (text, required): Item id
-- `configuredSources` (textarea): Configured sources (json)
 - `installTarget.assetTypeId` (text): Target asset type
 - `installTarget.scope` (select): Target scope
 - `installTarget.directory` (text): Project directory
@@ -9357,6 +9369,132 @@ No field hints are published. Use the typed input accepted by `execute`.
 - `template.endpointTemplates.[].baseUrl` (text): Provider address
 - `template.credential` (json): Credential requirement
 - `template.catalog` (json): Model catalog
+
+## `registries.items.list`
+
+**Browse registry items** — No additional description is published.
+
+- Safety: `safe`; side effect: `read`.
+- Approval: `none` result; `deferred` flow.
+- Request admission: `account_automation` — subject to surface, access, grant and approval policy.
+- Decision/effect authority: `account_automation` — subject to applicable approval and target decision authority.
+- Also surfaced on: `ui`, `cli`, `agent`, `mcp`, `rpc`, `api`.
+
+### Input guidance
+
+No field hints are published. Use the typed input accepted by `execute`.
+
+## `registries.items.read`
+
+**Read registry item** — No additional description is published.
+
+- Safety: `safe`; side effect: `read`.
+- Approval: `none` result; `deferred` flow.
+- Request admission: `account_automation` — subject to surface, access, grant and approval policy.
+- Decision/effect authority: `account_automation` — subject to applicable approval and target decision authority.
+- Also surfaced on: `ui`, `cli`, `agent`, `mcp`, `rpc`, `api`.
+
+### Input guidance
+
+No field hints are published. Use the typed input accepted by `execute`.
+
+## `registries.sources.create`
+
+**Add registry source** — No additional description is published.
+
+- Safety: `danger`; side effect: `write`.
+- Approval: `required` result; `blocking` flow.
+- Request admission: `account_automation` — subject to surface, access, grant and approval policy.
+- Decision/effect authority: `account_automation` — subject to applicable approval and target decision authority.
+- Also surfaced on: `ui`, `cli`, `agent`, `mcp`, `rpc`, `api`.
+
+### Input guidance
+
+No field hints are published. Use the typed input accepted by `execute`.
+
+## `registries.sources.delete`
+
+**Remove registry source** — No additional description is published.
+
+- Safety: `danger`; side effect: `write`.
+- Approval: `required` result; `blocking` flow.
+- Request admission: `account_automation` — subject to surface, access, grant and approval policy.
+- Decision/effect authority: `account_automation` — subject to applicable approval and target decision authority.
+- Also surfaced on: `ui`, `cli`, `agent`, `mcp`, `rpc`, `api`.
+
+### Input guidance
+
+No field hints are published. Use the typed input accepted by `execute`.
+
+## `registries.sources.detect`
+
+**Detect registry source** — No additional description is published.
+
+- Safety: `safe`; side effect: `read`.
+- Approval: `none` result; `deferred` flow.
+- Request admission: `account_automation` — subject to surface, access, grant and approval policy.
+- Decision/effect authority: `account_automation` — subject to applicable approval and target decision authority.
+- Also surfaced on: `ui`, `cli`, `agent`, `mcp`, `rpc`, `api`.
+
+### Input guidance
+
+No field hints are published. Use the typed input accepted by `execute`.
+
+## `registries.sources.list`
+
+**List registry sources** — No additional description is published.
+
+- Safety: `safe`; side effect: `read`.
+- Approval: `none` result; `deferred` flow.
+- Request admission: `account_automation` — subject to surface, access, grant and approval policy.
+- Decision/effect authority: `account_automation` — subject to applicable approval and target decision authority.
+- Also surfaced on: `ui`, `cli`, `agent`, `mcp`, `rpc`, `api`.
+
+### Input guidance
+
+No field hints are published. Use the typed input accepted by `execute`.
+
+## `registries.sources.token.set`
+
+**Set registry credentials** — No additional description is published.
+
+- Safety: `danger`; side effect: `write`.
+- Approval: `required` result; `blocking` flow.
+- Request admission: `account_automation` — subject to surface, access, grant and approval policy.
+- Decision/effect authority: `account_automation` — subject to applicable approval and target decision authority.
+- Also surfaced on: `ui`, `cli`, `agent`, `mcp`, `rpc`, `api`.
+
+### Input guidance
+
+No field hints are published. Use the typed input accepted by `execute`.
+
+## `registries.sources.update`
+
+**Change registry source** — No additional description is published.
+
+- Safety: `safe`; side effect: `write`.
+- Approval: `none` result; `deferred` flow.
+- Request admission: `account_automation` — subject to surface, access, grant and approval policy.
+- Decision/effect authority: `account_automation` — subject to applicable approval and target decision authority.
+- Also surfaced on: `ui`, `cli`, `agent`, `mcp`, `rpc`, `api`.
+
+### Input guidance
+
+No field hints are published. Use the typed input accepted by `execute`.
+
+## `registries.updates.check`
+
+**Check registry updates** — No additional description is published.
+
+- Safety: `safe`; side effect: `write`.
+- Approval: `none` result; `deferred` flow.
+- Request admission: `account_automation` — subject to surface, access, grant and approval policy.
+- Decision/effect authority: `account_automation` — subject to applicable approval and target decision authority.
+- Also surfaced on: `ui`, `cli`, `agent`, `mcp`, `rpc`, `api`.
+
+### Input guidance
+
+No field hints are published. Use the typed input accepted by `execute`.
 
 ## `relay.access.configure`
 
@@ -11675,6 +11813,48 @@ No field hints are published. Use the typed input accepted by `execute`.
 - `machineId` (text, required): Machine id
 - `settings` (json, required): Settings
 
+## `secrets.create`
+
+**Create private Saved Secret** — No additional description is published.
+
+- Safety: `danger`; side effect: `write`.
+- Approval: `required` result; `blocking` flow.
+- Request admission: `account_automation` — subject to surface, access, grant and approval policy.
+- Decision/effect authority: `account_automation` — subject to applicable approval and target decision authority.
+- Also surfaced on: `ui`, `cli`, `agent`, `mcp`, `rpc`, `api`.
+
+### Input guidance
+
+No field hints are published. Use the typed input accepted by `execute`.
+
+## `secrets.delete`
+
+**Delete private Saved Secret** — No additional description is published.
+
+- Safety: `danger`; side effect: `write`.
+- Approval: `required` result; `blocking` flow.
+- Request admission: `account_automation` — subject to surface, access, grant and approval policy.
+- Decision/effect authority: `account_automation` — subject to applicable approval and target decision authority.
+- Also surfaced on: `ui`, `cli`, `agent`, `mcp`, `rpc`, `api`.
+
+### Input guidance
+
+No field hints are published. Use the typed input accepted by `execute`.
+
+## `secrets.list`
+
+**List Saved Secrets** — No additional description is published.
+
+- Safety: `safe`; side effect: `read`.
+- Approval: `none` result; `deferred` flow.
+- Request admission: `account_automation` — subject to surface, access, grant and approval policy.
+- Decision/effect authority: `account_automation` — subject to applicable approval and target decision authority.
+- Also surfaced on: `ui`, `cli`, `agent`, `mcp`, `rpc`, `api`.
+
+### Input guidance
+
+No field hints are published. Use the typed input accepted by `execute`.
+
 ## `secrets.shared.create`
 
 **Create shared Saved Secret** — Create an independently managed Saved Secret resource.
@@ -11754,6 +11934,20 @@ No field hints are published. Use the typed input accepted by `execute`.
 - Request admission: `account_automation` — subject to surface, access, grant and approval policy.
 - Decision/effect authority: `account_automation` — subject to applicable approval and target decision authority.
 - Also surfaced on: `ui`, `agent`, `cli`, `api`.
+
+### Input guidance
+
+No field hints are published. Use the typed input accepted by `execute`.
+
+## `secrets.update`
+
+**Update private Saved Secret** — No additional description is published.
+
+- Safety: `danger`; side effect: `write`.
+- Approval: `required` result; `blocking` flow.
+- Request admission: `account_automation` — subject to surface, access, grant and approval policy.
+- Decision/effect authority: `account_automation` — subject to applicable approval and target decision authority.
+- Also surfaced on: `ui`, `cli`, `agent`, `mcp`, `rpc`, `api`.
 
 ### Input guidance
 
@@ -12107,6 +12301,38 @@ No field hints are published. Use the typed input accepted by `execute`.
 - `canvasKey` (text, required): Mounted Session canvas key
 - `tabId` (text, required): Canvas tab id
 - `beforeTabId` (text, required): Insert before tab (null appends)
+
+## `session.capabilities.get`
+
+**List session capabilities** — No additional description is published.
+
+- Safety: `safe`; side effect: `read`.
+- Approval: `required` result; `blocking` flow.
+- Request admission: `account_automation` — subject to surface, access, grant and approval policy.
+- Decision/effect authority: `account_automation` — subject to applicable approval and target decision authority.
+- Also surfaced on: `ui`, `cli`, `agent`, `mcp`, `rpc`, `api`.
+
+### Input guidance
+
+- `sessionId` (text, required): Session
+
+## `session.capabilities.set`
+
+**Change session capabilities** — No additional description is published.
+
+- Safety: `danger`; side effect: `write`.
+- Approval: `required` result; `deferred` flow.
+- Request admission: `account_automation` — subject to surface, access, grant and approval policy.
+- Decision/effect authority: `account_automation` — subject to applicable approval and target decision authority.
+- Also surfaced on: `ui`, `cli`, `agent`, `mcp`, `rpc`, `api`.
+
+### Input guidance
+
+- `sessionId` (text, required): Session
+- `kind` (text, required): Kind
+- `id` (text, required): Item
+- `state` (text, required): State
+- `reason` (textarea): Reason
 
 ## `session.checkpoint`
 
@@ -12822,22 +13048,6 @@ No field hints are published. Use the typed input accepted by `execute`.
 - `path` (text, required): Log path
 - `maxBytes` (text): Maximum bytes
 - `offset` (text): File offset
-
-## `session.mcp_selection.set`
-
-**Set session MCP selection** — Set the MCP server selection applied to future turns in the current session.
-
-- Safety: `safe`; side effect: `write`.
-- Approval: `optional` result; `deferred` flow.
-- Request admission: `account_automation` — subject to surface, access, grant and approval policy.
-- Decision/effect authority: `account_automation` — subject to applicable approval and target decision authority.
-- Also surfaced on: `ui`, `api`.
-
-### Input guidance
-
-- `sessionId` (text): Session id
-- `selection` (json, required): MCP selection
-- `sessionActive` (json, required): Session is active
 
 ## `session.memory.set`
 
@@ -14313,6 +14523,22 @@ No field hints are published. Use the typed input accepted by `execute`.
 
 - `sessionId` (text, required): Linked session id
 
+## `sessions.spawn.capabilities.preview`
+
+**Preview session capabilities** — No additional description is published.
+
+- Safety: `safe`; side effect: `read`.
+- Approval: `required` result; `blocking` flow.
+- Request admission: `account_automation` — subject to surface, access, grant and approval policy.
+- Decision/effect authority: `account_automation` — subject to applicable approval and target decision authority.
+- Also surfaced on: `ui`, `cli`, `agent`, `mcp`, `rpc`, `voice`, `api`.
+
+### Input guidance
+
+- `machineId` (text, required): Machine
+- `agentId` (text, required): Agent
+- `directory` (text): Directory
+
 ## `sessions.spawn.connected_services.list`
 
 **List spawn connected services** — List connected-service references available for new sessions without exposing credentials.
@@ -14507,6 +14733,231 @@ No field hints are published. Use the typed input accepted by `execute`.
 - Request admission: `account_automation` — subject to surface, access, grant and approval policy.
 - Decision/effect authority: `account_automation` — subject to applicable approval and target decision authority.
 - Also surfaced on: `ui`, `voice`, `agent`, `mcp`, `api`.
+
+### Input guidance
+
+No field hints are published. Use the typed input accepted by `execute`.
+
+## `skills.create`
+
+**Create a skill** — No additional description is published.
+
+- Safety: `danger`; side effect: `write`.
+- Approval: `required` result; `blocking` flow.
+- Request admission: `account_automation` — subject to surface, access, grant and approval policy.
+- Decision/effect authority: `account_automation` — subject to applicable approval and target decision authority.
+- Also surfaced on: `ui`, `cli`, `agent`, `mcp`, `rpc`, `api`.
+
+### Input guidance
+
+No field hints are published. Use the typed input accepted by `execute`.
+
+## `skills.delete`
+
+**Delete a skill** — No additional description is published.
+
+- Safety: `danger`; side effect: `write`.
+- Approval: `required` result; `blocking` flow.
+- Request admission: `account_automation` — subject to surface, access, grant and approval policy.
+- Decision/effect authority: `account_automation` — subject to applicable approval and target decision authority.
+- Also surfaced on: `ui`, `cli`, `agent`, `mcp`, `rpc`, `api`.
+
+### Input guidance
+
+No field hints are published. Use the typed input accepted by `execute`.
+
+## `skills.duplicate`
+
+**Duplicate a skill** — No additional description is published.
+
+- Safety: `danger`; side effect: `write`.
+- Approval: `required` result; `blocking` flow.
+- Request admission: `account_automation` — subject to surface, access, grant and approval policy.
+- Decision/effect authority: `account_automation` — subject to applicable approval and target decision authority.
+- Also surfaced on: `ui`, `cli`, `agent`, `mcp`, `rpc`, `api`.
+
+### Input guidance
+
+No field hints are published. Use the typed input accepted by `execute`.
+
+## `skills.export`
+
+**Export skills** — No additional description is published.
+
+- Safety: `safe`; side effect: `read`.
+- Approval: `none` result; `deferred` flow.
+- Request admission: `account_automation` — subject to surface, access, grant and approval policy.
+- Decision/effect authority: `account_automation` — subject to applicable approval and target decision authority.
+- Also surfaced on: `ui`, `cli`, `agent`, `mcp`, `rpc`, `api`.
+
+### Input guidance
+
+No field hints are published. Use the typed input accepted by `execute`.
+
+## `skills.found.adopt`
+
+**Add found skills to the library** — No additional description is published.
+
+- Safety: `danger`; side effect: `write`.
+- Approval: `required` result; `blocking` flow.
+- Request admission: `account_automation` — subject to surface, access, grant and approval policy.
+- Decision/effect authority: `account_automation` — subject to applicable approval and target decision authority.
+- Also surfaced on: `ui`, `cli`, `agent`, `mcp`, `rpc`, `api`.
+
+### Input guidance
+
+No field hints are published. Use the typed input accepted by `execute`.
+
+## `skills.found.list`
+
+**Find skills on a machine** — Read native skill folders discovered by the machine’s agent contributions.
+
+- Safety: `safe`; side effect: `read`.
+- Approval: `none` result; `deferred` flow.
+- Request admission: `account_automation` — subject to surface, access, grant and approval policy.
+- Decision/effect authority: `account_automation` — subject to applicable approval and target decision authority.
+- Also surfaced on: `ui`, `cli`, `agent`, `mcp`, `rpc`, `api`.
+
+### Input guidance
+
+No field hints are published. Use the typed input accepted by `execute`.
+
+## `skills.found.read`
+
+**Read a skill found on a machine** — No additional description is published.
+
+- Safety: `safe`; side effect: `read`.
+- Approval: `none` result; `deferred` flow.
+- Request admission: `account_automation` — subject to surface, access, grant and approval policy.
+- Decision/effect authority: `account_automation` — subject to applicable approval and target decision authority.
+- Also surfaced on: `ui`, `cli`, `agent`, `mcp`, `rpc`, `api`.
+
+### Input guidance
+
+No field hints are published. Use the typed input accepted by `execute`.
+
+## `skills.install`
+
+**Add a skill** — No additional description is published.
+
+- Safety: `danger`; side effect: `write`.
+- Approval: `required` result; `blocking` flow.
+- Request admission: `account_automation` — subject to surface, access, grant and approval policy.
+- Decision/effect authority: `account_automation` — subject to applicable approval and target decision authority.
+- Also surfaced on: `ui`, `cli`, `agent`, `mcp`, `rpc`, `api`.
+
+### Input guidance
+
+No field hints are published. Use the typed input accepted by `execute`.
+
+## `skills.list`
+
+**List skills** — No additional description is published.
+
+- Safety: `safe`; side effect: `read`.
+- Approval: `none` result; `deferred` flow.
+- Request admission: `account_automation` — subject to surface, access, grant and approval policy.
+- Decision/effect authority: `account_automation` — subject to applicable approval and target decision authority.
+- Also surfaced on: `ui`, `cli`, `agent`, `mcp`, `rpc`, `api`.
+
+### Input guidance
+
+No field hints are published. Use the typed input accepted by `execute`.
+
+## `skills.machine.install`
+
+**Also install a skill on a machine** — Copy a library skill into the agents’ native user folders for use outside Happier.
+
+- Safety: `danger`; side effect: `write`.
+- Approval: `required` result; `blocking` flow.
+- Request admission: `account_automation` — subject to surface, access, grant and approval policy.
+- Decision/effect authority: `account_automation` — subject to applicable approval and target decision authority.
+- Also surfaced on: `ui`, `cli`, `agent`, `mcp`, `rpc`, `api`.
+
+### Input guidance
+
+No field hints are published. Use the typed input accepted by `execute`.
+
+## `skills.machine.uninstall`
+
+**Remove a skill from a machine** — Remove only this library skill’s receipted installs from the machine.
+
+- Safety: `danger`; side effect: `write`.
+- Approval: `required` result; `blocking` flow.
+- Request admission: `account_automation` — subject to surface, access, grant and approval policy.
+- Decision/effect authority: `account_automation` — subject to applicable approval and target decision authority.
+- Also surfaced on: `ui`, `cli`, `agent`, `mcp`, `rpc`, `api`.
+
+### Input guidance
+
+No field hints are published. Use the typed input accepted by `execute`.
+
+## `skills.read`
+
+**Read a skill** — Read a library skill and its supporting files. By name, read only a skill delivered to the selected session.
+
+- Safety: `safe`; side effect: `read`.
+- Approval: `none` result; `deferred` flow.
+- Request admission: `account_automation` — subject to surface, access, grant and approval policy.
+- Decision/effect authority: `account_automation` — subject to applicable approval and target decision authority.
+- Also surfaced on: `ui`, `cli`, `agent`, `mcp`, `rpc`, `api`.
+
+### Input guidance
+
+No field hints are published. Use the typed input accepted by `execute`.
+
+## `skills.rules.set`
+
+**Change where skills are on** — No additional description is published.
+
+- Safety: `danger`; side effect: `write`.
+- Approval: `required` result; `blocking` flow.
+- Request admission: `account_automation` — subject to surface, access, grant and approval policy.
+- Decision/effect authority: `account_automation` — subject to applicable approval and target decision authority.
+- Also surfaced on: `ui`, `cli`, `agent`, `mcp`, `rpc`, `api`.
+
+### Input guidance
+
+- `items` (json, required): Items
+- `change` (json, required): Rules change
+
+## `skills.update`
+
+**Update a skill** — No additional description is published.
+
+- Safety: `danger`; side effect: `write`.
+- Approval: `required` result; `blocking` flow.
+- Request admission: `account_automation` — subject to surface, access, grant and approval policy.
+- Decision/effect authority: `account_automation` — subject to applicable approval and target decision authority.
+- Also surfaced on: `ui`, `cli`, `agent`, `mcp`, `rpc`, `api`.
+
+### Input guidance
+
+No field hints are published. Use the typed input accepted by `execute`.
+
+## `skills.updates.apply`
+
+**Apply a skill update** — No additional description is published.
+
+- Safety: `danger`; side effect: `write`.
+- Approval: `required` result; `blocking` flow.
+- Request admission: `account_automation` — subject to surface, access, grant and approval policy.
+- Decision/effect authority: `account_automation` — subject to applicable approval and target decision authority.
+- Also surfaced on: `ui`, `cli`, `agent`, `mcp`, `rpc`, `api`.
+
+### Input guidance
+
+No field hints are published. Use the typed input accepted by `execute`.
+
+## `skills.updates.diff`
+
+**Review a skill update** — No additional description is published.
+
+- Safety: `safe`; side effect: `read`.
+- Approval: `none` result; `deferred` flow.
+- Request admission: `account_automation` — subject to surface, access, grant and approval policy.
+- Decision/effect authority: `account_automation` — subject to applicable approval and target decision authority.
+- Also surfaced on: `ui`, `cli`, `agent`, `mcp`, `rpc`, `api`.
 
 ### Input guidance
 
@@ -18285,6 +18736,62 @@ No field hints are published. Use the typed input accepted by `execute`.
 ## `workspace.tabs.close`
 
 **Close workspace tab** — Operate on the mounted client workspace in its current Home, Account and window. A headless host without that workspace returns unsupported_action.
+
+- Safety: `safe`; side effect: `external`.
+- Approval: `required` result; `blocking` flow.
+- Request admission: `account_automation` — subject to surface, access, grant and approval policy.
+- Decision/effect authority: `account_automation` — subject to applicable approval and target decision authority.
+- Also surfaced on: `ui`, `voice`, `agent`, `mcp`, `api`.
+
+### Input guidance
+
+- `tabId` (text, required): Tab id
+
+## `workspace.tabs.close_all`
+
+**Close all workspace tabs in a pane** — Close unpinned tabs in the specified pane, or the focused pane when omitted, respecting unsaved-draft guards.
+
+- Safety: `safe`; side effect: `external`.
+- Approval: `required` result; `blocking` flow.
+- Request admission: `account_automation` — subject to surface, access, grant and approval policy.
+- Decision/effect authority: `account_automation` — subject to applicable approval and target decision authority.
+- Also surfaced on: `ui`, `voice`, `agent`, `mcp`, `api`.
+
+### Input guidance
+
+- `groupId` (text): Pane id
+
+## `workspace.tabs.close_left`
+
+**Close workspace tabs to the left** — Close unpinned tabs before the named tab in its pane, respecting unsaved-draft guards.
+
+- Safety: `safe`; side effect: `external`.
+- Approval: `required` result; `blocking` flow.
+- Request admission: `account_automation` — subject to surface, access, grant and approval policy.
+- Decision/effect authority: `account_automation` — subject to applicable approval and target decision authority.
+- Also surfaced on: `ui`, `voice`, `agent`, `mcp`, `api`.
+
+### Input guidance
+
+- `tabId` (text, required): Tab id
+
+## `workspace.tabs.close_others`
+
+**Close other workspace tabs** — Close unpinned tabs in the named tab's pane, keeping that tab and respecting unsaved-draft guards.
+
+- Safety: `safe`; side effect: `external`.
+- Approval: `required` result; `blocking` flow.
+- Request admission: `account_automation` — subject to surface, access, grant and approval policy.
+- Decision/effect authority: `account_automation` — subject to applicable approval and target decision authority.
+- Also surfaced on: `ui`, `voice`, `agent`, `mcp`, `api`.
+
+### Input guidance
+
+- `tabId` (text, required): Tab id
+
+## `workspace.tabs.close_right`
+
+**Close workspace tabs to the right** — Close unpinned tabs after the named tab in its pane, respecting unsaved-draft guards.
 
 - Safety: `safe`; side effect: `external`.
 - Approval: `required` result; `blocking` flow.

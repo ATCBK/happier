@@ -1,0 +1,246 @@
+---
+title: Email channel
+description: Connect an authenticated mailbox, route each thread to an Agent session, and send replies or scheduled HTML messages.
+---
+
+Connect a mailbox to Happier so approved people can forward work or ask questions
+by email. A router chooses a saved recipe for the first message; replies continue
+in that thread's Session.
+
+<Callout type="warn">
+  This guide describes the current 0.3 development source, not stable-release
+  availability. Email and its IMAP + SMTP transport are bundled in that source.
+  Production mailbox authentication and deliverability still need tenant-specific
+  validation. Cross-machine attachment files are currently unavailable.
+</Callout>
+
+## What you need first
+
+- A signed-in Happier daemon on a machine that can reach the mailbox's IMAP and
+  SMTP servers, plus an installed Session-capable Agent.
+- A mailbox with IMAP over TLS and authenticated SMTP submission enabled.
+- A password or app password supported by your mail host, or an administrator
+  who can configure Microsoft app-only access for Exchange Online.
+- The exact addresses allowed to contact the Agent, saved recipes, and a trust
+  strategy whose markers your receiving mail server supplies and protects.
+
+Use the same machine for the connection and its Sessions when recipes need
+images or other attachment files. PDF and text content can be supplied inline
+even when the Session runs elsewhere.
+
+## Connect IMAP and SMTP
+
+Create the **Email IMAP + SMTP** Connected Account (`email-imap-smtp`) first.
+Choose `password` for a host that supports password authentication; enter the
+password or app password in that Account, not a route or prompt. Completing the
+Account checks both IMAP and SMTP login before saving the credentials.
+
+Set the mailbox address, IMAP TLS host and port (normally 993), SMTP submission
+host and port (normally 587 with `starttls`, or 465 with `tls` when your host
+supports it). The username defaults to the mailbox address. The inbox defaults
+to `INBOX`; the Sent folder is discovered when omitted, or you can name it.
+
+For a self-hosted server with a private or self-signed certificate, paste its CA
+certificate into **Custom TLS CA certificate (PEM)** (`tlsCaPem`). This Account
+option applies to both IMAP and SMTP; certificate and hostname verification stay
+enabled. Leaving it empty uses the standard trusted certificate authorities.
+
+Then open **Settings → Conversation Channels → Connections**, create an Email
+connection, select the Connected Account and its machine, and enter the same
+mailbox address. Choose the trust strategy below and test the connection.
+Mailbox passwords and application secrets remain in Connected Accounts.
+
+Only the configured inbox is polled. IMAP IDLE wakes the receiver for new mail;
+the saved checkpoint combines UIDVALIDITY and the last UID. A changed UIDVALIDITY
+reports a history gap instead of claiming that no messages were missed.
+Submission checks Sent for the deterministic Message-ID and appends a copy
+when the server has not saved one.
+
+### Microsoft 365 app-only setup
+
+Use `microsoft-app-only` for Exchange Online. An administrator completes these
+steps once for the mailbox:
+
+1. In the Microsoft Entra admin center, register a single-tenant application.
+   Record its application/client ID and directory/tenant ID. Create a client
+   secret and copy its **value** into the Connected Account's secret field.
+2. Add **Office 365 Exchange Online** application permissions
+   `IMAP.AccessAsApp` and `SMTP.SendAsApp`, then grant tenant administrator consent.
+   Microsoft Graph `Mail.Send` is not the IMAP/SMTP permission.
+3. Open that app's **Enterprise applications** instance and record its object ID.
+   This is different from the object ID under **App registrations**.
+4. Register the service principal in Exchange Online, then grant access and
+   SendAs to the one mailbox Happier uses. Substitute your own identifiers:
+
+```powershell
+Install-Module ExchangeOnlineManagement
+Import-Module ExchangeOnlineManagement
+Connect-ExchangeOnline -Organization "tenant-id"
+New-ServicePrincipal -AppId "application-client-id" -ObjectId "enterprise-application-object-id" -DisplayName "Happier email"
+$EmailPrincipal = Get-ServicePrincipal -Identity "Happier email"
+Add-MailboxPermission -Identity "agent@example.com" -User $EmailPrincipal.Identity -AccessRights FullAccess
+Add-RecipientPermission -Identity "agent@example.com" -Trustee $EmailPrincipal.Identity -AccessRights SendAs
+```
+
+Grant those rights only on the intended mailbox. These are the IDs and mailbox
+permissions required by [Microsoft's app-only OAuth setup](https://learn.microsoft.com/en-us/exchange/client-developer/legacy-protocols/how-to-authenticate-an-imap-pop-smtp-application-by-using-oauth).
+
+5. Enable IMAP and SMTP AUTH on that mailbox and inspect the resulting settings:
+
+```powershell
+Set-CASMailbox -Identity "agent@example.com" -ImapEnabled $true -SmtpClientAuthenticationDisabled $false
+Get-CASMailbox -Identity "agent@example.com" | Format-List ImapEnabled,SmtpClientAuthenticationDisabled
+```
+
+The mailbox SMTP AUTH setting overrides the organization setting. Entra security
+defaults can still disable SMTP AUTH; have your administrator resolve that tenant
+policy before proceeding. See [Microsoft's SMTP AUTH guidance](https://learn.microsoft.com/en-us/exchange/clients-and-mobile-in-exchange-online/authenticated-client-smtp-submission).
+
+6. Configure the Connected Account with IMAP `outlook.office365.com:993` and SMTP
+   `smtp.office365.com:587`, `starttls`, and `microsoft-app-only`. Supply the tenant
+   ID, client ID and secret value. Happier obtains a client-credentials token from
+   `login.microsoftonline.com` with scope `https://outlook.office365.com/.default`
+   and authenticates both protocols using SASL XOAUTH2. Exchange Online client
+   submission uses STARTTLS; do not select port 465 for it. See
+   [Microsoft's client submission settings](https://learn.microsoft.com/en-us/exchange/mail-flow-best-practices/how-to-set-up-a-multifunction-device-or-application-to-send-email-using-microsoft-365-or-office-365).
+
+## Verify the sender before routing
+
+An address in a router group is necessary but insufficient: the email core must
+authenticate the top-level sender. Forwarded bodies and attached messages are
+untrusted content, even when their forwarder is trusted.
+
+- `exchangeOrganization` requires exactly one
+  `X-MS-Exchange-Organization-AuthAs: Internal`, an `AuthSource` matching the
+  configured `authSource`, and a `Sender` address equal to `From`. Inspect a real
+  internal message's raw IMAP headers before choosing it; some paths do not expose
+  all of those markers.
+- `authenticationResults` reads only the topmost `Authentication-Results` header.
+  Its authserv-id must equal the configured `authservId`, and DMARC must pass with
+  `header.from` equal to the From domain, or DKIM must pass with `header.d` equal
+  to it. This implementation uses exact domain alignment. It never searches lower
+  headers after a mismatch or trusts headers inside forwarded/attached mail.
+
+Configure these values from your receiving server's actual headers, not a domain
+guess or wildcard. That server must protect the markers from sender forgery.
+Missing, malformed or failing evidence refuses admission. For an address in the
+current enabled binding audience, missing required trust markers also produce
+connection readiness attention through Channels' existing provider diagnostic
+path. Unknown unconfigured senders do not produce that attention. Retest can
+confirm login; a successful login alone
+does not prove that inbound mail carries trust markers. Fix the receiving path or
+choose a strategy supported by its headers, then verify a real message.
+
+The optional `allowedDomains` setting restricts addresses as they are resolved
+for group membership. Empty or omitted means no domain restriction; exact group
+membership still controls admission. Email uses address entry rather than pairing.
+Keep `allowBotSenders: false` and `senderFeedback: 'off'`: automatic replies,
+bounces, receipts, list mail and the integration mailbox's own mail must not
+start Agent turns.
+
+## Choose what the Agent reads
+
+There are three content options on the connection:
+
+| Option | Effect |
+| --- | --- |
+| `quotedHistory` | `stripKnown` (default) strips quoted history for an already linked thread; `always` strips quoted history; `never` keeps it. A new thread with `stripKnown` keeps its pasted discussion. |
+| `stripSignatures` | Defaults to `true`; removes detected signatures and images used only in them. Real attachments remain. |
+| `bodyFormat` | `markdown` (default) preserves links, lists and tables; `text` supplies plain text. |
+
+Forwards retain their discussion and carry forwarded provenance. Raw HTML does
+not become Agent input: hidden content, scripts, styles and tracking pixels are
+removed during shaping. A forwarded `.eml` contributes its discussion inline
+and exposes its files; calendar invites are attachments.
+
+## Route threads to saved recipes
+
+Link the mailbox-level destination to a `threadRouter`. Its `principalGroups`
+hold verified addresses; their union is the router's sender allowlist. Ordered
+`routes` choose a group (or `any`) and whether a message is forwarded (`true`,
+`false` or `any`). The first match wins; unmatched messages are dropped with a
+content-free `routeNotMatched` record.
+
+For example, route forwarded mail from any group to intake, then fresh mail from
+sales to intake, then fresh questions from the questions group to a conversation
+recipe. See [Email agent recipes](/extending/email-agent-recipes) for confinement,
+MCP identity and a morning brief workflow.
+
+The first admitted message creates an ordinary child binding and Session. Its
+allowlist contains only the verified originating sender, and subsequent messages
+in that thread continue the same Session. A child records its `parentBindingId`;
+disabling the router stops admission for its children. An archived target Session
+is restored for a new admitted message rather than replaced.
+
+Set `recipe.organizationPlacement` to an existing folder's ID and optional tags
+to organize each route's Sessions. There is no thread TTL or automatic archive.
+An original `/stop` from an allowed person cancels the active turn; a forwarded
+copy of `/stop` stays content.
+
+### Attachments and machine placement
+
+Attachment descriptors travel with the observation; bytes are fetched at dispatch.
+On the same machine, Happier materializes files in the Session's attachment folder.
+PDF text layers and `text/*` are also inlined with untrusted/forwarded provenance,
+so an exclusive MCP-only recipe can read their text without a file tool.
+
+Across machines, inline text remains available, but the file outcome is
+`{ kind: 'unavailable', reason: 'attachmentNotAvailableOnThisMachine' }`.
+Use the connection's machine for Sessions that need image or binary files.
+Cross-machine byte transfer remains a follow-up; outbound attachments are outside
+this development feature.
+
+## Start a new conversation
+
+Call the Channels Action `conversation/start-v1` through its discovered qualified
+ID, `happier.channels/actions/conversation/start-v1`. It takes a router, an existing
+audience group, a subject, `{ text, html? }` content and an unattested reply Session.
+The caller never supplies To, Cc, Bcc or Reply-To. The owner configures recipients
+in the audience group.
+
+Starts enter ordinary delivery custody. `accepted` means queued in custody, not
+delivered to an inbox. After confirmed delivery, a child binding points replies
+at the named Session and allows the audience's members. Such a multi-person thread
+does not acquire a single sender's attested identity. Replies use
+`In-Reply-To`/`References`, quote the answered message, and go to its trusted sender,
+never reply-all. Email supplies both text and HTML MIME alternatives and asks mail
+servers to suppress automatic responses.
+
+An owner-authored workflow `action` step uses this same path. Agent requests use
+the existing Action approval defaults; management is also available through UI,
+CLI and MCP. Unknown or partial submission outcomes require reconciliation or
+explicit acceptance/discard through Channels; do not send a duplicate blindly.
+SMTP 4xx responses are retryable known failures, while 5xx responses are typed
+failures. Email declares no per-message text limit; mail-host and Agent limits
+still apply.
+
+## Add an email transport
+
+Plugin authors can contribute to `happier.channel.email`'s targeted `transports`
+point. The first-party `imap-smtp` transport implements the same contract as an
+external contribution. The email core owns parsing, trust, shaping and recipients;
+a transport supplies raw RFC 5322 bytes and protocol outcomes.
+
+Use `EmailTransportsContributionProtocolV1` from
+`@happier-dev/email-transports-protocol/v1`. Bind required `listSince`, `fetchRaw`,
+`submitRaw` and `connectionTest` Actions, plus optional `findSent`, through
+`protocol.operations.<role>.bind(localActionId)` and
+`protocol.contribute({ operations })`. Declare the resulting contribution at
+`contributesTo['happier.channel.email'].transports.<contributionId>`.
+`fetchRaw` returns `{ kind: 'raw', mimeBase64 }`; `submitRaw` receives MIME,
+the core-selected envelope and Message-ID. `listSince` returns refs and an opaque
+checkpoint or a history gap. Without `findSent`, an uncertain submission uses
+ordinary Channels delivery resolution.
+
+Declare handlers with each operation's input/result schemas, surface and danger
+metadata. Keep operations plugin-only and require the host-stamped Email-core
+caller. Never create a transport-specific parser, router or outbound sender.
+See [Plugin contributions](/plugins/manifest/contributions) for host admission and
+lifecycle, and [SDK entrypoints](/plugins/api/sdk-entrypoints) for public imports.
+
+## Related
+
+- [Conversation channels](/extending/channels) — connections, bindings and recovery.
+- [Email agent recipes](/extending/email-agent-recipes) — tools, MCP headers and workflows.
+- [SDK and Action API](/extending/sdk) — backend calls and scoped tokens.
+- [Connected Services](/accounts/connected-services) — credential ownership.

@@ -139,6 +139,20 @@ to a frame does not establish an execution sandbox. Consult the installed API
 inventory for the exact bindings; this development surface is not a released
 stability or platform-certification promise.
 
+## Resource states (0.3 development)
+
+Pass the `resource` snapshot from `usePluginResource` or `useLivePluginResource`
+directly to `State`, and pass the hook's `refresh` as `onRetry`. `State` keeps
+admitted content mounted while refreshing or after a failed refresh, with one
+freshness line and recovery action. Before the first successful read it shows
+loading or an error with Retry. Set `isEmpty` when your decoded content is empty;
+the component does not infer emptiness from Resource bytes.
+
+`SceneArt` from `/components` renders a built-in or authored scene through the
+same host renderer used by `EmptyState`. A host without that renderer supplies
+no art. These are development-source interfaces; check your installed API
+inventory before using them.
+
 ## Chart family (0.3 development)
 
 Use the shared chart family for hierarchical proportions, time series, capacity,

@@ -379,6 +379,8 @@ The server and daemon bundle their respective host mirrors; controller CLI login
 
 For browser QA, provision eligible hosts with `dev-targets qa setup <target> --stack=<qa>`, then retain the foreground `dev-targets browser start <lane-session> --stack=<qa> --url=<qa-ui-url>` command. Chromium runs on the selected QA pool host; use its returned loopback CDP endpoint from controller-local agent-browser or Playwright and open the returned browser-facing `url`. The existing origin-preserving reverse SOCKS route keeps the QA Home and borrowed Expo addresses reachable after Account restore. Do not rewrite the Home origin or add lane-specific proxy flags. Interrupt that exact handle after QA and verify cleanup before stopping the stack. An unusable pool or unavailable selected host fails closed without a controller-local browser. The paired daemon materializes connected-service credentials; never copy user Agent credentials during provisioning.
 
+In 0.3 development, when the browser and QA daemon run on the same host, a daemon peer endpoint such as `http://127.0.0.1:<observed-port>/peer-mediation/v2/rpc` belongs to that worker. Pass its observed URL as `--worker-loopback-url=<endpoint>` to `dev-targets browser start --target=<daemon-host>`. The browser reaches only that exact loopback origin directly; Home and Expo still use the controller's SOCKS route. The option rejects a controller Home or Expo origin and URLs with credentials or a non-loopback host. Read the current endpoint again after a daemon restart; its port can change. This option does not make a daemon on another host reachable.
+
 In 0.3 development, set `HAPPIER_STACK_QA_BROWSER_TARGETS` to choose a browser pool independently of the fixed daemon host:
 
 ```bash

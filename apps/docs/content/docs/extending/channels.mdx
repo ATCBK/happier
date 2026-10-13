@@ -1,6 +1,6 @@
 ---
 title: Conversation channels
-description: Connect a Discord, Telegram, or GitHub conversation to a Happier session or automation, so people who do not use Happier can still talk to your agents.
+description: Connect external conversations to Happier sessions or automations, including one Session per authenticated email thread.
 ---
 
 A channel connects a conversation somewhere else — a Discord channel, a
@@ -14,10 +14,14 @@ on the other end never install anything.
   provider journeys are still release gates rather than stable-release claims.
 </Callout>
 
-The current 0.3 source bundles **Discord**, **Telegram**, and **GitHub**
+The current 0.3 source bundles **Discord**, **Telegram**, **GitHub**, and **Email**
 providers. Providers are a contribution point
 rather than a fixed list, so a trusted installed plugin receives the same public
 contract and can add another.
+
+[Email setup](/extending/email-channel) uses an authenticated IMAP + SMTP mailbox
+and exact sender addresses. It has its own trust checks rather than a pairing
+challenge.
 
 ## The two halves
 
@@ -25,8 +29,8 @@ Channels separates *the bot you connect* from *the conversations it carries*,
 and it is worth holding those apart because they are configured in different
 places and change independently.
 
-**A connection is one bot** — a Telegram bot, a Discord application's bot, or a
-GitHub account on one repository. It holds the credential reference, the
+**A connection is one external identity** — a Telegram bot, a Discord application's
+bot, a GitHub account on one repository, or an email mailbox. It holds the credential reference, the
 machine it runs on, and its health. You create it once, test it, enable or
 disable it, transfer it to another machine, and eventually delete it. One
 connection serves every conversation linked through it, so a problem with the
@@ -34,7 +38,8 @@ bot (a revoked token, another program reading the same Telegram bot) affects
 all of them at once.
 
 **A binding is one linked conversation**: one chat, channel, thread, issue or
-pull request, pointed at one target — a session or an automation. It carries
+pull request, pointed at one target — a session, an automation, or a thread router
+that selects recipes for child threads. It carries
 who may talk in that conversation, which messages count, what is sent back,
 and whether people there may answer the agent's permission requests. A
 binding's target can be **rotated** without touching the bot underneath. That
@@ -74,6 +79,7 @@ channel at it.
 | Discord | `discord-bot-credential` | Discord REST plus a persistent gateway worker |
 | Telegram | `telegram-bot-credential` | The Telegram bot API |
 | GitHub | `github-connected-account` | The GitHub REST API over checkpointed polling |
+| Email | `email-mailbox` | IMAP over TLS and SMTP submission through an Email IMAP + SMTP Connected Account |
 
 Each provider also checks provider-side permissions at setup, so a credential
 that authenticates but cannot actually reach the conversation is refused there
@@ -142,10 +148,10 @@ Comments on that issue or pull request arrive as channel messages, and replies
 are posted back as comments on it. In the current development source, Channels
 splits long replies at the GitHub provider's declared limit of 65,536 Unicode
 code points per comment, preserving the complete reply in one delivery record.
-This uses the setup facts saved with the connection: older GitHub connections
-without the declared limit do not receive core splitting. New connections and
-successful connection transfers save the current limit; Retest checks readiness
-without refreshing setup facts.
+This uses the setup facts saved with the connection. New connections, successful
+connection transfers, and successful Retest refresh the provider's current limit
+and recommended freshness. Retest also upgrades older GitHub connections that
+lack the declared limit, while preserving the freshness value you selected.
 The provider replaces `@` with `＠` to suppress notification mentions without
 growing a chunk beyond that limit. GitHub's API still decides whether to accept
 each comment. GitHub has no webhook delivery in this preview: inbound
@@ -204,6 +210,54 @@ out.
 
 ## Channels and automations
 
+### Routers and child threads
+
+A `threadRouter` binding links a parent destination, such as a mailbox, to
+ordered recipes. Principal groups supply both its sender allowlist and the
+audiences used to start conversations. Routes match a group (or `any`) and
+forwarded provenance (`true`, `false` or `any`); the first match wins. Unmatched
+messages are dropped with a content-free `routeNotMatched` record.
+
+The first admitted message in an unknown child thread creates one Session and
+an ordinary child binding, allowing only its verified originating sender.
+Follow-ups, replay and concurrent first messages use the same Session identity.
+Pausing the router stops its children through the shared parent policy. A new
+admitted message restores an archived target Session before sending to it.
+Set each recipe's `organizationPlacement` to an existing folder for organization;
+there is no thread TTL or automatic archive. These rules apply to thread-capable
+channel integrations, not only email.
+
+### Start a conversation
+
+The Channels Action `conversation/start-v1` (qualified id
+`happier.channels/actions/conversation/start-v1`) starts a thread for a configured
+router audience and a named reply Session. Its input is `routerBindingId`,
+`audienceGroupId`, `subject`, `content: { text, html? }`, and `sessionId`.
+Recipients come from the audience group; callers cannot supply addresses.
+The Session must have no single-sender attested identity. After delivery,
+the child binding allows the audience and sends replies to that Session.
+An `accepted` result means delivery custody was created, not that mail arrived.
+
+Email supports starts and HTML alternatives. Telegram, Discord and GitHub
+currently return typed unsupported for starts and ignore HTML. They deliver the
+text alternative under their native limits. A provider's optional
+`outboundTextLimit` declares its actual ceiling; omission means no native
+per-message text ceiling. GitHub's declared limit is 65,536 Unicode code points
+per comment, with the core splitting described above. Happier does not add a
+generic body-size or chunk-count cap.
+
+### Manage through Actions
+
+Connection setup, testing, transfer, recovery and deletion, plus binding/router
+creation, editing, pause, deletion and delivery resolution, use the same Actions
+from UI, CLI, Agent and MCP. Writes and external effects retain their confirmation
+defaults and revision checks. An owner-authored workflow can call the start
+Action through an `action` step; Agent requests follow ordinary approval.
+Pairing still requires the external person's proof where that integration uses
+it. See [Actions and tools](/extending/happier-tools) for discovery.
+
+### Target an automation
+
 A binding can target an automation rather than a session. When a message is
 admitted through that binding, Happier invokes a Conversation-origin Run for
 the selected automation; the automation's own definition remains independent
@@ -253,7 +307,9 @@ currentness before accepting an answer.
 
 ## Related
 
+- [Email channel](/extending/email-channel) — mailbox setup, sender trust and attachments.
+- [Email agent recipes](/extending/email-agent-recipes) — restricted recipes and scheduled HTML briefs.
 - [Automations](/extras/automations) — including automation bindings.
 - [Connected Services](/accounts/connected-services) — where the bot credentials live.
-- [What ships in the box](/plugins/bundled) — the provider plugins: Discord, Telegram, and GitHub (inside the GitHub hosting provider).
+- [What ships in the box](/plugins/bundled) — bundled channel integrations.
 - [Participant routing](/accounts/participant-routing) — who a message reaches inside Happier.

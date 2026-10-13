@@ -82,6 +82,14 @@ fallback use this admission rather than another person's cached URL. Native dire
 still needs the actual registered native descriptor and its signed grant; a Browser target
 alone cannot create that capability.
 
+In 0.3 development, private and public preview cookies use `SameSite=None; Secure;
+HttpOnly; Partitioned` within the preview's own host and path. This lets a preview embedded
+under another site retain its admission. Browsers that support
+[partitioned cookies](https://privacysandbox.google.com/cookies/chips) keep that admission
+scoped to the top-level viewer site; opening under another site needs a fresh admission.
+Older browsers that block cross-site cookies and do not support partitioning may still
+refuse the embedded preview.
+
 Final effective access loss closes the affected viewer's streams. Losing the starter's
 serving admission retires the service's exposures immediately, even if native Stop is
 unsupported or its outcome is still uncertain. Another valid overlapping grant preserves

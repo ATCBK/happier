@@ -205,7 +205,8 @@ ${grouped.join('\n\n')}
 ${extras}
 ${commands.has('workspace.tab.new') ? `The development-only 0.3 workspace adds tab shortcuts for the focused pane.
 They work while editing: \`Mod+T\` opens an empty tab, \`Mod+W\` closes the active
-tab, \`Mod+1\` through \`Mod+8\` select a position, and \`Mod+9\` selects the last
+tab, \`Mod+Shift+W\` closes the pane's unpinned tabs, \`Mod+1\` through \`Mod+8\`
+select a position, and \`Mod+9\` selects the last
 tab. They require the general shortcut registry to be enabled. A browser may
 claim these keys before Happier receives them; you can rebind them if needed.
 

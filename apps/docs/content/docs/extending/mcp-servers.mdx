@@ -169,6 +169,33 @@ Important:
 
 ## Secrets, auth, and environment values
 
+### MCP server sign-in (0.3 development)
+
+The development CLI supports `happier mcp servers sign-in <name-or-id>` and
+`happier mcp servers sign-out <name-or-id>` for remote servers configured to use
+OAuth. Sign-in needs a reachable daemon in the same Happier Account and an HTTPS
+resource URL. The authorization service's discovery, registration, browser and
+token endpoints must also use HTTPS, including services on localhost. Static
+headers and API-key configurations remain separate choices.
+
+Happier discovers the server's authorization service and requires PKCE S256. It
+uses its client metadata document when the authorization service supports it,
+otherwise dynamic client registration. If neither is supported, sign-in is
+refused; use an API key if the server offers one. Paste the full redirected URL
+into the sign-in prompt, including its `state` and any `iss` parameter—not just
+the authorization code.
+
+The grant belongs to the Account's Connected Accounts, not a machine-local MCP
+token store. The daemon obtains authorization for the exact configured resource
+for each request. A scope challenge requires an explicit sign-in with the union
+of existing and requested scopes; it does not automatically reconnect.
+
+The stable client identity is
+`https://app.happier.dev/oauth/mcp/client-metadata.json`, with redirect URI
+`https://app.happier.dev/oauth/mcp/callback`. Production-domain publication and
+installed-app return are release checks; these development changes do not imply
+that the callback presentation is already deployed.
+
 Happier lets you set MCP env vars and headers using:
 
 - **Saved Secrets** — recommended

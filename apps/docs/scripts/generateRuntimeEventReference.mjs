@@ -44,7 +44,7 @@ const FAMILIES = [
   {
     title: 'Output',
     lede: 'What the agent produced, as it produces it.',
-    kinds: ['message-delta', 'tool-call', 'tool-progress', 'tool-result', 'transcript-message-committed', 'file-edit', 'usage-observed', 'mcp-tool-usage'],
+    kinds: ['message-delta', 'tool-call', 'tool-progress', 'tool-result', 'transcript-message-committed', 'file-edit', 'usage-observed', 'mcp-tool-usage', 'skill-usage'],
   },
   {
     title: 'Activity',

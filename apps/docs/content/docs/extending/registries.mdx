@@ -1,0 +1,93 @@
+---
+title: Registry sources
+description: Browse skill and plugin catalogs through your Account's shared source list.
+---
+
+Registry sources let you review reusable skills and plugins before adding them
+to Happier. Your source list belongs to your Account; a source is a location,
+not a second copy of your library or permission to run its contents.
+
+## Availability
+
+This guide describes **0.3 development source**, not a released stable version.
+The shared source/Action contracts and client-direct plugin browsing are being
+integrated. Personal token management is available through Actions and the CLI;
+replacement registry controls remain in progress. The current skill readers are Git, `skills.sh` and Claude
+marketplace catalogs; plugin browsing reads Happier catalogs and community npm.
+MCP/ACP registry readers and Happier picks belong to their later consumer units.
+
+## Before you begin
+
+Use your qualified Home and Account. Public GitHub skills and public plugin
+catalogs can be read directly by the client. Web browsing of `skills.sh` and
+non-GitHub Git repositories needs a reachable connected machine. Native clients
+read public GitHub repositories over HTTPS and HTTP catalogs directly. Non-GitHub
+Git repositories and older saved SSH/Git/local-checkout sources need a connected
+machine on native clients too.
+
+## Browse and add content
+
+The retained **Settings → Prompts → Registries** page browses skill
+sources. **Settings → Plugins → Discover** browses plugin listings directly;
+it does not need a Machine simply to show a public catalog. Source management
+uses the Account list rather than a selected Machine's private source file.
+
+For a new Git source, use a credential-free HTTPS repository URL. Git sources
+are scanned for `SKILL.md` bundles. `skills.sh` uses its public search/featured
+surface. Claude marketplace catalogs expose their skills, not their hooks,
+commands, Agents or MCP servers.
+
+Read an item's details before adding it. Skills are installed into the library
+at the reviewed commit with their supporting files and executable modes.
+Importing into the library and exporting to an Agent's native filesystem are
+different operations. See [Prompts and skills](/extending/prompts-and-skills).
+Plugin install review and installation still run on the chosen connected
+Machine and use that Machine's credential-profile owner.
+
+The development CLI exposes `happier registries` and `happier skills` through
+the same Actions. Consult the generated [host Action catalog](/plugins/api/host-actions)
+for current argument schemas and approval requirements. CLI and Agent callers
+ask by default; browsing does not grant installation or token disclosure.
+
+## Private sources
+
+Create a private Saved Secret, then select it when adding a source:
+
+```bash
+happier secrets create registry-token
+happier registries add https://github.com/owner/private --token-secret registry-token
+```
+
+The secret value comes from a hidden prompt or stdin, never a command-line value.
+The source stores the Saved Secret's reference. Token-protected requests run on
+the CLI or a connected machine; the browser does not materialize the token.
+Private Saved Secrets do not require Teams.
+
+A bound token prevents deletion of its Saved Secret. Clear or replace the binding
+first with `happier registries token <source> --clear` or
+`happier registries token <source> --secret <name-or-id>`. Removing a source keeps
+the content already imported into your library.
+
+## Supplied sources and failures
+
+Built-in and plugin-supplied sources can be disabled, but their declarations
+cannot be edited or removed as personal rows. Removing a supplying plugin
+removes its source from discovery; content already in your library stays there.
+A daemon-placed plugin source needs one of its supplying Machines, not merely
+any online Machine.
+
+A failed source reports its own problem while other sources remain usable.
+When a registry supplies a rate-limit reset time, Happier shows that time and
+holds requests to the host until it resets. Without a reset time it shows
+“Rate limited”; use Retry or refresh to try again manually. No cooldown is guessed.
+An explicit refresh retries the current request. Last-known items are not a
+substitute for current source authority: disabling/removing a source or retiring
+its supplier withdraws its old results. If a skill write succeeded but a later
+reach/export step failed, repair that step rather than install another copy.
+
+## Related
+
+- [Prompts and skills](/extending/prompts-and-skills)
+- [Marketplace integration](/plugins/packaging/marketplace)
+- [Plugin registry declarations](/plugins/manifest/contributions#registry-sources-in-development)
+- [Host Actions](/plugins/api/host-actions)

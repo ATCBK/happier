@@ -78,18 +78,21 @@ Agent updates on the Updates page use the same job. Happier can check the latest
 version only where the agent declares an npm or managed GitHub release source;
 an unknown latest version does not mean the installed version is current.
 
-From a shell on the machine, use the same development flow:
+From the CLI, use the same development flow:
 
 ```bash
 happier agents install codex --dry-run
 happier agents install codex
 happier agents update codex
+happier agents install codex --machine <machine-id>
 ```
 
 `--dry-run` previews the local plan without starting an install job. Real installs
-and updates need the local daemon to be running; if it is unavailable, run
-`happier daemon start` and retry. Vendor install or update recipes require
+and updates run through Actions on the selected machine; without `--machine`,
+the CLI selects this Account's local machine. Its daemon must be running.
+CLI requests ask for approval according to your Actions settings. Vendor install or update recipes additionally require
 `--yes`, `--allow-vendor-recipe`, or confirmation in an interactive terminal.
+Those flags provide recipe consent; they do not waive Action approval.
 Use `--force` with `agents install` when you intend to reinstall an existing CLI.
 Ctrl+C requests cancellation and waits for the daemon's final outcome.
 
