@@ -708,7 +708,7 @@ describe('provider connection service', () => {
     expect(runtimeSummaryInput?.resolution.record.deployment).toMatchObject({ kind: 'managedLocal' });
   });
 
-  it('refuses Account enable at the machine-only service without runtime observation or a write', async () => {
+  it('enables Account access through the shared Account owner without machine runtime observation', async () => {
     const h = harness();
     await expect(h.service.create({
       action: 'createContribution',
@@ -722,7 +722,7 @@ describe('provider connection service', () => {
     h.loadSnapshot.mockClear();
     h.collectDnsEvidence.mockClear();
 
-    const before = structuredClone(h.getRaw());
+    const before = readRetainedProviderSettingsFixture(h.getRaw()).settings;
 
     await expect(h.service.setEnabled({
       action: 'setEnabled',
@@ -731,12 +731,15 @@ describe('provider connection service', () => {
       enabled: true,
       scope: 'account',
     })).resolves.toMatchObject({
-      status: 'error',
-      error: { code: 'provider_connection_invalid' },
+      status: 'success',
+      grants: { accountEnabled: true },
     });
 
     expect(h.collectDnsEvidence).not.toHaveBeenCalled();
-    expect(h.getRaw()).toEqual(before);
+    const after = readRetainedProviderSettingsFixture(h.getRaw()).settings;
+    expect(after.accountGrants).toEqual([expect.objectContaining({ connectionId: 'pc_generation' })]);
+    expect(after.connections).toEqual(before.connections);
+    expect(after.machineGrants).toEqual(before.machineGrants);
   });
 
   it('does not mutate persisted state for an unmatched managed authoring preview', async () => {
