@@ -58,7 +58,32 @@ describe('sessionModeControl', () => {
     metadata.sessionModeOverrideV1 = { v: 1, updatedAt: 4, modeId: 'plan' };
     expect(computeSessionModePickerControl({ agentId: 'opencode', metadata })).toMatchObject({ currentModeId: null, requestedModeId: 'plan', effectiveModeId: 'plan', isPending: true });
     metadata.sessionModesV2 = { ...metadata.sessionModesV2!, availableModes: [] };
-    expect(computeSessionModePickerControl({ agentId: 'opencode', metadata })).toBeNull();
+    expect(computeSessionModePickerControl({ agentId: 'opencode', metadata })).toMatchObject({
+      options: [{ id: 'plan', name: 'plan' }],
+      currentModeId: null,
+      requestedModeId: 'plan',
+      effectiveModeId: 'plan',
+      isExplicitOverride: true,
+      isPending: true,
+    });
+  });
+
+  it('keeps an explicit non-default override reversible before a mode catalog arrives', async () => {
+    const { computeSessionModePickerControl, getSessionModePickerOptions } = await import('./sessionModeControl');
+    const control = computeSessionModePickerControl({
+      agentId: 'opencode',
+      metadata: createMetadata({
+        sessionModeOverrideV1: { v: 1, updatedAt: 2, modeId: 'plan' },
+      }),
+    });
+
+    expect(control).toMatchObject({
+      requestedModeId: 'plan',
+      effectiveModeId: 'plan',
+      isExplicitOverride: true,
+    });
+    expect(getSessionModePickerOptions(control?.options ?? [], 'opencode').map((option) => option.id))
+      .toEqual(['default', 'plan']);
   });
   it('supportsSessionModeOverrides reflects agent catalog intent', async () => {
     const { supportsSessionModeOverrides } = await import('./sessionModeControl');

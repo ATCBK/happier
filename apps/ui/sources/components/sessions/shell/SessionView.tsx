@@ -623,6 +623,7 @@ import { formatShortRelativeTimeAt } from '@/utils/time/formatShortRelativeTime'
 import { combineSessionViewExtraActionChips } from './view/combineSessionViewExtraActionChips';
 import { resolveSessionViewModeOptionIds } from './view/resolveSessionViewModeOptionIds';
 import { readSessionModesState } from '@/sync/domains/sessionControl/readSessionControlMetadata';
+import { computeSessionModePickerControl } from '@/sync/domains/sessionControl/sessionModeControl';
 import { resolveSessionViewHeaderProps, shouldFoldSessionHeaderIconActions } from './view/resolveSessionViewHeaderProps';
 import { useWorkspaceSyncRelationshipSummaries } from '@/sync/domains/sessionHandoff/useWorkspaceSyncRelationshipSummaries';
 import { resolveWorkspaceSyncSetAttention } from '@/sync/domains/sessionHandoff/workspaceSyncRelationshipModel';
@@ -3168,6 +3169,9 @@ function SessionViewLoadedContent({
             agentCore?.sessionModes,
         )
         : [];
+    const sessionModePickerControl = agentId
+        ? computeSessionModePickerControl({ agentId, metadata: ownerMetadata })
+        : null;
     const enabledAgentIds = useEnabledAgentIds();
     const sessionActionDefaultBackend = resolveSessionActionDefaultBackend({
         session: session as any,
@@ -8776,7 +8780,7 @@ function SessionViewLoadedContent({
                 // Embedded: the mode stays a label unless the embed allows more than one mode (plan 04 §4.6).
                 // A controls-only composer offers only the granted model control.
                 onPermissionModeChange={!embeddedComposerControlsOnly && (!embedded || (embedded.permissionModePicker?.length ?? 0) > 1) ? updatePermissionMode : undefined}
-                onAcpSessionModeChange={!embedded && sessionModeOptionIds.length > 0 ? updateAcpSessionModeOverride : undefined}
+                onAcpSessionModeChange={!embedded && sessionModePickerControl ? updateAcpSessionModeOverride : undefined}
                 onAcpConfigOptionChange={embeddedComposerControlsOnly ? undefined : updateAcpConfigOptionOverride}
                 modelMode={modelMode}
                 sessionActive={isSessionActive}

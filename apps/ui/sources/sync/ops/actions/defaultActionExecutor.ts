@@ -217,6 +217,7 @@ import {
     sessionAbort,
     resumeSession,
 } from '@/sync/ops/sessions';
+import { sessionGoalClear, sessionGoalSet } from '@/sync/ops/sessionGoals';
 import { buildResumeSessionBaseOptionsFromSession } from '@/sync/domains/session/resume/resumeSessionBase';
 import { buildResumeCapabilityOptionsFromUiState, buildResumeSessionExtrasFromUiState } from '@/agents/registry/registryUiBehavior';
 import { getPermissionModeOverrideForSpawn } from '@/sync/domains/permissions/permissionModeOverride';
@@ -2612,6 +2613,16 @@ async function settleAccountSecurityAction<T>(operation: () => Promise<T>) {
         updateSessionMetadataWithRetry: sync.patchSessionMetadataWithRetry,
       });
       return { ok: true, sessionId, modeId: normalizedModeId };
+    },
+    sessionGoalSet: async ({ sessionId, objective, status, tokenBudget, serverId }) => {
+      return await sessionGoalSet(sessionId, {
+        ...(typeof objective === 'string' ? { objective } : {}),
+        ...(status ? { status } : {}),
+        ...(tokenBudget !== undefined ? { tokenBudget } : {}),
+      }, { serverId });
+    },
+    sessionGoalClear: async ({ sessionId, serverId }) => {
+      return await sessionGoalClear(sessionId, { serverId });
     },
     sessionConfigOptionSet: async ({ sessionId, configId, valueId }) => {
       const session = (storage.getState() as any)?.sessions?.[sessionId] ?? null;

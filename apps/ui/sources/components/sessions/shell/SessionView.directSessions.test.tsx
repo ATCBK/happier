@@ -191,6 +191,7 @@ const resolveVoiceSessionComposerRoutingSpy = vi.hoisted(() => vi.fn((_params: a
 const featureEnabledState = vi.hoisted(() => ({
   providers: false,
   voice: false,
+  'agents.goals': false,
   'files.reviewComments': false,
   'sessions.usageLimitRecovery': false,
   'connectedServices.quotas': false,
@@ -551,7 +552,8 @@ vi.mock('@/sync/ops/actions/defaultActionExecutor', async (importOriginal) => {
         // Provider demand exercises the real action admission and RPC path.
         // Unrelated legacy shell scenarios retain their existing action fixture.
         execute: (...input: Parameters<typeof executor.execute>) => {
-          if (input[0] === 'session.mode.set' || input[0] === 'session.config_option.set') {
+          if (input[0] === 'session.mode.set' || input[0] === 'session.config_option.set'
+            || input[0] === 'session.goal.set' || input[0] === 'session.goal.clear') {
             actionExecuteSpy(...input);
             return executor.execute(...input);
           }
@@ -729,6 +731,64 @@ installDisconnectedServerSocketBoundary((socket: Socket, serverUrl) => {
         result = { type: agentTransitionResult, localId: request.input.localId };
       } else if (method === RPC_METHODS.SESSION_PERMISSION_RESPOND) {
         result = {};
+      } else if (method === SESSION_RPC_METHODS.SESSION_GOAL_SET) {
+        const request = rpc.params as Readonly<{ objective?: unknown }>;
+        const objective = typeof request.objective === 'string' ? request.objective.trim() : '';
+        if (!objective) return { ok: false, error: 'invalid_goal', errorCode: 'invalid_goal' };
+        const current = storage.getState().sessions[rpc.method.slice(0, separator)];
+        if (!current) return { ok: false, error: 'session_not_found', errorCode: 'session_not_found' };
+        const sessionWorkStateV1 = {
+          v: 1 as const,
+          backendId: 'codex',
+          agentId: 'codex',
+          updatedAt: 10,
+          primaryItemId: 'goal:happier.agent.codex/codex/goals/goal',
+          items: [{
+            id: 'goal:happier.agent.codex/codex/goals/goal',
+            kind: 'goal' as const,
+            origin: 'vendor' as const,
+            status: 'active' as const,
+            title: objective,
+            updatedAt: 10,
+            agentId: 'codex',
+          }],
+        };
+        const nextSession = {
+          ...current,
+          metadata: {
+            ...current.metadata,
+            sessionWorkStateV1,
+          },
+          ownerMetadataView: { ...current.ownerMetadataView, sessionWorkStateV1 },
+          metadataVersion: (current.metadataVersion ?? 0) + 1,
+        };
+        storage.setState({ sessions: {
+          ...storage.getState().sessions,
+          [nextSession.id]: nextSession,
+        } });
+        result = { ok: true };
+      } else if (method === SESSION_RPC_METHODS.SESSION_GOAL_CLEAR) {
+        const current = storage.getState().sessions[rpc.method.slice(0, separator)];
+        if (!current) return { ok: false, error: 'session_not_found', errorCode: 'session_not_found' };
+        const sessionWorkStateV1 = {
+          v: 1 as const,
+          backendId: 'codex',
+          agentId: 'codex',
+          updatedAt: 11,
+          primaryItemId: null,
+          items: [],
+        };
+        const nextSession = {
+          ...current,
+          metadata: { ...current.metadata, sessionWorkStateV1 },
+          ownerMetadataView: { ...current.ownerMetadataView, sessionWorkStateV1 },
+          metadataVersion: (current.metadataVersion ?? 0) + 1,
+        };
+        storage.setState({ sessions: {
+          ...storage.getState().sessions,
+          [nextSession.id]: nextSession,
+        } });
+        result = { ok: true };
       } else if (method === SESSION_RPC_METHODS.EXECUTION_RUN_LIST) {
         result = ExecutionRunListResponseSchema.parse({ runs: [] });
       } else if (method === RPC_METHODS.CAPABILITIES_DETECT) {
@@ -1796,6 +1856,7 @@ describe('SessionView (direct sessions)', () => {
     renderRealAgentInputPermissionSurfaceState.current = false;
     featureEnabledState.providers = false;
     featureEnabledState.voice = false;
+    featureEnabledState['agents.goals'] = false;
     featureEnabledState['files.reviewComments'] = false;
     featureEnabledState['sessions.usageLimitRecovery'] = false;
     featureEnabledState['connectedServices.quotas'] = false;
@@ -4148,6 +4209,108 @@ describe('SessionView (direct sessions)', () => {
         overrides: { thinking: expect.objectContaining({ value: 'high' }) },
       }));
     });
+  });
+
+  it('keeps an Action-set non-default mode visible and resettable while its native catalog is unavailable', async () => {
+    storageState.sessions.s1 = {
+      ...storageState.sessions.s1,
+      access: createSessionAccessFixture('owner'),
+      accessLevel: 'owner',
+      metadata: {
+        ...storageState.sessions.s1.metadata,
+        sessionModeOverrideV1: { v: 1, updatedAt: 2, modeId: 'plan' },
+      },
+    };
+
+    const screen = await renderSessionViewAndSettle();
+    const agentInput = findAgentInput(screen);
+    expect(typeof agentInput.props.onAcpSessionModeChange).toBe('function');
+
+    await act(async () => {
+      agentInput.props.onAcpSessionModeChange('default');
+    });
+
+    expect(actionExecuteSpy).toHaveBeenCalledWith(
+      'session.mode.set',
+      { sessionId: 's1', modeId: '' },
+      expect.objectContaining({ surface: 'ui', defaultSessionId: 's1' }),
+    );
+  });
+
+  it('projects a goal Action write from canonical session state into the composer chip', async () => {
+    featureEnabledState['agents.goals'] = true;
+    storageState.sessions.s1 = {
+      ...storageState.sessions.s1,
+      access: createSessionAccessFixture('owner'),
+      accessLevel: 'owner',
+      agentState: {
+        capabilities: {
+          sessionGoalSetSupported: true,
+          sessionGoalClearSupported: true,
+        },
+      },
+    };
+    storageState.machines['machine-1'] = {
+      metadata: { daemonSessionGoalControlsSupported: true },
+    };
+
+    const screen = await renderSessionViewAndSettle();
+    const readGoalChip = () => (findAgentInput(screen).props.extraActionChips as readonly AgentInputExtraActionChip[])
+      .find((candidate) => candidate.controlId === 'goal');
+    const initialChip = readGoalChip();
+    expect(initialChip?.collapsedContentPopover?.label).toBe('session.workState.goal.set');
+    const renderContent = initialChip?.collapsedContentPopover?.renderContent;
+    if (typeof renderContent !== 'function') throw new Error('Expected canonical goal chip content');
+    const content = renderContent({ requestClose: () => {}, maxHeight: 420 });
+    if (!React.isValidElement<{ onSetGoal?: (request: { objective: string }) => Promise<unknown> }>(content)
+      || typeof content.props.onSetGoal !== 'function') {
+      throw new Error('Expected goal Action writer');
+    }
+
+    let writeResult: unknown;
+    await act(async () => {
+      writeResult = await content.props.onSetGoal?.({ objective: 'Ship canonical goal state' });
+    });
+    expect(writeResult).toEqual({ ok: true });
+    expect(externalRpcRequests).toContainEqual(expect.objectContaining({
+      targetId: 's1',
+      method: SESSION_RPC_METHODS.SESSION_GOAL_SET,
+      payload: { objective: 'Ship canonical goal state' },
+    }));
+    expect(readSessionOwnerMetadataView(storage.getState().sessions.s1)?.sessionWorkStateV1)
+      .toMatchObject({ items: [{ kind: 'goal', title: 'Ship canonical goal state' }] });
+
+    await vi.waitFor(async () => {
+      await settleDirectSessionView();
+      expect(readGoalChip()?.collapsedContentPopover?.label).toBe('Ship canonical goal state');
+    });
+    expect(actionExecuteSpy).toHaveBeenCalledWith(
+      'session.goal.set',
+      { sessionId: 's1', objective: 'Ship canonical goal state' },
+      expect.objectContaining({ surface: 'ui', defaultSessionId: 's1' }),
+    );
+
+    const activeRenderContent = readGoalChip()?.collapsedContentPopover?.renderContent;
+    if (typeof activeRenderContent !== 'function') throw new Error('Expected active goal chip content');
+    const activeContent = activeRenderContent({ requestClose: () => {}, maxHeight: 420 });
+    if (!React.isValidElement<{ onClearGoal?: () => Promise<unknown> }>(activeContent)
+      || typeof activeContent.props.onClearGoal !== 'function') {
+      throw new Error('Expected goal clear Action writer');
+    }
+    let clearResult: unknown;
+    await act(async () => {
+      clearResult = await activeContent.props.onClearGoal?.();
+    });
+    expect(clearResult).toEqual({ ok: true });
+    await vi.waitFor(async () => {
+      await settleDirectSessionView();
+      expect(readGoalChip()?.collapsedContentPopover?.label).toBe('session.workState.goal.set');
+    });
+    expect(actionExecuteSpy).toHaveBeenCalledWith(
+      'session.goal.clear',
+      { sessionId: 's1' },
+      expect.objectContaining({ surface: 'ui', defaultSessionId: 's1' }),
+    );
   });
 
   it('supplies the canonical native-only SessionModelPicker when Providers are feature-disabled', async () => {
