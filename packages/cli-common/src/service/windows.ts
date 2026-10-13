@@ -140,7 +140,8 @@ export function buildListWindowsScheduledTaskFolderPowerShellCommand(params: Rea
 
 export function parseWindowsScheduledTaskFolderPowerShellJson(text: string): readonly string[] | null {
   const trimmed = String(text ?? '').trim();
-  if (!trimmed) return null;
+  // Successful empty output stays an empty enumeration, as it was for `schtasks /Query /FO CSV /NH`.
+  if (!trimmed) return [];
   try {
     const parsed: unknown = JSON.parse(trimmed);
     if (!Array.isArray(parsed) || !parsed.every((value) => typeof value === 'string')) return null;
