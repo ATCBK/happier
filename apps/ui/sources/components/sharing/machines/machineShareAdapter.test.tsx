@@ -70,7 +70,7 @@ describe('Machine sharing through the canonical controller and sheet', () => {
             await screen.pressByTestIdAsync('machine-share-remove:account:bob');
             await vi.waitFor(() => expect(home.requests.filter(request => request.method === 'DELETE')).toHaveLength(1));
             expect(home.requests.find(request => request.method === 'DELETE')?.body).toEqual(leaving ? {} : { principal: bob });
-        } finally { home.dispose(); }
+        } finally { await home.dispose(); }
     });
     it('retains dated census for transport loss, then clears it on denial and discards an older read', async () => {
         let mode: 'ready' | 'transport' | 'unavailable' | 'pending' | 'denied' = 'ready';
@@ -119,7 +119,7 @@ describe('Machine sharing through the canonical controller and sheet', () => {
             await act(async () => { pending?.finish(Response.json(initial)); });
             expect(screen.findByTestId('machine-share-grant-account:bob')).toBeNull();
             expect(current?.model.owner).toBeNull();
-        } finally { home.dispose(); }
+        } finally { await home.dispose(); }
     });
 
     it('retires the census and in-flight read on credential removal, and restores with a fresh same-Account read', async () => {
@@ -164,7 +164,7 @@ describe('Machine sharing through the canonical controller and sheet', () => {
             await act(async () => { pending?.finish(Response.json(initial)); });
             expect(screen.findByTestId('machine-share-grant-account:bob')).toBeNull();
             expect(screen.findByTestId('machine-share-grant-account:cara')).not.toBeNull();
-        } finally { home.dispose(); localStorage.restore(); }
+        } finally { await home.dispose(); localStorage.restore(); }
     });
 
     it('names only the Team members whose work loses effective access when another grant overlaps', async () => {
@@ -193,7 +193,7 @@ describe('Machine sharing through the canonical controller and sheet', () => {
             expect(consequences).toContain('Bob');
             expect(consequences).not.toContain('Cara');
             expect(consequences).toContain(t('machines.sharing.effectiveLoss'));
-        } finally { home.dispose(); }
+        } finally { await home.dispose(); }
     });
 
     it('keeps mixed Team levels editable and explains incompatible members without offering futile key preparation', async () => {
@@ -244,7 +244,7 @@ describe('Machine sharing through the canonical controller and sheet', () => {
             await act(async () => { publishHomeAccountChange(scope.serverId, ['machine']); });
             await vi.waitFor(() => expect(screen.findByTestId('machine-share-key-retry:team:team')).not.toBeNull());
             expect(screen.findByTestId('machine-share-incompatible:team:team:cara')).not.toBeNull();
-        } finally { home.dispose(); }
+        } finally { await home.dispose(); }
     });
 
     it('loads after StrictMode effect replay and retires every captured request lifetime before late results settle', async () => {
@@ -282,7 +282,7 @@ describe('Machine sharing through the canonical controller and sheet', () => {
             await act(async () => {
                 for (const request of requests) request.finish(Response.json({ ...initial, grants: [] }));
             });
-        } finally { home.dispose(); }
+        } finally { await home.dispose(); }
     });
 
     it('refreshes external audience changes without losing a failed draft or expanded selection, ignoring another Home wake', async () => {
@@ -327,7 +327,7 @@ describe('Machine sharing through the canonical controller and sheet', () => {
             expect(screen.findByTestId('machine-share-retry:account:bob')).not.toBeNull();
             expect(screen.findByTestId('machine-share-level:account:bob:admin')?.props.accessibilityState.checked).toBe(true);
             expect(home.requests.filter(request => request.method === 'PUT')).toHaveLength(1);
-        } finally { home.dispose(); }
+        } finally { await home.dispose(); }
     });
     it('offers Use and Manage, retains the exact failed level intent, and discloses effective loss in the same row', async () => {
         let snapshot = initial;
@@ -385,7 +385,7 @@ describe('Machine sharing through the canonical controller and sheet', () => {
             await screen.pressByTestIdAsync('machine-share-editor:list:header:leading:back-chip');
             expect(screen.findByTestId('machine-share-search')?.props.value).toBe('Bob');
             expect(screen.findByTestId('machine-share-remove:account:bob')).not.toBeNull();
-        } finally { home.dispose(); }
+        } finally { await home.dispose(); }
     });
 
     it('tells someone it is shared with only that it is offline, and gives them the same person mark as the people under it', async () => {
@@ -407,7 +407,7 @@ describe('Machine sharing through the canonical controller and sheet', () => {
             expect(text).toContain(t('machines.sharing.offlineRecipient', { machine: 'Devbox' }));
             expect(text).not.toContain(t('machines.sharing.offline', { machine: 'Devbox' }));
             expect(screen.findByTestId('machine-share-your-access-visual')).not.toBeNull();
-        } finally { home.dispose(); }
+        } finally { await home.dispose(); }
     });
 
     it('retries waived Leave after failure and discloses overlapping inherited access without exposing a manager roster', async () => {
@@ -457,7 +457,7 @@ describe('Machine sharing through the canonical controller and sheet', () => {
             expect(screen.findByTestId('machine-share-grant-account:bob')).toBeNull();
             expect(home.requests.filter(request => request.method === 'DELETE').map(request => request.body)).toEqual([{}, {}]);
             expect(home.requests.filter(request => request.path.includes('data-key-envelopes'))).toEqual([]);
-        } finally { home.dispose(); }
+        } finally { await home.dispose(); }
     });
 
     it('locks an incompatible directory candidate only after the typed Home refusal, retaining the query and exact target', async () => {
@@ -494,6 +494,6 @@ describe('Machine sharing through the canonical controller and sheet', () => {
             expect(home.requests.filter(request => request.method === 'PUT')).toHaveLength(1);
             expect(screen.findByTestId('machine-share-search')?.props.value).toBe('Bob');
             expect(screen.findByTestId('machine-share-grant-account:bob')).toBeNull();
-        } finally { home.dispose(); }
+        } finally { await home.dispose(); }
     });
 });

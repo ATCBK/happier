@@ -118,7 +118,7 @@ function dashboardDocument(bindings: WidgetInputBindingsV1 = {}, authored?: Widg
     } };
 }
 
-let disposeHome: (() => void) | null = null;
+let disposeHome: (() => Promise<void>) | null = null;
 let widgetHomeActive = false;
 function binaryBlobId() { return `00000000-0000-4000-8000-${host.documentVersion.toString(16).padStart(12, '0')}`; }
 function storedArtifact(artifactId: string) {
@@ -415,7 +415,7 @@ describe('DocumentShareSheet', () => {
             await disconnectActiveServerConnection();
             widgetHomeActive = false;
         }
-        disposeHome?.();
+        await disposeHome?.();
         disposeHome = null;
         retireActiveServerAccountScopeLifetime();
         invalidateAccountEncryptionModeCache();
