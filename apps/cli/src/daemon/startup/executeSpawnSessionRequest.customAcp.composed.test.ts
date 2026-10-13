@@ -36,6 +36,8 @@ import { createAccountEncryptionCurrentnessFixture, createSessionNotificationCon
 import { writeAcpTestAgentScript } from '@/agent/acp/testkit/subprocessHarness';
 import { startDaemonSessionControlRuntime } from './startDaemonSessionControlRuntime';
 import type { TrackedSession } from '../types';
+import { resolveEntrypointIdentityFromLaunchSpec } from '../sessionRunnerRuntime/resolveRunnerEntrypointIdentity';
+import { readProcessIdentityByPid } from '../processIdentity';
 import * as processTermination from '@/processes/terminate/terminateProcessTree';
 import { createOnHappySessionWebhook } from '../sessions/onHappySessionWebhook';
 import { createOnChildExited } from '../sessions/onChildExited';
@@ -55,6 +57,7 @@ const storage = vi.hoisted(() => ({ home: '', persistedToken: 'df38-owner-token'
   credentials: { token: 'df38-owner-token', encryption: null }, io: vi.fn(),
   runnerCommand: '', runnerExited: false, sourceChecks: null as Array<{ command: string; args: string[] }> | null,
   runnerBootstrapPath: '',
+  runnerLaunches: [] as Array<{ command: string; args: string[] }>,
   runnerSpawn: null as ((args: string[], env: NodeJS.ProcessEnv) => import('node:child_process').ChildProcess) | null,
   daemonPort: 0, daemonControlToken: '' }));
 vi.mock('socket.io-client', () => ({ io: storage.io }));
@@ -75,15 +78,18 @@ vi.mock('node:child_process', async importOriginal => {
     const options = args[2];
     if (storage.runnerSpawn && storage.runnerBootstrapPath && Array.isArray(argv)
       && options?.env?.HAPPIER_AGENT_RUNTIME_RUNNER_BOOTSTRAP_FILE === storage.runnerBootstrapPath) {
-      const sourceEntrypointIndex = argv.indexOf(join(process.cwd(), 'src', 'index.ts'));
-      if (sourceEntrypointIndex >= 0) {
-        const runtimeIndex = argv.lastIndexOf(process.execPath, sourceEntrypointIndex);
-        if (runtimeIndex < 0 && command !== process.execPath) throw new Error('Expected the emitted Node source runner executable');
-        storage.runnerCommand = [process.execPath, ...argv.slice(runtimeIndex >= 0 ? runtimeIndex + 1 : 0)].join(' ');
-        const runChild = storage.runnerSpawn;
-        storage.runnerSpawn = null;
-        return runChild(argv.slice(sourceEntrypointIndex + 1), options.env);
-      }
+      storage.runnerLaunches.push({ command, args: [...argv] });
+      const entrypoint = resolveEntrypointIdentityFromLaunchSpec({ filePath: command, args: argv });
+      if (entrypoint.status !== 'known') throw new Error('Own runner launch has no canonical CLI entrypoint');
+      // The route's published startup argv precedes the Session control args.
+      // Its physical entrypoint can be source, admitted dist or a binary; the
+      // exact private bootstrap scopes this OS adapter to this one child.
+      const startupFlagIndex = argv.indexOf('--happy-starting-mode');
+      if (startupFlagIndex < 1) throw new Error('Own runner omitted the installed CLI startup contract');
+      storage.runnerCommand = [command, ...argv].join(' ');
+      const runChild = storage.runnerSpawn;
+      storage.runnerSpawn = null;
+      return runChild(argv.slice(startupFlagIndex - 1), options.env);
     }
     return actual.spawn(...args);
   } };
@@ -208,21 +214,22 @@ describe('Custom ACP fresh daemon launch composition', () => {
     const daemonMutationCustody = createDaemonSessionMutationCustody({ credentials: storage.credentials });
     const snapshot = getActiveAccountSettingsSnapshot();
     if (!snapshot) throw new Error('Expected the admitted fixture Account');
-    const permissionDefaults = Object.fromEntries(['alpha', 'beta'].map(definitionId => [buildBackendTargetKeyV2({
-      kind: 'agent', identity: CUSTOM_ACP_AGENT_CONTRIBUTION_IDENTITY_V1, definitionId }), definitionId === 'alpha' ? 'read-only' : 'yolo']));
-    setActiveAccountSettingsSnapshot({ ...snapshot, rawSettings: {},
-      settings: accountSettingsParse({ ...snapshot.settings, sessionDefaultPermissionModeByTargetKey: permissionDefaults }),
+    const rawSettings = { ...snapshot.settings };
+    setActiveAccountSettingsSnapshot({ ...snapshot, rawSettings, loadedAtMs: Date.now(),
+      settings: accountSettingsParse(rawSettings),
       mcpServerCatalog: { status: 'ready', authority: 'active', revision: 1, diagnostics: [],
         catalog: McpServerCatalogV1Schema.parse({ v: 1, servers: [], bindings: [] }) },
       promptLibraryCatalog: { status: 'ready', rows: PromptLibraryCatalogKeyV1Schema.options
         .map(key => ({ record: emptyPromptLibraryRecordV1(key, 1), revision: 1 })), tombstones: [], diagnostics: [] } });
     const initialProcessOwner = process.env[PROCESS_OWNER_ENV_KEY];
-    const daemonEnvironment = { ...process.env };
+    const daemonEnvironment = { ...process.env, HAPPIER_ACCOUNT_SETTINGS_MODE: 'auto' };
     vi.stubEnv(PROCESS_OWNER_ENV_KEY, initialProcessOwner);
     storage.runnerCommand = `${process.execPath} ${join(process.cwd(), 'src', 'index.ts')}`;
     storage.sourceChecks = [];
+    storage.runnerLaunches = [];
     let sessionId = 'cdf41qualified000000000001';
     let sessionRow: V2SessionByIdResponse['session'] = createSessionNotificationContextFixture(sessionId);
+    const createdPermissionIntents = new Map<string, ReturnType<typeof readPermissionModeIntentFromMetadata>>();
     const trackedSessions = new Map<number, TrackedSession>();
     const pidToAwaiter = new Map<number, (session: TrackedSession) => void>();
     const pidToSpawnResultResolver: ExecuteSpawnSessionRequestParams['pidToSpawnResultResolver'] = new Map();
@@ -306,6 +313,11 @@ describe('Custom ACP fresh daemon launch composition', () => {
           if (!sharedMetadata || typeof sharedMetadata !== 'object' || !('ciphertext' in sharedMetadata)
             || typeof sharedMetadata.ciphertext !== 'string') throw new Error('Missing produced shared metadata');
           const ownerMetadata = StoredSessionOwnerMetadataEnvelopeV1Schema.parse('ownerMetadata' in body ? body.ownerMetadata : undefined);
+          if (ownerMetadata.t !== 'plain') throw new Error('Expected the plain fixture Account');
+          const createdMetadata = projectSessionOwnerCompatibilityViewV1({
+            sharedMetadata: StoredSessionSharedMetadataV1Schema.parse(JSON.parse(sharedMetadata.ciphertext)),
+            ownerMetadata: ownerMetadata.v });
+          createdPermissionIntents.set(sessionId, readPermissionModeIntentFromMetadata(createdMetadata));
           const agentState = 'agentState' in body ? body.agentState : undefined;
           if (typeof agentState !== 'string' && agentState !== null) throw new Error('Invalid produced Agent state');
           if (!('metadataLayoutVersion' in body) || body.metadataLayoutVersion !== 1
@@ -359,7 +371,7 @@ describe('Custom ACP fresh daemon launch composition', () => {
               const request = JSON.parse(line);
               if (request.method === 'session/set_model') {
                 writeFileSync(${JSON.stringify(observedPath)}, JSON.stringify({ definitionId: process.env.DF38_SELECTION,
-                  agentTargetKey: process.env.DF41_TARGET_KEY, request }));
+                  agentTargetKey: process.env.DF41_TARGET_KEY, pid: process.pid, request }));
                 process.exit(0);
               }
               const result = request.method === 'initialize' ? { protocolVersion: 1, agentCapabilities: { loadSession: true }, authMethods: [] }
@@ -413,6 +425,9 @@ describe('Custom ACP fresh daemon launch composition', () => {
         // Fresh daemon startup is correlated by the request's existing nonce;
         // the real marker owner requires it when adopting a PID placeholder.
         spawnInput.options.spawnNonce = `df41-${definitionId}-launch`;
+        // Restricted runners deliberately cannot read hosting Account defaults.
+        // The public spawn request carries the user's admitted permission intent.
+        spawnInput.options.permissionMode = definitionId === 'alpha' ? 'read-only' : 'yolo';
         spawnInput.options.modelSelection = SessionModelSelectionV1Schema.parse({ v: 1, updatedAt: 1, ref: {
           agentTargetKey: buildBackendTargetKeyV2({ kind: 'agent', identity: CUSTOM_ACP_AGENT_CONTRIBUTION_IDENTITY_V1, definitionId }),
           providerConnectionId: null, modelId: 'ollama/qwen2.5:3b' } });
@@ -424,7 +439,7 @@ describe('Custom ACP fresh daemon launch composition', () => {
         storage.runnerSpawn = null;
         const observed = await readFile(observedPath, 'utf8').catch(() => null);
         const snapshotFailure = debug.mock.calls.filter(([message]) => String(message).includes('Failed to sync session snapshot')).at(-1);
-        expect(observed, `Spawn result: ${JSON.stringify(result)}\nRunner failed before native model call: ${runnerFailure instanceof Error
+        expect(observed, `Spawn result: ${JSON.stringify(result)}\nOwn OS launch: ${JSON.stringify(storage.runnerLaunches)}\nRunner failed before native model call: ${runnerFailure instanceof Error
           ? runnerFailure.stack : String(runnerFailure)}\nRunner cause code: ${runnerFailure && typeof runnerFailure === 'object'
             ? String(Reflect.get(runnerFailure, 'code')) : 'none'}\nSnapshot transport: ${JSON.stringify(snapshotFailure?.slice(1))}\nSpawn boundary: ${JSON.stringify(debug.mock.calls
               .filter(([message]) => String(message).includes('preflight') || String(message).includes('Failed to spawn')
@@ -441,13 +456,14 @@ describe('Custom ACP fresh daemon launch composition', () => {
         // ACP itself transports a native model id, not host Agent identity.
         // The real selected definition's environment qualifies the physical
         // vendor process receiving that first model request.
-        expect(JSON.parse(observed!)).toMatchObject({ definitionId, agentTargetKey: buildBackendTargetKeyV2(admittedTarget), request: {
+        const firstModel = JSON.parse(observed!);
+        expect(firstModel).toMatchObject({ definitionId, agentTargetKey: buildBackendTargetKeyV2(admittedTarget), request: {
           method: 'session/set_model', params: { modelId: 'ollama/qwen2.5:3b' } } });
-        const ownerMetadata = StoredSessionOwnerMetadataEnvelopeV1Schema.parse(sessionRow.ownerMetadata);
-        if (ownerMetadata.t !== 'plain') throw new Error('Expected the plain fixture Account');
-        const metadata = projectSessionOwnerCompatibilityViewV1({ sharedMetadata: StoredSessionSharedMetadataV1Schema.parse(JSON.parse(sessionRow.metadata!)),
-          ownerMetadata: ownerMetadata.v });
-        expect(readPermissionModeIntentFromMetadata(metadata)).toMatchObject({ permissionMode: definitionId === 'alpha' ? 'read-only' : 'yolo' });
+        expect(createdPermissionIntents.get(sessionId), 'Session creation must preserve the admitted permission intent')
+          .toMatchObject({ permissionMode: definitionId === 'alpha' ? 'read-only' : 'yolo' });
+        expect(Number.isSafeInteger(firstModel.pid) && firstModel.pid > 0).toBe(true);
+        expect(await readProcessIdentityByPid(firstModel.pid), 'The real owned ACP vendor process must be retired').toBeNull();
+        expect(storage.runnerExited, 'The owned in-process runner must be retired').toBe(true);
       }
     } finally {
       await daemon?.stopControlServer();
