@@ -7,7 +7,8 @@ import { createMachineVitalsSampler } from '../vitals/createMachineVitalsSampler
 import { createMinuteHistoryStore } from '../vitals/history/minuteHistoryStore';
 import type { MachineVitalsReaderResult } from '../vitals/readers/types';
 import type { ApiMachineClient } from '@/api/apiMachine';
-import type { MachinePublishedDaemonStateV1 } from '@happier-dev/protocol/machines/machinePublishedContentV1';
+import { MachinePublishedDaemonStateV1Schema, StoredMachinePublishedDaemonStateV1Schema,
+    type MachinePublishedDaemonStateV1 } from '@happier-dev/protocol/machines/machinePublishedContentV1';
 
 describe('Machine resource summary through the real sampler', () => {
     let directory: string;
@@ -40,7 +41,11 @@ describe('Machine resource summary through the real sampler', () => {
         let connection!: Parameters<ApiMachineClient['onConnectionStateChange']>[0];
         const transport: Pick<ApiMachineClient, 'updateDaemonState' | 'onConnectionStateChange'> = {
             updateDaemonState: async update => {
-                writes.push(update(writes.at(-1) ?? initialState));
+                const produced = update(writes.at(-1) ?? initialState);
+                // Validate before any tolerant stored reader can discard producer drift.
+                expect(MachinePublishedDaemonStateV1Schema.parse(produced)).toEqual(produced);
+                expect(StoredMachinePublishedDaemonStateV1Schema.parse(JSON.parse(JSON.stringify(produced)))).toEqual(produced);
+                writes.push(produced);
                 return 'published';
             },
             onConnectionStateChange: listener => { connection = listener; return () => {}; },
