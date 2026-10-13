@@ -5,6 +5,8 @@ import { MessageQueue2 } from '@/agent/runtime/modeMessageQueue';
 import { Session } from './session';
 import { EventEmitter } from 'node:events';
 import type { EnhancedMode } from './loop';
+import { completedNativeChildTranscript } from './workflows/claudeWorkflowActivitySource.testkit';
+import type { SessionWorkflowRunSnapshotV1 } from '@happier-dev/protocol';
 
 vi.mock('@/agent/runtime/createHappierMcpBridge', () => ({
   createHappierMcpBridge: vi.fn(async () => ({
@@ -240,6 +242,43 @@ describe('claudeLocalLauncher', () => {
     for (const session of createdSessions.splice(0)) {
       session.cleanup();
     }
+  });
+
+  it('projects authenticated local hooks through the real source without injecting visible messages', async () => {
+    const { session, client } = createLocalHarness();
+    session.onSessionFound('claude-session-1');
+    const snapshots: SessionWorkflowRunSnapshotV1[] = [];
+    Object.assign(client, {
+      getStoredContentEncryptionContext: () => ({ mode: 'plain' }),
+      getMetadataSnapshot: () => ({}),
+      upsertSessionSystemRecord: async (record: { content: { t: string; v?: SessionWorkflowRunSnapshotV1 } }) => {
+        if (record.content.t === 'plain' && record.content.v?.agents) snapshots.push(record.content.v);
+      },
+    });
+    // Delegate the existing test seam to production: source, projector, tracker and writer stay real.
+    const actual = await vi.importActual<typeof import('./workflows/createClaudeWorkflowActivitySourceForSession')>('./workflows/createClaudeWorkflowActivitySourceForSession');
+    let source: Awaited<ReturnType<typeof actual.createClaudeWorkflowActivitySourceForSession>> = null;
+    mockCreateClaudeWorkflowActivitySourceForSession.mockImplementationOnce(async params => {
+      source = await actual.createClaudeWorkflowActivitySourceForSession(params);
+      return source;
+    });
+    mockCreateSessionScanner.mockImplementationOnce(async opts => {
+      for (const row of completedNativeChildTranscript()) opts.onRawJsonlValue?.(row, { historicalReplay: false });
+      await source?.flush();
+      expect(snapshots.at(-1)?.status).toBe('complete');
+      return createSessionScannerStub();
+    });
+    mockClaudeLocal.mockImplementationOnce(async () => {
+      session.onClaudeSessionHook({ hook_event_name: 'SubagentStart', agent_id: 'native-a', session_id: 'claude-session-1' });
+      await source?.flush();
+    });
+    const { claudeLocalLauncher } = await import('./claudeLocalLauncher');
+    await claudeLocalLauncher(session);
+    expect(snapshots.some(snapshot => snapshot.status === 'active'
+      && snapshot.agents.find(agent => agent.id === 'a')?.status === 'active'
+      && snapshot.agents.find(agent => agent.id === 'b')?.status === 'complete')).toBe(true);
+    expect(client.sendClaudeSessionMessage).not.toHaveBeenCalled();
+    expect(client.sendClaudeSessionMessageCommittedExact).not.toHaveBeenCalled();
   });
 
   it('restores idle activity for owned local relaunches and retries while surfacing process errors', async () => {
@@ -817,7 +856,7 @@ describe('claudeLocalLauncher', () => {
         provider: 'claude',
         issue: expect.objectContaining({
           code: 'usage_limit',
-          usageLimit: expect.objectContaining({ providerLimitId: 'rate_limit' }),
+          usageLimit: expect.objectContaining({ quotaScope: 'account' }),
         }),
       }));
     });
