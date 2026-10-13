@@ -139,6 +139,7 @@ export const ANTIGRAVITY_PLUGIN = definePlugin({
         },
         primary: 'sessions',
         catalog: {
+          acpRegistryIds: [...AGENT_DEFINITION.acpRegistryIds],
           vendorResume: { support: AGENT_DEFINITION.core.resume.vendorResume },
         },
         connectedAccounts: [{
@@ -149,7 +150,8 @@ export const ANTIGRAVITY_PLUGIN = definePlugin({
           credentialKinds: ['oauth'],
         }],
         capabilities: projectAgentCapabilitiesV2FromDefinition(AGENT_DEFINITION.core, {
-          skills: { delivery: 'none', nativeDisable: 'unsupported', liveReload: 'unsupported' },
+          skills: { delivery: 'none', nativeDisable: 'unsupported', liveReload: 'unsupported',
+            nativeRoots: { user: [['.gemini', 'antigravity-cli', 'skills']], project: [['.gemini', 'skills'], ['.agents', 'skills']] } },
           surfaces: ['externalSessions'],
           sessions: {
             open: ['create', 'resume'],

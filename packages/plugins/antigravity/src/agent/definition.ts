@@ -13,6 +13,7 @@ export const AGENT_STATE_SHARING_DESCRIPTOR = antigravityConnectedAccountLaunch.
 // and is never borrowed as a default here.
 export const AGENT_DEFINITION = Object.freeze({
   id: ANTIGRAVITY_AGENT_ID,
+  acpRegistryIds: ['antigravity-acp'] as const,
   core: {
     id: ANTIGRAVITY_AGENT_ID,
     backendDefinition: false,

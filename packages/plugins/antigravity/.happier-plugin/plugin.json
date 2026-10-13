@@ -28,6 +28,30 @@
               ]
             }
           },
+          "skills": {
+            "delivery": "none",
+            "liveReload": "unsupported",
+            "nativeDisable": "unsupported",
+            "nativeRoots": {
+              "project": [
+                [
+                  ".gemini",
+                  "skills"
+                ],
+                [
+                  ".agents",
+                  "skills"
+                ]
+              ],
+              "user": [
+                [
+                  ".gemini",
+                  "antigravity-cli",
+                  "skills"
+                ]
+              ]
+            }
+          },
           "surfaces": [
             "terminal",
             "externalSessions"
@@ -37,6 +61,9 @@
           }
         },
         "catalog": {
+          "acpRegistryIds": [
+            "antigravity-acp"
+          ],
           "vendorResume": {
             "support": "supported"
           }
@@ -377,6 +404,7 @@
     "projectNativeAdapters": [],
     "promptAssets": [],
     "providers": [],
+    "registrySources": [],
     "requestInterceptors": [],
     "resources": [],
     "roles": [],
