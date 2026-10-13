@@ -2,6 +2,9 @@ import { homedir } from 'node:os';
 import { randomUUID } from 'node:crypto';
 
 import {
+  ACTION_OPERATION_RPC_METHODS_V1,
+  ActionOperationListV1ResponseSchema,
+  ActionOperationGetV1ResponseSchema,
   buildBackendTargetKey,
   getActionSpec,
   listNativeReviewEngines,
@@ -94,7 +97,10 @@ import { normalizeExecutionRunWaitTimeoutMs } from '@/session/services/execution
 import { resolveSessionTransportContext } from '@/session/services/resolveSessionTransportContext';
 import { fetchSessionById, fetchSessionByIdCompat, type RawSessionRecord } from '@/session/transport/http/sessionsHttp';
 import { callSessionRpc } from '@/session/transport/rpc/sessionRpc';
-import { SESSION_RPC_METHODS } from '@happier-dev/protocol/rpc';
+import { callMachineRpc } from '@/session/transport/rpc/machineRpc';
+import { resolveSessionHandoffEligibility } from '@/session/handoff/resolveSessionHandoffEligibility';
+import { delay } from '@/utils/time';
+import { RPC_METHODS, SESSION_RPC_METHODS } from '@happier-dev/protocol/rpc';
 import { readRpcErrorCode } from '@happier-dev/protocol/rpcErrors';
 import { routeSessionCatalogControl } from '@/session/catalogControls/sessionCatalogControlRouter';
 import { routeSessionGoalControl } from '@/session/goalControls/sessionGoalControlRouter';
@@ -1309,6 +1315,51 @@ export function createCliActionDeps(params: Readonly<{
     sessionOpen: async () => notSupported(),
     sessionFork: async () => notSupported(),
     sessionRollback: async () => notSupported(),
+    sessionHandoffStart: async ({ sessionId, targetMachineId, targetPath, targetSessionStorageMode, stateTransfer, workspaceTransfer, requestId, signal }) => {
+      if (!params.credentials) return { ok: false, errorCode: 'not_authenticated', error: 'Authentication is required' };
+      const credentials = params.credentials;
+      const transport = await resolveTransportForSession(sessionId);
+      if (!transport.ok) return { ok: false, errorCode: transport.code, error: transport.code };
+      const metadata = readSessionMetadata(transport);
+      const eligibility = resolveSessionHandoffEligibility({ metadata, accountSettings: await readActionAccountSettings() });
+      if (!eligibility.eligible) return { ok: false, errorCode: eligibility.reasonCode, error: eligibility.reasonCode };
+      const effectiveRequestId = requestId ?? randomUUID();
+      const sourceRpc = async (method: string, request: unknown) => await callMachineRpc({ credentials, machineId: eligibility.sourceMachineId, method, request });
+      if (signal?.aborted) return { ok: false, errorCode: 'action_cancelled', error: 'Session handoff cancelled' };
+      const started = await sourceRpc(RPC_METHODS.DAEMON_SESSION_HANDOFF_START, {
+        requestId: effectiveRequestId,
+        sessionId: transport.sessionId,
+        sourceMachineId: eligibility.sourceMachineId,
+        targetMachineId,
+        sessionStorageMode: eligibility.storageMode,
+        preferredTransportStrategies: ['direct_peer', 'server_routed_stream'],
+        ...(targetPath ? { targetPath } : {}),
+        ...(targetSessionStorageMode ? { targetSessionStorageMode } : {}),
+        ...(stateTransfer === 'existing' ? { stateTransfer } : {}),
+        ...(workspaceTransfer ? { workspaceTransfer } : {}),
+      });
+      if (started && typeof started === 'object' && 'ok' in started && started.ok === false) return started;
+      // The historical receipt acknowledges source staging, not target commit. Observe the
+      // existing operation owner by caller identity before reporting the public Action complete.
+      let cursor: string | undefined;
+      let operationId: string | undefined;
+      do {
+        const page = ActionOperationListV1ResponseSchema.parse(await sourceRpc(ACTION_OPERATION_RPC_METHODS_V1.list, { sessionId: transport.sessionId, ...(cursor ? { cursor } : {}) }));
+        operationId = page.items.find((operation) => operation.actionId === 'session.handoff' && operation.requestId === effectiveRequestId)?.operationId;
+        cursor = page.nextCursor ?? undefined;
+      } while (!operationId && cursor);
+      if (!operationId) return { ok: false, errorCode: 'handoff_operation_unavailable', error: 'Session handoff operation is unavailable; inspect handoff recovery before retrying' };
+      while (true) {
+        const observed = ActionOperationGetV1ResponseSchema.parse(await sourceRpc(ACTION_OPERATION_RPC_METHODS_V1.get, { operationId }));
+        if (observed.kind === 'not_found') return { ok: false, errorCode: 'handoff_operation_unavailable', error: 'Session handoff operation is unavailable; inspect handoff recovery before retrying' };
+        const operation = observed.operation;
+        if (operation.state === 'succeeded') return operation.result;
+        if (operation.state === 'failed') return { ok: false, errorCode: operation.error?.errorCode ?? 'handoff_failed', error: operation.error?.error ?? 'Session handoff failed' };
+        if (operation.state === 'cancelled') return { ok: false, errorCode: 'action_cancelled', error: 'Session handoff cancelled' };
+        if (signal?.aborted) await sourceRpc(ACTION_OPERATION_RPC_METHODS_V1.cancel, { operationId });
+        await delay(250);
+      }
+    },
     sessionSpawnNew: async ({
       tag,
       agentId,
@@ -1551,9 +1602,7 @@ export function createCliActionDeps(params: Readonly<{
       if (!params.credentials) return { items: [] };
       return await listRecentSpawnPathItems({ credentials: params.credentials, machineId, limit });
     },
-    machinesList: async ({ limit }) => params.credentials
-      ? await listSpawnMachineItems({ credentials: params.credentials, limit })
-      : { items: [] },
+    machinesList: async ({ limit }) => await listSpawnMachineItems({ limit }),
     serversList: async ({ limit }) => await listSpawnServerItems({ limit }),
     sessionsSpawnProfilesList: async ({ agentId, backendTargetKey, includeDisabled, limit }) => {
       if (!params.credentials) return { items: [] };

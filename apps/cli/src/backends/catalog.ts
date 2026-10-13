@@ -41,6 +41,8 @@ import type {
 } from '@/backends/connectedServices/verifyResumeReachableTypes';
 import type { ConnectedServiceProviderRuntimeAuthAdapter } from '@/daemon/connectedServices/runtimeAuth/types';
 import type { ConnectedServiceQuotaFetcherDescriptor } from '@/daemon/connectedServices/quotas/types';
+import type { ImportedSessionHandoffBundle } from '@/session/handoff/types';
+import { resolveSessionHandoffEligibility } from '@/session/handoff/resolveSessionHandoffEligibility';
 import type {
   ConnectedServiceRuntimeAuthSelectionMaterializerParams,
 } from '@/daemon/connectedServices/sessionAuthSwitch/runtimeAuthSelectionMaterializerTypes';
@@ -79,6 +81,28 @@ export function requireCatalogEntry(agentId: CatalogAgentId): AgentCatalogEntry 
   const entry = AGENTS[agentId];
   if (!entry) throw new Error(`Missing catalog agent entry for ${agentId}`);
   return entry;
+}
+
+export async function resolveExistingSessionHandoffStateThroughCatalog(params: Readonly<{
+  metadata: unknown;
+  targetPath: string;
+  env?: NodeJS.ProcessEnv;
+  sessionStorageMode?: 'direct' | 'persisted';
+}>): Promise<ImportedSessionHandoffBundle> {
+  const eligibility = resolveSessionHandoffEligibility({ metadata: params.metadata });
+  if (!eligibility.eligible) {
+    throw new Error(`Session is not eligible for existing-state handoff: ${eligibility.reasonCode}`);
+  }
+  const resolver = requireCatalogEntry(eligibility.agentId).resolveExistingSessionHandoffState;
+  if (!resolver) throw new Error(`Existing-state handoff is unsupported for ${eligibility.agentId}`);
+  if (!params.targetPath.trim()) throw new Error('Target path is unavailable for existing-state handoff');
+  return await resolver({
+    metadata: params.metadata as Record<string, unknown>,
+    vendorResumeId: eligibility.vendorHandoffId,
+    targetPath: params.targetPath,
+    env: params.env ?? process.env,
+    sessionStorageMode: params.sessionStorageMode ?? eligibility.storageMode,
+  });
 }
 
 export function getConnectedServiceQuotaFetcherDescriptors(): ReadonlyArray<ConnectedServiceQuotaFetcherDescriptor> {
