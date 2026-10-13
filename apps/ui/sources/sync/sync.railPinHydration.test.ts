@@ -1,0 +1,93 @@
+import 'fake-indexeddb/auto';
+import { afterEach, beforeAll, describe, expect, it, vi } from 'vitest';
+import { AccountSettingsV2GetResponseSchema, CurrentCursorResponseSchema, FeaturesResponseSchema } from '@happier-dev/protocol';
+import { projectSessionAccessCapabilitiesV1 } from '@happier-dev/protocol/sessions/access/sessionEffectiveAccessV1';
+import { SessionCurrentProjectionRecordV1Schema } from '@happier-dev/protocol/sessions/listing/response';
+import { createPlainSessionOwnerMetadataEnvelopeV1, createSessionOwnerMetadataV1, projectSessionSharedMetadataV1 } from '@happier-dev/protocol/sessions/metadata/sessionMetadataEnvelopesV1';
+import { SessionOrganizationSnapshotResponseSchema } from '@happier-dev/protocol/sessions/organization/snapshot';
+
+import { createPlainAccountEncryptionCurrentnessFixture, standardCleanup } from '@/dev/testkit';
+import { installDisconnectedServerSocketBoundary, restoreServerAccountForTest } from '@/dev/testkit/harness/serverAccountConnectionHarness';
+import { loadSyncSingletonForTests } from '@/dev/testkit/harness/syncSingletonLoader';
+import { storage, readSessionOrganizationProjectionCached } from '@/sync/domains/state/storage';
+import { resolveServerProfileScopeIdForIdentifier } from '@/sync/domains/server/serverProfiles';
+import { fetchAndApplySessionOrganizationSnapshot } from '@/sync/ops/sessionOrganization/fetchSessionOrganizationSnapshot';
+
+// Real Account restoration, Sync, HTTP schemas, store and rail projection; only
+// the network transport and native platform adapters are substituted.
+vi.mock('react-native', async () => (await import('@/dev/testkit/mocks/reactNative')).createReactNativeWebMock());
+vi.mock('react-native-unistyles', async () => (await import('@/dev/testkit/mocks/unistyles')).createUnistylesMock());
+vi.mock('expo-router', async () => (await import('@/dev/testkit/mocks/router')).createExpoRouterMock().module);
+vi.mock('socket.io-client', async importOriginal =>
+    (await import('@/dev/testkit/harness/serverAccountConnectionHarness')).createSocketIoClientBoundary(importOriginal));
+installDisconnectedServerSocketBoundary(socket => { socket.connected = true; });
+
+let connection: Awaited<ReturnType<typeof restoreServerAccountForTest>> | undefined;
+
+describe('ordinary Session refresh hydrates every personal pin surface', () => {
+    beforeAll(loadSyncSingletonForTests);
+    afterEach(async () => {
+        await standardCleanup();
+        await connection?.dispose();
+        connection = undefined;
+    });
+
+    it('restores off-page rail-only Bots alongside list and dual-surface pins', async () => {
+        const pins = [
+            { sessionId: 'list-only', sortKey: 'a', pinnedAt: 1, listPinned: true, railPinned: false },
+            { sessionId: 'rail-only', sortKey: 'b', pinnedAt: 2, listPinned: false, railPinned: true },
+            { sessionId: 'both', sortKey: 'c', pinnedAt: 3, listPinned: true, railPinned: true },
+        ];
+        const snapshot = SessionOrganizationSnapshotResponseSchema.parse({ snapshot: {
+            schemaVersion: 1, version: 1, pins, folders: [], folderAssignments: [], tags: [],
+            tagAssignments: [], orderEntries: [], labels: [],
+        } });
+        const sourceMetadata = { path: '/bot', host: 'fixture', bot: { kind: 'bot' } };
+        const owner = createSessionOwnerMetadataV1({ metadata: sourceMetadata });
+        if (!owner.ok) throw new Error('Bot owner metadata fixture was rejected');
+        const metadata = projectSessionSharedMetadataV1({ metadata: sourceMetadata });
+        const records = new Map(pins.map(pin => [pin.sessionId, SessionCurrentProjectionRecordV1Schema.parse({
+            id: pin.sessionId, seq: 0, createdAt: 1, updatedAt: 2, active: false, activeAt: 1,
+            archivedAt: null, encryptionMode: 'plain', metadataLayoutVersion: 1,
+            metadata: JSON.stringify(metadata), metadataVersion: 1, agentState: null, agentStateVersion: 0,
+            dataEncryptionKey: null, share: null, responsibleAccountId: null, responsibleAccount: null,
+            ownerMetadata: createPlainSessionOwnerMetadataEnvelopeV1(owner.ownerMetadata),
+            effectiveAccess: { v: 1, level: 'owner', sources: [{ kind: 'owner' }],
+                capabilities: projectSessionAccessCapabilitiesV1({ owner: true, grants: [] }) },
+        })]));
+        const exactReads: string[] = [];
+        connection = await restoreServerAccountForTest({
+            serverUrl: 'https://rail-hydration.example.test', serverIdentityId: 'srv_rail-hydration', accountId: 'rail-account',
+            request: async url => {
+                const path = new URL(String(url)).pathname;
+                if (path === '/health') return Response.json({ status: 'ok' });
+                if (path === '/v1/features') return Response.json(FeaturesResponseSchema.parse({ features: {}, capabilities: {} }));
+                if (path === '/v2/cursor') return Response.json(CurrentCursorResponseSchema.parse({ cursor: 0, changesFloor: 0 }));
+                if (path === '/v1/account/encryption/currentness') return Response.json(createPlainAccountEncryptionCurrentnessFixture());
+                if (path === '/v1/account/encryption') return Response.json({ mode: 'plain', updatedAt: 1 });
+                if (path === '/v2/account/settings') return Response.json(AccountSettingsV2GetResponseSchema.parse({ content: { t: 'plain', v: {} }, version: 1 }));
+                if (path === '/v2/session-organization') return Response.json(snapshot);
+                if (path === '/v2/sessions/metadata-upgrades') return Response.json({ sessionIds: [] });
+                if (path === '/v2/sessions' || path === '/v2/sessions/active') return Response.json({ sessions: [], nextCursor: null, hasNext: false });
+                const sessionId = path.startsWith('/v2/sessions/') ? decodeURIComponent(path.slice('/v2/sessions/'.length)) : '';
+                const record = records.get(sessionId);
+                if (!record) return null;
+                exactReads.push(sessionId);
+                return Response.json({ session: record });
+            },
+        });
+        const serverId = resolveServerProfileScopeIdForIdentifier(connection.home.id);
+        await fetchAndApplySessionOrganizationSnapshot({ credentials: connection.credentials, serverId, serverUrl: connection.home.serverUrl });
+        const { sync } = await import('./sync');
+        await sync.refreshSessions({ awaitSessionListHydration: true });
+
+        expect(new Set(exactReads)).toEqual(new Set(['list-only', 'rail-only', 'both']));
+        const organization = readSessionOrganizationProjectionCached(storage.getState(), serverId);
+        expect(organization.pinnedSessionIds).toEqual(['list-only', 'both']);
+        expect(organization.railPinnedSessionIds).toEqual(['rail-only', 'both']);
+        const { buildAppRailEntries } = await import('@/components/navigation/shell/appRail/appRailModel');
+        const entries = buildAppRailEntries([], { botHomes: [{ serverId, organization,
+            rowsBySessionId: storage.getState().sessionListRowsByServerId[serverId] ?? {} }] });
+        expect(entries.bots.map(entry => entry.sessionId)).toEqual(['rail-only', 'both']);
+    });
+});
