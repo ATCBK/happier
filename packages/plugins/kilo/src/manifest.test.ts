@@ -28,7 +28,16 @@ describe('Kilo plugin manifest', () => {
         agents: [{
           id: 'kilo', title: 'Kilo', primary: 'sessions',
           runtime: { kind: 'custom' },
-          capabilities: { sessions: { open: ['create', 'resume'], delivery: ['newTurn', 'followUp'], cancel: true } },
+          capabilities: {
+            skills: {
+              delivery: 'none', nativeDisable: 'unsupported', liveReload: 'unsupported',
+              nativeRoots: {
+                user: [['.agents', 'skills'], ['.claude', 'skills'], ['.kilo', 'skills']],
+                project: [['.agents', 'skills'], ['.claude', 'skills'], ['.kilo', 'skills'], ['.kilocode', 'skills']],
+              },
+            },
+            sessions: { open: ['create', 'resume'], delivery: ['newTurn', 'followUp'], cancel: true },
+          },
         }],
         systemTools: [{ id: 'kilo-cli', executableNames: ['kilo'] }],
         settings: [KILO_AGENT_SETTINGS_CONTRIBUTION],

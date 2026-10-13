@@ -3,6 +3,7 @@ const KILO_AGENT_ID = 'kilo';
 // IMPORTANT: this must stay JSON-serializable (data-only).
 export const AGENT_DEFINITION = Object.freeze({
   id: KILO_AGENT_ID,
+  acpRegistryIds: ['kilo'] as const,
   core: {
     id: KILO_AGENT_ID,
     cliSubcommand: 'kilo',
@@ -18,7 +19,8 @@ export const AGENT_DEFINITION = Object.freeze({
       sessionRollback: { conversation: 'unsupported' },
     },
     handoff: { vendorStateTransfer: 'unsupported' },
-    tools: { delivery: 'native_mcp', support: 'experimental' },
+    tools: { delivery: 'native_mcp', support: 'experimental',
+      mcpToolControl: { off: 'blocked' as const, approval: 'host' as const } },
   },
   sessionModeDescriptor: { source: 'acp', semantics: 'agent-modes', runtimeSwitch: 'acp-setSessionMode' },
   sessionModesKind: 'acpAgentModes',

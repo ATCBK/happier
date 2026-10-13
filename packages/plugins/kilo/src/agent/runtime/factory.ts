@@ -5,12 +5,12 @@ import type {
   AgentSessionOpenRequest,
 } from '@happier-dev/plugin-sdk/agents/runtime';
 
-import { buildKiloAcpEnv } from '../acp/callbacks.js';
+import { buildKiloAcpEnv, buildKiloAcpToolNameResolver } from '../acp/callbacks.js';
 import { KILO_ACP_RUNTIME_DEFINITION } from '../acp/definition.js';
 import { KILO_ACP_COMMAND } from '../acp/command.js';
 
 function createKiloAcpOptions(
-  request: Pick<AgentSessionOpenRequest, 'launchEnvironment'> & Readonly<{
+  request: Pick<AgentSessionOpenRequest, 'launchEnvironment' | 'mcpServers' | 'mcpToolPolicy'> & Readonly<{
     configuration?: AgentSessionConfigurationSnapshot;
   }>,
 ): AgentAcpRuntimeOptions {
@@ -23,9 +23,10 @@ function createKiloAcpOptions(
       env: buildKiloAcpEnv({
         launchEnvironment: request.launchEnvironment,
         permissionIntent: request.configuration.permissionIntent.value,
+        mcpToolPolicy: request.mcpToolPolicy,
       }),
     },
-    definition: KILO_ACP_RUNTIME_DEFINITION,
+    definition: { ...KILO_ACP_RUNTIME_DEFINITION, toolNameResolver: buildKiloAcpToolNameResolver(request) },
   };
 }
 

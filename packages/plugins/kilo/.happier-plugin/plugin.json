@@ -21,11 +21,57 @@
               "resume"
             ]
           },
+          "skills": {
+            "delivery": "none",
+            "liveReload": "unsupported",
+            "nativeDisable": "unsupported",
+            "nativeRoots": {
+              "project": [
+                [
+                  ".agents",
+                  "skills"
+                ],
+                [
+                  ".claude",
+                  "skills"
+                ],
+                [
+                  ".kilo",
+                  "skills"
+                ],
+                [
+                  ".kilocode",
+                  "skills"
+                ]
+              ],
+              "user": [
+                [
+                  ".agents",
+                  "skills"
+                ],
+                [
+                  ".claude",
+                  "skills"
+                ],
+                [
+                  ".kilo",
+                  "skills"
+                ]
+              ]
+            }
+          },
           "tools": {
-            "delivery": "native_mcp"
+            "delivery": "native_mcp",
+            "mcpToolControl": {
+              "approval": "host",
+              "off": "blocked"
+            }
           }
         },
         "catalog": {
+          "acpRegistryIds": [
+            "kilo"
+          ],
           "vendorResume": {
             "support": "supported"
           }
@@ -99,6 +145,7 @@
     "projectNativeAdapters": [],
     "promptAssets": [],
     "providers": [],
+    "registrySources": [],
     "requestInterceptors": [],
     "resources": [],
     "roles": [],
@@ -175,7 +222,7 @@
         "reason": "Run the declared Kilo CLI executable.",
         "scope": {
           "envKeys": [
-            "OPENCODE_PERMISSION"
+            "KILO_PERMISSION"
           ],
           "executables": [
             {

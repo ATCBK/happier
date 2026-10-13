@@ -7,6 +7,7 @@ describe('Kilo agent definition', () => {
     expect(AGENT_DEFINITION.core.tools).toEqual({
       delivery: 'native_mcp',
       support: 'experimental',
+      mcpToolControl: { off: 'blocked', approval: 'host' },
     });
   });
 
