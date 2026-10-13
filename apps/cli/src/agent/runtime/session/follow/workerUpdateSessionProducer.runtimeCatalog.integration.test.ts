@@ -247,7 +247,7 @@ async function fixture(status: 'completed' | 'failed' | 'cancelled' | 'running',
   };
   const publisher = createCliActionDeps({ token: credentials.token, credentials, sessionId: workerId,
     mode: 'plain', ctx: null, serverHttpBaseUrl: origin,
-    publishWorkerReport: (report) => session.enqueueSessionEventCommitted({ type: 'worker-report', ...report }),
+    publishWorkerReport: (report) => getWorkerSession().enqueueSessionEventCommitted({ type: 'worker-report', ...report }),
   });
   return { observation, acknowledgements, acknowledgementState, row, messages, leadMessages, session, runAccess,
     publish: (report: SessionWorkerPublishInputV1) => publisher.sessionWorkerPublish!({ context: {}, ...report }),

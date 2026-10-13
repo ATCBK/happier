@@ -20,7 +20,7 @@ describe('Session role RPC provenance', () => {
     let metadata = createTestMetadata();
     const queued: RegisteredSessionStateFieldMutationV1[] = [];
     const rpc = new RpcHandlerManager({ scopePrefix: 'child', encryptionMode: 'plain', logger: () => {} });
-    const roleActionExecute = createRoleActionExecutor({ sessionId: 'misbound-child', readSessionMetadata: () => metadata,
+    const roleActionExecute = createRoleActionExecutor({ sessionId: 'child', readSessionMetadata: () => metadata,
       readSettingsOverrides: () => ({ status: 'ready', overrides: {} }),
       readRoleSources: createRoleSourceReaderV1({}),
       stageSessionStateMutation: async mutation => {
