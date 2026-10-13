@@ -22,13 +22,17 @@ describe('buildPermissionPromptModel', () => {
             kind: 'permission',
             arguments: { path: 'file.ts', replacement: 'hi' },
             createdAt: 1_234,
+            turnId: 'turn-1',
+            source: 'claude_local_permission_bridge',
+            permissionSuggestions: [{ type: 'setMode', mode: 'acceptEdits', destination: 'session' }],
         };
 
         const model = buildPermissionPromptModel({ request, metadata: null, nowMs: 9_999 });
 
         expect(model.tool.name).toBe('edit');
         expect(model.tool.input).toEqual({ path: 'file.ts', replacement: 'hi' });
-        expect(model.tool.permission).toEqual({ id: 'perm-1', status: 'pending' });
+        expect(model.tool.permission).toEqual({ id: 'perm-1', status: 'pending', turnId: 'turn-1',
+            source: 'claude_local_permission_bridge', suggestions: request.permissionSuggestions });
         expect(model.tool.createdAt).toBe(1_234);
         expect(model.tool.startedAt).toBe(1_234);
         expect(model.tool.completedAt).toBeNull();

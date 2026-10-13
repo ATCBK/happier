@@ -8,6 +8,9 @@ import { createSessionFixture, makeToolCall } from '@/dev/testkit';
 import type { ToolCallMessage } from '@happier-dev/session-core/messages';
 import { setPendingNavigationLanding, markSessionPendingAnswer } from '@/activity/source/pendingNavigationRuntime';
 import { installPermissionShellCommonModuleMocks } from './permissionShellTestHelpers';
+import { AgentStateSchema } from '@happier-dev/session-core/state';
+import { createReducer, reducer } from '@happier-dev/session-core/reducer';
+import { listPendingPermissionRequests } from '@happier-dev/session-core/pending';
 
 const platformEnvironment = vi.hoisted(() => ({
     platform: 'web' as 'web' | 'android',
@@ -56,6 +59,31 @@ function flattenStyle(style: unknown): Record<string, unknown> {
 }
 
 describe('PermissionPromptCard interactive targets', () => {
+    it('offers only invocation approval for a projected native Edit after AgentState unloads', async () => {
+        const { PermissionPromptCard } = await import('./PermissionPromptCard');
+        const { messages } = reducer(createReducer(), [], AgentStateSchema.parse({ requests: {
+            edit: { tool: 'Edit', arguments: { file_path: 'example.ts' }, createdAt: 1,
+                turnId: 'native-turn', source: 'native_tool_approval_once' },
+        } }));
+        const [request] = listPendingPermissionRequests({ sessionId: 'session-1', active: true, agentState: null }, messages);
+        if (!request) throw new Error('Missing projected native request');
+        const respondToPermission = vi.fn(async () => {});
+        const source = createTestSessionTranscriptSource({ sessionId: 'session-1', agentState: null,
+            interaction: { canApprovePermissions: true, canSendMessages: true },
+            actions: { respondToPermission, answerUserAction: vi.fn(), abort: vi.fn(), submitMessage: vi.fn() },
+        });
+        const screen = await renderBoundScreen(<PermissionPromptCard sessionId="session-1" request={request}
+            location={null} metadata={createSessionFixture({ metadata: {
+                path: '/fixture', host: 'fixture', flavor: 'claude',
+            } }).metadata} canApprovePermissions />, source);
+        const reusableGrants = screen.findAll(node => typeof node.type === 'string'
+            && node.props.accessibilityRole === 'button' && typeof node.props.onPress === 'function'
+            && node.props.testID === undefined);
+        expect(reusableGrants).toHaveLength(0);
+        await screen.pressByTestIdAsync('permission-footer.allow');
+        expect(respondToPermission).toHaveBeenCalledWith({ id: 'edit', approved: true, turnId: 'native-turn' });
+    });
+
     it('shows the settled landing after the request disappears without stale answer controls', async () => {
         setPendingNavigationLanding({ serverId: 'home-a', sessionId: 'session-1' }, 'answered-request', 'settled');
         const { SessionPendingPromptCards } = await import('./SessionPendingPromptCards');
@@ -115,7 +143,8 @@ describe('PermissionPromptCard interactive targets', () => {
     });
 
     it.each([
-        { platform: 'web', minimumSize: 44 },
+        // This harness has a precise pointer; the shared owner reserves touch floors for fingers.
+        { platform: 'web', minimumSize: 24 },
         { platform: 'android', minimumSize: 48 },
     ] as const)(
         'keeps the View Tool hit target at least $minimumSize on $platform without enlarging its icon',

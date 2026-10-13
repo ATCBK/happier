@@ -7,6 +7,7 @@ import { io as socketBoundary } from 'socket.io-client';
 import * as React from 'react';
 import { AgentStateSchema } from '@happier-dev/session-core/state';
 import { createReducer, reducer } from '@happier-dev/session-core/reducer';
+import { listPendingPermissionRequests } from '@happier-dev/session-core/pending';
 import { SessionPermissionRespondRpcParamsV1Schema } from '@happier-dev/protocol/sessions/permissions/respondRpcParamsV1';
 import { accountSettingsParse, CURRENT_ACCOUNT_STORED_CONTENT_COMPATIBILITY_DECLARATION, buildAccountStoredContentCompatibilitySocketAuthV1 } from '@happier-dev/protocol';
 import { SOCKET_RPC_EVENTS } from '@happier-dev/protocol/socketRpc';
@@ -49,6 +50,7 @@ installDisconnectedServerSocketBoundary();
 installPermissionShellCommonModuleMocks({ storage: async importOriginal => await importOriginal() });
 await loadSyncSingletonForTests();
 const { PermissionFooter } = await import('../../../../ui/sources/components/tools/shell/permissions/PermissionFooter');
+const { PermissionPromptCard } = await import('../../../../ui/sources/components/tools/shell/permissions/PermissionPromptCard');
 const { createAppSessionTranscriptActions } = await import('../../../../ui/sources/components/sessions/transcript/source/appSessionTranscriptActions');
 const { storage } = await import('../../../../ui/sources/sync/domains/state/storage');
 const { Platform } = await import('react-native');
@@ -233,11 +235,16 @@ describe('Session permission responses through production UI Actions and the aut
                 interaction: { canApprovePermissions: true, canSendMessages: true },
                 actions,
             });
-            const screen = await renderWithSessionTranscriptSource(React.createElement(PermissionFooter, {
-                sessionId: row.id, permission, toolName, toolInput: input, metadata: { flavor: 'claude' },
+            const pendingRequest = listPendingPermissionRequests({ sessionId: row.id, active: true, agentState: null }, messages)
+                .find(request => request.id === requestId);
+            if (!pendingRequest) throw new Error('Real projected request was not available to the prompt card');
+            const screen = await renderWithSessionTranscriptSource(React.createElement(PermissionPromptCard, {
+                sessionId: row.id, request: pendingRequest, location: null, metadata: uiSession.metadata,
                 canApprovePermissions: true,
             }), source);
-            const grants = screen.findAll(node => typeof node.type === 'string' && node.props.accessibilityRole === 'button'
+            const renderedFooter = screen.findAll(node => node.type === PermissionFooter)[0];
+            if (!renderedFooter) throw new Error('The production prompt did not render its permission footer');
+            const grants = renderedFooter.findAll(node => typeof node.type === 'string' && node.props.accessibilityRole === 'button'
                 && typeof node.props.onPress === 'function' && node.props.testID === undefined);
             expect(grants).toHaveLength(isNative ? 0 : 1);
             if (button === 'nativeBashPlugin') {

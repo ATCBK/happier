@@ -150,14 +150,7 @@ export const PermissionPromptCard = React.memo(function PermissionPromptCard(pro
                         : { executionRun: props.executionRun })}
                     embedded={true}
                     alignFirstButtonToStart={true}
-                    permission={{
-                        id: props.request.id,
-                        ...(props.request.turnId ? { turnId: props.request.turnId } : {}),
-                        status: 'pending',
-                        ...(typeof props.request.permissionSuggestions !== 'undefined'
-                            ? { suggestions: props.request.permissionSuggestions }
-                            : {}),
-                    }}
+                    permission={model.tool.permission}
                     serverId={props.serverId}
                     toolName={props.request.tool}
                     toolInput={props.request.arguments}

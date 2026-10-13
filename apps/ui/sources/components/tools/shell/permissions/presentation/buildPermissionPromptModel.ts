@@ -6,7 +6,7 @@ import { resolveToolHeaderTextPresentation } from '@/components/tools/shell/pres
 
 export type PermissionPromptModel = Readonly<{
     request: PendingPermissionRequest;
-    tool: ToolCall;
+    tool: ToolCall & { permission: NonNullable<ToolCall['permission']> };
     headerText: ReturnType<typeof resolveToolHeaderTextPresentation>;
 }>;
 
@@ -20,7 +20,7 @@ export function buildPermissionPromptModel(input: {
             ? input.request.createdAt
             : input.nowMs;
 
-    const tool: ToolCall = {
+    const tool: PermissionPromptModel['tool'] = {
         id: `perm:${input.request.id}`,
         name: input.request.tool,
         state: 'running',
@@ -30,7 +30,10 @@ export function buildPermissionPromptModel(input: {
         completedAt: null,
         description: null,
         result: null,
-        permission: { id: input.request.id, status: 'pending' },
+        permission: { id: input.request.id, status: 'pending',
+            ...(input.request.turnId ? { turnId: input.request.turnId } : {}),
+            ...(input.request.source ? { source: input.request.source } : {}),
+            ...(input.request.permissionSuggestions !== undefined ? { suggestions: input.request.permissionSuggestions } : {}) },
     };
 
     const headerText = resolveToolHeaderTextPresentation({ tool, metadata: input.metadata });
