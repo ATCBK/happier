@@ -7,6 +7,7 @@ import { flattenWidgetLayoutWidgetsV1, type WidgetLayoutItemV1 } from '../widget
 import { createHomeWidgetActionPortV1 } from '../widgets/homeWidgetActionPortV1.js';
 import { readBuiltinWidgetDescriptorV1 } from '../widgets/builtinWidgetDescriptorV1.js';
 import { resolveConfiguredWidgetInputs } from '../widgets/widgetInputAdmissionV1.js';
+import { UsageQuerySchema } from '../inputs/usageQuery.js';
 
 const instances = (layout: Readonly<{ items: readonly WidgetLayoutItemV1[] }>) => flattenWidgetLayoutWidgetsV1(layout.items).map(item => item.instance);
 // Copy/edit tests below track the configured installed definition, independently of the Home preset.
@@ -35,8 +36,12 @@ describe('Home Account Artifact semantic edits', () => {
         const capacity = instances(initial).find(instance => instance.definition.kind === 'builtin' && instance.definition.id === 'usage_capacity');
         expect(capacity).toBeDefined();
         if (!capacity) throw new Error('Missing canonical Capacity default');
-        expect(resolveConfiguredWidgetInputs({ instance: capacity, descriptor: readBuiltinWidgetDescriptorV1(capacity.definition)!,
-            providedContext: {}, viewerValues: {} })).toMatchObject({ status: 'ready', input: { projects: [], session: null, metric: 'tokens' } });
+        const resolved = resolveConfiguredWidgetInputs({ instance: capacity, descriptor: readBuiltinWidgetDescriptorV1(capacity.definition)!,
+            providedContext: {}, viewerValues: {} });
+        expect(resolved).toMatchObject({ status: 'ready', input: { projects: [], session: null } });
+        if (resolved.status !== 'ready') throw new Error('Capacity default inputs are not ready');
+        // Capacity consumes query scope; presentation defaults belong to the Usage read schema.
+        expect(UsageQuerySchema.parse(resolved.input)).toMatchObject({ projects: [], session: null, metric: 'tokens' });
         expect(Object.values(capacity.bindings).every(binding => binding.kind === 'value')).toBe(true);
         expect((await owner.describe(initial)).sections.some(section => section.kind === 'builtin' && section.id === 'usage')).toBe(false);
         expect(b.rows.size).toBe(0);
