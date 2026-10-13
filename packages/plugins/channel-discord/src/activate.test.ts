@@ -94,43 +94,6 @@ function providerActionContext(input: Readonly<{
 }
 
 describe('Discord Channel plugin activation', () => {
-  it('serializes one socket provider contribution through arbitrary local Actions', async () => {
-    assertConversationProviderContributionV1(PLUGIN_MANIFEST);
-    const testkit = await createPluginTestkit({ manifest: PLUGIN_MANIFEST, module: { activate } });
-    try {
-      expect(PLUGIN_MANIFEST.contributes.targetedPluginContributions).toEqual([{
-        id: 'discord-provider',
-        target: { pluginId: 'happier.channels', pointId: 'providers' },
-        protocol: { id: 'happier.channels/providers', version: 1 },
-        operations: DISCORD_CHANNEL_PROVIDER_OPERATIONS,
-      }]);
-      expect(testkit.registrations()).toEqual([
-        { family: 'actions', localId: DISCORD_GATEWAY_WORKER_ATTEMPT_ACTION_ID },
-        { family: 'actions', localId: DISCORD_AUTOMATION_MESSAGE_SETUP_ACTION_ID },
-        { family: 'actions', localId: DISCORD_AUTOMATION_MESSAGE_ADMIT_ACTION_ID },
-        ...Object.values(DISCORD_CHANNEL_ACTION_IDS).map((localId) => ({ family: 'actions' as const, localId })),
-        { family: 'backgroundServices', localId: DISCORD_GATEWAY_BACKGROUND_SERVICE_ID },
-        { family: 'connectedAccountDescriptors', localId: DISCORD_BOT_CONNECTED_ACCOUNT_ID },
-      ]);
-
-      const actions = new Map((PLUGIN_MANIFEST.contributes.actions ?? []).map((action) => [action.id, action]));
-      for (const localId of Object.values(DISCORD_CHANNEL_ACTION_IDS).filter(
-        (localId) => localId !== DISCORD_CHANNEL_ACTION_IDS.messageDeliver
-          && localId !== DISCORD_CHANNEL_ACTION_IDS.connectionStop,
-      )) {
-        expect(actions.get(localId)?.dangerLevel).toBe('safe');
-      }
-      expect(actions.get(DISCORD_CHANNEL_ACTION_IDS.messageDeliver)?.dangerLevel).toBe('writesRemote');
-      expect(actions.get(DISCORD_CHANNEL_ACTION_IDS.connectionStop)?.dangerLevel).toBe('writesRemote');
-      expect(PLUGIN_MANIFEST.contributes.targetedPluginContributions?.[0]?.operations)
-        .not.toHaveProperty('observationsPoll');
-      expect(PLUGIN_MANIFEST.contributes.targetedPluginContributions?.[0]?.operations)
-        .not.toHaveProperty('deliveryReconcile');
-    } finally {
-      await testkit.dispose();
-    }
-  });
-
   it('rejects a second activation until the exact Gateway supervisor is disposed', async () => {
     const first = await createPluginTestkit({ manifest: PLUGIN_MANIFEST, module: { activate } });
     try {
@@ -145,8 +108,28 @@ describe('Discord Channel plugin activation', () => {
   });
 
   it('registers its one Connected Account runtime, declared provider Actions, and the manifest-owned Gateway background service', async () => {
+    assertConversationProviderContributionV1(PLUGIN_MANIFEST);
     const testkit = await createPluginTestkit({ manifest: PLUGIN_MANIFEST, module: { activate } });
     try {
+      expect(PLUGIN_MANIFEST.contributes.targetedPluginContributions).toEqual([{
+        id: 'discord-provider',
+        target: { pluginId: 'happier.channels', pointId: 'providers' },
+        protocol: { id: 'happier.channels/providers', version: 1 },
+        operations: DISCORD_CHANNEL_PROVIDER_OPERATIONS,
+      }]);
+      const actions = new Map((PLUGIN_MANIFEST.contributes.actions ?? []).map((action) => [action.id, action]));
+      for (const localId of Object.values(DISCORD_CHANNEL_ACTION_IDS).filter(
+        (localId) => localId !== DISCORD_CHANNEL_ACTION_IDS.messageDeliver
+          && localId !== DISCORD_CHANNEL_ACTION_IDS.connectionStop,
+      )) {
+        expect(actions.get(localId)?.dangerLevel).toBe('safe');
+      }
+      expect(actions.get(DISCORD_CHANNEL_ACTION_IDS.messageDeliver)?.dangerLevel).toBe('writesRemote');
+      expect(actions.get(DISCORD_CHANNEL_ACTION_IDS.connectionStop)?.dangerLevel).toBe('writesRemote');
+      expect(PLUGIN_MANIFEST.contributes.targetedPluginContributions?.[0]?.operations)
+        .not.toHaveProperty('observationsPoll');
+      expect(PLUGIN_MANIFEST.contributes.targetedPluginContributions?.[0]?.operations)
+        .not.toHaveProperty('deliveryReconcile');
       expect(testkit.registrations()).toEqual([
         { family: 'actions', localId: DISCORD_GATEWAY_WORKER_ATTEMPT_ACTION_ID },
         { family: 'actions', localId: DISCORD_AUTOMATION_MESSAGE_SETUP_ACTION_ID },
