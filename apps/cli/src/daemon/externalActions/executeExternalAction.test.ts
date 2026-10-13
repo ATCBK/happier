@@ -1512,12 +1512,13 @@ describe('executeExternalAction', () => {
         authority: 'account_automation',
         actionCaller: { kind: 'host' },
         actionRequestId: 'request-1',
-        externalActionCredential: {
+        externalActionCredential: expect.objectContaining({
           accountId: 'account-1',
           principalId: 'principal-1',
           credentialId: 'credential-1',
-        },
+        }),
         externalActionTarget: { kind: 'machine', machineId: 'machine-1' },
+        defaultSessionMachineId: 'machine-1',
         signal,
       },
     );

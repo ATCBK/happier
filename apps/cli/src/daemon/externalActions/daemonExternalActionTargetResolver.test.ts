@@ -226,6 +226,9 @@ describe('createDaemonExternalActionTargetResolver', () => {
     const before = new Map(artifacts);
     const captured = readApproval();
     if (!captured || captured.v !== 2) throw new Error('Expected a durable approval with execution origin');
+    // This unsigned Agent proposal must not be reclassified as a UI host
+    // proposal when a human later decides it (FX35 custody neighbor).
+    expect(captured.executionOriginV1).toMatchObject({ surface: 'agent', caller: { kind: 'host' } });
     expect(await isCurrent({ origin: captured.executionOriginV1, request: captured }),
       JSON.stringify(captured.executionOriginV1)).toBe(true);
     expect(await executor.execute('approval.request.decide', { artifactId: 'approval', decision: 'approve' }, {

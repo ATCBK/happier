@@ -1,6 +1,20 @@
 import { expect, it } from 'vitest';
 import { reconcileExternalActionTarget, resolveExternalActionMachineTarget } from './reconcileExternalActionTarget';
 
+it('binds plugin installation to its semantic Machine at caller selection and actual daemon ingress', () => {
+  const install = { actionId: 'plugins.install' as const,
+    rawInput: { machineId: 'selected-machine', source: { kind: 'marketplace' as const,
+      sourceId: 'marketplace:community-npm', pluginId: 'acme.plugin', packageName: '@acme/plugin', version: '1.0.0' } } };
+  expect(resolveExternalActionMachineTarget({ ...install, fallbackMachineId: 'ambient-machine' }))
+    .toEqual({ kind: 'ready', machineId: 'selected-machine' });
+  expect(reconcileExternalActionTarget({ ...install, currentMachineId: 'selected-machine',
+    target: { kind: 'machine', machineId: 'selected-machine' } }))
+    .toMatchObject({ kind: 'ready', target: { kind: 'machine', machineId: 'selected-machine' } });
+  expect(reconcileExternalActionTarget({ ...install, currentMachineId: 'other-machine',
+    target: { kind: 'machine', machineId: 'other-machine' } }))
+    .toMatchObject({ kind: 'rejected', execution: { errorCode: 'target_not_local' } });
+});
+
 const input = {
   actionId: 'sessions.external.candidates.list' as const,
   rawInput: { machineId: 'addressed-machine', agentId: 'claude', source: { kind: 'claudeConfig', configDir: '/repo' } },

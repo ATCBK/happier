@@ -83,6 +83,8 @@ export type PrepareExternalActionRequesterAccountContext = (input: Readonly<{
   authorization: ExternalActionExecutionAuthorizationV1;
   executor: ExternalActionExecutor;
   resolveEncryption: ResolveExternalActionEncryption;
+  /** Target reads use the same privately admitted Account as the effect. */
+  resolveTarget?: ResolveExternalActionTarget;
   /** Host-only continuation of this exact finite wake, never a public executor ABI. */
   executeManagedFiniteWake?: (request: ManagedMachinePolicyRequest) => Promise<ActionExecuteResult>;
   dispose(): Promise<void>;
@@ -355,7 +357,7 @@ export async function executeExternalAction(input: Readonly<{
   // before the canonical Action executor runs.
   let target: ExternalActionTargetV1 | null;
   try {
-    target = await input.resolveTarget({
+    target = await (requesterContext?.resolveTarget ?? input.resolveTarget)({
       actionId: actionId.data,
       actionInput: decodedInput,
       target: reconciliation.target,
@@ -488,7 +490,7 @@ export async function executeExternalAction(input: Readonly<{
   const context: ActionExecutorContext = {
     surface: pluginCaller ? 'plugin' : sessionActionOrigin ? 'agent' : apiTokenPrincipal
       ? 'api'
-      : input.surface ?? 'ui',
+      : input.surface ?? (accountPrincipal?.authentication.kind === 'terminal' ? 'cli' : 'ui'),
     authority: input.principal.authority,
     actionCaller: pluginCaller ?? sessionActionOrigin?.caller ?? { kind: 'host' },
     ...(sessionActionOrigin ? {
@@ -526,10 +528,9 @@ export async function executeExternalAction(input: Readonly<{
         }
       : {}),
     externalActionTarget: target,
-    // A Session target does not itself name the exact daemon selected by the
-    // server. Persist that custodian in any durable approval origin so a UI
-    // decision never has to infer placement from the Session later.
-    ...(target.kind === 'session' ? { defaultSessionMachineId: input.currentMachineId } : {}),
+    // Both requester Account admission and durable approval origins consume
+    // this exact receiving daemon fact, including fresh Machine-targeted starts.
+    defaultSessionMachineId: input.currentMachineId,
     ...(input.currentServerId !== undefined ? { serverId: input.currentServerId } : {}),
     ...(accountPrincipal ? { runtimeAccountId: accountPrincipal.accountId }
       : !apiTokenPrincipal && input.currentAccountId ? { runtimeAccountId: input.currentAccountId } : {}),

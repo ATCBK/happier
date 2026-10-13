@@ -6,16 +6,18 @@ import Fastify, { type FastifyReply, type FastifyRequest } from 'fastify';
 import { serializerCompiler, validatorCompiler, type ZodTypeProvider } from 'fastify-type-provider-zod';
 import { tmpdir } from 'node:os';
 import { createServer } from 'node:http';
-import { FeaturesResponseSchema, AUTHORITY_CEILING_HEADER_V1 } from '@happier-dev/protocol';
+import { AccountSettingsSchema, FeaturesResponseSchema, AUTHORITY_CEILING_HEADER_V1, PluginManifestV2Schema } from '@happier-dev/protocol';
+import { MachineProvisionersListResultV1Schema } from '@happier-dev/protocol/plugins/contributions/machineProvisioners';
+import { MachinePresetActionOutputSchemasV1 } from '@happier-dev/protocol/machines/managed/machinePresetActionsV1';
+import { ManagedAdmissionOutputV1Schema } from '@happier-dev/protocol/machines/managed/actionsV1';
+import { ManagedMachineV1Schema } from '@happier-dev/protocol/machines/managed/managedMachineV1';
+import { PluginAvailabilityActionHttpPathsV1, PluginAvailabilityActionOutputSchemasV1 } from '@happier-dev/protocol/plugins/availability/actions';
 import { encodeBase64 } from '@happier-dev/protocol/crypto/base64';
 import { deriveAccountMachineKeyFromRecoverySecret } from '@happier-dev/protocol/crypto/accountScopedCipher';
 import { signAccountContentKeyBindingV1 } from '@happier-dev/protocol/crypto/accountContentKeyBindingV1';
 import { createExternalActionDaemonDispatchResponse, ExternalActionRequestEnvelopeSchema, normalizeActionsSettingsV1,
   sealExternalActionRequestV2, openExternalActionResponseV2 } from '@happier-dev/protocol/actions';
 import { createHomeGovernanceHarness, installHomeGovernanceBoundaries } from '../../../../ui/sources/dev/testkit/harness/homeGovernanceHarness';
-import { TokenStorage } from '../../../../ui/sources/auth/storage/tokenStorage';
-import { resetScopedHomeActionExecutorsForTests } from '../../../../ui/sources/sync/ops/actions/scopedHomeActionExecutor';
-import { createManagedProvisionerClient } from '../../../../ui/sources/components/settings/machines/managed/managedProvisionerClient';
 import type { FetchedMachineRow } from '../../../../ui/sources/sync/engine/machines/syncMachines';
 import { createLightSqliteHarness, type LightSqliteHarness } from '../../../../server/sources/testkit/lightSqliteHarness';
 import { enableAuthentication } from '../../../../server/sources/app/api/utils/enableAuthentication';
@@ -23,6 +25,10 @@ import { enableErrorHandlers } from '../../../../server/sources/app/api/utils/en
 import { registerAccountEncryptionRoutes } from '../../../../server/sources/app/api/routes/account/registerAccountEncryptionRoutes';
 import { registerAccountSettingsRoutes } from '../../../../server/sources/app/api/routes/account/registerAccountSettingsRoutes';
 import { registerExternalActionRoutes } from '../../../../server/sources/app/api/routes/actions/registerExternalActionRoutes';
+import { machinesRoutes } from '../../../../server/sources/app/api/routes/machines/machinesRoutes';
+import { admitManagedAcquire } from '../../../../server/sources/app/machines/managed/managedAcquire';
+import { registerPluginAvailabilityRoutes } from '../../../../server/sources/app/plugins/availability/routes';
+import { createReleaseLessDeclarationV1 } from '../../../../server/sources/app/plugins/availability/currentDeclaration';
 import { createExternalActionDaemonDispatcher } from '../../../../server/sources/app/api/socket/externalActionDispatcher';
 import { db } from '../../../../server/sources/storage/db';
 import { auth } from '../../../../server/sources/app/auth/auth';
@@ -32,8 +38,7 @@ import { executeExternalAction } from './executeExternalAction';
 import { createDaemonExternalActionTargetResolver } from './daemonExternalActionTargetResolver';
 import { createCliActionExecutorFromCredentials } from '@/session/actions/createCliActionExecutorFromCredentials';
 import { createDaemonManagedMachineActionAdapter } from '../startup/managedMachineActionAdapter';
-import { createResolvedContributionRegistry } from '@/plugins/projection/registry/createResolvedContributionRegistry';
-import type { ResolvedExecutablePluginRuntimeRegistry } from '@/plugins/runtime/resolveExecutablePluginRuntimeRegistry';
+import { fixture as nativeFixture } from '@/plugins/runtime/invocation/actions/managedCustody.testkit';
 import { createManagedProviderOperationAuthority } from '../connectedServices/purposeBindings/managedProviderOperationAuthority';
 import { createConnectedAccountPurposeBindingOwner } from '../connectedServices/purposeBindings/ConnectedAccountPurposeBindingOwner';
 import { createConnectedAccountRequestAuthSubjectRegistry } from '../connectedServices/requestAuth/ConnectedAccountRequestAuthSubjectRegistry';
@@ -45,6 +50,10 @@ import { createCurrentMachineExecutionOriginContextResolver } from '@/api/machin
 
 const home = createHomeGovernanceHarness();
 installHomeGovernanceBoundaries(home);
+// Load runtime consumers only after the canonical transport boundaries are installed.
+const { TokenStorage } = await import('../../../../ui/sources/auth/storage/tokenStorage');
+const { resetScopedHomeActionExecutorsForTests } = await import('../../../../ui/sources/sync/ops/actions/scopedHomeActionExecutor');
+const { createManagedProvisionerClient } = await import('../../../../ui/sources/components/settings/machines/managed/managedProvisionerClient');
 
 describe('managed catalog original Account transport', () => {
   let database: LightSqliteHarness;
@@ -89,9 +98,10 @@ describe('managed catalog original Account transport', () => {
       seq: 1, createdAt: 1, updatedAt: 1, access: { custodian: { accountId: account.id, displayName: 'Owner' }, role: 'manage', resourceMode: 'e2ee', accessState: 'ready' },
     } as const satisfies FetchedMachineRow;
     home.answer(uiServerId, '/v1/machines', { body: [machineRow] });
-    // The plugin-loading boundary has no installed leaves. The real registry and
-    // native catalog owner produce the empty catalog; no provider answer is fabricated.
-    const registry = { contributes: createResolvedContributionRegistry({}) } as ResolvedExecutablePluginRuntimeRegistry;
+    // Substitute plugin module loading through the existing native testkit;
+    // the real registry and catalog producer must carry this declaration through the relay.
+    const provisioner = nativeFixture({ credentialPurposes: [] });
+    const registry = provisioner.runtimeRegistry;
     const unavailable = async (): Promise<never> => { throw new Error('Catalog reads must not materialize credentials'); };
     const authority = createManagedProviderOperationAuthority({ materializationBaseDir: tmpdir(),
       purposeBindingOwner: createConnectedAccountPurposeBindingOwner({ store: { read: async () => ({ v: 1, bindings: [] }), update: unavailable,
@@ -208,7 +218,101 @@ describe('managed catalog original Account transport', () => {
         })();
       expect(admissionResult, JSON.stringify({ admissionResult, authorizationVerified, requesterContextPrepared, homeResponses, result }))
         .toMatchObject({ kind: 'response', response: { v: 2 } });
-      expect(result).toEqual({ kind: 'succeeded', value: { controller, provisioners: [] } });
+      expect(result.kind).toBe('succeeded');
+      if (result.kind !== 'succeeded') throw new Error('Catalog transport failed');
+      const catalog = MachineProvisionersListResultV1Schema.parse(result.value);
+      expect(catalog.controller).toEqual(controller);
+      expect(catalog.provisioners).toHaveLength(1);
+      expect(catalog.provisioners[0]).toMatchObject({ contribution: { pluginId: 'acme.compute', localId: 'vm' },
+        descriptor: { title: 'Virtual machine' } });
+      expect(MachineProvisionersListResultV1Schema.safeParse({ ...catalog, unexpected: true }).success).toBe(false);
     } finally { restoreHttp(); await app.close(); await io.close(); }
+  });
+
+  it('claims a release-less provisioner, saves a preset through the real Home Action adapter, and preserves it through disable/re-enable', async () => {
+    const account = await db.account.create({ data: { encryptionMode: 'plain' } });
+    const homeId = await getOrCreateServerIdentityId();
+    const token = await auth.createToken(account.id, undefined, { kind: 'account', authority: 'present_user' });
+    const credentials: StoredCredentials = { token, encryption: null };
+    const controller = { machineId: 'preset-seam-controller', installationId: 'preset-seam-installation' };
+    const provisioner = nativeFixture({ credentialPurposes: [] });
+    const manifest = PluginManifestV2Schema.parse(provisioner.runtimeRegistry.contributes.activationTargets[0]!.manifest);
+    const declaration = createReleaseLessDeclarationV1(manifest);
+    await db.machine.create({ data: { id: controller.machineId, accountId: account.id, installationId: controller.installationId,
+      metadata: '{}', pluginMaterializationRevision: BigInt(1) } });
+    // Installed Machine inventory is the external daemon-report boundary.
+    await db.pluginMachineMaterialization.create({ data: { accountId: account.id, serverIdentityId: homeId,
+      machineId: controller.machineId, materializationId: controller.installationId, pluginId: manifest.id,
+      version: manifest.version, sourceClass: 'bundledFirstParty', portableRelease: false,
+      archiveDigestSha256: declaration.manifestDigestSha256, uiArtifacts: [], enabled: true, trustState: 'trusted', observedAt: new Date() } });
+    const serverUrl = 'https://preset-seam.example';
+    const app = Fastify().withTypeProvider<ZodTypeProvider>();
+    app.setValidatorCompiler(validatorCompiler); app.setSerializerCompiler(serializerCompiler);
+    enableErrorHandlers(app); enableAuthentication(app);
+    registerAccountEncryptionRoutes(app); registerAccountSettingsRoutes(app);
+    registerPluginAvailabilityRoutes(app); machinesRoutes(app);
+    app.get('/v1/features', async () => FeaturesResponseSchema.parse({ features: {},
+      capabilities: { serverIdentity: { serverIdentityId: homeId } } }));
+    const restoreHttp = installAxiosFastifyAdapter({ app, origin: serverUrl });
+    const policy = normalizeActionsSettingsV1({ v: 1, approvalWaivedSurfaces: {
+      'machines.presets.create': ['cli'],
+    } });
+    const executor = createCliActionExecutorFromCredentials({ credentials, readCredentials: async () => credentials,
+      serverId: configuration.activeServerId, serverApiUrl: serverUrl, serverIdentityId: homeId,
+      actionsSettingsProvider: { getActionsSettings: () => policy,
+        getAccountSettings: () => AccountSettingsSchema.parse({ actionsSettingsV1: policy }) } });
+    const context = { surface: 'cli', authority: 'present_user', serverId: configuration.activeServerId } as const;
+    const input = { id: 'preset-seam', homeId, name: 'Future guest', owner: { kind: 'account', accountId: account.id }, controller,
+      recipe: { provider: { pluginId: manifest.id, localId: 'vm' }, schemaVersion: 1, name: 'Guest', choices: {} },
+      environment: { setupScript: 'echo setup' }, retention: { kind: 'until-delete' }, wakeOnAcceptedMessage: false } as const;
+    try {
+      // Availability's private host protocol is not a public Action id. Use its
+      // real authenticated route rather than inventing a public executor path.
+      const claimId = 'account.plugins.availability.collectionWriters.claim';
+      const claimed = await app.inject({ method: 'POST', url: PluginAvailabilityActionHttpPathsV1[claimId],
+        headers: { authorization: `Bearer ${token}` }, payload: { manifest } });
+      expect(claimed.statusCode, claimed.payload).toBe(200);
+      expect(PluginAvailabilityActionOutputSchemasV1[claimId].parse(claimed.json()))
+        .toMatchObject({ intent: { pluginId: manifest.id, desiredVersion: null, enabled: true, revision: '0' } });
+      const created = await executor.execute('machines.presets.create', input, context);
+      expect(created).toMatchObject({ ok: true });
+      if (!created.ok) throw new Error(`Preset refused: ${created.errorCode}`);
+      const saved = MachinePresetActionOutputSchemasV1['machines.presets.create'].parse(created.result);
+      expect(saved).toEqual({ kind: 'saved', preset: { ...input, revision: 0 } });
+      expect(await db.managedMachine.count({ where: { custodianAccountId: account.id } })).toBe(0);
+      expect((await db.managedMachinePreset.findUniqueOrThrow({ where: { id: input.id } })).launch).toEqual(input.recipe);
+      const changeIntent = async (enabled: boolean, expectedRevision: string) => {
+        const actionId = 'account.plugins.availability.intent.set';
+        const response = await app.inject({ method: 'POST', url: PluginAvailabilityActionHttpPathsV1[actionId],
+          headers: { authorization: `Bearer ${token}` }, payload: {
+            pluginId: manifest.id, desiredVersion: null, enabled, offlineUiHosting: 'disabled', writableCollections: [], expectedRevision,
+          } });
+        expect(response.statusCode, response.payload).toBe(200);
+        return PluginAvailabilityActionOutputSchemasV1[actionId].parse(response.json());
+      };
+      expect(await changeIntent(false, '0')).toMatchObject({ intent: { enabled: false, revision: '1' } });
+      expect(await executor.execute('machines.presets.get', { homeId, id: input.id }, context))
+        .toEqual({ ok: true, result: { kind: 'found', preset: { ...input, revision: 0 } } });
+      expect(await executor.execute('machines.presets.create', { ...input, id: 'disabled-preset' }, context))
+        .toEqual({ ok: true, result: { kind: 'refused', code: 'provider_unavailable' } });
+      expect(await changeIntent(true, '1')).toMatchObject({ intent: { enabled: true, revision: '2' } });
+      expect((await db.accountPluginIntent.findUniqueOrThrow({ where: { accountId_pluginId: { accountId: account.id, pluginId: manifest.id } } })).releaseLessDeclaration)
+        .toEqual(declaration);
+      expect(await executor.execute('machines.presets.create', { ...input, id: 'reenabled-preset' }, context))
+        .toEqual({ ok: true, result: { kind: 'saved', preset: { ...input, id: 'reenabled-preset', revision: 0 } } });
+      expect(MachinePresetActionOutputSchemasV1['machines.presets.create'].safeParse({ ...saved, unexpected: true }).success).toBe(false);
+      const admitted = ManagedAdmissionOutputV1Schema.parse(await admitManagedAcquire({ custodianAccountId: account.id,
+        requesterAccountId: account.id, requestEnvelopeDigest: 'preset-seam-reviewed', input: {
+          requestId: 'preset-seam-acquire', continuationPresent: false, input: {
+            selection: { kind: 'preset', homeId, id: input.id, revision: 0 }, controller,
+            retention: input.retention, wakeOnAcceptedMessage: false,
+          },
+        } }));
+      const current = ManagedMachineV1Schema.parse(admitted.machine);
+      expect(current).toMatchObject({ preset: { id: input.id, revision: 0 }, launch: input.recipe,
+        environmentSetup: { environment: input.environment, state: 'pending' } });
+      expect(await executor.execute('machines.managed.get', { homeId, managedId: current.id }, context))
+        .toEqual({ ok: true, result: current });
+    } finally { restoreHttp(); await app.close(); }
   });
 });
