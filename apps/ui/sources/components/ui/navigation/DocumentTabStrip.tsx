@@ -1,5 +1,6 @@
 import * as React from 'react';
 import { I18nManager, Image, Platform, Pressable, ScrollView, View, type LayoutChangeEvent } from 'react-native';
+import { Gesture, GestureDetector } from 'react-native-gesture-handler';
 import { StyleSheet, useUnistyles } from 'react-native-unistyles';
 
 import { Text } from '@/components/ui/text/Text';
@@ -17,19 +18,24 @@ import { DETAILS_TAB_STRIP_METRICS as M } from '@/components/appShell/panes/deta
 import { shadowLevelStyle } from '@/shadowElevation';
 import type { EntityDragItemV1, EntityDragKindV1, EntityDragScopeV1, EntityDropAdmissionV1, EntityDropEffectV1, EntityDropOutcomeV1 } from '@happier-dev/protocol/plugins/ui';
 import { measureWindowBounds, readWindowBounds, useEntityDragSource, useEntityDropTarget, useEntityDropTargetState, type EntityDragDropRuntime, type EntityDragInput, type WindowBounds } from '@/components/ui/treeDragDrop';
-import { useEntityDragDomBinding, useEntityDropDomBinding } from '@/components/ui/treeDragDrop/useEntityDragDomBinding';
+import { isSecondaryEntityRowControl, useEntityDragDomBinding, useEntityDropDomBinding } from '@/components/ui/treeDragDrop/useEntityDragDomBinding';
 import { TreeDropIndicatorLine } from '@/components/ui/treeDragDrop/ui/TreeDropIndicatorLine';
 import Animated, { useAnimatedStyle, useSharedValue, withSequence, withTiming } from 'react-native-reanimated';
 import { reanimatedMotionTokens } from '@/components/ui/motion/reanimatedMotionTokens';
 import { useReducedMotionPreference } from '@/hooks/ui/useReducedMotionPreference';
+import { createEntityDragGestureAdapter, ENTITY_DRAG_ACTIVATION_DISTANCE_PX } from '@/components/ui/treeDragDrop/entityDragGestureAdapter';
 
-export type DocumentTabEntityDragDrop = Readonly<{
+export type DocumentTabEntityDragSource = Readonly<{
     runtime: EntityDragDropRuntime;
     id: string;
     scope: EntityDragScopeV1;
-    acceptedKinds: readonly EntityDragKindV1[];
     getItem: (tabKey: string) => EntityDragItemV1 | null;
     isCurrent?: () => boolean;
+    /** Phone rails keep horizontal scrolling while a vertical pan carries the shown entity. */
+    nativeDragAxis?: 'vertical';
+}>;
+export type DocumentTabEntityDragDrop = DocumentTabEntityDragSource & Readonly<{
+    acceptedKinds: readonly EntityDragKindV1[];
     resolve: (input: Readonly<{ item: EntityDragItemV1; beforeTabId: string | null; input: EntityDragInput }>) => EntityDropAdmissionV1;
     execute: (effect: EntityDropEffectV1) => Promise<EntityDropOutcomeV1>;
 }>;
@@ -143,6 +149,8 @@ export type DocumentTabStripProps<T extends DocumentTabItem> = Readonly<{
     /** `bar` only: the tablist's own height (30 in the title strip, 28 in a pane's own strip). */
     barTabHeightPx?: number;
     entityDragDrop?: DocumentTabEntityDragDrop;
+    /** A tab may carry its entity without advertising this strip as a drop destination. */
+    entityDragSource?: DocumentTabEntityDragSource;
     /**
      * `bar` only, while an item is carried (DnD lab C2): `dropSlot` shows the place a kept tab will
      * land at the end of the strip; `dropRingTabKey` rings the tab an already-open item will go to.
@@ -382,6 +390,7 @@ const stylesheet = StyleSheet.create((theme) => ({
 }));
 
 export function DocumentTabStrip<T extends DocumentTabItem>(props: DocumentTabStripProps<T>) {
+    const entitySource = props.entityDragDrop ?? props.entityDragSource;
     const { theme } = useUnistyles();
     const materialColor = useHappierMaterialColorResolver();
     const styles = { ...stylesheet, tabActive: [stylesheet.tabActive, { backgroundColor: materialColor(theme.colors.surface.elevated) }] };
@@ -602,8 +611,8 @@ export function DocumentTabStrip<T extends DocumentTabItem>(props: DocumentTabSt
                     </View>
                 );
                 const wrapped = props.wrapTab ? props.wrapTab(tab, content) : content;
-                return <React.Fragment key={tab.key}>{props.entityDragDrop
-                    ? <DocumentEntityTab tab={tab} binding={props.entityDragDrop} gapPx={M.tabGapPx} first={tabIndex === 0}>{wrapped}</DocumentEntityTab>
+                return <React.Fragment key={tab.key}>{entitySource
+                    ? <DocumentEntityTab tab={tab} binding={entitySource} dropBinding={props.entityDragDrop} gapPx={M.tabGapPx} first={tabIndex === 0}>{wrapped}</DocumentEntityTab>
                     : wrapped}</React.Fragment>;
             })}
         </ScrollView>
@@ -656,28 +665,28 @@ function DocumentRail<T extends DocumentTabItem>(props: Readonly<{
             accessibilityLabel={strip.accessibilityLabel}
         >
             {strip.tabs.map((tab, tabIndex) => (
-                <DocumentBarTab
-                    key={tab.key}
-                    rail
-                    tab={tab}
-                    index={tabIndex}
-                    active={strip.activeTabKey ? tab.key === strip.activeTabKey : false}
-                    emphasis="quiet"
-                    unsaved={strip.unsavedTabKeys?.has(tab.key) === true}
-                    heightPx={B.tabHeightPx}
-                    actionSize={props.actionSize}
-                    strip={strip}
-                    onKeyDown={props.onKeyDown}
-                    onLayout={(event) => {
-                        const { x, width } = event.nativeEvent.layout;
-                        frames.current.set(tab.key, { x, width });
-                        if (tab.key === strip.activeTabKey) reveal(tab.key, false);
-                    }}
-                    registerFocusTarget={(target) => {
-                        if (target) props.focusTargets.set(tab.key, target);
-                        else props.focusTargets.delete(tab.key);
-                    }}
-                />
+                <View key={tab.key} onLayout={(event) => {
+                    const { x, width } = event.nativeEvent.layout;
+                    frames.current.set(tab.key, { x, width });
+                    if (tab.key === strip.activeTabKey) reveal(tab.key, false);
+                }}>
+                    <DocumentBarTab
+                        rail
+                        tab={tab}
+                        index={tabIndex}
+                        active={strip.activeTabKey ? tab.key === strip.activeTabKey : false}
+                        emphasis="quiet"
+                        unsaved={strip.unsavedTabKeys?.has(tab.key) === true}
+                        heightPx={B.tabHeightPx}
+                        actionSize={props.actionSize}
+                        strip={strip}
+                        onKeyDown={props.onKeyDown}
+                        registerFocusTarget={(target) => {
+                            if (target) props.focusTargets.set(tab.key, target);
+                            else props.focusTargets.delete(tab.key);
+                        }}
+                    />
+                </View>
             ))}
             {strip.railTrailing ?? null}
         </ScrollView>
@@ -727,8 +736,9 @@ function DocumentBarTab<T extends DocumentTabItem>(props: Readonly<{
     const draggedDuringPress = React.useRef(false);
     const dismissMenu = React.useRef(strip.onDismissTabMenu);
     dismissMenu.current = strip.onDismissTabMenu;
-    const runtime = strip.entityDragDrop?.runtime;
-    const sourceId = strip.entityDragDrop ? documentTabSourceId(strip.entityDragDrop.id, tab.key) : null;
+    const entitySource = strip.entityDragDrop ?? strip.entityDragSource;
+    const runtime = entitySource?.runtime;
+    const sourceId = entitySource ? documentTabSourceId(entitySource.id, tab.key) : null;
     React.useEffect(() => {
         if (!runtime || !sourceId) return;
         return runtime.subscribe(() => {
@@ -872,8 +882,8 @@ function DocumentBarTab<T extends DocumentTabItem>(props: Readonly<{
             {strip.dropRingTabKey === tab.key ? <DocumentTabGoToRing /> : null}
         </View>
     );
-    return strip.entityDragDrop
-        ? <DocumentEntityTab tab={tab} binding={strip.entityDragDrop} gapPx={B.stripGapPx} first={props.index === 0}
+    return entitySource
+        ? <DocumentEntityTab tab={tab} binding={entitySource} dropBinding={strip.entityDragDrop} gapPx={B.stripGapPx} first={props.index === 0}
             endMark={strip.dropSlot === true && props.index === strip.tabs.length - 1}>{content}</DocumentEntityTab>
         : content;
 }
@@ -895,7 +905,8 @@ function DocumentTabStatusMark(props: Readonly<{
 /** Each mounted tab supplies its current semantic anchor to the shared owner. */
 function DocumentEntityTab(props: Readonly<{
     tab: DocumentTabItem;
-    binding: DocumentTabEntityDragDrop;
+    binding: DocumentTabEntityDragSource;
+    dropBinding?: DocumentTabEntityDragDrop;
     /** The strip's gap: the insertion mark sits in the gap before this tab. */
     gapPx: number;
     first: boolean;
@@ -909,7 +920,6 @@ function DocumentEntityTab(props: Readonly<{
 }>) {
     const { tab, binding } = props;
     const sourceId = documentTabSourceId(binding.id, tab.key);
-    const targetId = JSON.stringify(['document-tab', binding.id, tab.key, 'target']);
     const host = React.useRef<unknown>(null);
     const nativeBounds = React.useRef<WindowBounds | null>(null);
     const measure = React.useCallback(async () => {
@@ -917,30 +927,21 @@ function DocumentEntityTab(props: Readonly<{
         const next = await measureWindowBounds(node);
         if (host.current === node) nativeBounds.current = next;
     }, []);
+    const bounds = React.useCallback(() => readWindowBounds(host.current) ?? nativeBounds.current, []);
     useEntityDragSource(binding.runtime, {
         id: sourceId, scope: binding.scope,
         getItem: () => binding.getItem(tab.key),
         isCurrent: () => binding.isCurrent?.() !== false && binding.getItem(tab.key) !== null,
         describe: () => ({ title: tab.title }),
+        getBounds: bounds,
     });
-    useEntityDropTarget(binding.runtime, {
-        id: targetId, scope: binding.scope, acceptedKinds: binding.acceptedKinds,
-        isCurrent: () => binding.isCurrent?.() !== false,
-        getBounds: () => readWindowBounds(host.current) ?? nativeBounds.current,
-        measureBounds: measure,
-        listDestinations: () => [{ destination: { beforeTabId: tab.key }, label: tab.title }],
-        resolve: ({ item, input }) => binding.resolve({ item, beforeTabId: tab.key, input }),
-        execute: binding.execute,
-    });
+    const enabled = binding.isCurrent?.() !== false && binding.getItem(tab.key) !== null;
     const sourceRef = useEntityDragDomBinding({ runtime: binding.runtime, sourceId,
-        enabled: binding.isCurrent?.() !== false && binding.getItem(tab.key) !== null,
+        enabled,
         describe: () => tab.title,
-        canStart: (event, element) => {
-            const control = (event.target as Element | null)?.closest?.('button, input, [role="checkbox"]');
-            return !control || control === element.querySelector('[role="tab"]');
-        },
+        canStart: (event, element) => !isSecondaryEntityRowControl(event, element),
     });
-    const dropRef = useEntityDropDomBinding(binding.runtime);
+    const dropRef = useEntityDropDomBinding(props.dropBinding ? binding.runtime : undefined);
     const attach = React.useCallback((node: unknown) => {
         host.current = node;
         sourceRef(node);
@@ -948,12 +949,55 @@ function DocumentEntityTab(props: Readonly<{
         // Styling wrappers can detach/reattach the same host during a feedback
         // commit. Registration and measured layout own refresh, not transient refs.
     }, [sourceRef, dropRef]);
-    const state = useEntityDropTargetState(binding.runtime, targetId);
-    const allowed = state?.phase === 'carrying' && state.admission?.status === 'allowed';
-    return <View ref={attach} collapsable={false} onLayout={() => {
+    const adapter = React.useRef<ReturnType<typeof createEntityDragGestureAdapter> | null>(null);
+    const gesture = React.useMemo(() => Gesture.Pan().runOnJS(true)
+        .enabled(Platform.OS !== 'web' && enabled && binding.nativeDragAxis === 'vertical')
+        .activeOffsetY([-ENTITY_DRAG_ACTIVATION_DISTANCE_PX, ENTITY_DRAG_ACTIVATION_DISTANCE_PX])
+        .failOffsetX([-ENTITY_DRAG_ACTIVATION_DISTANCE_PX, ENTITY_DRAG_ACTIVATION_DISTANCE_PX])
+        .onStart(event => {
+            const carry = binding.runtime.begin(sourceId, 'pointer');
+            adapter.current = carry ? createEntityDragGestureAdapter(carry) : null;
+            adapter.current?.update({ x: event.absoluteX, y: event.absoluteY });
+            void binding.runtime.refreshMeasurements();
+        })
+        .onUpdate(event => { adapter.current?.update({ x: event.absoluteX, y: event.absoluteY }); binding.runtime.autoscroll(); })
+        .onEnd((event, success) => { void adapter.current?.end(success, { x: event.absoluteX, y: event.absoluteY }); })
+        .onFinalize(() => adapter.current?.finalize()), [binding.runtime, sourceId, enabled, binding.nativeDragAxis]);
+    React.useEffect(() => () => adapter.current?.cancel(), []);
+    const content = <View ref={attach} collapsable={false} onLayout={() => {
         void measure().then(() => binding.runtime.refresh());
     }} style={stylesheet.entityTab}>
         {props.children}
+        {props.dropBinding ? <DocumentEntityTabTarget tab={tab} binding={props.dropBinding} bounds={bounds} measure={measure}
+            gapPx={props.gapPx} first={props.first} endMark={props.endMark} /> : null}
+    </View>;
+    return Platform.OS !== 'web' && binding.nativeDragAxis === 'vertical'
+        ? <GestureDetector gesture={gesture}>{content}</GestureDetector> : content;
+}
+
+/** Only strips that declare a destination register its admission and subscribe to feedback. */
+function DocumentEntityTabTarget(props: Readonly<{
+    tab: DocumentTabItem;
+    binding: DocumentTabEntityDragDrop;
+    bounds: () => WindowBounds | null;
+    measure: () => Promise<void>;
+    gapPx: number;
+    first: boolean;
+    endMark?: boolean;
+}>) {
+    const { tab, binding } = props;
+    const targetId = JSON.stringify(['document-tab', binding.id, tab.key, 'target']);
+    useEntityDropTarget(binding.runtime, {
+        id: targetId, scope: binding.scope, acceptedKinds: binding.acceptedKinds,
+        isCurrent: () => binding.isCurrent?.() !== false,
+        getBounds: props.bounds, measureBounds: props.measure,
+        listDestinations: () => [{ destination: { beforeTabId: tab.key }, label: tab.title }],
+        resolve: ({ item, input }) => binding.resolve({ item, beforeTabId: tab.key, input }),
+        execute: binding.execute,
+    });
+    const state = useEntityDropTargetState(binding.runtime, targetId);
+    const allowed = state?.phase === 'carrying' && state.admission?.status === 'allowed';
+    return <>
         {allowed ? <View pointerEvents="none" testID={`document-tab-drop-before-${toTestIdSafeValue(tab.key)}`}
             style={[stylesheet.entityTabInsertion, { left: props.first ? 0 : -(props.gapPx / 2) - 1 }]}>
             <TreeDropIndicatorLine orientation="vertical" indentPx={0}
@@ -964,7 +1008,7 @@ function DocumentEntityTab(props: Readonly<{
             <TreeDropIndicatorLine orientation="vertical" indentPx={0}
                 visual={{ kind: 'line', targetId: tab.key, edge: 'bottom', depth: 0 }} />
         </View> : null}
-    </View>;
+    </>;
 }
 
 /** Rings the tab the carried item would go to. It pulses once on arrival; under reduced motion it simply appears. */

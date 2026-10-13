@@ -10,7 +10,7 @@ import { createEntityDragDropRuntime } from '@/components/ui/treeDragDrop/entity
 
 installPanelCommonModuleMocks();
 
-function TabPressMenuFixture(props: Readonly<{ runtime: ReturnType<typeof createEntityDragDropRuntime>; variant: 'bar' | 'rail' }>) {
+function TabPressMenuFixture(props: Readonly<{ runtime: ReturnType<typeof createEntityDragDropRuntime>; variant: 'bar' | 'rail'; sourceOnly?: boolean }>) {
     const [menu, setMenu] = React.useState<string | null>(null);
     const scope = { serverId: 'home', accountId: 'account' };
     const menuLifecycle = {
@@ -24,7 +24,9 @@ function TabPressMenuFixture(props: Readonly<{ runtime: ReturnType<typeof create
             onActivate={() => {}} onPin={() => {}} onUnpin={() => {}} onClose={() => {}}
             renderLeadingIcon={() => null} tabNativeId={id => id} panelNativeId={id => id}
             testIds={{ tab: id => `press-menu-${id}` }}
-            entityDragDrop={{ runtime: props.runtime, id: 'press-menu', scope, acceptedKinds: ['workspace-tab'],
+            entityDragSource={props.sourceOnly ? { runtime: props.runtime, id: 'press-menu', scope,
+                getItem: tabId => ({ kind: 'workspace-tab', scope, tabId }) } : undefined}
+            entityDragDrop={props.sourceOnly ? undefined : { runtime: props.runtime, id: 'press-menu', scope, acceptedKinds: ['workspace-tab'],
                 getItem: tabId => ({ kind: 'workspace-tab', scope, tabId }),
                 resolve: () => ({ status: 'refused', reason: { code: 'no-change', message: 'Already here' } }),
                 execute: async () => ({ status: 'applied' }),
@@ -34,9 +36,9 @@ function TabPressMenuFixture(props: Readonly<{ runtime: ReturnType<typeof create
 }
 
 describe('DocumentTabStrip actions', () => {
-    it.each(['bar', 'rail'] as const)('retires the %s press menu on a real carry and suppresses that press through drag end', async (variant) => {
+    it.each([['bar', false], ['rail', false], ['rail', true]] as const)('retires the %s press menu on a real carry (source only: %s) and suppresses that press through drag end', async (variant, sourceOnly) => {
         const runtime = createEntityDragDropRuntime();
-        const screen = await renderScreen(<TabPressMenuFixture runtime={runtime} variant={variant} />);
+        const screen = await renderScreen(<TabPressMenuFixture runtime={runtime} variant={variant} sourceOnly={sourceOnly} />);
         const tab = () => {
             const node = screen.findHostByTestId('press-menu-anchor');
             if (!node) throw new Error('Missing tab press boundary');

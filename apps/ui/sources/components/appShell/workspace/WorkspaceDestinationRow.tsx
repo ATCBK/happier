@@ -9,6 +9,7 @@ import { isSecondaryEntityRowControl, useEntityDragDomBinding } from '@/componen
 import { useOptionalWorkspaceNavigation } from './WorkspaceNavigationContext';
 import { readDestinationInstanceTitle, resolveDestinationRefFromHref } from '../destinations/compactAppDestinationCatalog';
 import type { EntityDragItemV1 } from '@happier-dev/protocol/plugins/ui';
+import { resolveWorkspaceDestinationEntityItem } from './workspaceEntitySource';
 
 type WorkspaceDestinationRowProps = Readonly<{
     href: string | null;
@@ -49,23 +50,8 @@ function WorkspaceDestinationRowDestination(props: WorkspaceDestinationRowProps)
         const current = latest.current;
         const href = current.props.href;
         if (!href || !current.scope || current.actions.items.length === 0) return null;
-        const ref = current.workspace?.catalog ? resolveDestinationRefFromHref(current.workspace.catalog, href) : null;
-        if (ref?.params.serverId && ref.params.serverId !== current.scope.serverId) return null;
-        if (ref?.params.accountId && ref.params.accountId !== current.scope.accountId) return null;
-        if (current.props.entityItem) {
-            const item = current.props.entityItem;
-            if (item.scope.serverId !== current.scope.serverId || item.scope.accountId !== current.scope.accountId) return null;
-            // Session file destinations retain their Session-qualified navigation
-            // identity. Composer and pane targets interpret the same catalog ref.
-            if (item.kind === 'repository-file' && !item.workspaceId) {
-                if (ref?.kind === 'project' && ref.params.workspaceRefId) return { ...item, workspaceId: ref.params.workspaceRefId };
-                return { kind: 'destination', scope: current.scope, href };
-            }
-            return item;
-        }
-        if (ref?.kind === 'session' && ref.params.id) return { kind: 'session', scope: current.scope,
-            address: { serverId: current.scope.serverId, sessionId: ref.params.id } };
-        return { kind: 'destination', scope: current.scope, href };
+        return resolveWorkspaceDestinationEntityItem({ href, scope: current.scope,
+            catalog: current.workspace?.catalog, entityItem: current.props.entityItem });
     };
     const currentGetItem = React.useRef(getItem);
     currentGetItem.current = getItem;

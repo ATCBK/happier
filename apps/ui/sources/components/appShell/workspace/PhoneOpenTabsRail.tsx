@@ -4,11 +4,12 @@ import { StyleSheet, useUnistyles } from 'react-native-unistyles';
 
 import { Icon } from '@/components/ui/icons/Icon';
 import { Text } from '@/components/ui/text/Text';
-import { DocumentTabStrip, type DocumentTabItem } from '@/components/ui/navigation/DocumentTabStrip';
+import { DocumentTabStrip, type DocumentTabItem, type DocumentTabEntityDragSource } from '@/components/ui/navigation/DocumentTabStrip';
 import { SessionAgentCatalogIdentityIcon } from '@/components/sessions/presentation/SessionAgentCatalogIdentityIcon';
 import { readSessionPresentationAgentId } from '@/sync/domains/session/presentation/readSessionPresentationAgentId';
 import { readSessionOwnerMetadataView } from '@/sync/domains/session/readSessionOwnerMetadataView';
-import { useSession } from '@/sync/domains/state/storage';
+import { useActiveServerAccountScope, useSession } from '@/sync/domains/state/storage';
+import { useEntityDragDropRuntime } from '@/components/ui/treeDragDrop/entityDragDropHooks';
 import { Typography } from '@/constants/Typography';
 import { t } from '@/text';
 import { Modal } from '@/modal';
@@ -16,6 +17,7 @@ import { hrefForDestinationRef, resolveCurrentAppDestination, useDestinationInst
 import { HappierPressable } from '@happier-dev/plugin-ui/presentation';
 import { useOptionalWorkspaceNavigation } from './WorkspaceNavigationContext';
 import { usePhoneWorkspaceTabs, type PhoneWorkspaceTab } from './usePhoneWorkspaceTabs';
+import { resolveWorkspaceDestinationEntityItem } from './workspaceEntitySource';
 
 export const PHONE_OPEN_TABS_RAIL_TEST_ID = 'phone-open-tabs-rail';
 
@@ -90,6 +92,10 @@ const styles = StyleSheet.create((theme) => ({
  */
 export const PhoneOpenTabsRail = React.memo(function PhoneOpenTabsRail() {
     const phoneTabs = usePhoneWorkspaceTabs();
+    const scope = useActiveServerAccountScope();
+    const runtime = useEntityDragDropRuntime();
+    const dragBindingId = React.useId();
+    const workspace = useOptionalWorkspaceNavigation();
     const syncStatus = useOptionalWorkspaceNavigation()?.tabSyncStatus;
     const { theme } = useUnistyles();
     const items = React.useMemo((): readonly RailItem[] => phoneTabs.tabs.map((tab) => ({
@@ -132,6 +138,18 @@ export const PhoneOpenTabsRail = React.memo(function PhoneOpenTabsRail() {
         activateTab(tabId);
     }, [activateTab, catalog, closeTab, phoneTabs.tabs]);
     const activeTab = phoneTabs.tabs.find((tab) => tab.id === phoneTabs.activeTabId) ?? null;
+    const entityDragSource: DocumentTabEntityDragSource | undefined = scope ? {
+        runtime, id: dragBindingId, scope, nativeDragAxis: 'vertical',
+        isCurrent: () => Boolean(workspace?.phone),
+        getItem: tabKey => {
+            const tab = phoneTabs.tabs.find(candidate => candidate.id === tabKey);
+            if (!tab || tab.unavailable || !workspace?.phone) return null;
+            // A desktop pair is one rail entry; carry the pane currently shown on the phone.
+            const pane = workspace.state.tabs[tab.activeTabId];
+            const href = pane ? hrefForDestinationRef(workspace.phone.catalog, pane.target) : null;
+            return href ? resolveWorkspaceDestinationEntityItem({ href, scope, catalog: workspace.phone.catalog }) : null;
+        },
+    } : undefined;
     if (!phoneTabs.available || items.length < MINIMUM_TABS) return null;
     return (
         <View style={styles.root} testID={PHONE_OPEN_TABS_RAIL_TEST_ID}>
@@ -145,6 +163,7 @@ export const PhoneOpenTabsRail = React.memo(function PhoneOpenTabsRail() {
                 onPin={noop}
                 onUnpin={noop}
                 renderLeadingIcon={renderLeadingIcon}
+                entityDragSource={entityDragSource}
                 tabNativeId={railTabNativeId}
                 panelNativeId={railPanelNativeId}
                 railTrailing={trailing}
