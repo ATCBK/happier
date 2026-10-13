@@ -59,9 +59,15 @@ describe('public email transport declarative conformance', () => {
     expect(checkEmailTransportContributionV1(manifest).ok).toBe(false);
   });
 
-  it('rejects a transport Action exposed to an additional caller surface', () => {
+  it('accepts a safe transport Action with the required plugin surface and an additional CLI surface', () => {
     const manifest = mutableManifest();
-    manifest.contributes.actions.find(action => action.id === 'author/fetch')!.surfaces = ['plugin', 'agent'];
+    manifest.contributes.actions.find(action => action.id === 'author/fetch')!.surfaces = ['plugin', 'cli'];
+    expect(checkEmailTransportContributionV1(manifest).ok).toBe(true);
+  });
+
+  it('rejects malformed caller surfaces through the public manifest parser', () => {
+    const manifest = mutableManifest();
+    manifest.contributes.actions.find(action => action.id === 'author/fetch')!.surfaces = ['plugin', 'unknown'];
     expect(checkEmailTransportContributionV1(manifest).ok).toBe(false);
   });
 

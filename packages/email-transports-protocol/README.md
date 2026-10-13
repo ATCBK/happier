@@ -26,6 +26,18 @@ result schema, surfaces and danger level from the corresponding role's
 declarations through the public SDK manifest parser. It checks every transport
 contribution in the manifest and does not certify installation or runtime availability.
 
+In current development source, `listSince(null, ...)` establishes a baseline:
+return no references and the current high-water checkpoint. After `historyGap`,
+the same null-checkpoint call establishes the replacement baseline; it does not
+import mailbox history. A non-null checkpoint returns subsequent arrivals.
+
+`fetchRaw` returns `{ kind: 'raw', mimeBase64, receivedAtMs }`. The receipt time
+must come from immutable transport evidence for that message (IMAP
+`INTERNALDATE`, for example), and must remain identical when the reference is
+replayed. The email core uses a valid message `Date` header for occurrence time,
+falling back to this receipt time. A poll or fetch invocation time is not a
+receipt time.
+
 V1 keeps protocol identity `happier.channel.email/transports`, version `1`.
 Serialized protocol identity and executable validation establish interoperability
 between separately installed package copies. Package versions and wire epochs

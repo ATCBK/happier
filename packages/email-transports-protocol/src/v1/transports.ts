@@ -18,7 +18,8 @@ export const EmailTransportListSinceResultV1Schema = defineProtocolUnion([
 ]);
 export const EmailTransportFetchRawInputV1Schema = defineProtocolObject({ ...common, ref: text }, { policy: 'closed' });
 export const EmailTransportFetchRawResultV1Schema = defineProtocolUnion([
-  defineProtocolObject({ kind: defineProtocolLiteral('raw'), mimeBase64: text }, { policy: 'closed' }), ConversationProviderFailureV1Schema,
+  defineProtocolObject({ kind: defineProtocolLiteral('raw'), mimeBase64: text,
+    receivedAtMs: defineProtocolNumber({ integer: true, minimum: 0 }) }, { policy: 'closed' }), ConversationProviderFailureV1Schema,
 ]);
 export const EmailTransportSubmitRawInputV1Schema = defineProtocolObject({
   ...common, mimeBase64: text, messageId: text,

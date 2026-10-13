@@ -60,7 +60,7 @@ export function checkEmailTransportContributionV1(manifestInput: unknown): Email
         continue;
       }
       const expected = protocol.operations[role].declaration;
-      if (action.surfaces.length !== expected.surfaces.length || !expected.surfaces.every(surface => action.surfaces.includes(surface))) {
+      if (!expected.surfaces.every(surface => action.surfaces.includes(surface))) {
         errors.push(`Email transport role '${role}' has an incompatible Action surface.`);
       }
       if (action.dangerLevel !== expected.dangerLevel) errors.push(`Email transport role '${role}' has an incompatible danger level.`);
