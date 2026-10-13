@@ -7,6 +7,8 @@ import { pluginSourceCustodyV1Equal } from '@happier-dev/protocol/plugins/runtim
 import { readBackendTargetRefV2 } from '@happier-dev/protocol/backends/targets/backendTargetRefV2';
 import { AgentExecutionTargetV1Schema } from '@happier-dev/protocol/agents/executionTargetV1';
 import { RuntimeDescriptorV1Schema } from '@happier-dev/protocol/sessions/metadata/runtime-descriptor';
+import { HAPPIER_AGENT_RUNTIME_RUNNER_BOOTSTRAP_FILE_ENV_KEY } from '@/agent/runtime/session/process/agentRuntimeRunnerProtocol';
+import { readRunnerAgentSessionBootstrap } from '@/agent/runtime/session/process/runnerAgentSessionBootstrap';
 import type { BackendTargetRefV2Input, PluginSourceCustodyV1, ProviderErrorV1 } from '@happier-dev/protocol';
 
 import type { StoredCredentials } from '@/persistence';
@@ -272,10 +274,33 @@ Provider CLI Options:
       const existingSessionId = parsed.existingSessionId;
       const resume = parsed.resume;
       const profileQuery = parsed.profileQuery ?? '';
-      const extraOptions = params.resolveExtraOptions ? params.resolveExtraOptions(params.context.args, parsed) : ({} as Extra);
+      const startedBy = resolved.startedBy ?? 'terminal';
+      const commandExtraOptions = params.resolveExtraOptions ? params.resolveExtraOptions(params.context.args, parsed) : ({} as Extra);
+      const bootstrapPath = startedBy === 'daemon'
+        ? process.env[HAPPIER_AGENT_RUNTIME_RUNNER_BOOTSTRAP_FILE_ENV_KEY]?.trim()
+        : undefined;
+      const bootstrap = bootstrapPath ? await readRunnerAgentSessionBootstrap(bootstrapPath) : null;
+      if (bootstrap && bootstrap.descriptor.backendId !== params.backendIdForSessionRuntime.trim()) {
+        throw new Error('Runner bootstrap does not match the selected Agent command');
+      }
+      // The admitted bootstrap is the sole daemon→runner selection carrier.
+      // Its declaration identifies the contribution; launch retains the selected
+      // definition. Read it before model ingress, not only at runtime construction.
+      const extraOptions = {
+        ...commandExtraOptions,
+        ...(bootstrap ? {
+          agentTarget: AgentExecutionTargetV1Schema.parse({
+            kind: 'agent',
+            identity: { pluginId: bootstrap.descriptor.pluginId, localId: bootstrap.descriptor.agentDeclaration?.definition.id },
+            ...(bootstrap.launch?.runtimeDescriptorV1.agent.definitionId === undefined ? {} : {
+              definitionId: bootstrap.launch.runtimeDescriptorV1.agent.definitionId,
+            }),
+          }),
+          ...(bootstrap.launch ? { runtimeDescriptorV1: bootstrap.launch.runtimeDescriptorV1 } : {}),
+        } : {}),
+      };
       const agentTarget = extraOptions.agentTarget === undefined ? undefined : AgentExecutionTargetV1Schema.parse(extraOptions.agentTarget);
       const runtimeDescriptorV1 = extraOptions.runtimeDescriptorV1 === undefined ? undefined : RuntimeDescriptorV1Schema.parse(extraOptions.runtimeDescriptorV1);
-      const startedBy = resolved.startedBy ?? 'terminal';
       const isExplicitCliSubcommand = params.isExplicitCliSubcommand
         ?? (params.context.args[0] === cliArgumentAgentId);
 

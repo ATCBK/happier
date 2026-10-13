@@ -70,6 +70,7 @@ import {
     type PluginRuntimeOccurrenceId,
 } from '@/plugins/runtime/runtimeSlots';
 import { readPrivateBearerFile } from '@/daemon/privateBearerFile';
+import { readRunnerAgentSessionBootstrap } from './runnerAgentSessionBootstrap';
 import {
     updateSessionMarkerRunnerManagedProviderAuthority,
 } from '@/daemon/sessionRegistry';
@@ -192,9 +193,7 @@ export async function createRunnerAgentSessionRuntimeBootstrap(input: Readonly<{
         z.infer<typeof AgentRuntimeDaemonSessionDescriptorV1Schema>;
     let launch: z.infer<typeof AgentRuntimeRunnerBootstrapV1Schema>['launch'];
     try {
-        const bootstrap = AgentRuntimeRunnerBootstrapV1Schema.parse(
-            JSON.parse(await readPrivateBearerFile(input.bootstrapFilePath)),
-        );
+        const bootstrap = await readRunnerAgentSessionBootstrap(input.bootstrapFilePath);
         descriptor = bootstrap.descriptor;
         launch = bootstrap.launch;
     } catch {

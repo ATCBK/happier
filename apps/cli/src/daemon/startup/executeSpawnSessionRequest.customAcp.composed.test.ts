@@ -21,6 +21,13 @@ import { SessionSpawnNewResultV1Schema } from '@happier-dev/protocol/sessions/cr
 import { projectSessionSpawnFailure } from '@/session/creation/projectSessionSpawnFailure';
 import { resolveTrackedSessionTerminalPresentation } from '../sessions/resolveTrackedSessionTerminalPresentation';
 import { projectResolvedAgentBackendTarget } from '@/session/creation/resolveSessionCreationAgentTarget';
+import { requireCatalogEntry } from '@/agent/catalog/registry';
+import { buildHappySessionControlArgs } from '../sessionSpawnArgs';
+import { resolveDaemonCliSubcommandFromBackendTarget } from '../backendTargetRouting';
+import { HAPPIER_AGENT_RUNTIME_RUNNER_BOOTSTRAP_FILE_ENV_KEY } from '@/agent/runtime/session/process/agentRuntimeRunnerProtocol';
+import { HAPPIER_AGENT_RUNTIME_DAEMON_SERVICE_AUTHORITY_FILE_ENV_KEY } from '../agentRuntime/sessionBridgeAuthorization';
+import { SessionModelSelectionV1Schema } from '@happier-dev/protocol/providers/model-selection';
+import { logger } from '@/ui/logger';
 
 const storage = vi.hoisted(() => ({ home: '', persistedToken: 'df38-owner-token',
   credentials: { token: 'df38-owner-token', encryption: null } }));
@@ -29,6 +36,7 @@ const storage = vi.hoisted(() => ({ home: '', persistedToken: 'df38-owner-token'
 vi.mock('@/configuration', async importOriginal => ({
   ...await importOriginal<typeof import('@/configuration')>(),
   configuration: { get happyHomeDir() { return storage.home; },
+    get settingsFile() { return join(storage.home, 'settings.json'); },
     get activeServerDir() { return join(storage.home, 'servers', 'active'); },
     activeServerId: 'df38-home', serverUrl: 'http://df38.example.test',
     apiServerUrl: 'http://df38.example.test', publicServerUrl: 'http://df38.example.test',
@@ -81,6 +89,53 @@ function params(definitionId: string, beforeSessionRunnerLaunch: () => Promise<b
 }
 
 describe('Custom ACP fresh daemon launch composition', () => {
+  it('carries the admitted bootstrap through the real catalog runner into strict model ingress', async () => {
+    // Process exit and file logging are OS boundaries. No runner, catalog,
+    // model resolver or host runtime is replaced. Absent daemon authority
+    // stops this in-process child before a real vendor process can start.
+    const fatal = vi.spyOn(logger, 'fatal').mockImplementation(() => {});
+    const exit = vi.spyOn(process, 'exit').mockImplementation(() => { throw new Error('df40-child-exit'); });
+    const stderr = vi.spyOn(console, 'error').mockImplementation(() => {});
+    try {
+      for (const definitionId of ['alpha', 'beta']) {
+        let enteredRunner = false;
+        const failures: Array<Readonly<{ modelDefinition: string; error: unknown }>> = [];
+        const result = await executeSpawnSessionRequest(params(definitionId, async () => {
+          const bootstrapDir = join(configuration.happyHomeDir, 'tmp', 'runner-agent-session-bootstraps');
+          const [file] = await readdir(bootstrapDir);
+          const bootstrapPath = join(bootstrapDir, file!);
+          const bootstrap = AgentRuntimeRunnerBootstrapV1Schema.parse(JSON.parse(await readFile(bootstrapPath, 'utf8')));
+          const target = AgentExecutionTargetV1Schema.parse({ kind: 'agent', identity: CUSTOM_ACP_AGENT_CONTRIBUTION_IDENTITY_V1, definitionId });
+          const backendTarget = projectResolvedAgentBackendTarget(target, bootstrap.descriptor.agentId);
+          const command = resolveDaemonCliSubcommandFromBackendTarget(backendTarget)!;
+          const handler = await requireCatalogEntry(command).getCliCommandHandler!();
+          vi.stubEnv(HAPPIER_AGENT_RUNTIME_RUNNER_BOOTSTRAP_FILE_ENV_KEY, bootstrapPath);
+          vi.stubEnv(HAPPIER_AGENT_RUNTIME_DAEMON_SERVICE_AUTHORITY_FILE_ENV_KEY, '');
+          for (const modelDefinition of [definitionId, 'wrong-definition']) {
+            fatal.mockClear();
+            const selection = SessionModelSelectionV1Schema.parse({ v: 1, updatedAt: 1,
+              ref: { agentTargetKey: `agent:happier.agent.custom-acp/custom-acp:definition:${modelDefinition}`,
+                providerConnectionId: null, modelId: 'ollama/qwen2.5:3b' } });
+            const args = [command, '--started-by', 'daemon', ...buildHappySessionControlArgs({ backendTarget, modelSelection: selection })];
+            await expect(handler({ args, rawArgv: ['happier', ...args], terminalRuntime: null })).rejects.toThrow('df40-child-exit');
+            failures.push({ modelDefinition, error: fatal.mock.calls.at(-1)?.[0] });
+          }
+          enteredRunner = true;
+          return false;
+        }));
+        expect({ enteredRunner, result }, JSON.stringify(result)).toMatchObject({ enteredRunner: true,
+          result: { type: 'error', errorCode: 'DAEMON_RPC_UNAVAILABLE' } });
+        expect(failures[0]?.error).toMatchObject({ code: 'RUNNER_AGENT_SESSION_RUNTIME_SOURCE_MISSING' });
+        expect(failures[1]?.error).toMatchObject({ code: 'model_selection_agent_target_mismatch' });
+      }
+    } finally {
+      vi.unstubAllEnvs();
+      fatal.mockRestore();
+      exit.mockRestore();
+      stderr.mockRestore();
+    }
+  });
+
   it('carries each qualified definition through execution surfaces and bootstrap into its exact spawn specification', async () => {
     for (const definitionId of ['alpha', 'beta']) {
       let reachedLaunch = false;
@@ -128,7 +183,7 @@ describe('Custom ACP fresh daemon launch composition', () => {
     const result = await executeSpawnSessionRequest(params('missing', async () => {
       throw new Error('A missing executable must never reach runner admission');
     }));
-    expect(result).toMatchObject({ type: 'error', errorCode: 'agent_cli_missing', agentId: 'custom-acp' });
+    expect(result, JSON.stringify(result)).toMatchObject({ type: 'error', errorCode: 'agent_cli_missing', agentId: 'custom-acp' });
   });
 
   it('supplies a cause code for an unexpected uncoded launch failure', async () => {
@@ -179,5 +234,24 @@ describe('Custom ACP fresh daemon launch composition', () => {
     const result = await executeSpawnSessionRequest(params('alpha', async () => { reached = true; return false; }));
     expect({ reached, result }, JSON.stringify(result)).toMatchObject({ reached: true,
       result: { type: 'error', errorCode: 'DAEMON_RPC_UNAVAILABLE' } });
+  });
+
+  it('refuses a selected command whose required JavaScript runtime cannot resolve', async () => {
+    const command = await writeExecutableShim({ dir: storage.home, fileName: 'df40-node-agent',
+      contents: '#!/usr/bin/env node\nprocess.exit(0);\n' });
+    const snapshot = getActiveAccountSettingsSnapshot()!;
+    if (snapshot.acpCatalog?.status !== 'ready') throw new Error('Expected the ready launch catalog');
+    commitActiveAcpCatalog({ scopeKey: snapshot.scopeKey!, lifetimeToken: getActiveAccountSettingsSnapshotLifetimeToken(),
+      catalog: { ...snapshot.acpCatalog, revision: 5, record: AcpCatalogRecordV1Schema.parse({ v: 1,
+        definitions: snapshot.acpCatalog.record.definitions.map(definition => definition.id === 'alpha'
+          ? { ...definition, launch: { kind: 'command', command, args: [] } } : definition) }) } });
+    let reachedRunner = false;
+    const input = params('alpha', async () => { reachedRunner = true; return false; });
+    // An explicit invalid runtime override is exclusive at the real managed
+    // JavaScript resolver. A present vendor script alone is not launchability.
+    const result = await executeSpawnSessionRequest({ ...input,
+      processEnv: { ...input.processEnv, HAPPIER_JS_RUNTIME_PATH: 'df40-unresolved-runtime' } });
+    expect({ reachedRunner, result }, JSON.stringify(result)).toMatchObject({ reachedRunner: false,
+      result: { type: 'error', errorCode: 'agent_cli_missing', agentId: 'custom-acp' } });
   });
 });

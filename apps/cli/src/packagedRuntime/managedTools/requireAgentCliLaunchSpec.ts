@@ -34,7 +34,10 @@ export async function resolveAgentCliLaunchSpecForSession(agentId: string, opts:
   }
   const spec = buildAgentCliLaunchSpecFromResolution({ command: launch.command,
     source: configured.configuredBackend.launch.kind === 'command' ? 'system' : 'managed' }, opts);
-  return spec ? { ...spec, args: [...spec.args, ...launch.args] } : null;
+  if (!spec) {
+    throw new AgentCliNotFoundError(agentId, `Agent '${configured.configuredBackend.title}' requires an available JavaScript runtime.`);
+  }
+  return { ...spec, args: [...spec.args, ...launch.args] };
 }
 
 export function resolveAgentCliLaunchSpec(
