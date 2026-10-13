@@ -899,6 +899,25 @@ describe('discoverInstalledDaemonServiceEntries', () => {
     });
   });
 
+  it.each(['', ' \r\n', 'not-json'])('rejects an unproven inventory from status-zero output %j', async (stdout) => {
+    readdirSyncMock.mockReturnValue([]);
+    spawnSyncMock.mockReturnValueOnce({ status: 0, stdout, stderr: '' } as never);
+    await expect(discoverInstalledDaemonServiceEntries({
+      platform: 'win32', userHomeDir: '/unused', happierHomeDir: '/unused/.happier', mode: 'user', serversById: {},
+    })).rejects.toMatchObject({ code: 'service_inventory_unavailable' });
+  });
+
+  it('does not infer a task disappeared from blank output after its detail reads failed', async () => {
+    readdirSyncMock.mockReturnValue([]);
+    spawnSyncMock.mockReturnValueOnce(happierTaskFolderListing(['\\Happier\\happier-daemon.company']))
+      .mockReturnValueOnce({ status: 1, stdout: '', stderr: 'not found' } as never)
+      .mockReturnValueOnce({ status: 1, stdout: '', stderr: 'not found' } as never)
+      .mockReturnValueOnce({ status: 0, stdout: '', stderr: '' } as never);
+    await expect(discoverInstalledDaemonServiceEntries({
+      platform: 'win32', userHomeDir: '/unused', happierHomeDir: '/unused/.happier', mode: 'user', serversById: {},
+    })).rejects.toMatchObject({ code: 'service_inventory_unavailable' });
+  });
+
   it('applies a timeout to Windows schtasks discovery calls', async () => {
     await withTempDir('happier-discover-service-entry-windows-timeout-', async (homeDir) => {
       const happierHomeDir = join(homeDir, '.happier');
