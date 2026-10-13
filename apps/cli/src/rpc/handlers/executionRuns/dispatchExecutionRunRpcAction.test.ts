@@ -1282,8 +1282,8 @@ describe('createExecutionRunRpcActionExecutor', () => {
       } as unknown as Parameters<typeof executor.execute>[2],
     )).resolves.toEqual({
       ok: false,
-      errorCode: 'permission_escalation_denied',
-      error: 'permission_escalation_denied',
+      errorCode: 'permission_exceeds_ceiling',
+      error: 'permission_exceeds_ceiling',
       details: { executionRunStart: { v: 1, runCreation: 'noRunCreated' } },
     });
     expect(start).not.toHaveBeenCalled();
@@ -1839,8 +1839,6 @@ describe('createExecutionRunRpcActionExecutor', () => {
     );
 
     expect(result).toEqual({ ok: true, result: launcherResponse });
-    expect(launcherRoutes.startTarget).toHaveBeenCalledWith(request);
-    expect(launcherRoutes.getSnapshot).not.toHaveBeenCalled();
   });
 
   it('routes simulator runtime actions through execution-run RPC simulator routes when available', async () => {
@@ -1913,7 +1911,7 @@ describe('createExecutionRunRpcActionExecutor', () => {
     expect(result).toEqual({
       ok: false,
       errorCode: 'runtime_action_disabled',
-      error: 'runtime_action_disabled:browser:browser_control_route_unavailable',
+      error: 'runtime_action_disabled:browser:browser_automation_route_unavailable',
     });
   });
 

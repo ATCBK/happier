@@ -86,6 +86,7 @@ function createResumableStaticRuntime(responseText: string): TestExecutionRunHos
     resumeSupported: true,
     replayResumeSupported: true,
     resumeRuntimeId: 'child_session_resumed',
+    providerSessionId: 'child_session_resumed',
     onSendPrompt: async () => {
       runtime.emitMessage({ type: 'model-output', fullText: responseText });
     },
@@ -401,6 +402,7 @@ describe('ExecutionRunManager execution-run registry integration', () => {
     const started = await manager.start({
       sessionId: 'parent_session_1',
       intent: 'plan',
+      modelSelection: null,
       backendTarget: { kind: 'builtInAgent', agentId: TEST_PRIMARY_BACKEND_ID },
       instructions: '',
       permissionMode: 'read_only',
@@ -430,6 +432,7 @@ describe('ExecutionRunManager execution-run registry integration', () => {
     const started = await manager.start({
       sessionId: 'parent_session_1',
       intent: 'delegate',
+      modelSelection: null,
       backendTarget: { kind: 'builtInAgent', agentId: TEST_PRIMARY_BACKEND_ID },
       instructions: '',
       permissionMode: 'read_only',
@@ -498,6 +501,7 @@ describe('ExecutionRunManager execution-run registry integration', () => {
     const started = await manager.start({
       sessionId: 'parent_session_1',
       intent: 'delegate',
+      modelSelection: null,
       backendTarget: { kind: 'builtInAgent', agentId: TEST_PRIMARY_BACKEND_ID },
       instructions: '',
       permissionMode: 'read_only',
@@ -529,6 +533,7 @@ describe('ExecutionRunManager execution-run registry integration', () => {
         runtime = createTestExecutionRunHostRuntime({
           resumeSupported: true,
           resumeRuntimeId: 'child_session_resumed',
+          providerSessionId: 'child_session_resumed',
           onSendPrompt: async (_sessionId, prompt) => {
             prompts.push(prompt);
             runtime.emitMessage({

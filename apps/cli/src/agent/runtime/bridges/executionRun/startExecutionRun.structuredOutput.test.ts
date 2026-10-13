@@ -1,5 +1,6 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { getAgentStaticModels } from '@happier-dev/agents';
+import { resolveRoleSelectionV1 } from '@happier-dev/protocol/prompts/roles/resolveRoleSelectionV1';
 
 import { VoiceAgentManager } from '@/agent/voice/agent/VoiceAgentManager';
 import { createTestExecutionRunHostRuntime } from './testkit';
@@ -75,10 +76,13 @@ describe('structured analysis Run admission', () => {
     const voiceAgentManager = new VoiceAgentManager({ createRuntime: () => { throw new Error('Unused Voice boundary'); } });
     let dispatched = false;
     try {
+      const reviewer = intent === 'review' ? resolveRoleSelectionV1({ roleId: 'reviewer' }) : null;
+      if (reviewer && !reviewer.ok) throw new Error('The canonical reviewer role is unavailable');
       const result = startExecutionRun({
         params: {
           sessionId: 'parent-session', intent,
           ...(intent === 'review' ? { intentInput: { outputs: ['walkthrough'] } } : {}),
+          ...(reviewer?.ok ? { resolvedRole: reviewer.selection } : {}),
           backendTarget: { kind: 'builtInAgent', agentId: 'claude' },
           modelId: selectedModelId,
           instructions: '', permissionMode: 'read_only', retentionPolicy: 'resumable',
