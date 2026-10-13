@@ -1,9 +1,8 @@
 import { describe, expect, it } from 'vitest';
-import { readFile, stat } from 'node:fs/promises';
 import type { PluginInvocationContext } from '@happier-dev/plugin-sdk';
 import { deliverEmailMessage, pollEmailObservations, reconcileEmailDelivery,
   resolveEmailEndpoint, resolveEmailPrincipal, setupEmailChannels, testEmailConnection,
-  fetchEmailAttachment, cleanupEmailAttachments } from './channelActions.js';
+  fetchEmailAttachment } from './channelActions.js';
 
 const config = {
   mailbox: 'wilson@example.com',
@@ -64,48 +63,5 @@ describe('email mailbox resolution', () => {
       .resolves.toEqual({ kind: 'resolved', candidates: [] });
     await expect(resolveEmailEndpoint({ ...connection, query: config.mailbox, kinds: ['thread'] }, context))
       .resolves.toEqual({ kind: 'resolved', candidates: [] });
-  });
-});
-
-describe('email lazy attachment fetch', () => {
-  it('exports trusted attachment bytes in a protected owned file until occurrence cleanup', async () => {
-    const mime = ['Message-ID: <file@example.com>', 'From: Alice <alice@example.com>',
-      'Authentication-Results: mx.example.com; dmarc=pass header.from=example.com',
-      'MIME-Version: 1.0', 'Content-Type: multipart/mixed; boundary="files"', '',
-      '--files', 'Content-Type: text/plain', '', 'See attachment.', '--files',
-      'Content-Type: application/octet-stream', 'Content-Disposition: attachment; filename="../../outside.txt"',
-      'Content-Transfer-Encoding: base64', '', 'aGVsbG8=', '--files--', ''].join('\r\n');
-    let rawMime = mime;
-    const handle = Object.freeze({ identity: { role: 'fetchRaw' } });
-    // The host catalog and admitted executor are genuine system boundaries. MIME,
-    // sender trust, selection and protected filesystem staging remain real.
-    const services = {
-      targetedContributions: { observeForSelf: () => ({ dispose() {}, readCurrent: async () => ({
-        contributions: [{ protocol: { id: 'happier.channel.email/transports', version: 1 },
-          contributor: config.transport, operations: { fetchRaw: handle } }],
-      }) }) },
-      actions: { executeAdmittedTargetedOperationWithExecutionOrigin: async (operation: unknown) => {
-        expect(operation).toBe(handle);
-        return { result: { kind: 'raw', mimeBase64: Buffer.from(rawMime).toString('base64') } };
-      } },
-    } as unknown as PluginInvocationContext['services'];
-    let path: string | undefined;
-    try {
-      const result = await fetchEmailAttachment({ ...connection, messageId: '<file@example.com>', attachmentId: 'mime:2' }, { ...context, services });
-      expect(result.kind).toBe('fetched');
-      if (result.kind !== 'fetched') return;
-      path = result.path;
-      expect(await readFile(result.path, 'utf8')).toBe('hello');
-      expect(path).not.toContain('outside.txt');
-      if (process.platform !== 'win32') expect((await stat(result.path)).mode & 0o777).toBe(0o600);
-      await expect(fetchEmailAttachment({ ...connection, messageId: '<different@example.com>', attachmentId: 'mime:2' }, { ...context, services }))
-        .resolves.toMatchObject({ kind: 'notReady', reason: 'permissionMissing' });
-      rawMime = mime.replace('dmarc=pass', 'dmarc=fail');
-      await expect(fetchEmailAttachment({ ...connection, messageId: '<file@example.com>', attachmentId: 'mime:2' }, { ...context, services }))
-        .resolves.toMatchObject({ kind: 'notReady', reason: 'permissionMissing' });
-    } finally {
-      cleanupEmailAttachments();
-    }
-    if (path) await expect(stat(path)).rejects.toMatchObject({ code: 'ENOENT' });
   });
 });

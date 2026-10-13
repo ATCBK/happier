@@ -2,15 +2,32 @@ import { once } from 'node:events';
 import { getCACertificates, setDefaultCACertificates } from 'node:tls';
 import imapkit, { type IMAPServer } from 'imapkit';
 import { SMTPServer } from 'smtp-server';
+import { simpleParser } from 'mailparser';
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 import type { ConnectedAccountAuthenticationContext, ConnectedAccountCredentialStore, ConnectedAccountReadContext } from '@happier-dev/plugin-sdk/connected-accounts';
-import type { PluginInvocationContext } from '@happier-dev/plugin-sdk';
+import type { JsonValue, PluginInvocationContext, PluginServices } from '@happier-dev/plugin-sdk';
+import type { SessionHandle, SessionSendRequest, SessionSummary } from '@happier-dev/plugin-sdk/sessions';
+import type { ActionHandler, SessionTranscriptGetExternalShareableResultV1 } from '@happier-dev/plugin-sdk/actions';
+// These fixtures implement the external Session host boundary, which validates
+// the canonical host schemas including the public plugin surface binding.
+import { getActionSpec } from '@happier-dev/protocol/actions/actionSpecs';
+import { compilePluginJsonSchema, isValidPluginJsonSchemaValue } from '@happier-dev/plugin-sdk/manifest';
 import { createPluginTestkit, type PluginTestkit } from '@happier-dev/plugin-sdk/testing';
 
 import { createImapSmtpTransport, type ImapSmtpAccount } from './client';
 import { IMAP_SMTP_CONNECTED_ACCOUNT_ID } from './connectedAccount';
 import { imapSmtpActions } from './index';
 import { emailPlugin } from '../../plugin';
+import { EMAIL_CHANNEL_ACTION_IDS } from '../../constants';
+import { ConversationPollResultV1Schema, ConversationProviderConnectionReadInputV1Schema,
+  ConversationTransportFactReportInputV1Schema, type ConversationPollResultV1 } from '@happier-dev/channels-protocol/v1';
+import { EmailTransportFetchRawResultV1Schema, EmailTransportSubmitRawInputV1Schema, type EmailTransportSubmitRawInputV1 } from '../../transports';
+import { channelsOperationOnlyTargetedContributionsFixture } from '../../../../channels/src/testkit/operationOnlyTargetedContributionsFixture';
+import { createChannelsJourneyFixture } from '../../../../channels/src/testkit/channelsJourney';
+import { createCurrentConversationConnectionFixture } from '../../../../channels/src/testkit/currentConnectionFixture';
+import { createConversationSessionProjectionFrontierRow } from '../../../../channels/src/sessionProjection';
+import { CHANNEL_STATE_COLLECTION, CHANNEL_DELIVERIES_COLLECTION } from '../../../../channels/src/collections';
+import { EMAIL_CONFIG_SCHEMA } from '../../config';
 
 const mailbox = 'wilson@example.com';
 const raw = (id: string) => Buffer.from(`From: sales@example.com\r\nTo: ${mailbox}\r\nMessage-ID: <${id}@example.com>\r\nSubject: Meubles\r\n\r\nBonjour.\r\n`);
@@ -81,22 +98,430 @@ describe('IMAP/SMTP transport against real TLS protocol servers', () => {
     if (originalCertificates) setDefaultCACertificates(originalCertificates);
   });
 
+  it.each([false, true])('composes trusted mail through registered Channels ingress and reply custody (wrong transport=%s)', async (wrongTransport) => {
+    const credentialRef = { service: { pluginId: emailPlugin.manifest.id, localId: IMAP_SMTP_CONNECTED_ACCOUNT_ID }, accountId: mailbox };
+    const config = EMAIL_CONFIG_SCHEMA.parse({ mailbox, transport: { pluginId: emailPlugin.manifest.id, contributionId: 'imap-smtp' },
+      transportConfig: {}, trustStrategy: { kind: 'authenticationResults', authservId: 'mx.example.com' }, allowedDomains: ['example.com'] });
+    const nativeSubmissions: EmailTransportSubmitRawInputV1[] = [];
+    const polls: ConversationPollResultV1[] = [];
+    const refusals: unknown[] = [];
+    let journey: Awaited<ReturnType<typeof createChannelsJourneyFixture>>;
+    // Only the Connected Account store and host catalog are substituted. The
+    // real plugin registers both its provider and its own TCP transport once.
+    const connectedAccounts = { async materialize(_purpose: string, _request: unknown, options: { expectedAccount: unknown }) {
+      expect(options.expectedAccount).toEqual(credentialRef);
+      return { kind: 'environment', env: { HAPPIER_EMAIL_IMAP_SMTP_ACCOUNT: JSON.stringify(account) } };
+    } } as unknown as PluginServices['connectedAccounts'];
+    const providerMaterialization = { pluginId: emailPlugin.manifest.id, machineId: 'email-seam-machine', materializationId: 'email-seam' };
+    registeredPlugin = await createPluginTestkit({ manifest: emailPlugin.manifest,
+      resolveCurrentPluginMaterializationRef: () => providerMaterialization,
+      services: { connectedAccounts },
+      module: { activate(api) {
+        return emailPlugin.activate({ ...api, actions: { ...api.actions,
+          register<I extends JsonValue, O extends JsonValue | void>(id: string, run: ActionHandler<I, O>) {
+          const wrapped: ActionHandler<I, O> = async (input, context) => {
+            const fixtureCatalog = channelsOperationOnlyTargetedContributionsFixture(registeredPlugin!, emailPlugin.contributionPoints.transports);
+            // Cross-plugin host dispatch is the boundary; the target handler,
+            // canonical schema and Account lifecycle remain real.
+            const executeCore = async (action: { pluginId: string; localId: string }, value: unknown) => {
+              if (action.pluginId !== 'happier.channels') throw new Error('Unexpected contributed Action');
+              const schema = action.localId === 'provider/connection-read-v1' ? ConversationProviderConnectionReadInputV1Schema
+                : action.localId === 'provider/transport-fact-report-v1' ? ConversationTransportFactReportInputV1Schema : null;
+              if (!schema) throw new Error('Unexpected core Action');
+              const handler = journey.kit.registration('actions', action.localId);
+              if (!handler) throw new Error('Missing activated core handler');
+              const source = registeredPlugin!.readTargetedContributionFixture(emailPlugin.contributionPoints.transports).contributions[0];
+              if (!source) throw new Error('Missing provider source custody');
+              const storage = { account: { collection: () => journey.state } } as unknown as PluginServices['storage'];
+              return await handler(schema.parse(value), { ...context, caller: { kind: 'plugin', pluginId: emailPlugin.manifest.id,
+                contribution: context.contribution, occurrenceId: source.contributor.occurrenceId, sourceCustody: source.contributor.sourceCustody,
+                materialization: providerMaterialization }, services: { ...context.services, storage } });
+            };
+            const invocation = { ...context, services: { ...context.services, targetedContributions: fixtureCatalog,
+              actions: { ...context.services.actions, execute: executeCore as PluginServices['actions']['execute'] } } };
+            if (id === 'transport/imap-smtp/submit-raw-v1') nativeSubmissions.push(EmailTransportSubmitRawInputV1Schema.parse(input));
+            // The negative control deliberately misbinds a host Action; its
+            // declared generic input/result stay unchanged at this boundary.
+            const handler = wrongTransport && id === 'transport/imap-smtp/fetch-raw-v1'
+              ? imapSmtpActions['transport/imap-smtp/connection-test-v1'].run as unknown as ActionHandler<I, O> : run;
+            try {
+              const result = await handler(input, invocation);
+              if (id === EMAIL_CHANNEL_ACTION_IDS.observationsPoll) polls.push(ConversationPollResultV1Schema.parse(result));
+              return result;
+            } catch (error) { refusals.push(error); throw error; }
+          };
+          return api.actions.register(id, wrapped);
+        } } });
+      } } });
+    const baseConnection = createCurrentConversationConnectionFixture({ connectionId: 'email-seam-connection', authority: {
+      providerPluginId: emailPlugin.manifest.id, providerContributionSelection: { contributionId: 'email-provider' },
+      providerSetupInput: { ...config, credentialRef }, credentialRef,
+      transportOrigin: { serverIdentityId: 'srv_plugin_testkit', materializationRef: providerMaterialization },
+      providerConnectionKey: `email:${mailbox}`, providerConfig: config,
+      routingIdentityKey: 'e'.repeat(43), integrationPrincipal: { id: mailbox }, authorityEpoch: 1,
+    } });
+    const { outboundTextLimit: _fixtureDefault, ...connectionPayload } = baseConnection.payload;
+    const connection = { ...baseConnection, payload: connectionPayload };
+    const endpoint = { kind: 'thread', audience: 'direct', id: '<root@example.com>', parentId: mailbox };
+    const binding = { id: 'email-seam-binding', 'record-kind': 'binding', v: 1, 'connection-id': connection.id,
+      'binding-id': 'email-seam-binding', 'created-at': 1, 'updated-at': 1, payload: { endpoint,
+        target: { kind: 'session', sessionId: 'email-seam-session', policy: { deliveryMode: 'repliesOnly', permissionCeiling: 'read-only',
+          approvals: { kind: 'off' }, newSession: { kind: 'off' } } },
+        allowedPrincipalIds: ['sales@example.com'], allowBotSenders: false, inputMode: 'allAllowedMessages',
+        inboundDebounceMs: 0, linkPreviewPolicy: 'suppress', senderFeedback: 'off', authorityEpoch: 1, enabled: true, deletionState: 'none' } };
+    const admitted: Extract<SessionSendRequest, { kind: 'userText' }>[] = [];
+    const transcript: SessionTranscriptGetExternalShareableResultV1['items'][number][] = [];
+    const sessionId = 'email-seam-session';
+    const summary = { id: sessionId, state: 'idle', runtimeAvailability: { status: 'available' },
+      storagePolicy: 'optional', encryptionMode: 'plain', updatedAtMs: 1 } satisfies SessionSummary;
+    // The Session host is an external boundary for the plugin. The separate
+    // CLI-owned Channels journey runs real admission; this boundary validates
+    // its wire request and returns schema-produced transcript pages.
+    const sessions = { async get(id: string) {
+      if (id !== sessionId) return null;
+      return { async summary() { return summary; }, async send(request: SessionSendRequest) {
+        if (request.kind !== 'userText') throw new Error('Email ingress must send user text');
+        const { kind: _kind, text, ...fields } = request;
+        const sendSpec = getActionSpec('session.message.send');
+        const sendSchema = sendSpec.surfaceBindings?.plugin?.inputSchema ?? sendSpec.inputSchema;
+        sendSchema.parse({ sessionId, message: text, ...fields });
+        admitted.push(request);
+        const localId = `email-local-${admitted.length}`;
+        transcript.push({ kind: 'userText', sessionId, seq: transcript.length + 1, itemId: localId, localId, text,
+          origin: { v: 1, producer: 'pluginSession', actor: 'collaborator', sourceAuthority: {
+            mediatorPluginId: 'happier.channels', sourceRef: request.source!.sourceRef!, sourceRevisionOrEpoch: request.source!.sourceRevisionOrEpoch!,
+          } } });
+        const resultSchema = sendSpec.surfaceBindings?.plugin?.outputSchema ?? sendSpec.outputSchema;
+        if (!resultSchema) throw new Error('Missing Session send result schema');
+        return resultSchema.parse({ status: 'accepted', localId });
+      } } as unknown as SessionHandle;
+    } } as unknown as PluginServices['sessions'];
+    const actions = { async execute(action: string, input: unknown) {
+      const spec = getActionSpec(action as 'session.transcript.get' | 'session.permission.remote.pending.list');
+      spec.inputSchema.parse(input);
+      if (!spec.outputSchema) throw new Error(`Missing output schema for ${action}`);
+      if (action === 'session.permission.remote.pending.list') return spec.outputSchema.parse({ requests: [], truncated: false });
+      if (action !== 'session.transcript.get') throw new Error(`Unexpected host Action ${action}`);
+      const request = input as { cursor?: string | null; limit?: number };
+      const cursor = Number(request.cursor ?? 0);
+      const items = request.limit === 0 ? [] : transcript.filter(item => item.seq > cursor);
+      return spec.outputSchema.parse({ ok: true, projection: 'externalShareableV1', sessionId,
+        scannedThroughSeq: transcript.length, nextCursor: String(transcript.length), hasMore: false, items });
+    } } as unknown as PluginServices['actions'];
+    journey = await createChannelsJourneyFixture({ provider: registeredPlugin, connection, binding, sessions, actions });
+    try {
+      await journey.state.put(createConversationSessionProjectionFrontierRow({ bindingId: binding.id, targetSessionId: sessionId,
+        transcriptCursor: '0', lastScannedSeq: 0, revision: 1, now: 1 }), { expectedRevision: 'absent' });
+      const trusted = 'Authentication-Results: mx.example.com; dmarc=pass header.from=example.com';
+      const incoming = (id: string, from: string, authentication: readonly string[], headers: readonly string[] = []) => Buffer.from([
+        `From: ${from}`, `To: ${mailbox}`, `Message-ID: <${id}@example.com>`, 'References: <root@example.com>',
+        'Reply-To: attacker@outside.com', 'Cc: other@example.com', 'Subject: Re: Meubles', ...authentication, ...headers,
+        'Content-Type: text/html; charset=utf-8', '', '<p>Bonjour, avez-vous ce modèle ?</p><div style="display:none">HIDDEN</div>',
+        '<div class="gmail_signature">SIGNATURE</div><div class="gmail_quote">HISTORY</div>',
+      ].join('\r\n'));
+      imap.control.addMessage('INBOX', { raw: incoming('historic', 'sales@example.com', [trusted]) });
+      const initialPoll = await journey.poll();
+      expect((await journey.state.get(connection.id))?.value.payload).toMatchObject({ pollFailure: null });
+      expect(initialPoll).toMatchObject({ kind: 'committed' });
+      expect(polls).toEqual([{ kind: 'checkpointOnly', checkpointAfterBatch: {
+        uidValidity: String(imap.control.getMailbox('INBOX').uidvalidity), lastUid: 1,
+      } }]);
+      expect(admitted).toEqual([]);
+      imap.control.addMessage('INBOX', { raw: incoming('incoming', 'sales@example.com', [trusted]) });
+      imap.control.addMessage('INBOX', { raw: incoming('spoof', 'sales@example.com', ['Authentication-Results: attacker.invalid; dmarc=pass header.from=example.com', trusted]) });
+      imap.control.addMessage('INBOX', { raw: incoming('outsider', 'other@example.com', [trusted]) });
+      imap.control.addMessage('INBOX', { raw: incoming('automatic', 'sales@example.com', [trusted], ['Auto-Submitted: auto-replied']) });
+      imap.control.addMessage('INBOX', { raw: incoming('external-no-markers', 'external@outside.com', []) });
+      await journey.poll();
+      if (wrongTransport) {
+        expect(refusals.length).toBeGreaterThan(0);
+        expect(admitted).toEqual([]);
+        expect(submitted).toEqual([]);
+        expect(nativeSubmissions).toEqual([]);
+        return;
+      }
+      expect(refusals).toEqual([]);
+      expect(polls[1]).toMatchObject({ kind: 'batch', observations: [
+        { observation: { observation: { actor: { kind: 'human', principalId: 'sales@example.com' } } } },
+        { observation: { observation: { actor: { kind: 'unknown', principalId: null } } } },
+        { observation: { observation: { actor: { kind: 'human', principalId: 'other@example.com' } } } },
+        { observation: { observation: { actor: { kind: 'bot' } } } },
+        { observation: { observation: { actor: { kind: 'unknown', principalId: null } } } },
+      ] });
+      expect((await journey.state.get(connection.id))?.value.payload).toMatchObject({ providerReadiness: null });
+      expect(admitted).toHaveLength(1);
+      expect(admitted[0]).toMatchObject({ text: 'Bonjour, avez-vous ce modèle ?', source: {
+        sourceRef: `channels:binding:${binding.id}`, sourceRevisionOrEpoch: '1:1', contentProvenance: 'original',
+        requestedPermissionCeiling: 'read-only', remoteApprovalMaxScope: 'off', externalActor: { kind: 'human' },
+      } });
+      const origin = transcript[0]!;
+      if (origin.kind !== 'userText') throw new Error('Expected the admitted user transcript input');
+      transcript.push({ kind: 'assistantText', sessionId, seq: 2, itemId: 'email-answer', turnId: 'email-turn', final: 'completed',
+        text: 'Oui, **disponible**.', consumedInputs: [{ localId: origin.localId, origin: origin.origin }] });
+      await journey.outward();
+      expect(submitted).toHaveLength(1);
+      expect(nativeSubmissions[0]?.envelope).toEqual({ from: mailbox, to: ['sales@example.com'] });
+      const reply = await simpleParser(submitted[0]!);
+      expect(reply.inReplyTo).toBe('<incoming@example.com>');
+      expect(reply.references).toEqual(['<root@example.com>', '<incoming@example.com>']);
+      expect(reply.to).toMatchObject({ value: [{ address: 'sales@example.com' }] });
+      expect(reply.cc).toBeUndefined();
+      expect(reply.headers.get('auto-submitted')).toBe('auto-replied');
+      expect(reply.text).toContain('disponible');
+      expect(reply.text).toContain('Bonjour');
+      expect(reply.html).toContain('<strong>disponible</strong>');
+      expect(imap.control.listMessages('Sent')).toHaveLength(1);
+      expect([...journey.deliveries.rows.values()].map(row => row.value.payload)).toContainEqual(expect.objectContaining({ state: 'delivered' }));
+      for (const [collection, definition] of [[journey.state, CHANNEL_STATE_COLLECTION], [journey.deliveries, CHANNEL_DELIVERIES_COLLECTION]] as const) {
+        const schema = compilePluginJsonSchema(definition.schema);
+        for (const row of collection.rows.values()) expect(isValidPluginJsonSchemaValue(schema, row.value),
+          `${definition.id}/${row.rowId}`).toBe(true);
+      }
+      await journey.poll(); await journey.outward();
+      expect(admitted).toHaveLength(1);
+      expect(submitted).toHaveLength(1);
+      imap.control.resetUidValidity('INBOX');
+      await journey.poll();
+      expect(polls.at(-1)).toEqual({ kind: 'historyGap', reason: 'providerHistoryUnavailable' });
+      const interrupted = await journey.state.get(connection.id);
+      if (!interrupted) throw new Error('Missing history-gap connection');
+      expect(interrupted.value.payload).toMatchObject({ historyGap: { reason: 'providerHistoryUnavailable' } });
+      expect(await journey.invoke('stream/baseline-accept-v1', {
+        connectionId: connection.id, expectedRevision: interrupted.revision,
+      })).toMatchObject({ kind: 'updated' });
+      expect(polls.at(-1)).toEqual({ kind: 'checkpointOnly', checkpointAfterBatch: {
+        uidValidity: String(imap.control.getMailbox('INBOX').uidvalidity), lastUid: imap.control.getMailbox('INBOX').uidnext - 1,
+      } });
+      expect(admitted).toHaveLength(1);
+      imap.control.addMessage('INBOX', { raw: incoming('after-reset', 'sales@example.com', [trusted]) });
+      await journey.poll();
+      expect(admitted).toHaveLength(2);
+      imap.control.addMessage('INBOX', { raw: incoming('allowed-no-markers', 'sales@example.com', []) });
+      await journey.poll();
+      expect(admitted).toHaveLength(2);
+      expect((await journey.state.get(connection.id))?.value.payload).toMatchObject({ providerReadiness: {
+        code: 'providerPermissionMissing',
+      } });
+      expect(imap.control.listMessages('INBOX').every(message => !message.flags.includes('\\Seen'))).toBe(true);
+    } finally { await journey.dispose(); }
+    // This composed protocol journey opens real TLS connections for baseline,
+    // ingress, SMTP, replay and UIDVALIDITY recovery; it exceeds Vitest's 5s unit
+    // default without imposing any shorter timeout on the transport itself.
+  }, 30_000);
+
   it('receives raw bytes, pages UIDs without replay, reads only INBOX and never marks Seen', async () => {
-    imap.control.addMessage('INBOX', { raw: raw('first') });
-    imap.control.addMessage('INBOX', { raw: raw('second') });
+    const receivedAt = new Date('2026-10-12T07:00:00Z');
+    imap.control.addMessage('INBOX', { raw: raw('first'), internaldate: receivedAt });
+    imap.control.addMessage('INBOX', { raw: raw('second'), internaldate: receivedAt });
     imap.control.addMessage('Sent', { raw: raw('outgoing') });
     const first = await transport.listSince({ uidValidity: String(imap.control.getMailbox('INBOX').uidvalidity), lastUid: 0, futureField: 'ignored' }, 0, 1);
     expect(first.kind).toBe('batch');
     if (first.kind !== 'batch') throw new Error('Expected first batch');
     expect(first.refs).toHaveLength(1);
-    expect(await transport.fetchRaw(first.refs[0])).toEqual(raw('first'));
+    expect(await transport.fetchRaw(first.refs[0])).toEqual({ mime: raw('first'), receivedAtMs: receivedAt.getTime() });
+    expect(await transport.fetchRaw(first.refs[0])).toEqual({ mime: raw('first'), receivedAtMs: receivedAt.getTime() });
     const second = await transport.listSince(first.checkpointAfterBatch, 0, 1);
     if (second.kind !== 'batch') throw new Error('Expected second batch');
     expect(second.refs).toHaveLength(1);
-    expect(await transport.fetchRaw(second.refs[0])).toEqual(raw('second'));
+    expect(await transport.fetchRaw(second.refs[0])).toEqual({ mime: raw('second'), receivedAtMs: receivedAt.getTime() });
     const empty = await transport.listSince(second.checkpointAfterBatch, 0, 10);
     expect(empty).toMatchObject({ kind: 'batch', refs: [] });
     expect(imap.control.listMessages('INBOX').every((message) => !message.flags.includes('\\Seen'))).toBe(true);
+  });
+
+  it('preserves first-mail shaping across child creation and compacted replay, while stripping held replies', async () => {
+    const credentialRef = { service: { pluginId: emailPlugin.manifest.id, localId: IMAP_SMTP_CONNECTED_ACCOUNT_ID }, accountId: mailbox };
+    const config = EMAIL_CONFIG_SCHEMA.parse({ mailbox, transport: { pluginId: emailPlugin.manifest.id, contributionId: 'imap-smtp' },
+      transportConfig: {}, trustStrategy: { kind: 'authenticationResults', authservId: 'mx.example.com' } });
+    const materialization = { pluginId: emailPlugin.manifest.id, machineId: 'email-seam-machine', materializationId: 'email-replay' };
+    const polls: ConversationPollResultV1[] = [];
+    // Credential persistence and Session Actions are external host boundaries;
+    // the email plugin, TCP transport, routing, census and custody stay real.
+    const connectedAccounts = { async materialize() {
+      return { kind: 'environment', env: { HAPPIER_EMAIL_IMAP_SMTP_ACCOUNT: JSON.stringify(account) } };
+    } } as unknown as PluginServices['connectedAccounts'];
+    registeredPlugin = await createPluginTestkit({ manifest: emailPlugin.manifest,
+      resolveCurrentPluginMaterializationRef: () => materialization, services: { connectedAccounts },
+      module: { activate(api) { return emailPlugin.activate({ ...api, actions: { ...api.actions,
+        register<I extends JsonValue, O extends JsonValue | void>(id: string, run: ActionHandler<I, O>) {
+        const wrapped: ActionHandler<I, O> = async (input, context) => {
+          const catalog = channelsOperationOnlyTargetedContributionsFixture(registeredPlugin!, emailPlugin.contributionPoints.transports);
+          const result = await run(input, { ...context, services: { ...context.services, targetedContributions: catalog } });
+          if (id === EMAIL_CHANNEL_ACTION_IDS.observationsPoll) polls.push(ConversationPollResultV1Schema.parse(result));
+          return result;
+        };
+        return api.actions.register(id, wrapped);
+      } } }); } } });
+    const base = createCurrentConversationConnectionFixture({ connectionId: 'email-replay-connection', authority: {
+      providerPluginId: emailPlugin.manifest.id, providerContributionSelection: { contributionId: 'email-provider' },
+      providerSetupInput: { ...config, credentialRef }, credentialRef,
+      transportOrigin: { serverIdentityId: 'srv_plugin_testkit', materializationRef: materialization },
+      providerConnectionKey: `email:${mailbox}`, providerConfig: config, routingIdentityKey: 'e'.repeat(43),
+      integrationPrincipal: { id: mailbox }, authorityEpoch: 1,
+    } });
+    const { outboundTextLimit: _limit, ...payload } = base.payload;
+    const connection = { ...base, payload };
+    const sessionId = 'email-replay-session';
+    const policy = { deliveryMode: 'repliesOnly', permissionCeiling: 'read-only', approvals: { kind: 'off' }, newSession: { kind: 'off' } };
+    const binding = { id: 'email-replay-router', 'record-kind': 'binding', v: 1, 'connection-id': connection.id,
+      'binding-id': 'email-replay-router', 'created-at': 1, 'updated-at': 1, payload: {
+        endpoint: { kind: 'direct', audience: 'direct', id: mailbox }, target: { kind: 'threadRouter',
+          principalGroups: [{ id: 'sales', principalIds: ['sales@example.com'] }], routes: [{ id: 'intake',
+            when: { group: 'sales', forwarded: 'any' }, policy, recipe: {
+              executionTarget: { serverId: 'server-1', machineId: 'email-seam-machine' },
+              directory: { kind: 'path', path: '/workspace/email' },
+              agentTarget: { kind: 'agent', identity: { pluginId: 'happier.agent.claude', localId: 'claude' } },
+            } }] }, allowedPrincipalIds: ['sales@example.com'], allowBotSenders: false, inputMode: 'allAllowedMessages',
+        inboundDebounceMs: 0, linkPreviewPolicy: 'suppress', senderFeedback: 'off', authorityEpoch: 1, enabled: true, deletionState: 'none',
+      } };
+    const admitted: Extract<SessionSendRequest, { kind: 'userText' }>[] = [];
+    const transcript: SessionTranscriptGetExternalShareableResultV1['items'][number][] = [];
+    const summary = { id: sessionId, state: 'idle', runtimeAvailability: { status: 'available' }, storagePolicy: 'optional',
+      encryptionMode: 'plain', updatedAtMs: 1 } satisfies SessionSummary;
+    const sessions = { async get(id: string) {
+      if (id !== sessionId) return null;
+      return { async summary() { return summary; }, async send(request: SessionSendRequest) {
+        if (request.kind !== 'userText') throw new Error('Expected email text');
+        const { kind: _kind, text, ...fields } = request;
+        const spec = getActionSpec('session.message.send');
+        (spec.surfaceBindings?.plugin?.inputSchema ?? spec.inputSchema).parse({ sessionId, message: text, ...fields });
+        admitted.push(request);
+        const localId = `email-replay-local-${admitted.length}`;
+        transcript.push({ kind: 'userText', sessionId, seq: transcript.length + 1, itemId: localId, localId, text,
+          origin: { v: 1, producer: 'pluginSession', actor: 'collaborator', sourceAuthority: {
+            mediatorPluginId: 'happier.channels', sourceRef: request.source!.sourceRef!, sourceRevisionOrEpoch: request.source!.sourceRevisionOrEpoch!,
+          } } });
+        return { status: 'accepted', localId };
+      } } as unknown as SessionHandle;
+    } } as unknown as PluginServices['sessions'];
+    let spawns = 0;
+    const actions = { async execute(action: string, input: unknown) {
+      const spec = getActionSpec(action as 'session.spawn_new' | 'session.transcript.get' | 'session.permission.remote.pending.list');
+      const request = spec.inputSchema.parse(input);
+      if (action === 'session.spawn_new') {
+        spawns += 1;
+        expect(request).toMatchObject({ creationKey: 'channel-thread:email-replay-router:<first@example.com>',
+          attestedContext: { externalPrincipalId: 'sales@example.com', sourceMessageId: '<first@example.com>' } });
+        return { type: 'success', disposition: 'created', sessionId,
+          attestedContext: { externalPrincipalId: 'sales@example.com', sourceMessageId: '<first@example.com>' },
+          executionTarget: { serverId: 'server-1', machineId: 'email-seam-machine' },
+          organizationPlacement: { folderId: null, tagIds: [] }, initialInput: { status: 'notRequested' } };
+      }
+      if (!spec.outputSchema) throw new Error('Expected Session result schema');
+      if (action === 'session.permission.remote.pending.list') return spec.outputSchema.parse({ requests: [], truncated: false });
+      const page = input as { cursor?: string | null; limit?: number };
+      return spec.outputSchema.parse({ ok: true, projection: 'externalShareableV1', sessionId,
+        scannedThroughSeq: transcript.length, nextCursor: String(transcript.length), hasMore: false,
+        items: page.limit === 0 ? [] : transcript.filter(item => item.seq > Number(page.cursor ?? 0)) });
+    } } as unknown as PluginServices['actions'];
+    const journey = await createChannelsJourneyFixture({ provider: registeredPlugin, connection, binding, sessions, actions });
+    const mime = (id: string, answer: string, reply = false) => Buffer.from([
+      `From: sales@example.com`, `To: ${mailbox}`, `Message-ID: <${id}@example.com>`,
+      ...(reply ? ['References: <first@example.com>', 'In-Reply-To: <first@example.com>'] : []),
+      'Authentication-Results: mx.example.com; dmarc=pass header.from=example.com', 'Subject: Question',
+      'Content-Type: text/plain; charset=utf-8', '', answer, 'On Monday, Alice wrote:', '> HISTORY',
+    ].join('\r\n'));
+    try {
+      expect(await journey.poll()).toMatchObject({ kind: 'committed' });
+      const checkpoint = [...journey.state.rows.values()].find(row => row.value['record-kind'] === 'checkpoint');
+      if (!checkpoint) throw new Error('Expected the IMAP baseline');
+      const nativeBatch = journey.state.batch.bind(journey.state);
+      let failCensus = true;
+      let failCheckpoint = true;
+      journey.state.batch = async operations => {
+        if (failCensus && operations.some(operation => operation.kind === 'put'
+          && operation.value !== null && typeof operation.value === 'object'
+          && 'record-kind' in operation.value && operation.value['record-kind'] === 'ingress-census')) {
+          failCensus = false;
+          throw new Error('Lost first census commit after child creation');
+        }
+        if (failCheckpoint && operations.some(operation => operation.kind === 'put'
+          && operation.value !== null && typeof operation.value === 'object'
+          && 'record-kind' in operation.value && operation.value['record-kind'] === 'checkpoint')) {
+          failCheckpoint = false;
+          throw new Error('Lost checkpoint commit after admission');
+        }
+        return nativeBatch(operations);
+      };
+      const receipt = new Date();
+      imap.control.addMessage('INBOX', { raw: mime('first', 'FIRST'), internaldate: receipt });
+      await expect(journey.poll()).rejects.toThrow('Lost first census commit');
+      const first = polls.at(-1);
+      expect(spawns).toBe(1);
+      expect(admitted).toHaveLength(0);
+      expect([...journey.state.rows.values()].filter(row => row.value['record-kind'] === 'ingress-census')).toHaveLength(0);
+      await expect(journey.poll()).rejects.toThrow('Lost checkpoint commit');
+      expect(polls.at(-1)).toEqual(first);
+      expect(admitted.map(message => message.text)).toEqual(['FIRST\nOn Monday, Alice wrote:\n> HISTORY']);
+      await journey.poll();
+      expect(polls.at(-1)).toEqual(first);
+      expect(admitted).toHaveLength(1);
+      expect(spawns).toBe(1);
+      const user = transcript[0]!;
+      if (user.kind !== 'userText') throw new Error('Expected first user input');
+      transcript.push({ kind: 'assistantText', sessionId, seq: 2, itemId: 'first-answer', turnId: 'first-turn', final: 'completed',
+        text: 'Answer', consumedInputs: [{ localId: user.localId, origin: user.origin }] });
+      await journey.outward();
+      await journey.retention();
+      const census = [...journey.state.rows.values()].find(row => row.value['record-kind'] === 'ingress-census');
+      expect(census?.value.payload).toMatchObject({ normalizedIngress: null, endpointWasRetainedAtPoll: false,
+        compacted: { shell: { message: { id: '<first@example.com>' } } } });
+      // Re-present the real mailbox UID after a host checkpoint recovery. The
+      // compacted census must supply the same shaping decision after restart.
+      const restoreBaseline = async () => {
+        const current = await journey.state.get(checkpoint.rowId);
+        if (!current) throw new Error('Missing checkpoint');
+        await journey.state.put(checkpoint.value, { expectedRevision: current.revision });
+      };
+      await restoreBaseline();
+      await journey.poll();
+      expect(polls.at(-1)).toEqual(first);
+      expect(admitted).toHaveLength(1);
+      if (!census) throw new Error('Missing compacted census');
+      const historicPayload = census.value.payload as Record<string, unknown>;
+      const { endpointWasRetainedAtPoll: _historicContext, ...withoutContext } = historicPayload;
+      await journey.state.put({ ...census.value, payload: withoutContext }, { expectedRevision: census.revision });
+      await restoreBaseline();
+      await journey.poll();
+      expect(polls.at(-1)).toEqual(first);
+      expect(admitted).toHaveLength(1);
+      imap.control.addMessage('INBOX', { raw: mime('followup', 'FOLLOWUP', true), internaldate: receipt });
+      await journey.poll();
+      expect(admitted.map(message => message.text)).toEqual(['FIRST\nOn Monday, Alice wrote:\n> HISTORY', 'FOLLOWUP']);
+      expect(spawns).toBe(1);
+      // Same immutable mail identity with changed actual text must still
+      // conflict, even when the frozen shaping decision is replayed.
+      imap.control.addMessage('INBOX', { raw: mime('first', 'CHANGED'), internaldate: receipt });
+      await expect(journey.poll()).rejects.toMatchObject({ code: 'channels_ingress_occurrence_conflict' });
+      expect(admitted).toHaveLength(2);
+      expect([...journey.state.rows.values()].filter(row => row.value['record-kind'] === 'ingress-census'
+        && row.value.attention === true)).toHaveLength(1);
+    } finally { await journey.dispose(); }
+  }, 30_000);
+
+  it('establishes the null baseline at UIDNEXT without replaying existing or expunged mail', async () => {
+    imap.control.addMessage('INBOX', { raw: raw('historic') });
+    const expunged = imap.control.addMessage('INBOX', { raw: raw('expunged') });
+    imap.control.expungeMessages('INBOX', [expunged.uid]);
+    const initial = await transport.listSince(null, 10_000, 10);
+    expect(initial).toEqual({ kind: 'batch', refs: [], checkpointAfterBatch: {
+      uidValidity: String(imap.control.getMailbox('INBOX').uidvalidity), lastUid: expunged.uid,
+    } });
+    if (initial.kind !== 'batch') throw new Error('Expected baseline');
+    imap.control.addMessage('INBOX', { raw: raw('new') });
+    const next = await transport.listSince(initial.checkpointAfterBatch, 0, 10);
+    expect(next).toMatchObject({ kind: 'batch', refs: [expect.any(String)] });
+    if (next.kind !== 'batch') throw new Error('Expected new arrival');
+    expect((await transport.fetchRaw(next.refs[0])).mime).toEqual(raw('new'));
+  });
+
+  it('establishes an empty baseline without entering IDLE before its checkpoint is committed', async () => {
+    const abort = new AbortController();
+    imap.on('session', (event: { type: string; command?: string }) => {
+      if (event.type === 'waiting' && event.command === 'IDLE') abort.abort(new Error('Baseline entered IDLE'));
+    });
+    expect(await transport.listSince(null, 10_000, 10, abort.signal)).toEqual({ kind: 'batch', refs: [],
+      checkpointAfterBatch: { uidValidity: String(imap.control.getMailbox('INBOX').uidvalidity), lastUid: 0 } });
   });
 
   it('wakes IDLE on arrival within the containing waitMs', async () => {
@@ -116,16 +541,28 @@ describe('IMAP/SMTP transport against real TLS protocol servers', () => {
     imap.control.addMessage('INBOX', { raw: raw('old') });
     const first = await transport.listSince(null, 0, 10);
     if (first.kind !== 'batch') throw new Error('Expected batch');
+    const oldRef = JSON.stringify({ uidValidity: imap.control.getMailbox('INBOX').uidvalidity.toString(), uid: 1 });
     imap.control.resetUidValidity('INBOX');
     expect(await transport.listSince(first.checkpointAfterBatch, 0, 10)).toEqual({ kind: 'historyGap', reason: 'providerHistoryUnavailable' });
-    await expect(transport.fetchRaw(first.refs[0])).rejects.toThrow();
+    await expect(transport.fetchRaw(oldRef)).rejects.toThrow();
+    const baseline = await transport.listSince(null, 10_000, 10);
+    expect(baseline).toEqual({ kind: 'batch', refs: [], checkpointAfterBatch: {
+      uidValidity: String(imap.control.getMailbox('INBOX').uidvalidity), lastUid: imap.control.getMailbox('INBOX').uidnext - 1,
+    } });
+    if (baseline.kind !== 'batch') throw new Error('Expected recovery baseline');
+    imap.control.addMessage('INBOX', { raw: raw('after-reset') });
+    const next = await transport.listSince(baseline.checkpointAfterBatch, 0, 10);
+    if (next.kind !== 'batch') throw new Error('Expected arrival after reset');
+    expect(next.refs).toHaveLength(1);
+    expect((await transport.fetchRaw(next.refs[0])).mime).toEqual(raw('after-reset'));
   });
 
   it('fetches the email core RFC Message-ID from Inbox or Sent for reply context and lazy attachments', async () => {
-    imap.control.addMessage('INBOX', { raw: raw('incoming-reference') });
-    imap.control.addMessage('Sent', { raw: raw('outgoing-reference') });
-    expect(await transport.fetchRaw('<incoming-reference@example.com>')).toEqual(raw('incoming-reference'));
-    expect(await transport.fetchRaw('<outgoing-reference@example.com>')).toEqual(raw('outgoing-reference'));
+    const receivedAt = new Date('2026-10-12T08:00:00Z');
+    imap.control.addMessage('INBOX', { raw: raw('incoming-reference'), internaldate: receivedAt });
+    imap.control.addMessage('Sent', { raw: raw('outgoing-reference'), internaldate: receivedAt });
+    expect(await transport.fetchRaw('<incoming-reference@example.com>')).toEqual({ mime: raw('incoming-reference'), receivedAtMs: receivedAt.getTime() });
+    expect(await transport.fetchRaw('<outgoing-reference@example.com>')).toEqual({ mime: raw('outgoing-reference'), receivedAtMs: receivedAt.getTime() });
   });
 
   it.each([false, true])('submits raw reply and start MIME; saves exactly one Sent copy (server saves=%s)', async (serverSaves) => {
@@ -153,6 +590,17 @@ describe('IMAP/SMTP transport against real TLS protocol servers', () => {
     transport = createImapSmtpTransport({ ...account, auth: { user: mailbox, accessToken: 'testtoken' } }, { ca: imap.getCredentials().cert });
     expect(await transport.connectionTest()).toEqual({ kind: 'ready', mailbox });
     expect(await transport.submitRaw(raw('oauth'), { from: mailbox, to: ['sales@example.com'] }, '<oauth@example.com>')).toMatchObject({ kind: 'delivered' });
+  });
+
+  it('rejects a private TLS certificate by default and accepts its configured CA for both protocols', async () => {
+    setDefaultCACertificates(originalCertificates);
+    await expect(createImapSmtpTransport(account).connectionTest()).rejects.toMatchObject({ code: 'DEPTH_ZERO_SELF_SIGNED_CERT' });
+    const configuredAccount = { ...account, tlsCaPem: imap.getCredentials().cert.toString() };
+    expect(await createImapSmtpTransport(configuredAccount).connectionTest()).toEqual({ kind: 'ready', mailbox });
+    const unrelatedCa = originalCertificates[0];
+    if (!unrelatedCa) throw new Error('Expected a standard trusted CA for the negative control');
+    await expect(createImapSmtpTransport({ ...account, tlsCaPem: unrelatedCa }).connectionTest())
+      .rejects.toMatchObject({ code: 'DEPTH_ZERO_SELF_SIGNED_CERT' });
   });
 
   it('submits over implicit TLS as used by port 465, with certificate verification', async () => {
@@ -199,6 +647,8 @@ describe('IMAP/SMTP transport against real TLS protocol servers', () => {
   });
 
   it.each(['password', 'microsoft-app-only'])('completes %s only after live IMAP and SMTP login, and materializes no application secret', async (modeId) => {
+    setDefaultCACertificates(originalCertificates);
+    const tlsCaPem = imap.getCredentials().cert.toString();
     registeredPlugin = await createPluginTestkit({ manifest: emailPlugin.manifest, module: emailPlugin });
     const runtime = registeredPlugin.registration('connectedAccountDescriptors', IMAP_SMTP_CONNECTED_ACCOUNT_ID);
     if (!runtime) throw new Error('Missing registered Connected Account runtime');
@@ -213,7 +663,7 @@ describe('IMAP/SMTP transport against real TLS protocol servers', () => {
     // Host and credential-store adapters are genuine boundaries; the runtime
     // consumes only configuration, signal, HTTP and these credential members.
     const context = {
-      configuration: { target: { kind: 'attempt', modeId }, values: { mailbox, imapHost: 'localhost', imapPort: account.imapPort, smtpHost: 'localhost', smtpPort: account.smtpPort }, getSecret: async () => null },
+      configuration: { target: { kind: 'attempt', modeId }, values: { mailbox, imapHost: 'localhost', imapPort: account.imapPort, smtpHost: 'localhost', smtpPort: account.smtpPort, tlsCaPem }, getSecret: async () => null },
       signal: new AbortController().signal, attemptCredentials: credentials,
       services: { http: { async request() { return { status: 200, finalUrl: 'https://login.microsoftonline.com/tenant/oauth2/v2.0/token', headers: {}, body: Buffer.from(JSON.stringify({ access_token: 'testtoken', token_type: 'Bearer' })) }; } } },
     } as unknown as ConnectedAccountAuthenticationContext;
@@ -226,7 +676,7 @@ describe('IMAP/SMTP transport against real TLS protocol servers', () => {
     expect(materialized.kind).toBe('environment');
     if (materialized.kind !== 'environment') throw new Error('Missing environment');
     expect(Object.keys(materialized.env)).toEqual(['HAPPIER_EMAIL_IMAP_SMTP_ACCOUNT']);
-    expect(JSON.parse(materialized.env.HAPPIER_EMAIL_IMAP_SMTP_ACCOUNT)).toMatchObject({ mailbox, auth: modeId === 'password' ? { pass: 'testpass' } : { accessToken: 'testtoken' } });
+    expect(JSON.parse(materialized.env.HAPPIER_EMAIL_IMAP_SMTP_ACCOUNT)).toMatchObject({ mailbox, tlsCaPem, auth: modeId === 'password' ? { pass: 'testpass' } : { accessToken: 'testtoken' } });
     expect(JSON.stringify(materialized)).not.toContain('application-secret');
     const bad: Record<string, string> = modeId === 'password' ? { password: 'wrong' } : { tenantId: 'tenant', clientId: 'app', clientSecret: 'application-secret' };
     if (modeId === 'microsoft-app-only') imap.control.updateUser(mailbox, { xoauth2: { accessToken: 'revoked' } });
@@ -237,6 +687,8 @@ describe('IMAP/SMTP transport against real TLS protocol servers', () => {
   });
 
   it('invokes the declared transport connection Action with exact Connected Account materialization and rejects other callers', async () => {
+    setDefaultCACertificates(originalCertificates);
+    const configuredAccount = { ...account, tlsCaPem: imap.getCredentials().cert.toString() };
     const test = imapSmtpActions['transport/imap-smtp/connection-test-v1'].run;
     const credentialRef = { service: { pluginId: 'happier.channel.email', localId: 'email-imap-smtp' }, accountId: mailbox };
     const input = { credentialRef, config: {} };
@@ -246,10 +698,15 @@ describe('IMAP/SMTP transport against real TLS protocol servers', () => {
         expect(purpose).toBe('email-mailbox');
         expect(request).toEqual({ kind: 'environment', keys: ['HAPPIER_EMAIL_IMAP_SMTP_ACCOUNT'] });
         expect(options.expectedAccount).toEqual(credentialRef);
-        return { kind: 'environment', env: { HAPPIER_EMAIL_IMAP_SMTP_ACCOUNT: JSON.stringify(account) } };
+        return { kind: 'environment', env: { HAPPIER_EMAIL_IMAP_SMTP_ACCOUNT: JSON.stringify(configuredAccount) } };
       } } },
     } as unknown as PluginInvocationContext;
     expect(await test(input, context)).toEqual({ kind: 'ready', mailbox });
+    const receivedAt = new Date('2026-10-12T07:00:00Z');
+    imap.control.addMessage('INBOX', { raw: raw('action-contract'), internaldate: receivedAt });
+    const fetched = await imapSmtpActions['transport/imap-smtp/fetch-raw-v1'].run({ ...input, ref: '<action-contract@example.com>' }, context);
+    expect(EmailTransportFetchRawResultV1Schema.parse(fetched)).toEqual({ kind: 'raw', mimeBase64: raw('action-contract').toString('base64'),
+      receivedAtMs: receivedAt.getTime() });
     if (context.caller?.kind !== 'plugin') throw new Error('Missing plugin caller fixture');
     await expect(test(input, { ...context, caller: { ...context.caller, pluginId: 'other.plugin' } })).rejects.toThrow();
     expect(await test({ ...input, credentialRef: null }, context)).toMatchObject({ kind: 'notReady', reason: 'credentialInvalid' });

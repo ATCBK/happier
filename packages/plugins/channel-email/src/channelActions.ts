@@ -18,6 +18,7 @@ import {
   type ConversationPollResultV1, type ConversationProviderConnectionInputV1,
   type ConversationProviderFailureV1, type ConversationProviderSetupOutcomeV1,
   type ConversationAttachmentFetchResultV1,
+  type ConversationResolvedEndpointV1,
 } from '@happier-dev/channels-protocol/v1';
 import { EMAIL_CONFIG_SCHEMA, EMAIL_SETUP_INPUT_SCHEMA, EMAIL_STORED_CONFIG_SCHEMA, type EmailConfig } from './config.js';
 import { normalizeEmailAddress } from './email/address.js';
@@ -128,7 +129,8 @@ export async function resolveEmailPrincipal(input: unknown, context: PluginInvoc
   return { kind: 'resolved', candidates: [{ id: address, label: address, kind: address === config.mailbox ? 'integration' : 'human' }] };
 }
 
-async function reportMissingTrustMarkers(request: ConversationProviderConnectionInputV1, context: PluginInvocationContext): Promise<void> {
+async function reportMissingTrustMarkers(request: ConversationProviderConnectionInputV1, context: PluginInvocationContext,
+  senderEligibility: Readonly<{ endpoint: ConversationResolvedEndpointV1; principalId: string }>): Promise<void> {
   const snapshot = ConversationProviderConnectionsSnapshotV1Schema.parse(await context.services.actions.execute(
     { pluginId: CONVERSATION_CORE_PLUGIN_ID_V1, localId: CONVERSATION_CORE_PROVIDER_ACTION_IDS_V1.connectionRead },
     { connectionId: request.connectionId }, { signal: context.signal }));
@@ -141,7 +143,7 @@ async function reportMissingTrustMarkers(request: ConversationProviderConnection
   if (JSON.stringify(readConfig(current)) !== JSON.stringify(readConfig(request))) return;
   await context.services.actions.execute(
     { pluginId: CONVERSATION_CORE_PLUGIN_ID_V1, localId: CONVERSATION_CORE_PROVIDER_ACTION_IDS_V1.transportFactReport },
-    { connectionId: request.connectionId, authorityEpoch: current.authorityEpoch,
+    { connectionId: request.connectionId, authorityEpoch: current.authorityEpoch, senderEligibility,
       fact: { kind: 'providerReadiness', status: 'attention', code: 'providerPermissionMissing',
         diagnostic: 'Inbound mail lacks the authentication markers required by this connection’s trust strategy.' } },
     { signal: context.signal });
@@ -158,7 +160,7 @@ export async function pollEmailObservations(input: unknown, context: PluginInvoc
       waitMs: request.waitMs, limit: request.limit }, transportOptions(request, context));
   if (result.kind !== 'batch') return result;
   const observations: Array<Extract<ConversationPollResultV1, { kind: 'batch' }>['observations'][number]> = [];
-  let markersMissing = false;
+  const missingMarkerSenders: Array<{ endpoint: ConversationResolvedEndpointV1; principalId: string }> = [];
   for (const ref of result.refs) {
     const raw = await fetchMail(ref, config, request, transport, context);
     if (raw.kind !== 'raw') return raw;
@@ -167,7 +169,8 @@ export async function pollEmailObservations(input: unknown, context: PluginInvoc
     try {
       mail = await parseEmail(bytes, { ...config, knownThread: identity =>
         request.bindings?.some(binding => binding.endpoint.kind === 'thread' && binding.endpoint.id === emailThreadKey(identity)
-          && binding.endpoint.parentId === config.mailbox) ?? false });
+          && binding.endpoint.parentId === config.mailbox
+          && (identity.messageId === null || !binding.excludedMessageIds?.includes(identity.messageId))) ?? false });
     } catch (error) {
       rethrowConversationProviderLifecycleFailureV1(error, context.signal);
       mail = { headers: new Map(), messageId: null, references: [], inReplyTo: null, from: null, sender: null,
@@ -175,18 +178,22 @@ export async function pollEmailObservations(input: unknown, context: PluginInvoc
     }
     const trust = evaluateEmailTrust({ ...mail, strategy: config.trustStrategy });
     const actor = classifyEmailActor({ ...mail, mailbox: config.mailbox, trust });
-    if (mail.from !== null && actor.kind === 'unknown' && trust.markersMissing) markersMissing = true;
     const identity = mail.messageId ?? ref;
     const idHash = createHash('sha256').update(identity).digest('hex');
-    const timestamp = mail.receivedAtMs !== null && mail.receivedAtMs >= 0 ? mail.receivedAtMs : context.invokedAtMs;
+    const timestamp = mail.receivedAtMs !== null && mail.receivedAtMs >= 0 ? mail.receivedAtMs : raw.receivedAtMs;
     const envelope = {
-      v: 1, occurrenceId: `email:${idHash}`, occurredAt: context.invokedAtMs, transport: { kind: 'poll' },
+      v: 1, occurrenceId: `email:${idHash}`, occurredAt: timestamp, transport: { kind: 'poll' },
       endpoint: { kind: 'thread', audience: 'direct', id: emailThreadKey(mail) ?? `email-invalid:${idHash}`, parentId: config.mailbox }, actor,
       message: { id: identity, providerTimestamp: timestamp, contentProvenance: mail.forwarded ? 'forwarded' : 'original',
         addressingEvidence: 'none', ...(mail.inReplyTo === null ? {} : { replyToMessageId: mail.inReplyTo }) },
     };
     const attachments = mail.attachments.map(attachment => ({ attachmentId: attachment.attachmentId,
       name: attachment.name, mediaType: attachment.mediaType, byteLength: attachment.bytes.byteLength }));
+    const candidate = mail.from === null ? null : normalizeEmailAddress(mail.from);
+    if (candidate !== null && actor.kind === 'unknown' && !actor.isIntegrationSelf && trust.markersMissing) {
+      missingMarkerSenders.push({ endpoint: { kind: 'thread', audience: 'direct', id: envelope.endpoint.id,
+        parentId: config.mailbox }, principalId: candidate });
+    }
     const text = mail.text;
     observations.push(ConversationIngressObservedEntryV1Schema.parse({ eventCandidate: null,
       observation: mail.messageId === null || (text.length === 0 && attachments.length === 0)
@@ -194,7 +201,7 @@ export async function pollEmailObservations(input: unknown, context: PluginInvoc
         : { kind: 'fullText', observation: { ...envelope, message: { ...envelope.message, text,
           ...(attachments.length === 0 ? {} : { attachments }) } } } }));
   }
-  if (markersMissing) await reportMissingTrustMarkers(request, context);
+  for (const sender of missingMarkerSenders) await reportMissingTrustMarkers(request, context, sender);
   return observations.length === 0 ? { kind: 'checkpointOnly', checkpointAfterBatch: result.checkpointAfterBatch }
     : { kind: 'batch', observations, checkpointAfterBatch: result.checkpointAfterBatch };
 }
@@ -220,7 +227,10 @@ export async function deliverEmailMessage(input: unknown, context: PluginInvocat
     const mail = await parseEmail(Buffer.from(raw.mimeBase64, 'base64'), { quotedHistory: 'never', stripSignatures: false, bodyFormat: 'text' });
     const trust = evaluateEmailTrust({ ...mail, strategy: config.trustStrategy });
     const actor = classifyEmailActor({ ...mail, mailbox: config.mailbox, trust });
-    if (trust.markersMissing && actor.kind === 'unknown') await reportMissingTrustMarkers(request, context);
+    const candidate = mail.from === null ? null : normalizeEmailAddress(mail.from);
+    if (candidate !== null && trust.markersMissing && actor.kind === 'unknown' && !actor.isIntegrationSelf) {
+      await reportMissingTrustMarkers(request, context, { endpoint: request.endpoint, principalId: candidate });
+    }
     if (!trust.trusted || actor.kind !== 'human' || actor.isIntegrationSelf || mail.messageId !== ref
       || mail.from === null || emailThreadKey(mail) !== request.endpoint.id) return { kind: 'notDelivered', retry: 'never' };
     const from = normalizeEmailAddress(mail.from);
@@ -271,7 +281,6 @@ export async function fetchEmailAttachment(input: unknown, context: PluginInvoca
   const mail = await parseEmail(Buffer.from(raw.mimeBase64, 'base64'), { ...config, knownThread: true });
   const trust = evaluateEmailTrust({ ...mail, strategy: config.trustStrategy });
   const actor = classifyEmailActor({ ...mail, mailbox: config.mailbox, trust });
-  if (trust.markersMissing && actor.kind === 'unknown') await reportMissingTrustMarkers(request, context);
   if (mail.messageId !== request.messageId || !trust.trusted || actor.kind !== 'human' || actor.isIntegrationSelf) {
     return { kind: 'notReady', reason: 'permissionMissing', diagnostic: 'The referenced email does not authenticate a human sender.' };
   }

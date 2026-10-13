@@ -35,11 +35,13 @@ function accountConfiguration(context: AccountContext): Omit<ImapSmtpAccount, 'a
   };
   if (!mailbox) throw new EmailCredentialError('invalidConfiguration');
   if (values.smtpSecurity !== undefined && values.smtpSecurity !== 'tls' && values.smtpSecurity !== 'starttls') throw new EmailCredentialError('invalidConfiguration');
+  if (values.tlsCaPem !== undefined && (typeof values.tlsCaPem !== 'string' || !values.tlsCaPem.trim())) throw new EmailCredentialError('invalidConfiguration');
   const username = typeof values.username === 'string' && values.username.trim() ? values.username.trim() : mailbox;
   return { mailbox, username, imapHost: host('imapHost'), imapPort: port('imapPort', 993),
     smtpHost: host('smtpHost'), smtpPort: port('smtpPort', 587), inboxFolder: folder('inboxFolder', 'INBOX')!,
     ...(folder('sentFolder') ? { sentFolder: folder('sentFolder') } : {}),
-    ...(values.smtpSecurity ? { smtpSecurity: values.smtpSecurity } : {}) };
+    ...(values.smtpSecurity ? { smtpSecurity: values.smtpSecurity } : {}),
+    ...(typeof values.tlsCaPem === 'string' ? { tlsCaPem: values.tlsCaPem } : {}) };
 }
 
 async function authenticate(mode: AuthenticationMode, fields: Readonly<Record<string, string>>, context: AccountContext, signal: AbortSignal): Promise<ImapSmtpAccount> {
@@ -126,7 +128,10 @@ const configuration = {
     textField('imapHost', 'IMAP TLS host'), { id: 'imapPort', title: 'IMAP TLS port', secret: false as const, default: 993, schema: { type: 'integer' as const, minimum: 1, maximum: 65535 } },
     textField('smtpHost', 'SMTP submission host'), { id: 'smtpPort', title: 'SMTP submission port', secret: false as const, default: 587, schema: { type: 'integer' as const, minimum: 1, maximum: 65535 } },
     { id: 'smtpSecurity', title: 'SMTP TLS mode (465 uses TLS; other ports use STARTTLS)', required: false, secret: false as const, schema: { type: 'string' as const, enum: ['starttls', 'tls'] } },
-    { ...textField('inboxFolder', 'Inbox folder', false), default: 'INBOX' }, textField('sentFolder', 'Sent folder (auto-detected when omitted)', false)],
+    { ...textField('inboxFolder', 'Inbox folder', false), default: 'INBOX' }, textField('sentFolder', 'Sent folder (auto-detected when omitted)', false),
+    { ...textField('tlsCaPem', 'Custom TLS CA certificate (PEM)', false),
+      presentation: { control: 'textarea' as const },
+      description: 'Trust this certificate authority for both IMAP and SMTP. Leave empty to use the standard trusted authorities.' }],
 };
 
 export const imapSmtpConnectedAccountDescriptor = {

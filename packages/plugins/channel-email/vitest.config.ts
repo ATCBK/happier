@@ -9,7 +9,16 @@ export default defineConfig({
     { packageName: '@happier-dev/email-transports-protocol', packageSourceRoot: resolve(repoRoot, 'packages/email-transports-protocol/src') },
     { packageName: '@happier-dev/channels-protocol', packageSourceRoot: resolve(repoRoot, 'packages/channels-protocol/src') },
     { packageName: '@happier-dev/plugin-sdk', packageSourceRoot: resolve(repoRoot, 'packages/plugin-sdk/src') },
+    { packageName: '@happier-dev/agents', packageSourceRoot: resolve(repoRoot, 'packages/agents/src') },
     { packageName: '@happier-dev/protocol', packageSourceRoot: resolve(repoRoot, 'packages/protocol/src') },
   ])],
-  test: { ...resolveVitestWorkers(), environment: 'node', include: ['src/**/*.test.ts'], exclude: ['node_modules/**', 'dist/**'] },
+  test: { ...resolveVitestWorkers(), environment: 'node', include: ['src/**/*.test.ts'], exclude: ['node_modules/**', 'dist/**'],
+    server: { deps: { inline: [
+      // Keep the source harness on current SDK/Protocol owners rather than
+      // externalizing their private bundled dependency snapshots.
+      /^@happier-dev\/plugin-sdk(?:\/|$)/,
+      /^@happier-dev\/agents(?:\/|$)/,
+      /^@happier-dev\/protocol(?:\/|$)/,
+    ] } },
+  },
 });

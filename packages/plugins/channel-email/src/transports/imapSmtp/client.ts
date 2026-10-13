@@ -7,7 +7,7 @@ import type { EmailTransportListSinceResultV1 } from '@happier-dev/email-transpo
 
 export type ImapSmtpAccount = Readonly<{
   mailbox: string; imapHost: string; imapPort: number; smtpHost: string; smtpPort: number;
-  inboxFolder: string; sentFolder?: string; smtpSecurity?: 'starttls' | 'tls';
+  inboxFolder: string; sentFolder?: string; smtpSecurity?: 'starttls' | 'tls'; tlsCaPem?: string;
   auth: Readonly<{ user: string; pass: string }> | Readonly<{ user: string; accessToken: string }>;
 }>;
 export type ImapCheckpoint = Readonly<{ uidValidity: string; lastUid: number }>;
@@ -28,10 +28,11 @@ function smtpResponseCode(error: unknown): number | undefined {
 }
 
 export function createImapSmtpTransport(account: ImapSmtpAccount, tls?: ConnectionOptions) {
+  const tlsOptions = account.tlsCaPem ? { ...tls, ca: account.tlsCaPem } : tls;
   async function withImap<T>(work: (client: ImapFlow) => Promise<T>, signal?: AbortSignal): Promise<T> {
     signal?.throwIfAborted();
     const client = new ImapFlow({ host: account.imapHost, port: account.imapPort,
-      secure: true, auth: account.auth, tls, logger: false, disableAutoIdle: true,
+      secure: true, auth: account.auth, tls: tlsOptions, logger: false, disableAutoIdle: true,
       socketTimeout: 0 }); // The containing poll's waitMs/signal owns IDLE lifetime.
     const abort = () => client.close();
     client.on('error', () => { /* Command promises and the IDLE waiter report network failures. */ });
@@ -45,7 +46,7 @@ export function createImapSmtpTransport(account: ImapSmtpAccount, tls?: Connecti
     signal?.throwIfAborted();
     const secure = account.smtpSecurity ? account.smtpSecurity === 'tls' : account.smtpPort === 465;
     const client = new SMTPConnection({ host: account.smtpHost, port: account.smtpPort, secure,
-      requireTLS: !secure, tls, logger: false, debug: false });
+      requireTLS: !secure, tls: tlsOptions, logger: false, debug: false });
     let rejectOperation: (error: unknown) => void = () => {};
     const abort = () => { rejectOperation(signal?.reason ?? new Error('Email operation cancelled')); client.close(); };
     const run = new Promise<T>((resolve, reject) => {
@@ -90,6 +91,15 @@ export function createImapSmtpTransport(account: ImapSmtpAccount, tls?: Connecti
     return null;
   }
 
+  async function fetchMessage(client: ImapFlow, uid: number) {
+    const message = await client.fetchOne(uid, { source: true, internalDate: true }, { uid: true });
+    if (!message || !message.source) throw new Error('IMAP message is no longer available');
+    const receivedAtMs = message.internalDate instanceof Date ? message.internalDate.getTime()
+      : typeof message.internalDate === 'string' ? new Date(message.internalDate).getTime() : NaN;
+    if (!Number.isInteger(receivedAtMs) || receivedAtMs < 0) throw new Error('IMAP message receipt time is unavailable');
+    return { mime: message.source, receivedAtMs };
+  }
+
   async function waitForInbox(client: ImapFlow, waitMs: number, signal?: AbortSignal) {
     if (waitMs <= 0) return;
     let dispose = () => {};
@@ -125,7 +135,9 @@ export function createImapSmtpTransport(account: ImapSmtpAccount, tls?: Connecti
         const box = await client.mailboxOpen(account.inboxFolder, { readOnly: true });
         const uidValidity = box.uidValidity.toString();
         if (previous && uidValidity !== previous.uidValidity) return historyGap;
-        const lastUid = previous?.lastUid ?? 0;
+        if (previous === null) return { kind: 'batch', refs: [],
+          checkpointAfterBatch: { uidValidity, lastUid: box.uidNext - 1 } };
+        const lastUid = previous.lastUid;
         const readUids = async () => {
           if (lastUid === 0xffffffff) return [];
           const uids = await client.search({ uid: `${lastUid + 1}:*` }, { uid: true });
@@ -139,15 +151,13 @@ export function createImapSmtpTransport(account: ImapSmtpAccount, tls?: Connecti
           checkpointAfterBatch: { uidValidity, lastUid: uids.at(-1) ?? lastUid } };
       }, signal);
     },
-    async fetchRaw(ref: string, signal?: AbortSignal): Promise<Buffer> {
+    async fetchRaw(ref: string, signal?: AbortSignal): Promise<{ mime: Buffer; receivedAtMs: number }> {
       if (ref.startsWith('<') && ref.endsWith('>') && !/[\r\n\x00]/.test(ref)) {
         return withImap(async (client) => {
           let uid = await messageUid(client, account.inboxFolder, ref);
           if (uid === null) uid = await messageUid(client, await sentFolder(client), ref);
           if (uid === null) throw new Error('IMAP message is no longer available');
-          const message = await client.fetchOne(uid, { source: true }, { uid: true });
-          if (!message || !message.source) throw new Error('IMAP message is no longer available');
-          return message.source;
+          return await fetchMessage(client, uid);
         }, signal);
       }
       const value: unknown = JSON.parse(ref);
@@ -157,9 +167,7 @@ export function createImapSmtpTransport(account: ImapSmtpAccount, tls?: Connecti
       return withImap(async (client) => {
         const box = await client.mailboxOpen(account.inboxFolder, { readOnly: true });
         if (box.uidValidity.toString() !== position.uidValidity) throw new Error('IMAP message history is no longer available');
-        const message = await client.fetchOne(position.lastUid, { source: true }, { uid: true });
-        if (!message || !message.source) throw new Error('IMAP message is no longer available');
-        return message.source;
+        return await fetchMessage(client, position.lastUid);
       }, signal);
     },
     async submitRaw(mime: Uint8Array, envelope: Readonly<{ from: string; to: readonly string[] }>, messageId: string, signal?: AbortSignal): Promise<ConversationDeliveryResultV1> {

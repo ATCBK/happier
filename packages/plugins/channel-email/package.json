@@ -36,6 +36,8 @@
     "turndown": "^7.2.0"
   },
   "devDependencies": {
+    "@happier-dev/protocol": "0.0.0",
+    "@happier-dev/plugins-channels": "0.0.0",
     "@types/css-tree": "^3.2.0",
     "@types/mailparser": "^3.4.6",
     "@types/nodemailer": "^7.0.2",

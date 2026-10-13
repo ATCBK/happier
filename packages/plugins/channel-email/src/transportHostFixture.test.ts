@@ -2,16 +2,21 @@ import { describe, expect, it } from 'vitest';
 import { readFile, stat } from 'node:fs/promises';
 import { simpleParser } from 'mailparser';
 import { assertEmailTransportContributionV1 } from '@happier-dev/email-transports-protocol/testing/v1';
-import { definePlugin, type JsonValue, type PluginInvocationContext, type TargetedContributionSnapshot } from '@happier-dev/plugin-sdk';
+import { definePlugin, type JsonValue, type PluginInvocationContext, type PluginServices, type TargetedContributionPointRef, type TargetedContributionSnapshot } from '@happier-dev/plugin-sdk';
 import type { ActionHandler } from '@happier-dev/plugin-sdk/actions';
 import { createPluginTestkit, type PluginTestkit } from '@happier-dev/plugin-sdk/testing';
 import { emailPlugin } from './plugin.js';
 import { EMAIL_CHANNEL_ACTION_IDS as ids } from './constants.js';
+import { channelsOperationOnlyTargetedContributionsFixture } from '../../channels/src/testkit/operationOnlyTargetedContributionsFixture.js';
+import { CHANNELS_PLUGIN } from '../../channels/src/manifest.js';
+import { CHANNEL_STATE_COLLECTION } from '../../channels/src/collections.js';
+import { MemoryCollection } from '../../channels/src/testkit/memoryCollection.js';
+import { createCurrentConversationConnectionFixture } from '../../channels/src/testkit/currentConnectionFixture.js';
 import { EmailTransportsContributionProtocolV1 as protocol, EmailTransportFetchRawInputV1Schema,
   EmailTransportSubmitRawInputV1Schema, EmailTransportFindSentInputV1Schema,
   type EmailTransportSubmitRawInputV1 } from './transports.js';
 import { ConversationAttachmentFetchResultV1Schema, ConversationPollResultV1Schema,
-  ConversationPrincipalResolveResultV1Schema, ConversationProviderConnectionReadInputV1Schema,
+  ConversationPrincipalResolveResultV1Schema,
   ConversationTransportFactReportInputV1Schema, type ConversationTransportFactReportInputV1 } from '@happier-dev/channels-protocol/v1';
 
 const mailbox = 'wilson@example.com';
@@ -31,17 +36,19 @@ async function fixture(options: { findSent?: boolean } = {}) {
   let retainedCatalog: ReturnType<PluginTestkit['readTargetedContributionFixture']> | undefined;
   let ambiguous = false;
   let lookupOverride: Uint8Array | undefined;
+  let invokedAtMs = Date.now();
+  const receivedAtMs = 1_792_000_000_000;
   function transportAction(role: keyof typeof protocol.operations, run: ActionHandler) {
     const d = protocol.operations[role].declaration;
     return { title: role, inputSchema: d.input.schema.jsonSchema, resultSchema: d.resultSchema.jsonSchema,
-      surfaces: d.surfaces, dangerLevel: d.dangerLevel, run };
+      surfaces: role === 'fetchRaw' ? [...d.surfaces, 'cli' as const] : d.surfaces, dangerLevel: d.dangerLevel, run };
   }
   const transportPlugin = definePlugin({ id: 'acme.email.fixture', version: '0.0.0', actions: {
     list: transportAction('listSince', async () => ({ kind: 'batch', refs, checkpointAfterBatch: { position: 1 } })),
     fetch: transportAction('fetchRaw', async (input): Promise<JsonValue> => {
       const { ref } = EmailTransportFetchRawInputV1Schema.parse(input);
       const raw = lookupOverride ?? messages.get(ref) ?? sent.get(ref);
-      return raw ? { kind: 'raw', mimeBase64: Buffer.from(raw).toString('base64') } : { kind: 'notReady', reason: 'unsupported' };
+      return raw ? { kind: 'raw', mimeBase64: Buffer.from(raw).toString('base64'), receivedAtMs } : { kind: 'notReady', reason: 'unsupported' };
     }),
     submit: transportAction('submitRaw', async (input): Promise<JsonValue> => {
       const request = EmailTransportSubmitRawInputV1Schema.parse(input);
@@ -61,28 +68,52 @@ async function fixture(options: { findSent?: boolean } = {}) {
   } }) } } } });
   assertEmailTransportContributionV1(transportPlugin.manifest);
   const transport = await createPluginTestkit({ manifest: transportPlugin.manifest, module: transportPlugin });
-  const factsDefinition = definePlugin({ id: 'happier.channels', version: '0.0.0', actions: {
-    'provider/connection-read-v1': { title: 'Read fixture authority', surfaces: ['plugin'], dangerLevel: 'safe',
-      run: async input => ConversationProviderConnectionReadInputV1Schema.parse(input).connectionId === connection.connectionId
-        ? { [connection.connectionId]: { ...connection, authorityEpoch: 1, enabled: true,
-          deletionState: 'none', requiresFullSharedMessageContent: false } } : {} },
-    'provider/transport-fact-report-v1': { title: 'Record fixture readiness', surfaces: ['plugin'], dangerLevel: 'writesLocal',
-      confirmation: { title: 'Record fixture readiness?' },
-      run: async input => { facts.push(ConversationTransportFactReportInputV1Schema.parse(input)); return { kind: 'recorded' }; } },
-  } });
-  const coreFacts = await createPluginTestkit({ manifest: factsDefinition.manifest, module: factsDefinition });
+  const state = new MemoryCollection();
+  const materializationRef = { pluginId: emailPlugin.manifest.id, machineId: 'fixture-machine', materializationId: 'fixture-email' };
+  await state.put(createCurrentConversationConnectionFixture({ connectionId: connection.connectionId, authority: {
+    providerPluginId: emailPlugin.manifest.id, providerContributionSelection: { contributionId: 'email-provider' },
+    providerSetupInput: { ...config, credentialRef: null }, credentialRef: null, providerConfig: config,
+    providerConnectionKey: connection.providerConnectionKey, routingIdentityKey: 'e'.repeat(43),
+    transportOrigin: { serverIdentityId: 'srv_plugin_testkit', materializationRef }, integrationPrincipal: { id: mailbox }, authorityEpoch: 1,
+  } }), { expectedRevision: 'absent' });
+  await state.put({ id: 'fixture-binding', 'record-kind': 'binding', 'binding-id': 'fixture-binding', 'connection-id': connection.connectionId,
+    v: 1, 'created-at': 1, 'updated-at': 1, payload: { endpoint: thread,
+      target: { kind: 'session', sessionId: 'fixture-session', policy: { deliveryMode: 'repliesOnly', permissionCeiling: 'read-only',
+        approvals: { kind: 'off' }, newSession: { kind: 'off' } } },
+      allowedPrincipalIds: ['alice@example.com'], allowBotSenders: false, inputMode: 'allAllowedMessages', inboundDebounceMs: 0,
+      linkPreviewPolicy: 'suppress', senderFeedback: 'off', authorityEpoch: 1, enabled: true, deletionState: 'none',
+    } }, { expectedRevision: 'absent' });
+  const storage = { account: { collection(definition: { id: string }) {
+    if (definition.id !== CHANNEL_STATE_COLLECTION.id) throw new Error('Unexpected readiness Collection');
+    return state;
+  } } } as unknown as PluginServices['storage'];
+  const coreFacts = await createPluginTestkit({ manifest: CHANNELS_PLUGIN.manifest, services: { storage },
+    module: { activate(api) { return CHANNELS_PLUGIN.activate({ ...api, actions: { ...api.actions, register(id, run) {
+      return api.actions.register(id, async (input: Parameters<typeof run>[0], context) => {
+        const result = await run(input, context);
+        if (id === 'provider/transport-fact-report-v1' && result !== null && typeof result === 'object'
+          && 'kind' in result && (result.kind === 'recorded' || result.kind === 'rejoined')) {
+          const { senderEligibility: _candidate, ...publicFact } = ConversationTransportFactReportInputV1Schema.parse(input);
+          facts.push(publicFact);
+        }
+        return result;
+      });
+    } } }); } } });
   let email: PluginTestkit;
   // The testkit provides structural admission and real opaque Action handles,
   // but deliberately has no production catalog observer. Adapt that host boundary only.
   function withCatalog(context: PluginInvocationContext): PluginInvocationContext {
-    return { ...context, services: { ...context.services, targetedContributions: {
-      observeForSelf: <T>(point: Parameters<PluginInvocationContext['services']['targetedContributions']['observeForSelf']>[0]) => ({
-        dispose() {}, readCurrent: async () => (retainedCatalog ?? email.readTargetedContributionFixture(point)) as unknown as TargetedContributionSnapshot<T>,
-      }),
+    const catalog = channelsOperationOnlyTargetedContributionsFixture(email, emailPlugin.contributionPoints.transports);
+    return { ...context, invokedAtMs, services: { ...context.services, targetedContributions: {
+      observeForSelf: <T>(point: TargetedContributionPointRef<T>, options: { onInvalidated: () => void }) => {
+        const observation = catalog.observeForSelf<T>(point, options);
+        return { ...observation, readCurrent: async () => retainedCatalog
+          ? retainedCatalog as unknown as TargetedContributionSnapshot<T> : observation.readCurrent() };
+      },
     } } };
   }
   email = await createPluginTestkit({ manifest: emailPlugin.manifest, targetedContributionContributors: [transport],
-    actionTargets: [coreFacts],
+    actionTargets: [coreFacts], resolveCurrentPluginMaterializationRef: () => materializationRef,
     module: { activate(api) {
       return emailPlugin.activate({ ...api, actions: { ...api.actions,
         register: (id, run) => api.actions.register(id, (input: Parameters<typeof run>[0], context) => run(input, withCatalog(context))),
@@ -100,7 +131,8 @@ async function fixture(options: { findSent?: boolean } = {}) {
       } },
   } });
   const channels = await createPluginTestkit({ manifest: channelsPlugin.manifest, module: channelsPlugin, actionTargets: [email] });
-  return { sent, submissions, facts, setAmbiguous(value: boolean) { ambiguous = value; }, replaceFetched(raw: Uint8Array) { lookupOverride = raw; },
+  return { sent, submissions, facts, receivedAtMs, setInvocationTime(value: number) { invokedAtMs = value; },
+    setAmbiguous(value: boolean) { ambiguous = value; }, replaceFetched(raw: Uint8Array) { lookupOverride = raw; },
     setMessages(values: readonly (readonly [string, Uint8Array])[]) { for (const [ref, raw] of values) messages.set(ref, raw); refs = values.map(([ref]) => ref); },
     addMessage(ref: string, raw: Uint8Array) { messages.set(ref, raw); },
     setNotFound() { forceNotFound = true; },
@@ -120,6 +152,22 @@ const delivery = { ...connection, endpoint: thread, content: { text: 'Reply' }, 
   replyContext: { replyToMessageId: '<incoming@example.com>' }, mentionPolicy: 'suppress', linkPreviewPolicy: 'providerDefault' };
 
 describe('email core with an external contributed raw transport', () => {
+  it.each([false, true])('keeps immutable occurrence times across later polls (Date header: %s)', async withDate => {
+    const f = await fixture();
+    try {
+      const dated = Buffer.from([...(withDate ? ['Date: Mon, 12 Oct 2026 07:00:00 +0000'] : []), incoming.toString()].join('\r\n'));
+      f.setMessages([['opaque-incoming', dated]]);
+      const poll = { ...connection, checkpoint: { position: 0 }, limit: 10, waitMs: 0 };
+      f.setInvocationTime(1_792_100_000_000);
+      const first = ConversationPollResultV1Schema.parse(await f.invoke(ids.observationsPoll, poll));
+      f.setInvocationTime(1_792_100_100_000);
+      const replay = ConversationPollResultV1Schema.parse(await f.invoke(ids.observationsPoll, poll));
+      expect(replay).toEqual(first);
+      if (first.kind !== 'batch' || first.observations[0]?.observation.kind !== 'fullText') throw new Error('Expected a full email observation');
+      const expected = withDate ? Date.parse('2026-10-12T07:00:00Z') : f.receivedAtMs;
+      expect(first.observations[0].observation.observation).toMatchObject({ occurredAt: expected, message: { providerTimestamp: expected } });
+    } finally { await f.dispose(); }
+  });
   it('authenticates the selected contributed mailbox during setup without inventing an outbound cap', async () => {
     const f = await fixture();
     try {
@@ -192,7 +240,7 @@ describe('email core with an external contributed raw transport', () => {
   it('projects unknown senders, noise and self while recording content-free trust attention and malformed mail', async () => {
     const f = await fixture();
     const makeMail = (id: string | null, from: string, headers: readonly string[]) => Buffer.from([
-      `From: ${from}`, ...(id === null ? [] : [`Message-ID: ${id}`]), ...headers, 'Content-Type: text/plain', '', 'Question',
+      `From: ${from}`, ...(id === null ? [] : [`Message-ID: ${id}`]), 'References: <root@example.com>', ...headers, 'Content-Type: text/plain', '', 'Question',
     ].join('\r\n'));
     const trustedHeader = 'Authentication-Results: mx.example.com; dmarc=pass header.from=example.com';
     try {
@@ -220,6 +268,25 @@ describe('email core with an external contributed raw transport', () => {
     } finally { await f.dispose(); }
   });
 
+  it.each([
+    ['external@example.com', [], false],
+    ['alice@example.com', [], true],
+    ['alice@example.com', ['Auto-Submitted: auto-replied'], false],
+    [mailbox, [], false],
+  ] as const)('scopes missing-marker readiness through the registered core for %s', async (from, headers, attention) => {
+    const f = await fixture();
+    try {
+      f.setMessages([['missing', Buffer.from([`From: ${from}`, 'Message-ID: <missing@example.com>',
+        'References: <root@example.com>', ...headers, 'Content-Type: text/plain', '', 'Question'].join('\r\n'))]]);
+      const result = ConversationPollResultV1Schema.parse(await f.invoke(ids.observationsPoll, {
+        ...connection, checkpoint: { position: 0 }, limit: 10, waitMs: 0,
+      }));
+      expect(result.kind).toBe('batch');
+      expect(f.facts.length > 0).toBe(attention);
+      expect(JSON.stringify(f.facts)).not.toContain(from);
+    } finally { await f.dispose(); }
+  });
+
   it('fetches stable nested attachment ids after signature image filtering without trusting embedded authentication headers', async () => {
     const f = await fixture();
     let stagedPath: string | undefined;
@@ -229,7 +296,7 @@ describe('email core with an external contributed raw transport', () => {
       '<p>Lead details</p><div class="gmail_signature"><img src="cid:logo"></div>', '--inner',
       'Content-Type: image/png', 'Content-ID: <logo>', 'Content-Disposition: inline; filename=logo.png',
       'Content-Transfer-Encoding: base64', '', 'eA==', '--inner', 'Content-Type: text/plain',
-      'Content-Disposition: attachment; filename=lead.txt', 'Content-Transfer-Encoding: base64', '',
+      'Content-Disposition: attachment; filename="../../lead.txt"', 'Content-Transfer-Encoding: base64', '',
       Buffer.from('nested lead file').toString('base64'), '--inner--', ''].join('\r\n');
     const outer = Buffer.from(['From: alice@example.com', 'Message-ID: <forward@example.com>', auth, 'Subject: Fwd: Lead',
       'MIME-Version: 1.0', 'Content-Type: multipart/mixed; boundary=outer', '', '--outer', 'Content-Type: text/html', '',
@@ -255,16 +322,27 @@ describe('email core with an external contributed raw transport', () => {
       const attachments = entry.observation.message.attachments!;
       expect(attachments.map(file => file.name)).not.toContain('forwarder-logo.png');
       expect(attachments.map(file => file.name)).toContain('logo.png');
-      const attachment = attachments.find(file => file.name === 'lead.txt')!;
+      const attachment = attachments.find(file => file.name.endsWith('lead.txt'))!;
       expect(attachment.attachmentId).toContain('/');
       const fetched = ConversationAttachmentFetchResultV1Schema.parse(await f.invoke(ids.attachmentFetch, {
         ...connection, messageId: '<forward@example.com>', attachmentId: attachment.attachmentId,
       }));
       expect(fetched.kind).toBe('fetched');
-      if (fetched.kind === 'fetched') { stagedPath = fetched.path; expect(await readFile(fetched.path, 'utf8')).toBe('nested lead file'); }
+      if (fetched.kind !== 'fetched') throw new Error('Expected a protected attachment file');
+      stagedPath = fetched.path;
+      expect(await readFile(stagedPath, 'utf8')).toBe('nested lead file');
+      expect(stagedPath).not.toContain('lead.txt');
+      if (process.platform !== 'win32') expect((await stat(stagedPath)).mode & 0o777).toBe(0o600);
+      f.replaceFetched(outer);
+      await expect(f.invoke(ids.attachmentFetch, { ...connection, messageId: '<different@example.com>', attachmentId: attachment.attachmentId }))
+        .resolves.toMatchObject({ kind: 'notReady', reason: 'permissionMissing' });
+      f.replaceFetched(Buffer.from(outer.toString().replace('dmarc=pass', 'dmarc=fail')));
+      await expect(f.invoke(ids.attachmentFetch, { ...connection, messageId: '<forward@example.com>', attachmentId: attachment.attachmentId }))
+        .resolves.toMatchObject({ kind: 'notReady', reason: 'permissionMissing' });
       const untrusted = Buffer.from(outer.toString().replace(`${auth}\r\n`, '').replace('<forward@example.com>', '<untrusted-forward@example.com>'));
       f.setMessages([['untrusted-ref', untrusted]]);
       f.addMessage('<untrusted-forward@example.com>', untrusted);
+      f.replaceFetched(untrusted);
       await expect(f.invoke(ids.observationsPoll, pollInput)).resolves.toMatchObject({ observations: [{ observation: {
         observation: { actor: { kind: 'unknown', principalId: null } },
       } }] });

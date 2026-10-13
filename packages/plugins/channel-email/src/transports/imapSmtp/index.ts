@@ -20,7 +20,7 @@ const port = defineProtocolNumber({ integer: true, minimum: 1, maximum: 65535 })
 // This is a host-materialized credential document, never an Action input.
 const accountReader = createProtocolStoredReadSchema(defineProtocolObject({
   mailbox: text, imapHost: text, imapPort: port, smtpHost: text, smtpPort: port,
-  inboxFolder: text, sentFolder: text.optional(),
+  inboxFolder: text, sentFolder: text.optional(), tlsCaPem: text.optional(),
   smtpSecurity: defineProtocolUnion([defineProtocolLiteral('starttls'), defineProtocolLiteral('tls')]).optional(),
   auth: defineProtocolUnion([
     defineProtocolObject({ user: text, pass: text }, { policy: 'closed' }),
@@ -87,7 +87,10 @@ export const imapSmtpActions = {
   }),
   [ids.fetchRaw]: action('Fetch raw IMAP message', 'fetchRaw', async (input, context) => {
     assertEmailCore(context); const request = EmailTransportFetchRawInputV1Schema.parse(input);
-    return invoke(request, context, async (transport) => ({ kind: 'raw', mimeBase64: (await transport.fetchRaw(request.ref, context.signal)).toString('base64') }));
+    return invoke(request, context, async (transport) => {
+      const raw = await transport.fetchRaw(request.ref, context.signal);
+      return { kind: 'raw', mimeBase64: raw.mime.toString('base64'), receivedAtMs: raw.receivedAtMs };
+    });
   }),
   [ids.submitRaw]: action('Submit raw SMTP message', 'submitRaw', async (input, context) => {
     assertEmailCore(context); const request = EmailTransportSubmitRawInputV1Schema.parse(input);
