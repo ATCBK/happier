@@ -69,6 +69,12 @@ const FEATURE_CATALOG_DEFINITION = {
     dependencies: ['connectedServices'],
     representation: 'server',
   },
+  'connectedServices.quotaRecoveryCreditDetails': {
+    description: 'Typed reset display facts in provider account usage plain-write metadata.',
+    defaultFailMode: 'fail_closed',
+    dependencies: ['connectedServices.quotas'],
+    representation: 'server',
+  },
   'connectedServices.accountGroups': {
     description: 'Connected service account groups and member management APIs.',
     defaultFailMode: 'fail_closed',
