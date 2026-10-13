@@ -336,6 +336,7 @@ export async function materializeConnectedServicesForSpawn(params: Readonly<{
   let disposed = false;
   let promotedDisposableRoot = false;
   let artifactWrite: Promise<unknown> | undefined;
+  let promotion: Promise<void> | undefined;
   let cleanup: Promise<void> | undefined;
   const assertOpen = () => {
     params.signal?.throwIfAborted();
@@ -357,6 +358,8 @@ export async function materializeConnectedServicesForSpawn(params: Readonly<{
     disposed = true;
     return cleanup ??= (async () => {
       await artifactWrite?.catch(() => {});
+      // The last write can settle before atomic promotion has rolled back its target.
+      await promotion?.catch(() => {});
       await cleanupRoot();
       if (promotedDisposableRoot) await rm(rootDir, { recursive: true, force: true });
     })();
@@ -440,8 +443,9 @@ export async function materializeConnectedServicesForSpawn(params: Readonly<{
         cleanupMaterializationRoot: () => { void cleanupRoot(); }, env: buildPromotedEnv() };
     }
     await runSerializedPromotion(rootDir, async () => {
+      assertOpen();
       assertActiveAttempt({ rootDir, attemptId, cleanupRoot });
-      await replaceDirectoryAtomically({
+      promotion = replaceDirectoryAtomically({
         stagedDir: attemptRoot,
         targetDir: rootDir,
         writeArtifacts,
@@ -460,9 +464,11 @@ export async function materializeConnectedServicesForSpawn(params: Readonly<{
           });
           assertActiveAttempt({ rootDir, attemptId, cleanupRoot });
         },
+      }).then(() => {
+        promotedDisposableRoot = true;
+        assertActiveAttempt({ rootDir, attemptId, cleanupRoot });
       });
-      promotedDisposableRoot = true;
-      assertActiveAttempt({ rootDir, attemptId, cleanupRoot });
+      await promotion;
     });
     assertActiveAttempt({ rootDir, attemptId, cleanupRoot });
     const cleanupFinalRoot = bestEffortCleanupDirectory(rootDir);
