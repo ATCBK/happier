@@ -28,6 +28,13 @@ Open a running session and use the Agent picker in the message composer — the 
 
 The picker lists the Agents the current CLI can run for this session. The Agent currently running the session is marked as such and stays selectable, because that row is also where you edit its model and configuration.
 
+Configured ACP entries retain their own identities, even when two entries use
+the same executable. Continuing into one starts its exact configuration with
+the recent conversation as text. It does not reuse another entry's opaque ACP
+conversation ID. This development behavior requires a supporting CLI; older
+CLIs retain their existing built-in behavior while configured continuation
+remains unavailable.
+
 ## Arm an Agent, then send
 
 Selecting another Agent **arms** it. There is no separate confirm step:
