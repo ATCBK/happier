@@ -16,10 +16,27 @@ export const { manifest: PLUGIN_MANIFEST, activate } = definePlugin({
   },
   engines: { happier: '^0.0.0' }, runtime: { apiVersion: 1 },
   hostAccess: { required: [], optional: [] },
+  ui: {
+    translations: [
+      { locale: 'en', messages: { 'settingsVoice.realtimeProviders.xai.description': "Uses your xAI API key" } },
+      { locale: 'ru', messages: { 'settingsVoice.realtimeProviders.xai.description': "Использует ваш API-ключ xAI" } },
+      { locale: 'pl', messages: { 'settingsVoice.realtimeProviders.xai.description': "Używa Twojego klucza API xAI" } },
+      { locale: 'es', messages: { 'settingsVoice.realtimeProviders.xai.description': "Usa tu clave API de xAI" } },
+      { locale: 'fr', messages: { 'settingsVoice.realtimeProviders.xai.description': "Utilise ta clé API xAI" } },
+      { locale: 'it', messages: { 'settingsVoice.realtimeProviders.xai.description': "Usa la tua chiave API xAI" } },
+      { locale: 'pt', messages: { 'settingsVoice.realtimeProviders.xai.description': "Usa sua chave de API xAI" } },
+      { locale: 'ca', messages: { 'settingsVoice.realtimeProviders.xai.description': "Fa servir la teva clau API d’xAI" } },
+      { locale: 'de', messages: { 'settingsVoice.realtimeProviders.xai.description': "Nutzt deinen xAI-API-Schlüssel" } },
+      { locale: 'zh-Hans', messages: { 'settingsVoice.realtimeProviders.xai.description': "使用你的 xAI API 密钥" } },
+      { locale: 'zh-Hant', messages: { 'settingsVoice.realtimeProviders.xai.description': "使用你的 xAI API 金鑰" } },
+      { locale: 'ja', messages: { 'settingsVoice.realtimeProviders.xai.description': "xAIのAPIキーを使用します" } },
+    ],
+  },
   voiceProviders: {
     [XAI_VOICE_PROVIDER_CONTRIBUTION_ID]: {
       declaration: {
       title: 'xAI Grok Voice',
+      description: { key: 'settingsVoice.realtimeProviders.xai.description', fallback: 'Uses your xAI API key' },
       mark: { kind: 'agent', agentId: 'grok' },
       kind: 'conversation',
       roles: ['conversation_stt', 'conversation_tts', 'realtime_conversation', 'turn_control'],
