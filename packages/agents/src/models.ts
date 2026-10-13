@@ -149,12 +149,6 @@ const CLAUDE_STATIC_MODELS = Object.freeze(([
     contextWindowTokens: 1_000_000,
   },
   {
-    id: 'claude-sonnet-5-5',
-    name: 'Sonnet 5.5',
-    description: 'Latest balanced Claude model with the best combination of speed and intelligence.',
-    contextWindowTokens: 1_000_000,
-  },
-  {
     id: 'claude-opus-5',
     name: 'Opus 5',
     description: 'Prior Opus model for complex coding and reasoning tasks.',
@@ -163,7 +157,7 @@ const CLAUDE_STATIC_MODELS = Object.freeze(([
   {
     id: 'claude-sonnet-5',
     name: 'Sonnet 5',
-    description: 'Prior Sonnet model for complex coding and reasoning tasks.',
+    description: 'Latest balanced Claude model with the best combination of speed and intelligence.',
     contextWindowTokens: 1_000_000,
   },
   {
