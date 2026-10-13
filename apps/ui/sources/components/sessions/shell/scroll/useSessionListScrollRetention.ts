@@ -237,6 +237,10 @@ export function useSessionListScrollRetention(params: Readonly<{
             }
             return;
         }
+        // Reordering below the visible anchor does not change its content position.
+        // Reissuing scrollToIndex here would move an already-correct viewport.
+        if (previous.nodeIds.indexOf(anchor.nodeId) === targetIndex
+            && previous.nodeIds.slice(0, targetIndex).every((nodeId, index) => nodeId === nextNodeIds[index])) return;
         pendingMembershipRestoreRef.current = {
             retentionKey: params.retentionKey,
             nodeId: anchor.nodeId,
