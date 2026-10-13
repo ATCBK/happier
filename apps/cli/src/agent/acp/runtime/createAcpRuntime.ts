@@ -18,7 +18,12 @@ import {
   handleAcpModelOutputDelta,
   handleAcpStatusRunning,
 } from '@/agent/acp/bridge/acpCommonHandlers';
-import { reconcileModelOutput, type ModelOutputReconciliationState } from '@/agent/core/reconcileModelOutput';
+import {
+  isModelOutputSegmentBoundary,
+  reconcileModelOutput,
+  resetModelOutputSegment,
+  type ModelOutputReconciliationState,
+} from '@/agent/core/reconcileModelOutput';
 import { createAcpAgentMessageForwarder } from '@/agent/acp/bridge/createAcpAgentMessageForwarder';
 import { isThinkingToolName } from '@/agent/acp/bridge/thinkingToolCall';
 import { recordToolTraceEvent } from '@/agent/tools/trace/toolTrace';
@@ -1338,10 +1343,22 @@ export function createAcpRuntime(params: {
         return;
       }
 
+      if (msg.type === 'tool-result') evictToolCallCache(Date.now());
+      const thinkingToolBoundary = (msg.type === 'tool-call' || msg.type === 'tool-result')
+        && isThinkingToolName(msg.type === 'tool-result'
+          ? toolNameByCallId.get(msg.callId)?.toolName ?? msg.toolName
+          : msg.toolName);
+      if (isModelOutputSegmentBoundary(msg) && !thinkingToolBoundary) {
+        resetModelOutputSegment(modelOutputState);
+        lastModelOutputText = '';
+        void streamedTranscriptWriter.flushAll({ reason: 'tool-call-boundary' });
+      }
+
       switch (msg.type) {
         case 'model-output': {
           lastModelOutputText = msg.textDelta ?? msg.fullText ?? '';
-          const deltaRaw = reconcileModelOutput(modelOutputState, msg);
+          const change = reconcileModelOutput(modelOutputState, msg);
+          const deltaRaw = change.kind === 'append' ? change.text : '';
           if (acpTraceMarkersEnabled && sessionId && deltaRaw.includes('ACP_STUB_')) {
             // Trace only deterministic stub markers (never arbitrary assistant text) so provider harness
             // can coordinate mid-turn steer without requiring tool-calls or vendor credentials.
@@ -1363,7 +1380,12 @@ export function createAcpRuntime(params: {
           });
           params.turnAssistantPreviewTracker?.replace(modelOutputState.turnText);
 
-          if (deltaRaw) {
+          if (change.kind === 'replace') {
+            params.messageBuffer.updateLastMessage(modelOutputState.turnText, 'assistant', { replace: true });
+            if (!streamedTranscriptWriter.overrideAssistantText(modelOutputState.segmentText)) {
+              streamedTranscriptWriter.appendAssistantDelta(modelOutputState.segmentText);
+            }
+          } else if (deltaRaw) {
             streamedTranscriptWriter.appendAssistantDelta(deltaRaw);
           }
           break;
@@ -1433,9 +1455,6 @@ export function createAcpRuntime(params: {
             break;
           }
 
-          modelOutputState.segmentText = '';
-          lastModelOutputText = '';
-          void streamedTranscriptWriter.flushAll({ reason: 'tool-call-boundary' });
           params.messageBuffer.addMessage(`Executing: ${msg.toolName}`, 'tool');
           recordToolCall(msg.callId, msg.toolName);
           forwarder.forward(msg);
@@ -1444,7 +1463,6 @@ export function createAcpRuntime(params: {
 
         case 'tool-result': {
           const callId = msg.callId;
-          evictToolCallCache(Date.now());
           const originToolName = toolNameByCallId.get(callId)?.toolName ?? msg.toolName;
           if (typeof originToolName === 'string' && isThinkingToolName(originToolName)) {
             forwarder.forward(msg);
@@ -1597,7 +1615,7 @@ export function createAcpRuntime(params: {
           } catch (e) {
             logger.debug(`[${params.provider}] Failed to run permission-request hook (non-fatal)`, e);
           }
-          modelOutputState.segmentText = '';
+          resetModelOutputSegment(modelOutputState);
           lastModelOutputText = '';
           void streamedTranscriptWriter.flushAll({ reason: 'tool-call-boundary' }).finally(() => {
             forwarder.forward(msg);
