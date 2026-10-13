@@ -10,7 +10,8 @@ import { Modal } from '@/modal';
 import { t } from '@/text';
 import { awaitActionApprovalResult, type ActionApprovalRegistration } from '@/components/approvals/actionApprovalContinuation';
 import { isTeamActionApprovalPendingError } from '@/sync/ops/teams/teamActionClient';
-import { captureLazyActionAccountContext } from '@/sync/ops/actions/actionAccountContext';
+import { runTeamAction } from '@/sync/ops/teams/teamActionClient';
+import { PERSONAL_SAVED_SECRET_ACTION_OUTPUT_SCHEMAS_V1 } from '@happier-dev/protocol/account/settings/personalSavedSecretActionsV1';
 import {
     observeSavedSecretCatalog,
     refreshSavedSecretCatalog,
@@ -24,8 +25,7 @@ import {
 } from '@/sync/store/settings/savedSecretCatalogSnapshot';
 import {
     deleteSavedSecretResource,
-    createSavedSecretResource,
-    updateSavedSecretResource,
+    type SavedSecretCreationResult,
     type SavedSecretResourceDeleteResult,
 } from '@/sync/ops/settings/savedSecretResourceOperations';
 
@@ -33,9 +33,14 @@ type SavedSecretCatalogCorruptOwnerEntry = Extract<
     SavedSecretCatalogCorruptEntryV1,
     Readonly<{ relationship: 'owner' }>
 >;
+type SavedSecretCreateActionResult = ReturnType<
+    (typeof PERSONAL_SAVED_SECRET_ACTION_OUTPUT_SCHEMAS_V1)['secrets.create']['parse']
+>;
 
 export type SavedSecretPrivateCreationApprovalOptions = Readonly<{
     onApprovalPending: (registration: ActionApprovalRegistration) => void;
+    /** The person rejected or canceled the approval: a decision, not a failure to present. */
+    onApprovalDeclined?: () => void;
     signal?: AbortSignal;
 }>;
 
@@ -52,6 +57,11 @@ export type SavedSecretCatalogProjection = Readonly<{
     collisionMigrationStatus: 'not_required' | 'migrating' | 'failed';
     entries: readonly SavedSecretCatalogEntryV1[];
     sharedEntries: readonly SavedSecretCatalogEntryV1[];
+    /** Selection rows retain private editing without reclassifying resource-management targets. */
+    picker: Readonly<{
+        personalSecrets: readonly SavedSecret[];
+        sharedEntries: readonly SavedSecretCatalogEntryV1[];
+    }>;
     corruptEntries: readonly SavedSecretCatalogCorruptEntryV1[];
     /**
      * The repair carries the owner reference census's own answer, so a resource
@@ -75,7 +85,7 @@ export type SavedSecretCatalogProjection = Readonly<{
  * values are handled only by the catalog engine's source importer.
  */
 export function useSavedSecretCatalog(options?: Readonly<{
-    /** Fail-closed switch for surfaces scoped to Homes without shared credentials. */
+    /** Sharing visibility; private owner resources do not depend on Teams. */
     sharedEnabled?: boolean;
     /** Exact Account/Home scope for mounted surfaces that are not on the active Home. */
     scope?: AccountSettingsScope | null;
@@ -94,27 +104,28 @@ export function useSavedSecretCatalog(options?: Readonly<{
         && scope.accountId === activeScope.accountId,
     );
     const sharedEnabled = Boolean(scope) && options?.sharedEnabled !== false;
+    const catalogEnabled = Boolean(scope);
     const snapshot = React.useSyncExternalStore(
-        sharedEnabled ? subscribeSavedSecretCatalogSnapshots : subscribeNoop,
-        () => sharedEnabled ? getSavedSecretCatalogSnapshot(scope) : null,
-        () => sharedEnabled ? getSavedSecretCatalogSnapshot(scope) : null,
+        catalogEnabled ? subscribeSavedSecretCatalogSnapshots : subscribeNoop,
+        () => catalogEnabled ? getSavedSecretCatalogSnapshot(scope) : null,
+        () => catalogEnabled ? getSavedSecretCatalogSnapshot(scope) : null,
     );
 
     React.useEffect(() => {
-        if (!scope || !sharedEnabled) return;
+        if (!scope || !catalogEnabled) return;
         return observeSavedSecretCatalog(scope);
-    }, [scope, sharedEnabled]);
+    }, [scope, catalogEnabled]);
 
     const sharedEntries = snapshot?.data ?? EMPTY_SHARED_ENTRIES;
     const corruptEntries = snapshot?.corruptEntries ?? EMPTY_CORRUPT_ENTRIES;
     const entries = sharedEntries;
 
     const reload = React.useCallback(async () => {
-        if (scope && sharedEnabled) await refreshSavedSecretCatalog(scope);
-    }, [scope, sharedEnabled]);
+        if (scope && catalogEnabled) await refreshSavedSecretCatalog(scope);
+    }, [scope, catalogEnabled]);
 
     const deleteCorruptResource = React.useCallback(async (entry: SavedSecretCatalogCorruptOwnerEntry): Promise<SavedSecretResourceDeleteResult> => {
-        if (!scope || !scopeIsActive || !sharedEnabled || entry.repair.kind !== 'delete_resource') {
+        if (!scope || !scopeIsActive || !catalogEnabled || entry.repair.kind !== 'delete_resource') {
             return { ok: false, reason: 'unavailable' };
         }
         // The owner reference census reads this Account's own current Settings,
@@ -132,32 +143,22 @@ export function useSavedSecretCatalog(options?: Readonly<{
             await refreshSavedSecretCatalog(scope).catch(() => undefined);
         }
         return result;
-    }, [scope, scopeIsActive, settingsVersion, sharedEnabled]);
+    }, [scope, scopeIsActive, settingsVersion, catalogEnabled]);
 
     const updateResource = React.useCallback(async (secret: SavedSecret, change: Readonly<{ nextName?: string; nextValue?: string }>): Promise<boolean> => {
         try {
-            if (!scope || !scopeIsActive || !sharedEnabled) return false;
+            if (!scope || !scopeIsActive || !catalogEnabled) return false;
             const reference = parseSavedSecretRefV1(secret.id);
             const entry = sharedEntries.find(candidate => candidate.ref === secret.id);
             if (reference.kind !== 'shared_resource' || !entry || entry.relationship !== 'owner'
                 || entry.revision === null || entry.materialStatus !== 'ready'
                 || (change.nextName !== undefined && !entry.capabilities.rename)
                 || (change.nextValue !== undefined && !entry.capabilities.rotate)) return false;
-            const context = await captureLazyActionAccountContext(scope.serverId);
-            let result: Awaited<ReturnType<typeof updateSavedSecretResource>>;
-            try {
-                if (context.accountId !== scope.accountId) return false;
-                result = await updateSavedSecretResource({
-                    scope, resourceId: reference.resourceId, expectedRevision: entry.revision!, ...change,
-                    decryptDataKeyEnvelope: async encryptedDataKey => {
-                        const { encryption } = await context.resolveAccountEncryption();
-                        context.assertCurrent();
-                        return encryption ? encryption.decryptEncryptionKey(encryptedDataKey, scope) : null;
-                    },
-                });
-            } finally { context.dispose(); }
-            if (!result.ok && result.reason === 'outcome_unknown') await refreshSavedSecretCatalog(scope).catch(() => undefined);
-            return result.ok;
+            const result = await runTeamAction({scope,actionId:'secrets.update',input:{secretId:reference.resourceId,expectedUpdatedAt:entry.revision,
+                ...(change.nextName===undefined?{}:{name:change.nextName}),...(change.nextValue===undefined?{}:{value:change.nextValue})},
+                parse:value=>PERSONAL_SAVED_SECRET_ACTION_OUTPUT_SCHEMAS_V1['secrets.update'].parse(value)});
+            if (result.kind==='failed' && result.failure.kind==='outcome_unknown') await refreshSavedSecretCatalog(scope).catch(() => undefined);
+            return result.kind==='succeeded';
         } catch (error) {
             Modal.alert(
                 t('common.error'),
@@ -165,16 +166,32 @@ export function useSavedSecretCatalog(options?: Readonly<{
             );
             return false;
         }
-    }, [scope, scopeIsActive, sharedEnabled, sharedEntries]);
+    }, [scope, scopeIsActive, catalogEnabled, sharedEntries]);
     const createPersonal = React.useCallback(async (input: Readonly<{ name: string; value: string }>, approval?: SavedSecretPrivateCreationApprovalOptions) => {
         const name = input.name.trim();
         if (!name || input.value.length === 0) return null;
-        if (!scope || !scopeIsActive || !sharedEnabled) return null;
+        if (!scope || !scopeIsActive || !catalogEnabled) return null;
+        const noteDeclinedApproval = (code: string | null | undefined) => {
+            if (code === 'approval_rejected' || code === 'approval_canceled') approval?.onApprovalDeclined?.();
+        };
         const execute = async (callbacks?: Readonly<{
-            onApprovalSucceeded: (result: Extract<Awaited<ReturnType<typeof createSavedSecretResource>>, { ok: true }>) => void;
+            onApprovalSucceeded: (result: Extract<SavedSecretCreationResult, { ok: true }>) => void;
             onApprovalFailed: (code: string) => void;
-        }>) => createSavedSecretResource({ scope, name, kind: 'apiKey', value: input.value,
-            accountGrants: [], teamGrants: [], groupGrants: [], ...callbacks });
+        }>): Promise<SavedSecretCreationResult> => {
+            const result=await runTeamAction<SavedSecretCreateActionResult>({scope,actionId:'secrets.create',input:{name,kind:'apiKey',value:input.value},
+                parse:value=>PERSONAL_SAVED_SECRET_ACTION_OUTPUT_SCHEMAS_V1['secrets.create'].parse(value),
+                ...(approval ? { signal: approval.signal, executorOptions: {
+                    // The personal Action retains its plaintext input on the live
+                    // invocation. Project that wait through the same mounted UI
+                    // observer used by deferred resource approvals.
+                    onBlockingApprovalPending: ({ artifactId }) => approval.onApprovalPending(artifactId),
+                } } : {}),
+                ...(callbacks?{onApprovalSucceeded:value=>callbacks.onApprovalSucceeded({ok:true,resourceRef:value.secretRef,revision:1}),onApprovalFailed:callbacks.onApprovalFailed}:{})});
+            // A blocking approval settles on this live invocation: a decline arrives here as its failure code.
+            if (result.kind==='failed') noteDeclinedApproval(result.failure.code);
+            return result.kind==='succeeded'?{ok:true,resourceRef:result.value.secretRef,revision:1}
+                :{ok:false,reason:result.failure.kind==='outcome_unknown'?'outcome_unknown':result.failure.kind==='conflict'?'changed':'failed'};
+        };
         const result = approval
             ? await awaitActionApprovalResult<Extract<Awaited<ReturnType<typeof execute>>, { ok: true }>, Awaited<ReturnType<typeof execute>>>({
                 ...(approval.signal ? { signal: approval.signal } : {}),
@@ -187,13 +204,16 @@ export function useSavedSecretCatalog(options?: Readonly<{
                     }
                 },
                 succeeded: value => value,
-                failed: () => ({ ok: false, reason: 'failed' }),
+                failed: code => {
+                    noteDeclinedApproval(code);
+                    return { ok: false, reason: 'failed' };
+                },
                 aborted: () => ({ ok: false, reason: 'changed' }),
             })
             : await execute();
         if (!result.ok && result.reason === 'outcome_unknown') await refreshSavedSecretCatalog(scope).catch(() => undefined);
         return result.ok ? result.resourceRef : null;
-    }, [scope, scopeIsActive, sharedEnabled]);
+    }, [scope, scopeIsActive, catalogEnabled]);
     const renamePersonal = React.useCallback(async (secret: SavedSecret, directName?: string) => {
         const name = directName ?? await Modal.prompt(
             t('secrets.prompts.renameTitle'),
@@ -222,53 +242,56 @@ export function useSavedSecretCatalog(options?: Readonly<{
             { cancelText: t('common.cancel'), confirmText: t('common.delete'), destructive: true },
         );
         if (!confirmed) return false;
-        if (!scope || !scopeIsActive || !sharedEnabled || settingsVersion === null) return false;
+        if (!scope || !scopeIsActive || !catalogEnabled || settingsVersion === null) return false;
         const reference = parseSavedSecretRefV1(secret.id);
         const entry = sharedEntries.find(candidate => candidate.ref === secret.id);
         if (reference.kind !== 'shared_resource' || !entry || entry.relationship !== 'owner'
             || entry.revision === null || !entry.capabilities.delete) return false;
-        const result = await deleteSavedSecretResource({ scope, resourceId: reference.resourceId,
-            expectedRevision: entry.revision, expectedSettingsVersion: settingsVersion, confirmedByPresentUser: true });
-        if (!result.ok && result.reason === 'outcome_unknown') await refreshSavedSecretCatalog(scope).catch(() => undefined);
-        return result.ok;
-    }, [scope, scopeIsActive, settingsVersion, sharedEnabled, sharedEntries]);
+        const result = await runTeamAction({scope,actionId:'secrets.delete',input:{secretId:reference.resourceId,expectedUpdatedAt:entry.revision},
+            parse:value=>PERSONAL_SAVED_SECRET_ACTION_OUTPUT_SCHEMAS_V1['secrets.delete'].parse(value)});
+        if (result.kind==='failed' && result.failure.kind==='outcome_unknown') await refreshSavedSecretCatalog(scope).catch(() => undefined);
+        return result.kind==='succeeded';
+    }, [scope, scopeIsActive, settingsVersion, catalogEnabled, sharedEntries]);
     const personalMutations = React.useMemo(() => Object.freeze({
         create: createPersonal,
         rename: renamePersonal,
         rotate: rotatePersonal,
         delete: deletePersonal,
     }), [createPersonal, deletePersonal, renamePersonal, rotatePersonal]);
-    const usableSecrets = React.useMemo(
-        () => sharedEnabled ? getUsableSavedSecrets(scope, EMPTY_MATERIALIZED_SECRETS) : EMPTY_MATERIALIZED_SECRETS,
-        [scope, sharedEnabled, snapshot],
-    );
+    const usableSecrets = React.useMemo(() => catalogEnabled ? getUsableSavedSecrets(scope, EMPTY_MATERIALIZED_SECRETS) : EMPTY_MATERIALIZED_SECRETS,
+        [scope, catalogEnabled, snapshot]);
+    const personalSecrets = React.useMemo(() => {
+        if (!scopeIsActive) return EMPTY_MATERIALIZED_SECRETS;
+        const privateRefs = new Set(entries.filter(entry => entry.relationship === 'owner'
+            && entry.audience !== null
+            && entry.audience.accounts.length === 0 && entry.audience.teams.length === 0 && entry.audience.groups.length === 0
+            && entry.capabilities.rename && entry.capabilities.rotate && entry.capabilities.delete)
+            .map(entry => entry.ref));
+        return usableSecrets.filter(secret => privateRefs.has(secret.id));
+    }, [entries, scopeIsActive, usableSecrets]);
+    const displayedSharedEntries = React.useMemo(() => {
+        if (personalSecrets.length === 0) return sharedEntries;
+        const privateRefs = new Set(personalSecrets.map(secret => secret.id));
+        return sharedEntries.filter(entry => !privateRefs.has(entry.ref));
+    }, [personalSecrets, sharedEntries]);
+    const picker = React.useMemo(() => Object.freeze({ personalSecrets, sharedEntries: displayedSharedEntries }),
+        [personalSecrets, displayedSharedEntries]);
     const resolveReference = React.useCallback(
         (ref: string) => {
-            const resolved = resolveSavedSecretReference(scope, EMPTY_MATERIALIZED_SECRETS, ref);
-            if (!sharedEnabled && resolved.kind === 'shared_resource') {
-                return Object.freeze({
-                    ref,
-                    kind: 'shared_resource' as const,
-                    status: 'temporarily_unavailable' as const,
-                    entry: null,
-                    secret: null,
-                    revision: null,
-                    fingerprint: null,
-                });
-            }
-            return resolved;
+            return resolveSavedSecretReference(scope, EMPTY_MATERIALIZED_SECRETS, ref);
         },
-        [scope, sharedEnabled, snapshot],
+        [scope, snapshot],
     );
 
     return Object.freeze({
         sharedEnabled,
         personalSecrets: EMPTY_MATERIALIZED_SECRETS,
-        personalMutationsAvailable: scopeIsActive && sharedEnabled,
+        personalMutationsAvailable: scopeIsActive && catalogEnabled,
         personalMutations,
         collisionMigrationStatus: 'not_required',
         entries,
         sharedEntries,
+        picker,
         corruptEntries,
         deleteCorruptResource,
         materializedSecrets: snapshot && !snapshot.stale && snapshot.status === 'ready'
@@ -276,9 +299,9 @@ export function useSavedSecretCatalog(options?: Readonly<{
             : EMPTY_MATERIALIZED_SECRETS,
         usableSecrets,
         resolveReference,
-        status: sharedEnabled ? (snapshot?.status ?? 'loading') : 'ready',
-        stale: sharedEnabled ? (snapshot?.stale ?? true) : false,
-        error: sharedEnabled && snapshot?.error !== null && snapshot?.error !== undefined,
+        status: catalogEnabled ? (snapshot?.status ?? 'loading') : 'ready',
+        stale: catalogEnabled ? (snapshot?.stale ?? true) : false,
+        error: catalogEnabled && snapshot?.error !== null && snapshot?.error !== undefined,
         reload,
     });
 }

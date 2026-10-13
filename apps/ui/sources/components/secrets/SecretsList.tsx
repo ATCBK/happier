@@ -293,7 +293,6 @@ export function SecretsList(props: SecretsListProps) {
                         onOpenChange={setIsAddExpanded}
                         title={t('common.add')}
                         subtitle={t('secrets.addSubtitle')}
-                        icon={<Icon name="plus-circle" size={29} color={theme.colors.button.secondary.tint} />}
                         onCancel={resetAddDraft}
                         onSave={submitAddSecret}
                         saveDisabled={!draftName.trim() || draftValue.length === 0}
