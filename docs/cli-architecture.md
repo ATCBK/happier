@@ -149,13 +149,6 @@ sequenceDiagram
 same dependency defaults, exposed interactively for streamed prompts and through the registry for
 callers that supply prompt resolutions up front. No other kind appears in both.
 
-In current development source, CLI and desktop SSH bootstrap share the command builder and
-JSON-result normalization in `packages/cli-common/src/systemTasks`. Only `auth.status` may
-admit exit 1 with a version-1 `auth_status` envelope whose error is `not_authenticated`;
-that result continues through server selection and pairing. Transport failures, malformed
-auth envelopes, and other auth errors fail closed. Released daemon/service commands may
-still return raw JSON objects rather than CLI envelopes.
-
 Registry handlers can emit live callback progress through their execution context while awaiting
 work; these callbacks use the same event validation, redaction, task identity, and timestamps as
 yielded events. In current development source, desktop status inspection and explicit setup share
@@ -325,11 +318,7 @@ probe failures as inconclusive, preserving live ownership. For a PID hidden by a
 the existing authenticated control probe establishes publication presence. Its transport failures
 remain unverified. After observing a hidden owner through authenticated ping or an accepted
 authenticated stop, confirmed stop requires the matching lifecycle lock to release after control ceases, because control closes before final cleanup; without an
-observed lock confirmation remains incomplete. Ordinary dead publications remain absent, and stop
-reclaims their unchanged state and matching lifecycle lock through persistence's exact-owner file
-primitive. Cleanup requires proven process absence and the captured lock bytes; a replacement
-state or lock cancels reclamation. Live, inaccessible, unverified, and hidden owners are not
-reclaimed by the stop observer. Status
+observed lock confirmation remains incomplete. Ordinary dead publications remain absent. Status
 projections and service-update readers share the same presence owner; full daemon health inspection
 also validates process identity. An unverified publication remains explicit in status output and
 blocks service-update planning until authenticated presence can be observed. Initial startup-only
@@ -342,9 +331,8 @@ locks. It attempts siblings after a failed target and returns a confirmed stoppe
 `not_running`. It re-enumerates the same inventory after shutdown to detect a live successor
 publication or startup-only lock before `auth logout --all` can delete the home.
 After an observed hidden owner stops, namespace uncertainty remains scoped to its exact
-publication and lock path; unrelated stale release-ring siblings retain ordinary absence and may
-be reclaimed with the same proven-dead ownership checks. Normal shutdown cleanup remains owned
-by the daemon lifecycle holder; persistence owns narrowly scoped departed-publication reclamation.
+publication and lock path; unrelated stale release-ring siblings retain ordinary absence. State and lock
+cleanup remain owned by the daemon lifecycle holder; these observers do not delete publications.
 Stop commands and authentication report the returned outcome, and logout-all preserves the
 home on incomplete stop. Restart remains best effort for its stop phase, logs incomplete stop
 through the default file logger, and requires its existing distinct running identity proof.
@@ -963,6 +951,52 @@ Local state lives under `~/.happier` (or `HAPPIER_HOME_DIR`):
 Configuration lives in `src/configuration.ts`:
 - `HAPPIER_SERVER_URL` and `HAPPIER_WEBAPP_URL` override defaults.
 - `HAPPIER_VARIANT`, `HAPPIER_EXPERIMENTAL`, `HAPPIER_DISABLE_CAFFEINATE` control behavior.
+
+### Connected Agent storage (0.2 development)
+
+The connected-services materialization owner resolves durable account or pool
+homes through the existing home resolver and updates their managed files in
+place. Claude and Codex use account/pool homes; Antigravity uses the selected
+member's account home and retains restart-based switching. Shared state uses the
+existing state-sharing descriptor; isolated state stays local to that binding.
+Antigravity's isolated-state policy still refuses continuation across different
+accounts, including a pool rotation; the storage change does not relax it.
+Configuration inheritance remains a separate policy. Discovery probes and other
+temporary materializers retain disposable roots.
+
+When isolated history is imported into shared state and the same file already
+exists with different bytes, the existing importer preserves the destination
+and saves the incoming version under a `.happier-import-*` name. This preserves
+both versions but does not merge divergent conversations or make the incoming
+version authoritative at the original path. In particular, switching Antigravity
+to shared state is not conflict resolution for an already-diverged conversation.
+
+Resume preparation imports declared state from the previous root through the
+existing preservation owner. Legacy per-session roots may contribute their
+declared private state; moving an isolated Codex conversation between durable
+account homes imports only that resumed conversation, not the other account's
+history or memories. Adoption alone does not authorize deletion. Legacy
+Run cleanup requires explicit ephemeral retention; resumable and unidentified
+hashed roots are kept. The cleanup scheduler checks actual runtime registrations
+before deleting live Run homes, including pending cleanup after release. Session
+reference lookup remains current-server scoped; retaining an unidentified root
+does not establish that its original Run can resume. Both ordinary and archived
+Session references protect retained history; an unreadable or incomplete listing
+defers deletion rather than supplying partial deletion authority.
+
+Managed Codex app-server startup records the account whose access token was
+actually applied. Connected-account reset-credit reads use the daemon's current
+selection, not the launch home's credential; native sessions use their native
+home's auth store without invoking the connected-account refresh bridge.
+The daemon prepares managed credential projections;
+live runtime application verifies that preparation without becoming another file
+writer. Refresh distribution checks pool generation and credential revision
+inside the existing materialization lock.
+
+Execution-run isolation no longer assigns private XDG cache, data or state
+directories. User-configured locations and ordinary tool caches are preserved,
+while inherited connected-service authentication is still scrubbed. Account
+selection, pool cutover, refresh and recovery remain with their existing owners.
 
 ## API client architecture
 
