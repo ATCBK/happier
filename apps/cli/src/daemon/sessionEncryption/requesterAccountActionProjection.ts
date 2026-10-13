@@ -355,7 +355,11 @@ export async function prepareRequesterAccountActionContext(input: Readonly<{
   const encoded = hasBox ? openExternalActionRequesterAccountContextV1(input) : null;
   const credentials = hasBox
     ? encoded ? decodeStoredCredentials(encoded) : null
-    : !finiteWake && regularOwnAccount ? input.ownCredentials : null;
+    : !finiteWake && regularOwnAccount && input.ownCredentials
+      // Admission binds invocation scope in place. Borrow a private copy so
+      // installed custody stays current, preserving any existing private scope.
+      ? Object.defineProperties({ ...input.ownCredentials }, Object.getOwnPropertyDescriptors(input.ownCredentials))
+      : null;
   if (!credentials) return null;
   const admitted = await admitRequesterAccountActionContext({ ...input, credentials });
   if (!admitted) return null;

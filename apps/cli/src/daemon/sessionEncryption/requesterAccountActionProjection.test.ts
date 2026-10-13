@@ -5,7 +5,7 @@ import { EXTERNAL_ACTION_EXECUTION_AUTHORIZATION_HEADER, ExternalActionExecution
 import { ApiTokenGrantV1Schema } from '@happier-dev/protocol/auth/apiTokenGrant';
 import { createProjectAccountRowCipherV1 } from '@happier-dev/protocol/projects/projectAccountRowCipherV1';
 import { ARTIFACT_PLAIN_DATA_KEY_MARKER, encodePlainArtifactStoredContent } from '@happier-dev/protocol/storage/artifactStoredContent';
-import type { StoredCredentials } from '@/persistence';
+import { bindRequesterSessionCredentialScope, sameStoredCredentials, type StoredCredentials } from '@/persistence';
 import { projectRequesterAccountActionAuthorization } from './requesterSessionCredentials';
 import { projectExternalActionRequesterHttpAuthorization } from '@/api/externalActionExecutionAuthorization';
 import * as requesterAccountOwner from './requesterAccountActionProjection';
@@ -33,6 +33,55 @@ function bootstrap(credentials: StoredCredentials, isCurrent = async () => true)
 }
 
 describe('admitted requester Action projection', () => {
+  it.each(['plain', 'e2ee'] as const)('scopes borrowed own-Account credentials without retiring installed custody (%s)', async mode => {
+    const root = ExternalActionExecutionAuthorizationV1Schema.parse({ v: 1, token: 'own-account-root', binding: {
+      accountId: 'bob', custodianAccountId: 'bob', authentication: { kind: 'account', tokenEpoch: 1 },
+      accountEncryptionMode: mode, serverIdentityId: 'stable-home', machineId: 'machine', installationId: 'installation',
+      actionId: 'projects.context.update', requestId: 'request', requestEnvelopeDigest: 'a'.repeat(43),
+      target: { kind: 'machine', machineId: 'machine' },
+    } });
+    const credentials: StoredCredentials = { token: 'own-account', credentialProvenance: 'stored_session',
+      encryption: mode === 'plain' ? null : { type: 'legacy', secret: new Uint8Array(32).fill(8) } };
+    const installed = { ...credentials };
+    // HTTP is the system boundary; admission, provenance, scoping and projection stay real.
+    vi.spyOn(axios, 'get').mockImplementation(async (url: string) => {
+      if (url.endsWith('/v1/account/profile')) return { status: 200, data: { id: 'bob' } };
+      if (url.endsWith('/v2/account/settings')) return { status: 200, data: mode === 'plain'
+        ? { content: { t: 'plain', v: {} }, version: 0 } : { content: null, version: 0 } };
+      if (url.endsWith('/v1/account/encryption/currentness')) return { status: 200, data: {
+        mode, version: 1, signingKeyFingerprint: null, contentKeyFingerprint: null, updatedAt: 1,
+      } };
+      throw new Error('Unexpected own-Account read');
+    });
+    vi.spyOn(axios, 'post').mockResolvedValue({ status: 200, data: { ok: true } });
+    const input: Parameters<typeof requesterAccountOwner.prepareRequesterAccountActionContext>[0] = {
+      authorization: root, purpose: { kind: 'external_action' }, machineId: 'machine', installationId: 'installation',
+      installationPrivateKey: nacl.sign.keyPair.fromSeed(new Uint8Array(32).fill(31)).secretKey,
+      serverId: 'home-profile', serverIdentityId: 'stable-home', serverHttpBaseUrl: 'https://requester-home.test',
+      ownCredentials: credentials, isCurrent: async () => true,
+      createExecutor: () => ({ execute: async () => ({ ok: false, errorCode: 'unused', error: 'unused' }) }),
+    };
+    const prepared = await requesterAccountOwner.prepareRequesterAccountActionContext(input);
+    expect(prepared).not.toBeNull();
+    expect(sameStoredCredentials(credentials, installed)).toBe(true);
+    expect(credentials.requesterSessionCredentialScope).toBeUndefined();
+    const requester = requesterAccountOwner.readRequesterAccountActionContext(prepared?.authorization);
+    expect(requester?.credentials).toMatchObject({ credentialProvenance: 'stored_session', requesterSessionCredentialScope: {
+      serverId: 'home-profile', serverHttpBaseUrl: 'https://requester-home.test',
+    } });
+    expect(ExternalActionExecutionAuthorizationV1Schema.parse(prepared?.authorization)).toEqual(root);
+    await prepared?.dispose?.();
+    expect(await requester?.isCurrent()).toBe(false);
+    // Existing private scope remains binding; borrowing must not strip it.
+    bindRequesterSessionCredentialScope(credentials, { serverId: 'other-home', serverHttpBaseUrl: 'https://other-home.test' });
+    expect(await requesterAccountOwner.prepareRequesterAccountActionContext(input)).toBeNull();
+    expect(credentials.requesterSessionCredentialScope?.serverId).toBe('other-home');
+    expect(await requesterAccountOwner.prepareRequesterAccountActionContext({ ...input, isCurrent: async () => false })).toBeNull();
+    expect(await requesterAccountOwner.prepareRequesterAccountActionContext({ ...input, authorization: {
+      ...root, binding: { ...root.binding, custodianAccountId: 'alice' },
+    } })).toBeNull();
+  });
+
   it.each(['plain', 'e2ee'] as const)('binds scoped Project Open ports to the observed Home before private HTTP effects (%s)', async mode => {
     const root = ExternalActionExecutionAuthorizationV1Schema.parse({ v: 1, token: 'requester-open', binding: {
       accountId: 'bob', custodianAccountId: 'alice', authentication: { kind: 'terminal', tokenEpoch: 0 },

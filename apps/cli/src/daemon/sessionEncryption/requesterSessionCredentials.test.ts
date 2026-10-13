@@ -31,9 +31,17 @@ import { configuration } from '@/configuration';
 import { normalizeServerHttpBaseUrl, runWithServerHttpBaseUrl } from '@/api/client/serverHttpBaseUrl';
 import { probeAlreadyRunningExistingSessionServiceability } from '@/daemon/startup/pendingQueueNudge';
 import { createCliActionDeps } from '@/session/actions/createCliActionDeps';
+import type { RpcActionExecutorContext } from '@/rpc/handlers/_actionDispatchAdapter';
+import { createActionExecutor, computeExternalActionRequestEnvelopeDigestV1 } from '@happier-dev/protocol';
+import { executeExternalAction } from '../externalActions/executeExternalAction';
+import { createDaemonExternalActionTargetResolver } from '../externalActions/daemonExternalActionTargetResolver';
+import { prepareRequesterAccountActionContext } from './requesterAccountActionProjection';
+import { createRequesterSessionRuntimeContext } from './createRequesterSessionRuntimeContext';
+import { ConnectedServiceRuntimeRegistry } from '../connectedServices/runtimeRegistry/registry';
+import { createDaemonQualifiedConnectedAccountAuthGroupSwitchCoordinator } from '../connectedServices/runtimeAuth/createDaemonQualifiedConnectedAccountAuthGroupSwitchCoordinator';
 import { createSessionLifecycleRpcActionExecutor } from '@/rpc/handlers/sessionLifecycle';
 import * as sessionLifecycleRpc from '@/rpc/handlers/sessionLifecycle';
-import { sealSessionRequesterHandoffPreflightBootstrapRpcRequestV1 } from '@happier-dev/protocol/sessions/creation/sessionRequesterBootstrapV1';
+import { sealSessionRequesterHandoffPreflightBootstrapRpcRequestV1, sealExternalActionRequesterAccountContextV1 } from '@happier-dev/protocol/sessions/creation/sessionRequesterBootstrapV1';
 import { createForkSessionLifecycleActionHandler } from '@/session/actions/lifecycle/createForkSessionLifecycleActionHandler';
 import { getSessionHostBridge } from '@/agent/runtime/bridges/session/SessionHostBridge';
 import { createAdmittedPluginRuntimeFixture } from '@/plugins/testkit/admittedRuntime';
@@ -83,7 +91,7 @@ afterEach(async () => {
   vi.unstubAllEnvs();
 });
 
-async function home(options: Readonly<{ sessionId?: string; creationMachineId?: string; bot?: boolean; custodianAccountId?: string }> = {}) {
+async function home(options: Readonly<{ sessionId?: string; creationMachineId?: string; bot?: boolean; custodianAccountId?: string; requesterReadsOnly?: boolean }> = {}) {
   const sessionId = options.sessionId ?? 'session';
   const custodianAccountId = options.custodianAccountId ?? 'alice';
   directory = await mkdtemp(join(tmpdir(), 'requester-custody-'));
@@ -99,8 +107,10 @@ async function home(options: Readonly<{ sessionId?: string; creationMachineId?: 
   const requests: Array<{ path: string; bearer: string | undefined }> = [];
   app.addHook('onRequest', async request => { requests.push({ path: request.url, bearer: request.headers.authorization }); });
   app.get('/v1/account/profile', async () => ({ id: accountId }));
+  app.get('/v1/account/encryption', async () => ({ mode: accountMode, updatedAt: 1 }));
   app.get('/v1/account/encryption/currentness', async () => ({ mode: accountMode, version: 1,
     signingKeyFingerprint: null, contentKeyFingerprint: null, updatedAt: 1 }));
+  app.post('/v1/actions/session.open/execution-authorization/verify', async () => ({ ok: access }));
   app.get('/v2/account/settings', async () => ({ content: { t: 'plain', v: {} }, version: 1 }));
   app.get('/v1/account/entity-rows/acp', async () => ({ status: 'present', revision: 1, content: { t: 'plain', v: acpCatalog } }));
   app.get('/v1/machines/machine/access', async (_request, reply) => access ? {
@@ -130,7 +140,9 @@ async function home(options: Readonly<{ sessionId?: string; creationMachineId?: 
       ...(options.bot ? { identity: { bot: { kind: 'bot' }, createdAsBot: true } } : {}),
       configuration: null, connectedServices: null, capabilitySelection: null, transcriptStorage: null,
       terminal: null, agentSessionStartupInstructionsMarkerV1: null, checkout: null } });
-  app.get(`/v2/sessions/${sessionId}`, async () => ({ session: createSessionRecordFixture({ id: sessionId,
+  app.get(`/v2/sessions/${sessionId}`, async (request, reply) => options.requesterReadsOnly
+    && request.headers.authorization !== `Bearer ${credentials.token}`
+    ? reply.code(403).send({ error: 'access_denied' }) : ({ session: createSessionRecordFixture({ id: sessionId,
     encryptionMode: 'plain', metadata: JSON.stringify({ machineId: 'machine', path: '/workspace', codexSessionId: 'same-native-session',
       ...(options.bot ? { bot: { kind: 'bot' }, createdAsBot: true } : {}),
       sessionCreationCorrespondenceV1: correspondence }), dataEncryptionKey: null,
@@ -149,6 +161,142 @@ async function home(options: Readonly<{ sessionId?: string; creationMachineId?: 
 }
 
 describe('requester Session lifecycle custody', () => {
+  it('restores protected existing-Session custody through the real local resume registration and refuses revoked or substituted ownership', async () => {
+    const sessionId = 'caaaaaaaaaaaaaaaaaaaaaaaa';
+    const host = await home({ sessionId, requesterReadsOnly: true });
+    await createRequesterSessionCredentialCustody({ happyHomeDir: directory!, sessionId, attribution, credentials });
+    const current = () => verifyRequesterSessionMachineAdmissionCurrent({ credentials, attribution, sessionId,
+      serverHttpBaseUrl: origin, boundary: host.boundary });
+    const machineAdmission = { actorAccountId: 'bob', custodianAccountId: 'alice', machineId: 'machine',
+      installationId: 'installation', role: 'use' as const, encryptionMode: 'plain' as const };
+    const launched: SpawnSessionOptions[] = [];
+    const rpc = new RpcHandlerManager({ scopePrefix: 'machine', encryptionMode: 'plain', logger: () => {} });
+    const registry = new ConnectedServiceRuntimeRegistry();
+    const resolve = async (sessionId: string, expected?: typeof attribution) => {
+      const bootstrap = await resolveRequesterSessionBootstrap({ happyHomeDir: directory!, sessionId,
+        attribution: expected ?? attribution, serverHttpBaseUrl: origin, machineAdmissionBoundary: host.boundary });
+      if (!bootstrap) return null;
+      const switcher = createDaemonQualifiedConnectedAccountAuthGroupSwitchCoordinator({ token: credentials.token,
+        quotaFreshnessMs: 60_000, nowMs: Date.now,
+        // No connected account is selected. Physical auth rematerialization must remain unused.
+        applyGeneration: async () => { throw new Error('Unexpected auth rematerialization'); } });
+      return await createRequesterSessionRuntimeContext({ bootstrap, activeServerDir: directory!,
+        connectedServicesMaterializationBaseDir: join(directory!, 'materialized'),
+        resolveQualifiedConnectedAccountV4Support: () => 'indeterminate', coordinatorInput: {
+          machineId: 'machine', machineIdProvider: () => 'machine', runtimeId: 'runtime', happyHomeDir: directory!,
+          logger: { debug: () => {}, info: () => {}, warn: () => {} },
+          processEnv: { HAPPIER_CONNECTED_SERVICES_REFRESH_ENABLED: '0', HAPPIER_CONNECTED_SERVICES_QUOTAS_ENABLED: '0' },
+          pidToTrackedSession: new Map(), connectedServiceRuntimeRegistry: registry,
+          connectedServiceAuthGroupPreTurnSwitchCoordinator: switcher,
+        } });
+    };
+    sessionLifecycleRpc.registerPrivateSpawnSessionRpcHandlers({ rpcHandlerManager: rpc,
+      spawnLifecycleHandler: createSpawnNewSessionLifecycleActionHandler({ serverId: attribution.serverId,
+        // The physical Agent child is the only launch boundary substituted.
+        spawnSession: async options => { launched.push(options); return { type: 'success', sessionId }; } }),
+      requesterSessionRuntime: { serverId: attribution.serverId, resolve, release: runtime => runtime.dispose() },
+    });
+    const input = { type: 'resume-session' as const, sessionId, directory: '/workspace',
+      backendTarget: { kind: 'backend' as const, backendId: 'codex', sourceKind: 'built_in' as const }, resume: 'same-native-session',
+      permissionMode: 'read-only' as const,
+      initialTranscriptAfterSeq: 17, initialGoal: { objective: 'Finish the task' }, spawnNonce: 'resume-attempt' };
+    const constraints = { models: null, permissionModes: ['read-only' as const] };
+    const options = { rpcContext: { machineAdmission, verifyMachineAdmissionCurrent: current,
+      callerAuthority: 'account_automation' as const, callerInputConstraints: constraints } };
+    const deps = createCliActionDeps({ token: credentials.token, credentials, sessionId: '',
+      serverId: attribution.serverId, serverIdentityId: 'portable-bob-home', serverHttpBaseUrl: origin,
+      machineActionDirectTargetTransport: { machineId: 'machine', invoke: (method, request, localOptions) =>
+        rpc.invokeLocal(method, request, { ...localOptions, ...options }) },
+    });
+    if (!deps.sessionOpen) throw new Error('Missing canonical Session open owner');
+    const resume = () => runWithServerHttpBaseUrl(origin, () => deps.sessionOpen!({ sessionId,
+      serverId: 'portable-bob-home', intent: 'resume', resumeRequest: input }));
+    await expect(resume()).resolves.toMatchObject({ type: 'success', sessionId });
+    expect(launched).toHaveLength(1);
+    expect(launched[0]).toMatchObject({ existingSessionId: sessionId, resume: 'same-native-session',
+      requesterWorkAttributionV1: attribution, callerInputConstraints: constraints,
+      initialTranscriptAfterSeq: 17, initialGoal: { objective: 'Finish the task' } });
+    expect(launched[0]?.requesterSessionBootstrap?.credentials.token).toBe(credentials.token);
+    expect(launched[0]?.requesterSessionBootstrap?.getBoundSessionId()).toBe(sessionId);
+    await expect(runWithServerHttpBaseUrl(origin, () => deps.sessionOpen!({ sessionId,
+      serverId: 'portable-bob-home', intent: 'resume', resumeRequest: { ...input, sessionId: 'cbbbbbbbbbbbbbbbbbbbbbbbb' } })))
+      .resolves.toMatchObject({ ok: false, errorCode: 'target_unavailable' });
+    const accountPrincipal = { accountId: 'bob', authority: 'account_automation' as const,
+      authentication: { kind: 'account' as const, tokenEpoch: 1 } };
+    const target = { kind: 'machine' as const, machineId: 'machine' };
+    const envelope = { v: 1 as const, requestId: 'resume-ingress', target,
+      input: { serverId: 'portable-bob-home', sessionId, intent: 'resume', resumeRequest: input } };
+    const authorization = sealExternalActionRequesterAccountContextV1({ authorization: { v: 1, token: 'home-resume-root',
+      binding: { accountId: 'bob', custodianAccountId: 'alice', authentication: accountPrincipal.authentication,
+        accountEncryptionMode: 'plain', serverIdentityId: 'portable-bob-home', machineId: 'machine', installationId: 'installation',
+        actionId: 'session.open', requestId: envelope.requestId, target,
+        requestEnvelopeDigest: computeExternalActionRequestEnvelopeDigestV1(envelope) } },
+      credentials: encodeStoredCredentials(credentials), purpose: { kind: 'external_action' },
+      installationPublicKey: host.keyPair.publicKey, randomBytes: tweetnacl.randomBytes });
+    const admitted = await executeExternalAction({ actionId: 'session.open', envelope, principal: accountPrincipal,
+      currentMachineId: 'machine', currentServerId: attribution.serverId, currentInstallationId: 'installation',
+      executionAuthorization: authorization, externalActionMachineRequestPrivateKey: host.keyPair.secretKey,
+      verifyExecutionAuthorization: current,
+      resolveTarget: createDaemonExternalActionTargetResolver({ credentials: { token: 'alice-daemon', encryption: null }, serverApiUrl: origin }),
+      executor: createActionExecutor(deps),
+      prepareRequesterAccountContext: async request => {
+        let resolveTarget: ReturnType<typeof createDaemonExternalActionTargetResolver> | undefined;
+        const prepared = await prepareRequesterAccountActionContext({ ...request, purpose: { kind: 'external_action' },
+          machineId: 'machine', installationId: 'installation', installationPrivateKey: host.keyPair.secretKey,
+          serverId: attribution.serverId, serverIdentityId: 'portable-bob-home', serverHttpBaseUrl: origin, isCurrent: current,
+          createExecutor: requester => {
+            resolveTarget = createDaemonExternalActionTargetResolver({ credentials: requester.credentials,
+              serverApiUrl: requester.serverHttpBaseUrl });
+            const executor = createActionExecutor(createCliActionDeps({ token: requester.credentials.token,
+            credentials: requester.credentials, sessionId: '', serverId: attribution.serverId,
+            serverIdentityId: 'portable-bob-home', serverHttpBaseUrl: requester.serverHttpBaseUrl,
+            machineActionDirectTargetTransport: { machineId: 'machine', invoke: (method, request, localOptions) =>
+              rpc.invokeLocal(method, request, { ...localOptions, ...options }) },
+            }));
+            return { execute: (actionId, actionInput, context) => runWithServerHttpBaseUrl(requester.serverHttpBaseUrl,
+              () => executor.execute(actionId, actionInput, context)) };
+          },
+        });
+        return prepared && resolveTarget ? { ...prepared, resolveTarget } : null;
+      },
+    });
+    expect(host.requests.filter(request => request.path.startsWith('/v2/sessions/')).at(-1)?.bearer)
+      .toBe(`Bearer ${credentials.token}`);
+    expect(admitted, JSON.stringify(admitted)).toMatchObject({ kind: 'response', response: {
+      execution: { ok: true, result: { type: 'success', sessionId } },
+    } });
+    expect(host.requests.filter(request => request.path.startsWith('/v2/sessions/'))
+      .every(request => request.bearer === `Bearer ${credentials.token}`)).toBe(true);
+    // The replay owner reconstructs this original private context after the
+    // deciding caller has selected the executor. Resume must not use that
+    // caller's broader closure in place of the original permission ceiling.
+    const originalContext: RpcActionExecutorContext = { surface: 'ui', authority: 'account_automation',
+      serverId: 'portable-bob-home', callerInputConstraints: constraints };
+    const contextualExecutor = createActionExecutor(createCliActionDeps({ token: credentials.token, credentials, sessionId: '',
+      serverId: attribution.serverId, serverIdentityId: 'portable-bob-home', serverHttpBaseUrl: origin,
+      machineActionDirectTargetTransport: { machineId: 'machine', invoke: (method, request, localOptions) => {
+        const delivered: RpcActionExecutorContext | undefined = localOptions?.localActionContext;
+        return rpc.invokeLocal(method, request, { ...localOptions, rpcContext: { ...options.rpcContext,
+          callerAuthority: delivered?.authority ?? 'present_user', callerInputConstraints: delivered?.callerInputConstraints } });
+      } },
+    }));
+    const resumedWithOrigin = await runWithServerHttpBaseUrl(origin, () => contextualExecutor.execute('session.open', envelope.input, originalContext));
+    expect(resumedWithOrigin, JSON.stringify(resumedWithOrigin)).toMatchObject({ ok: true, result: { type: 'success', sessionId } });
+    expect(launched.at(-1)?.callerInputConstraints).toEqual(constraints);
+    const resumedFromMetadata = await runWithServerHttpBaseUrl(origin, () => contextualExecutor.execute('session.open', {
+      serverId: 'portable-bob-home', sessionId, intent: 'resume',
+    }, originalContext));
+    expect(resumedFromMetadata, JSON.stringify(resumedFromMetadata)).toMatchObject({ ok: true, result: { status: 'opened', sessionId } });
+    expect(launched.at(-1)?.callerInputConstraints).toEqual(constraints);
+    const admittedLaunches = launched.length;
+    await expect(rpc.invokeLocal(RPC_METHODS.SPAWN_HAPPY_SESSION_PROVIDER_SAFE, input, {
+      rpcContext: { ...options.rpcContext, machineAdmission: { ...machineAdmission, actorAccountId: 'eve' } },
+    })).resolves.toMatchObject({ ok: false });
+    host.setAccess(false);
+    await expect(resume()).resolves.toMatchObject({ ok: false });
+    expect(launched).toHaveLength(admittedLaunches);
+  });
+
   it.skipIf(process.platform === 'win32').each(['bob', 'alice'])('carries authenticated Account admission into managed ACP first use (custodian %s)', async custodianAccountId => {
     const host = await home({ custodianAccountId });
     vi.stubEnv('HAPPIER_HOME_DIR', directory!);
