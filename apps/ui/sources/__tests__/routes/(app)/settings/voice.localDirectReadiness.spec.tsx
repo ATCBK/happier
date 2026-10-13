@@ -1,488 +1,295 @@
 import React from 'react';
+import 'fake-indexeddb/auto';
 import { act } from 'react-test-renderer';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
-import { renderSettingsView, standardCleanup } from '@/dev/testkit';
+import { createMachineFixture, createRootLayoutFeaturesResponse, renderSettingsView, standardCleanup } from '@/dev/testkit';
+import { createPlainMachineRowFixture } from '@/dev/testkit/fixtures/machineFixtures';
+import { installSessionActionRpcBoundary } from '@/dev/testkit/harness/sessionActionRpcBoundary';
+import { InjectedAuthProvider } from '@/auth/context/AuthContext';
+import { createVoiceSettingsAccountTestHarness } from '@/voice/settings/panels/voiceSettingsAccountTestHarness';
+import { storage } from '@/sync/domains/state/storage';
+import { settingsParse } from '@/sync/domains/settings/settings';
+import { getServerFeaturesSnapshot } from '@/sync/api/capabilities/serverFeaturesClient';
+import { t, tLoose } from '@/text';
 import {
-    settingsParse,
-    type Settings,
-} from '@/sync/domains/settings/settings';
-import {
-    readLocalConversationVoiceSettings,
-    readLocalDirectVoiceSettings,
-    voiceSettingsDefaults,
-    voiceSettingsParse,
-    writeLocalConversationVoiceSettings,
-    writeLocalDirectVoiceSettings,
-    type VoiceSettings,
+    readLocalConversationVoiceSettings, readLocalDirectVoiceSettings, readVoiceDiagnosticsSettings, voiceSettingsDefaults,
+    voiceSettingsParse, writeLocalConversationVoiceSettings, writeLocalDirectVoiceSettings, type VoiceSettings,
 } from '@/sync/domains/settings/voiceSettings';
 import {
-    getDefaultModelPackId,
-    getModelPackCatalogEntry,
-    type DaemonVoiceInferenceModelStatus,
+    DaemonVoiceInferenceModelsListResponseSchema, DaemonVoiceInferenceModelsStatusResponseSchema,
+    getDefaultModelPackId, getModelPackCatalogEntry, listModelPackCatalogEntries,
+    tryWriteServerEnabledBitInPlace, type DaemonVoiceInferenceModelStatus,
 } from '@happier-dev/protocol';
+import { RPC_METHODS } from '@happier-dev/protocol/rpc';
+import { VoiceSpeechDiagnosticsStatusResponseV1Schema, resolveVoiceSpeechDiagnosticsStoragePolicy } from '@happier-dev/protocol/voice/diagnostics';
 
-import { installVoiceSettingsRouteModuleMocks } from './voiceSettingsRouteTestHelpers';
-
-(globalThis as any).IS_REACT_ACT_ENVIRONMENT = true;
-
-const routeState = vi.hoisted(() => ({
-    voice: null as VoiceSettings | null,
-    accountSettings: null as Settings | null,
-    setVoice: vi.fn<(next: VoiceSettings) => void>(),
-    platformOs: 'web' as 'web' | 'ios',
-    catalogCalls: [] as any[],
-    localAvailabilityCalls: [] as any[],
-    localAvailabilityRoute: 'relay' as 'relay' | 'relay_capped' | 'relay_disabled',
-    voiceHomeDaemonMachineId: 'voice-runtime-machine',
-    dictationProps: [] as any[],
-    localDirectProps: [] as any[],
-    localConversationProps: [] as any[],
-    statuses: [] as DaemonVoiceInferenceModelStatus[],
+const device = vi.hoisted(() => ({ os: 'web' as 'web' | 'ios', permission: vi.fn(), start: vi.fn() }));
+vi.mock('socket.io-client', async original =>
+    (await import('@/dev/testkit/harness/serverAccountConnectionHarness')).createSocketIoClientBoundary(original));
+vi.mock('react-native', async () => (await import('@/dev/testkit/mocks/reactNative')).createReactNativeWebMock({
+    Platform: {
+        get OS() { return device.os; },
+        select: (values: Record<string, unknown>) => values[device.os] ?? values.native ?? values.default ?? values.web,
+    },
 }));
+vi.mock('react-native-unistyles', async () => (await import('@/dev/testkit/mocks/unistyles')).createUnistylesMock());
+vi.mock('@expo/vector-icons', async () => (await import('@/dev/testkit/mocks/icons')).createExpoVectorIconsMock());
+vi.mock('expo-router', async () => (await import('@/dev/testkit/mocks/router')).createExpoRouterMock().module);
+vi.mock('expo-speech-recognition', () => ({ ExpoSpeechRecognitionModule: {
+    isRecognitionAvailable: () => true, requestPermissionsAsync: device.permission, start: device.start,
+} }));
 
+(globalThis as Record<string, unknown>).IS_REACT_ACT_ENVIRONMENT = true;
 const DIRECT_STT_PACK_ID = getDefaultModelPackId('stt_sherpa')!;
 const DIRECT_TTS_PACK_ID = getDefaultModelPackId('tts_sherpa')!;
-
-installVoiceSettingsRouteModuleMocks({
-    storageModule: async () => {
-        const { createStorageModuleStub } = await import('@/dev/testkit/mocks/storage');
-        return createStorageModuleStub({
-            useSetting: (key: keyof Settings) => (
-                routeState.accountSettings ?? settingsParse({ voice: routeState.voice })
-            )[key],
-            useSettings: () => routeState.accountSettings ?? settingsParse({ voice: routeState.voice }),
+let statuses: DaemonVoiceInferenceModelStatus[] = [];
+const requests = installSessionActionRpcBoundary(request => {
+    const method = request.method.slice(request.method.indexOf(':') + 1);
+    if (method === RPC_METHODS.DAEMON_VOICE_INFERENCE_MODELS_LIST) {
+        return DaemonVoiceInferenceModelsListResponseSchema.parse({ ok: true, models: statuses });
+    }
+    if (method === RPC_METHODS.DAEMON_VOICE_INFERENCE_MODELS_STATUS) {
+        return DaemonVoiceInferenceModelsStatusResponseSchema.parse({ ok: true, models: statuses });
+    }
+    if (method === RPC_METHODS.CAPABILITIES_DETECT) return { protocolVersion: 1, results: {} };
+    if (method === RPC_METHODS.DAEMON_VOICE_DIAGNOSTICS_STATUS) {
+        return VoiceSpeechDiagnosticsStatusResponseV1Schema.parse({ ok: true, root: '/voice-diagnostics',
+            settings: readVoiceDiagnosticsSettings(account.settings.voice), artifacts: [],
+            health: { captureFailure: false, cleanup: { status: 'healthy', code: null, ownedEntryCount: 0 } },
+            backupPolicy: resolveVoiceSpeechDiagnosticsStoragePolicy('daemon_desktop'),
         });
-    },
+    }
+    return { error: 'unavailable' };
 });
+const originalState = storage.getState();
+const { VoiceConversationsSettingsScreen } = await import('@/voice/settings/screens/VoiceConversationsSettingsScreen');
+const { VoiceDictationSettingsScreen } = await import('@/voice/settings/screens/VoiceDictationSettingsScreen');
+const { VoicePrivacySettingsScreen } = await import('@/voice/settings/screens/VoicePrivacySettingsScreen');
+const { VoiceProviderSection } = await import('@/voice/settings/panels/VoiceProviderSection');
+const { LocalDirectSection } = await import('@/voice/settings/panels/LocalDirectSection');
+const { resolveVoiceProviderAvailability } = await import('@/voice/settings/resolveVoiceProviderAvailability');
+let account: Awaited<ReturnType<typeof createVoiceSettingsAccountTestHarness>>;
 
-vi.mock('react-native', async () => {
-    const { createReactNativeWebMock } = await import('@/dev/testkit/mocks/reactNative');
-    return createReactNativeWebMock({
-        Platform: {
-            get OS() {
-                return routeState.platformOs;
-            },
-            select: (values: Record<string, unknown>) => (
-                values[routeState.platformOs] ?? values.native ?? values.default ?? values.web
-            ),
-        },
+function status(packId: string, installState: DaemonVoiceInferenceModelStatus['installState'] = 'installed'): DaemonVoiceInferenceModelStatus {
+    const entry = getModelPackCatalogEntry(packId)!;
+    return {
+        packId, pluginIdentity: null, kind: entry.kind, model: entry.model, version: null,
+        executionSupport: ['daemon'], runtimeFamily: entry.runtimeFamily, runtimeSupported: true,
+        installState, ...(installState === 'installed' ? { runtimeState: 'ready' as const } : {}),
+        progress: null, lastError: null, updatedAtMs: 0,
+    };
+}
+
+function createVoice(providerId: VoiceSettings['providerId'] = 'local_direct'): VoiceSettings {
+    const direct = readLocalDirectVoiceSettings(voiceSettingsDefaults);
+    const conversation = readLocalConversationVoiceSettings(voiceSettingsDefaults);
+    const stt = { ...direct.stt, provider: 'local_neural' as const,
+        localNeural: { ...direct.stt.localNeural, assetId: DIRECT_STT_PACK_ID, execution: 'daemon' as const } };
+    const tts = { ...direct.tts, provider: 'local_neural' as const,
+        localNeural: { ...direct.tts.localNeural, assetId: DIRECT_TTS_PACK_ID, execution: 'daemon' as const } };
+    return voiceSettingsParse({ ...writeLocalConversationVoiceSettings(
+        writeLocalDirectVoiceSettings(voiceSettingsDefaults, { ...direct, stt, tts }), { ...conversation, stt, tts },
+    ), providerId, executionMachine: { mode: 'fixed', machineId: 'voice-runtime-machine' } });
+}
+
+function hydrateMachines(ids: string[] = ['machine-1', 'voice-runtime-machine']) {
+    storage.getState().applyMachines(ids.map(id => createMachineFixture({
+        ...createPlainMachineRowFixture({ id, accountId: account.scope.accountId }),
+        metadata: { ...createMachineFixture().metadata!, displayName: id === 'machine-1' ? 'Primary Mac' : 'Voice runtime' },
+        daemonState: null, activeAt: Date.now(),
+    })), true, { sourceServerId: account.scope.serverId });
+}
+
+async function configure(voice = createVoice(), options: { capped?: boolean; machines?: string[] } = {}) {
+    account.replaceVoice(voice);
+    hydrateMachines(options.machines);
+    const features = createRootLayoutFeaturesResponse();
+    for (const id of ['voice', 'machines', 'machines.rpc', 'machines.liveStream', 'machines.liveStream.serverRouted'] as const) {
+        if (!tryWriteServerEnabledBitInPlace(features, id, true)) throw new Error(`Missing feature fixture: ${id}`);
+    }
+    features.capabilities.machines.liveStream.serverRouted = {
+        caps: { maxBitrateBps: 96_000, maxFramesPerSecond: 50, maxFrameBytes: 16_384, maxDurationMs: 60_000,
+            maxTotalBytes: 4_000_000, maxConcurrentStreamsPerAccount: 2, maxConcurrentStreamsPerSocket: 1, maxConcurrentStreamsPerMachine: 1 },
+        disabledReason: options.capped ? 'cap_exceeded' : null,
+    };
+    const baseRequest = account.request.getMockImplementation()!;
+    account.request.mockImplementation(async (url, init) => {
+        const path = new URL(String(url)).pathname;
+        if (path === '/v1/features' || path === '/v1/features/authenticated') return Response.json(features);
+        if (path.startsWith('/v1/machines/')) return Response.json({ machine: createPlainMachineRowFixture({
+            id: decodeURIComponent(path.slice('/v1/machines/'.length)), accountId: account.scope.accountId,
+        }) });
+        return baseRequest(url, init);
     });
-});
-
-vi.mock('@/voice/settings/useVoiceSettingsMutable', () => ({
-    useVoiceSettingsMutable: () => [routeState.voice, routeState.setVoice],
-}));
-
-vi.mock('@/sync/store/hooks', async (importOriginal) => {
-    const original = await importOriginal<typeof import('@/sync/store/hooks')>();
-    return {
-        ...original,
-        useAllMachines: () => [{
-            id: 'machine-1',
-            active: true,
-            createdAt: 1,
-            updatedAt: 1,
-            activeAt: 1,
-            seq: 1,
-            metadata: {
-                displayName: 'Primary Mac',
-                host: 'primary-mac',
-                platform: 'darwin',
-                happyCliVersion: '1',
-                happyHomeDir: '/h',
-                homeDir: '/u',
-            },
-            metadataVersion: 1,
-            daemonState: null,
-            daemonStateVersion: 1,
-        }],
-    };
-});
-
-vi.mock('@/hooks/server/useHappierVoiceSupport', () => ({
-    useHappierVoiceSupport: () => true,
-}));
-
-vi.mock('@/constants/Languages', () => ({
-    LANGUAGES: [],
-    findLanguageByCode: () => null,
-}));
-
-vi.mock('@/voice/settings/panels/VoiceProviderSection', () => ({
-    VoiceProviderSection: (props: any) => React.createElement('VoiceProviderSection', props),
-}));
-
-vi.mock('@/voice/settings/panels/VoicePrivacySection', () => ({
-    VoicePrivacySection: (props: any) => React.createElement('VoicePrivacySection', props),
-}));
-
-vi.mock('@/voice/settings/panels/VoiceUiSection', () => ({
-    VoiceUiSection: (props: any) => React.createElement('VoiceUiSection', props),
-}));
-
-vi.mock('@/voice/dictation/DictationSettingsSection', () => ({
-    DictationSettingsSection: (props: any) => {
-        routeState.dictationProps.push(props);
-        return React.createElement('DictationSettingsSection', props);
-    },
-}));
-
-vi.mock('@/voice/settings/panels/BundledConversationSettingsSection', () => ({
-    BundledConversationSettingsSection: (props: any) => React.createElement('BundledConversationSettingsSection', props),
-}));
-
-vi.mock('@/voice/settings/panels/LocalDirectSection', () => ({
-    LocalDirectSection: (props: any) => {
-        routeState.localDirectProps.push(props);
-        return React.createElement('LocalDirectSection', props);
-    },
-}));
-
-vi.mock('@/voice/settings/panels/LocalConversationSection', () => ({
-    LocalConversationSection: (props: any) => {
-        routeState.localConversationProps.push(props);
-        return React.createElement('LocalConversationSection', props);
-    },
-}));
-
-vi.mock('@/voice/settings/panels/modelCatalog/useDaemonVoiceModelCatalogState', () => ({
-    useDaemonVoiceModelCatalogState: (params: any) => {
-        routeState.catalogCalls.push(params);
-        return {
-            state: {
-                statuses: routeState.statuses,
-                errorCode: null,
-                loading: false,
-                actionPackId: null,
-                actionError: null,
-            },
-            refresh: vi.fn(),
-            install: vi.fn(),
-            remove: vi.fn(),
-        };
-    },
-}));
-
-vi.mock('@/voice/credentials/useExecutionMachinePresentation', () => ({
-    useVoiceExecutionMachinePresentation: () => ({
-        machineId: routeState.voiceHomeDaemonMachineId,
-        machineLabel: routeState.voiceHomeDaemonMachineId,
-    }),
-}));
-
-vi.mock('@/voice/settings/voiceProviderLocalAvailability', async (importOriginal) => {
-    const actual = await importOriginal<typeof import('@/voice/settings/voiceProviderLocalAvailability')>();
-    return {
-        ...actual,
-        useVoiceProviderLocalAvailability: (input: any) => {
-            routeState.localAvailabilityCalls.push(input);
-            return {
-                browserSpeech: { support: 'unavailable', onDevice: 'unsupported' },
-                daemon: {
-                    featureEnabled: true,
-                    route: routeState.localAvailabilityRoute,
-                    modelState: input.daemonModelState,
-                    runtimeState: input.daemonRuntimeState,
-                    pcmCapture: 'available',
-                },
-                nativeDevice: { requested: false },
-            };
-        },
-    };
-});
-
-function status(
-    packId: string,
-    kind: 'stt_sherpa' | 'tts_sherpa',
-    installState: DaemonVoiceInferenceModelStatus['installState'],
-): DaemonVoiceInferenceModelStatus {
-    const runtimeFamily = getModelPackCatalogEntry(packId)?.runtimeFamily ?? null;
-    return {
-        packId,
-        pluginIdentity: null,
-        kind,
-        model: packId,
-        version: null,
-        executionSupport: ['daemon'],
-        runtimeFamily,
-        runtimeSupported: runtimeFamily !== null,
-        installState,
-        runtimeState: installState === 'installed' ? 'ready' : undefined,
-        progress: null,
-        lastError: null,
-        updatedAtMs: 0,
-    };
+    const snapshot = await getServerFeaturesSnapshot({ serverId: account.scope.serverId, force: true });
+    expect(snapshot.status).toBe('ready');
+    requests.length = 0;
+    account.request.mockClear();
 }
 
-function createVoice(providerId: VoiceSettings['providerId']): VoiceSettings {
-    const localDirect = readLocalDirectVoiceSettings(voiceSettingsDefaults);
-    const localConversation = readLocalConversationVoiceSettings(voiceSettingsDefaults);
-    const withLocalDirect = writeLocalDirectVoiceSettings(
-        voiceSettingsDefaults,
-        {
-            ...localDirect,
-            stt: {
-                ...localDirect.stt,
-                provider: 'local_neural',
-                localNeural: {
-                    ...localDirect.stt.localNeural,
-                    assetId: DIRECT_STT_PACK_ID,
-                    execution: 'daemon',
-                },
-            },
-            tts: {
-                ...localDirect.tts,
-                provider: 'local_neural',
-                localNeural: {
-                    ...localDirect.tts.localNeural,
-                    assetId: DIRECT_TTS_PACK_ID,
-                    execution: 'daemon',
-                },
-            },
-        },
-    );
-    const withLocalConversation = writeLocalConversationVoiceSettings(
-        withLocalDirect,
-        {
-            ...localConversation,
-            stt: {
-                ...localConversation.stt,
-                provider: 'local_neural',
-                localNeural: {
-                    ...localConversation.stt.localNeural,
-                    assetId: DIRECT_STT_PACK_ID,
-                    execution: 'daemon',
-                },
-            },
-            tts: {
-                ...localConversation.tts,
-                provider: 'local_neural',
-                localNeural: {
-                    ...localConversation.tts.localNeural,
-                    assetId: DIRECT_TTS_PACK_ID,
-                    execution: 'daemon',
-                },
-            },
-        },
-    );
-    return voiceSettingsParse({ ...withLocalConversation, providerId });
+function render(screen: React.ReactElement) {
+    return renderSettingsView(<InjectedAuthProvider credentials={account.credentials}>{screen}</InjectedAuthProvider>);
+}
+function catalogRequests() {
+    return requests.filter(request => [RPC_METHODS.DAEMON_VOICE_INFERENCE_MODELS_LIST, RPC_METHODS.DAEMON_VOICE_INFERENCE_MODELS_STATUS]
+        .some(method => request.method.endsWith(`:${method}`)));
+}
+function expectCatalogFor(machineId: string) {
+    expect(catalogRequests()).toEqual(expect.arrayContaining([
+        { method: `${machineId}:${RPC_METHODS.DAEMON_VOICE_INFERENCE_MODELS_LIST}`, params: {} },
+        { method: `${machineId}:${RPC_METHODS.DAEMON_VOICE_INFERENCE_MODELS_STATUS}`, params: { packIds: listModelPackCatalogEntries().map(entry => entry.packId) } },
+    ]));
+    expect(catalogRequests().every(request => request.method.startsWith(`${machineId}:`))).toBe(true);
+}
+function pipeline(view: Awaited<ReturnType<typeof render>>, testID: string) {
+    const card = view.findAll(node => node.props.testID === testID && Array.isArray(node.props.steps))[0];
+    expect(card).toBeTruthy();
+    return card!;
 }
 
-// Module loading is collection setup; the assertions below measure screen-mount work.
-await import('@/voice/settings/screens/VoicePrivacySettingsScreen');
-await import('@/voice/settings/screens/VoiceConversationsSettingsScreen');
-
-beforeEach(() => {
-    routeState.voice = createVoice('local_direct');
-    routeState.accountSettings = null;
-    routeState.setVoice.mockReset();
-    routeState.platformOs = 'web';
-    routeState.catalogCalls = [];
-    routeState.localAvailabilityCalls = [];
-    routeState.localAvailabilityRoute = 'relay';
-    routeState.voiceHomeDaemonMachineId = 'voice-runtime-machine';
-    routeState.dictationProps = [];
-    routeState.localDirectProps = [];
-    routeState.localConversationProps = [];
-    routeState.statuses = [
-        status(DIRECT_STT_PACK_ID, 'stt_sherpa', 'installed'),
-        status(DIRECT_TTS_PACK_ID, 'tts_sherpa', 'installed'),
-    ];
+beforeEach(async () => {
+    device.os = 'web'; device.permission.mockClear(); device.start.mockClear();
+    statuses = [status(DIRECT_STT_PACK_ID), status(DIRECT_TTS_PACK_ID)];
+    account = await createVoiceSettingsAccountTestHarness(settingsParse({
+        voice: createVoice(), experiments: true,
+        featureToggles: { 'voice.daemonInference': true, 'voice.agent': true, 'execution.runs': true },
+    }));
+});
+afterEach(async () => {
+    standardCleanup();
+    await account.dispose();
+    storage.setState(originalState, true);
 });
 
 describe('VoiceSettingsScreen local_direct daemon readiness', () => {
     it('does not activate provider, daemon catalog, or local readiness work for Privacy & data', async () => {
-        const VoiceSettingsScreen = (await import('@/voice/settings/screens/VoicePrivacySettingsScreen')).VoicePrivacySettingsScreen;
-
-        const screen = await renderSettingsView(<VoiceSettingsScreen />);
-
-        expect(screen.findByTestId('settings.voice.section.privacy')).toBeTruthy();
-        expect(routeState.catalogCalls).toHaveLength(0);
-        expect(routeState.localAvailabilityCalls).toHaveLength(0);
-        expect(routeState.localDirectProps).toHaveLength(0);
-        expect(routeState.localConversationProps).toHaveLength(0);
-        expect(routeState.dictationProps).toHaveLength(0);
+        await configure();
+        const view = await render(<VoicePrivacySettingsScreen />);
+        expect(view.findByTestId('settings.voice.section.privacy')).toBeTruthy();
+        // Privacy owns a passive diagnostics-status read; it must not mount speech/catalog work.
+        expect(requests.filter(request => request.method.includes('voice') || request.method.endsWith(`:${RPC_METHODS.CAPABILITIES_DETECT}`)))
+            .toEqual([{ method: `voice-runtime-machine:${RPC_METHODS.DAEMON_VOICE_DIAGNOSTICS_STATUS}`, params: {} }]);
+        expect(view.tree.root.findAllByType(LocalDirectSection)).toEqual([]);
+        expect(view.tree.root.findAllByType(VoiceProviderSection)).toEqual([]);
+        expect(device.permission).not.toHaveBeenCalled();
+        expect(device.start).not.toHaveBeenCalled();
+        expect(account.request.mock.calls.every(([url]) => new URL(String(url)).hostname.endsWith('.example.test'))).toBe(true);
     });
 
     it('enables the daemon catalog and derives readiness from local_direct selected model packs', async () => {
-        const VoiceSettingsScreen = (await import('@/voice/settings/screens/VoiceConversationsSettingsScreen')).VoiceConversationsSettingsScreen;
-
-        await renderSettingsView(<VoiceSettingsScreen />);
-
-        expect(routeState.catalogCalls.at(-1)?.enabled).toBe(true);
-        expect(routeState.localAvailabilityCalls.at(-1)).toMatchObject({
-            daemonModelState: 'ready',
-            daemonRuntimeState: 'available',
-        });
+        await configure();
+        const view = await render(<VoiceConversationsSettingsScreen />);
+        expectCatalogFor('voice-runtime-machine');
+        // Retained local_direct has no picker tile/pipeline; inspect the real screen's readiness output
+        // and the actual installed model controls rather than inventing a selected gallery service.
+        expect(view.tree.root.findByType(VoiceProviderSection).props.localAvailability.daemon)
+            .toMatchObject({ modelState: 'ready', runtimeState: 'available' });
+        expect(view.findByTestId(`voice-model-remove-${DIRECT_STT_PACK_ID}`)).toBeTruthy();
+        expect(view.findByTestId(`voice-model-remove-${DIRECT_TTS_PACK_ID}`)).toBeTruthy();
     });
 
-    it('passes daemon route diagnostics into LocalDirectSection', async () => {
-        routeState.localAvailabilityRoute = 'relay_capped';
-        const VoiceSettingsScreen = (await import('@/voice/settings/screens/VoiceConversationsSettingsScreen')).VoiceConversationsSettingsScreen;
-
-        await renderSettingsView(<VoiceSettingsScreen />);
-
-        expect(routeState.localDirectProps.at(-1)?.daemonRouteDiagnosticReason).toBe('daemon_relay_capped');
+    it('passes daemon relay-cap diagnostics into the real LocalDirectSection', async () => {
+        const voice = createVoice();
+        await configure(voiceSettingsParse({ ...voice, dictation: { ...voice.dictation, sttBinding: 'explicit',
+            stt: readLocalDirectVoiceSettings(voice).stt } }), { capped: true });
+        const view = await render(<VoiceConversationsSettingsScreen />);
+        expect(view.tree.root.findByType(LocalDirectSection).props.daemonRouteDiagnosticReason).toBe('daemon_relay_capped');
+        expect(view.tree.root.findByType(VoiceProviderSection).props.localAvailability.daemon.route).toBe('relay_capped');
+        expect(resolveVoiceProviderAvailability({
+            happierVoiceSupported: view.tree.root.findByType(VoiceProviderSection).props.happierVoiceSupported, platformOs: 'web',
+            local: view.tree.root.findByType(VoiceProviderSection).props.localAvailability,
+        }).local.paths.daemon).toMatchObject({ selectable: false, runnable: false, reason: 'daemon_relay_capped' });
+        // The retained direct service has no gallery pipeline. Dictation consumes the same
+        // canonical route facts and renders the exact failure instead of treating installed packs as ready.
+        standardCleanup();
+        const dictation = await render(<VoiceDictationSettingsScreen />);
+        expect(pipeline(dictation, 'settings.voice.dictation.pipeline').props.steps[0].readiness)
+            .toMatchObject({ message: tLoose('voice.readiness.daemon_relay_capped') });
+        expect(pipeline(dictation, 'settings.voice.dictation.pipeline').findAll(node =>
+            node.children.includes(tLoose('voice.readiness.daemon_relay_capped'))).length).toBeGreaterThan(0);
     });
 
     it('uses the runtime voice-home machine target for local_direct daemon diagnostics', async () => {
-        const VoiceSettingsScreen = (await import('@/voice/settings/screens/VoiceConversationsSettingsScreen')).VoiceConversationsSettingsScreen;
-
-        await renderSettingsView(<VoiceSettingsScreen />);
-
-        expect(routeState.catalogCalls.at(-1)?.refreshKey).toBe('voice-runtime-machine');
-        expect(routeState.localAvailabilityCalls.at(-1)?.daemonMachineId).toBe('voice-runtime-machine');
+        await configure();
+        const view = await render(<VoiceConversationsSettingsScreen />);
+        expectCatalogFor('voice-runtime-machine');
+        expect(view.tree.root.findByType(VoiceProviderSection).props.executionMachineId).toBe('voice-runtime-machine');
+        expect(catalogRequests().some(request => request.method.startsWith('machine-1:'))).toBe(false);
     });
 
-    it('reaches the canonical machine selector for a Connected Account conversation provider', async () => {
+    it('persists the canonical machine selector choice for a Connected Account conversation provider', async () => {
         const { applyAccountVoiceCredentialSourceSelection } = await import('@/voice/credentials/accountVoiceCredential');
         const { createDefaultVoiceProviderRegistry } = await import('@/voice/registry/defaultRegistry');
         const provider = createDefaultVoiceProviderRegistry().get('happier.voice.openai/realtime-openai');
-        if (provider?.kind !== 'voice.conversation-provider.v1' || provider.declaration?.kind !== 'conversation') {
-            throw new Error('expected_openai_voice_provider');
-        }
-        const initial = settingsParse({
-            voice: {
-                ...voiceSettingsDefaults,
-                providerId: provider.providerId,
-            },
-        });
+        if (provider?.kind !== 'voice.conversation-provider.v1' || provider.declaration?.kind !== 'conversation') throw new Error('expected_openai_voice_provider');
+        const descriptor = provider.providerSettings;
+        if (!descriptor) throw new Error('expected_openai_settings_descriptor');
+        const voice = createVoice(provider.providerId);
+        await configure(voiceSettingsParse({ ...voice, providers: { ...voice.providers,
+            [provider.providerId]: { schemaVersion: descriptor.schemaVersion, config: descriptor.defaultConfig },
+        } }));
         const selected = applyAccountVoiceCredentialSourceSelection({
-            settings: initial,
-            mutation: {
-                contribution: { pluginId: provider.pluginId, localId: provider.declaration.id },
+            settings: account.settings,
+            connectedPurposes: account.purposes.value,
+            mutation: { contribution: { pluginId: provider.pluginId, localId: provider.declaration.id },
                 credentialSlotId: provider.declaration.credentials!.slot.id,
-                selection: {
-                    kind: 'connectedAccount',
-                    target: {
-                        kind: 'account',
-                        account: {
-                            service: { pluginId: 'happier.agent.codex', localId: 'openai-codex' },
-                            accountId: 'codex-work',
-                        },
-                    },
-                },
-                expectedSettingsVersion: 1,
-            },
-            currentDeclaration: provider.declaration,
+                selection: { kind: 'connectedAccount', target: { kind: 'account', account: {
+                    service: { pluginId: 'happier.agent.codex', localId: 'openai-codex' }, accountId: 'codex-work',
+                } } }, expectedSettingsVersion: 1 }, currentDeclaration: provider.declaration,
         });
-        routeState.accountSettings = selected.settings;
-        routeState.voice = selected.settings.voice;
-        const VoiceSettingsScreen = (await import('@/voice/settings/screens/VoiceConversationsSettingsScreen')).VoiceConversationsSettingsScreen;
-
-        const screen = await renderSettingsView(<VoiceSettingsScreen />);
-        // The page header's "Runs on" chip is the Voice computer selector on this page.
-        const chip = screen.findAll((node) => node.props?.filter?.id === 'voiceComputer')[0];
-
-        expect(chip?.props.filter.options).toEqual(expect.arrayContaining([
-            expect.objectContaining({ id: 'machine-1', label: 'Primary Mac' }),
-        ]));
-        await act(async () => {
-            chip?.props.filter.onChange('machine-1');
-        });
-        expect(routeState.setVoice).toHaveBeenCalledWith(expect.objectContaining({
-            executionMachine: expect.objectContaining({ mode: 'fixed', machineId: 'machine-1' }),
-        }));
+        await account.replaceConnectedPurposes(selected.connectedPurposes);
+        account.replaceSettings(selected.settings);
+        const view = await render(<VoiceConversationsSettingsScreen />);
+        const chip = view.findAll(node => node.props?.filter?.id === 'voiceComputer')[0];
+        expect(chip?.props.filter.options).toEqual(expect.arrayContaining([expect.objectContaining({ id: 'machine-1', label: 'Primary Mac' })]));
+        await act(async () => chip!.props.filter.onChange('machine-1'));
+        await vi.waitFor(() => expect(account.persistedSettings.voice.executionMachine).toMatchObject({ mode: 'fixed', machineId: 'machine-1' }));
+        expect(account.writes.length).toBeGreaterThan(0);
     });
 
     it('refreshes daemon catalog and diagnostics when the reactive execution machine hydrates', async () => {
-        routeState.voiceHomeDaemonMachineId = null as unknown as string;
-        const VoiceSettingsScreen = (await import('@/voice/settings/screens/VoiceConversationsSettingsScreen')).VoiceConversationsSettingsScreen;
-
-        const view = await renderSettingsView(<VoiceSettingsScreen />);
-        expect(routeState.catalogCalls.at(-1)?.refreshKey).toBeNull();
-
-        routeState.voiceHomeDaemonMachineId = 'hydrated-machine';
-        await act(async () => {
-            view.tree.update(<VoiceSettingsScreen />);
-        });
-
-        expect(routeState.catalogCalls.at(-1)?.refreshKey).toBe('hydrated-machine');
-        expect(routeState.localAvailabilityCalls.at(-1)?.daemonMachineId).toBe('hydrated-machine');
+        const voice = voiceSettingsParse({ ...createVoice(), executionMachine: { mode: 'fixed', machineId: 'hydrated-machine' } });
+        await configure(voice, { machines: [] });
+        const view = await render(<VoiceConversationsSettingsScreen />);
+        expect(catalogRequests()).toEqual([]);
+        expect(view.tree.root.findByType(VoiceProviderSection).props.executionMachineId).toBeNull();
+        await act(async () => hydrateMachines(['hydrated-machine']));
+        await vi.waitFor(() => expectCatalogFor('hydrated-machine'));
+        await vi.waitFor(() => expect(view.tree.root.findByType(VoiceProviderSection).props.localAvailability.daemon)
+            .toMatchObject({ modelState: 'ready', runtimeState: 'available' }));
     });
 
     it('projects installed STT readiness to Dictation without requiring the unrelated TTS pack', async () => {
-        const localConversationVoice = createVoice('local_conversation');
-        routeState.voice = voiceSettingsParse({
-            ...localConversationVoice,
-            dictation: {
-                ...localConversationVoice.dictation,
-                sttBinding: 'same_as_local',
-            },
-        });
-        routeState.statuses = [
-            status(DIRECT_STT_PACK_ID, 'stt_sherpa', 'installed'),
-            status(DIRECT_TTS_PACK_ID, 'tts_sherpa', 'not_installed'),
-        ];
-        const VoiceSettingsScreen = (await import('@/voice/settings/screens/VoiceDictationSettingsScreen')).VoiceDictationSettingsScreen;
-
-        await renderSettingsView(<VoiceSettingsScreen />);
-
-        expect(routeState.dictationProps.at(-1)?.localAvailability.daemon).toMatchObject({
-            modelState: 'ready',
-            runtimeState: 'available',
-        });
+        statuses = [status(DIRECT_STT_PACK_ID), status(DIRECT_TTS_PACK_ID, 'not_installed')];
+        const voice = createVoice('local_conversation');
+        await configure(voiceSettingsParse({ ...voice, dictation: { ...voice.dictation, sttBinding: 'same_as_local' } }));
+        const view = await render(<VoiceDictationSettingsScreen />);
+        expectCatalogFor('voice-runtime-machine');
+        expect(pipeline(view, 'settings.voice.dictation.pipeline').props.status.tone).toBe('ready');
+        expect(pipeline(view, 'settings.voice.dictation.pipeline').props.steps[0].readiness).toBeNull();
     });
 
     it('loads daemon STT catalog facts for explicit local Dictation under a non-local Voice provider', async () => {
-        const externalVoice = createVoice('happier.voice.elevenlabs/realtime-elevenlabs');
-        routeState.voice = voiceSettingsParse({
-            ...externalVoice,
-            dictation: {
-                ...externalVoice.dictation,
-                sttBinding: 'explicit',
-                stt: {
-                    ...externalVoice.dictation.stt,
-                    provider: 'local_neural',
-                },
-            },
-        });
-        const VoiceSettingsScreen = (await import('@/voice/settings/screens/VoiceDictationSettingsScreen')).VoiceDictationSettingsScreen;
-
-        await renderSettingsView(<VoiceSettingsScreen />);
-
-        expect(routeState.catalogCalls.at(-1)?.enabled).toBe(true);
-        expect(routeState.catalogCalls.at(-1)?.refreshKey).toBe('voice-runtime-machine');
+        const voice = createVoice('happier.voice.elevenlabs/realtime-elevenlabs');
+        await configure(voiceSettingsParse({ ...voice, dictation: { ...voice.dictation, sttBinding: 'explicit',
+            stt: readLocalDirectVoiceSettings(voice).stt } }));
+        const view = await render(<VoiceDictationSettingsScreen />);
+        expectCatalogFor('voice-runtime-machine');
+        expect(pipeline(view, 'settings.voice.dictation.pipeline').props.status.tone).toBe('ready');
     });
 
-    it.each(['auto', 'device'] as const)(
-        'does not request daemon catalog or daemon facts for native local-neural Dictation with %s execution',
-        async (execution) => {
-            routeState.platformOs = 'ios';
-            const externalVoice = createVoice('happier.voice.elevenlabs/realtime-elevenlabs');
-            routeState.voice = voiceSettingsParse({
-                ...externalVoice,
-                dictation: {
-                    ...externalVoice.dictation,
-                    sttBinding: 'explicit',
-                    stt: {
-                        ...externalVoice.dictation.stt,
-                        provider: 'local_neural',
-                        localNeural: {
-                            ...externalVoice.dictation.stt.localNeural,
-                            execution,
-                        },
-                    },
-                },
-            });
-            const VoiceSettingsScreen = (await import('@/voice/settings/screens/VoiceDictationSettingsScreen')).VoiceDictationSettingsScreen;
-
-            await renderSettingsView(<VoiceSettingsScreen />);
-
-            expect(routeState.catalogCalls.at(-1)).toMatchObject({
-                enabled: false,
-                refreshKey: null,
-            });
-            expect(routeState.localAvailabilityCalls.at(-1)).toMatchObject({
-                daemonMachineId: null,
-                daemonModelState: 'unknown',
-                daemonRuntimeState: 'unknown',
-            });
-        },
-    );
-});
-
-afterEach(() => {
-    standardCleanup();
+    it.each(['auto', 'device'] as const)('does not request daemon work for native local-neural Dictation with %s execution', async execution => {
+        device.os = 'ios';
+        const voice = createVoice('happier.voice.elevenlabs/realtime-elevenlabs');
+        const stt = readLocalDirectVoiceSettings(voice).stt;
+        await configure(voiceSettingsParse({ ...voice, dictation: { ...voice.dictation, sttBinding: 'explicit',
+            stt: { ...stt, localNeural: { ...stt.localNeural, execution } } } }));
+        const view = await render(<VoiceDictationSettingsScreen />);
+        expect(catalogRequests()).toEqual([]);
+        expect(requests.filter(request => request.method.includes('daemon.voiceInference.'))).toEqual([]);
+        expect(pipeline(view, 'settings.voice.dictation.pipeline').props.steps[0].where).toBe(t('settingsVoice.pages.pipeline.onThisDevice'));
+        expect(device.permission).not.toHaveBeenCalled();
+        expect(device.start).not.toHaveBeenCalled();
+    });
 });

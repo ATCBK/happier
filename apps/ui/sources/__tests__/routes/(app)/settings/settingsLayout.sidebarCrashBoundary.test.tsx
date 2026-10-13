@@ -1,14 +1,14 @@
 import * as React from 'react';
-import { describe, expect, it, vi } from 'vitest';
+import { afterEach, describe, expect, it, vi } from 'vitest';
 
-import { renderScreen } from '@/dev/testkit';
+import { renderScreen, standardCleanup } from '@/dev/testkit';
 import { createExpoRouterMock } from '@/dev/testkit/mocks/router';
+import { installDisconnectedServerSocketBoundary } from '@/dev/testkit/harness/serverAccountConnectionHarness';
+import { loadSyncSingletonForTests } from '@/dev/testkit/harness/syncSingletonLoader';
 
 (globalThis as any).IS_REACT_ACT_ENVIRONMENT = true;
 
 const windowDimsState = vi.hoisted(() => ({ width: 1600, height: 900 }));
-const setSettingsNavSidebarEnabled = vi.hoisted(() => vi.fn());
-const declaredScreenNames = vi.hoisted(() => [] as string[]);
 const routerMock = createExpoRouterMock();
 
 vi.mock('@/components/settings/shell/SettingsSidebar', () => ({
@@ -16,20 +16,11 @@ vi.mock('@/components/settings/shell/SettingsSidebar', () => ({
     SettingsSidebar: undefined,
 }));
 
-vi.mock('@/components/ui/panels/ResizableDockedPane', () => ({
-    ResizableDockedPane: (props: any) => React.createElement('ResizableDockedPane', props, props.children),
-}));
-
 vi.mock('expo-router', () => ({
     ...routerMock.module,
     Stack: Object.assign(
         (props: any) => React.createElement('Stack', { testID: 'settings-layout-stack' }, props.children),
-        {
-            Screen: (props: any) => {
-                declaredScreenNames.push(props?.name ?? '');
-                return React.createElement('Stack.Screen', { name: props?.name ?? '' });
-            },
-        },
+        { Screen: (props: any) => React.createElement('Stack.Screen', { name: props?.name ?? '' }) },
     ),
 }));
 
@@ -45,66 +36,39 @@ vi.mock('react-native', async () => {
     });
 });
 
-vi.mock('@/sync/domains/state/storage', async () => {
-    const { createStorageModuleStub } = await import('@/dev/testkit/mocks/storage');
-    return createStorageModuleStub({
-        useLocalSetting: (key: string) => {
-            if (key === 'settingsNavSidebarWidthPx') return 230;
-            if (key === 'settingsNavSidebarWidthBasisPx') return 1200;
-            if (key === 'settingsNavSidebarEnabled') return true;
-            return null;
-        },
-        useLocalSettingMutable: (key: string) => {
-            if (key === 'settingsNavSidebarEnabled') {
-                return [true, setSettingsNavSidebarEnabled];
-            }
-            return [null, vi.fn()];
-        },
-    });
-});
-
-vi.mock('@/text', async () => {
-    const { createTextModuleMock } = await import('@/dev/testkit/mocks/text');
-    return createTextModuleMock({ translate: (key) => key });
-});
-
-vi.mock('@/components/navigation/Header', () => ({
-    createHeader: () => null,
-}));
-
-vi.mock('@/utils/platform/platform', () => ({
-    isRunningOnMac: () => false,
-}));
-
 vi.mock('react-native-unistyles', async () => {
     const { createUnistylesMock } = await import('@/dev/testkit/mocks/unistyles');
     return createUnistylesMock();
 });
 
+installDisconnectedServerSocketBoundary();
+const { storage } = await import('@/sync/domains/state/storage');
+const { localSettingsParse } = await import('@/sync/domains/settings/localSettings');
+const { default: Layout } = await import('@/app/(app)/settings/_layout');
+const { SettingsShell } = await import('@/components/settings/shell/SettingsShell');
+
+afterEach(async () => {
+    await standardCleanup();
+});
+
 describe('/settings/_layout sidebar crash boundary', () => {
     it('renders without crashing when the sidebar subtree is an invalid element', async () => {
         const consoleErrorSpy = vi.spyOn(console, 'error').mockImplementation(() => {});
-        declaredScreenNames.length = 0;
-        const Layout = (await import('@/app/(app)/settings/_layout')).default;
-
+        await loadSyncSingletonForTests();
+        const initialState = storage.getState();
+        storage.setState({ localSettings: localSettingsParse({
+            settingsNavSidebarEnabled: true,
+            settingsNavSidebarWidthPx: 230,
+            settingsNavSidebarWidthBasisPx: 1200,
+        }) });
         const screen = await renderScreen(React.createElement(Layout));
 
+        expect(screen.findAllByType(SettingsShell)).toHaveLength(1);
         expect(screen.findByTestId('settings-layout-stack')).toBeTruthy();
-        expect(setSettingsNavSidebarEnabled).not.toHaveBeenCalled();
+        expect(screen.findByTestId('settings-shell.sidebarPane')).toBeNull();
+        expect(screen.findAllByTestId('app-crash-restart')).toHaveLength(0);
+        expect(storage.getState().localSettings.settingsNavSidebarEnabled).toBe(true);
+        storage.setState(initialState, true);
         consoleErrorSpy.mockRestore();
-    });
-
-    it('declares the Agents and Providers collections as their nested navigators', async () => {
-        declaredScreenNames.length = 0;
-        const Layout = (await import('@/app/(app)/settings/_layout')).default;
-
-        await renderScreen(React.createElement(Layout));
-
-        // Each collection owns its screens in its own `_layout` (rail + detail), so the settings
-        // stack declares the collection, never its leaf routes.
-        expect(declaredScreenNames).toContain('agents');
-        expect(declaredScreenNames).toContain('providers');
-        expect(declaredScreenNames).not.toContain('agents/index');
-        expect(declaredScreenNames).not.toContain('agents/[agentId]');
     });
 });

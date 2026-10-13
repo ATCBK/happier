@@ -33,20 +33,14 @@ installSessionSettingsEntryModuleMocks({
     featureEnabled: () => executionRunsEnabled,
 });
 
-vi.mock('@/agents/catalog/catalog', async (importOriginal) => ({
-    ...(await importOriginal<typeof import('@/agents/catalog/catalog')>()),
-    AGENT_IDS: ['codex'],
-    getAgentCore: () => ({ displayNameKey: 'agent.name' }),
-}));
 
-vi.mock('@/sync/domains/permissions/permissionModeOptions', () => ({
-    getPermissionModeLabelForAgentType: () => 'default',
-    getPermissionModeOptionsForAgentType: () => [],
-}));
 
 vi.mock('./sessionI18n', () => ({
     getPermissionApplyTimingSubtitleKey: () => 'x',
 }));
+
+// Load route graphs during collection; interaction deadlines measure the mounted contract.
+await import('@/app/(app)/settings/session');
 
 describe('Session settings (Sub-agent gate)', () => {
     afterEach(() => {

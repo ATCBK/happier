@@ -87,10 +87,26 @@ describe('/restore/manual', () => {
         });
     });
 
+    it('keeps a QR-selected Home target when no Account is known yet', async () => {
+        const fixture = createDirectoryHttpFixture();
+        const home = await adoptHomeProfile({ descriptor: fixture.home.connectionDescriptor,
+            source: 'qr', descriptorAuthority: 'current_connection_observation' });
+        navigation.params = { targetServerId: home.id, targetServerUrl: home.serverUrl };
+        const screen = await renderManualRestoreScreen();
+        expect(screen.findByTestId('restore-manual-secret-input')).not.toBeNull();
+        expect(screen.find(candidate => candidate.props.target?.serverId === home.id)?.props.target)
+            .toMatchObject({ canonicalServerUrl: home.serverUrl });
+        navigation.params = { ...navigation.params, returnTo: '/settings/account/api-tokens', resumeCreate: '1' };
+        await screen.update(<AuthProvider initialCredentials={null}><Screen /></AuthProvider>);
+        expect(screen.findByTestId('restore-manual-target-unavailable')).not.toBeNull();
+        expect(screen.findByTestId('restore-manual-secret-input')).toBeNull();
+    });
+
     it('does not auto-capitalize the case-sensitive Secret Key input', async () => {
         const screen = await renderManualRestoreScreen();
         expect(screen.findByTestId('restore-manual-wizard')).toBeTruthy();
         expect(screen.findByTestId('restore-manual-secret-input')?.props.autoCapitalize).toBe('none');
+        expect(screen.findByTestId('restore-manual-secret-input')?.props.accessibilityLabel).toBe('connect.secretKeyInputLabel');
     });
 
     it('is a one-step page: it shows no wizard step counter', async () => {
@@ -110,6 +126,17 @@ describe('/restore/manual', () => {
         expect(screen.findByTestId('restore-manual-secret-input')?.props.secureTextEntry).toBe(false);
     });
 
+    it('retains malformed key input without starting authentication', async () => {
+        const requests: string[] = [];
+        setRuntimeFetch(async input => { requests.push(new URL(String(input)).pathname); return Response.json({}, { status: 404 }); });
+        const screen = await renderManualRestoreScreen();
+        await act(async () => { screen.changeTextByTestId('restore-manual-secret-input', 'invalid-key'); });
+        await screen.pressByTestIdAsync('restore-manual-submit');
+        expect(screen.findByTestId('restore-manual-secret-input')?.props.value).toBe('invalid-key');
+        expect(screen.findByTestId('restore-manual-secret-error')).not.toBeNull();
+        expect(requests.some(path => path === '/v1/auth' || path === '/v1/auth/challenge')).toBe(false);
+    });
+
     it('persists the restored Secret Key and dismisses to Home without dispatching a nested replace', async () => {
         const token = 'e30.eyJzdWIiOiJhY2NvdW50LWEifQ.signature';
         const secret = encodeBase64(new Uint8Array(32).fill(7), 'base64url');
@@ -123,6 +150,7 @@ describe('/restore/manual', () => {
                 authRequests.push(init ?? {});
                 return Response.json({ token });
             }
+            if (path === '/v1/account/encryption') return Response.json({ mode: 'e2ee', updatedAt: 1 });
             if (path === '/v1/account/encryption/currentness') return Response.json({
                 mode: 'e2ee', version: 1, signingKeyFingerprint: 'signing', contentKeyFingerprint: 'content',
                 updatedAt: 1, recipientEnvelopeReadiness: { status: 'available' },

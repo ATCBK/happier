@@ -76,14 +76,10 @@ installSessionSettingsEntryModuleMocks({
 
 vi.mock('expo-localization', () => ({ getLocales: () => [{ languageTag: 'en-US' }] }));
 vi.mock('expo-system-ui', () => ({ setBackgroundColorAsync: vi.fn() }));
-vi.mock('@/theme', async (importOriginal) => {
-    const actual = await importOriginal<typeof import('@/theme')>();
-    return {
-        ...actual,
-        darkTheme: { ...actual.darkTheme, colors: { ...actual.darkTheme.colors, groupped: { background: '#000' } } },
-        lightTheme: { ...actual.lightTheme, colors: { ...actual.lightTheme.colors, groupped: { background: '#fff' } } },
-    };
-});
+
+// Load route graphs during collection; interaction deadlines measure the mounted contract.
+await import('@/app/(app)/settings/appearance');
+await import('@/app/(app)/settings/appearance/motion');
 
 afterEach(() => {
     standardCleanup();

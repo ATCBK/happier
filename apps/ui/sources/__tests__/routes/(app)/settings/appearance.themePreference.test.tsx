@@ -1,11 +1,11 @@
 import * as React from 'react';
 import { act } from 'react-test-renderer';
 import { afterEach, describe, expect, it, vi } from 'vitest';
+import { JSDOM } from 'jsdom';
 
 import { renderScreen, renderSettingsView, standardCleanup } from '@/dev/testkit';
 import { localSettingsParse } from '@/sync/domains/settings/localSettings';
 import { settingsParse } from '@/sync/domains/settings/settings';
-import { storage } from '@/sync/domains/state/storageStore';
 import { BUILT_IN_THEME_PROFILES } from '@/theme/profiles/builtInThemeProfiles';
 import { installSessionSettingsEntryModuleMocks, resetSessionSettingsEntryState, sessionSettingsEntryState } from './sessionSettingsEntryTestHelpers';
 
@@ -33,7 +33,7 @@ const shared = vi.hoisted(() => ({
     documentElementAnimate: vi.fn(),
 }));
 
-const initialStorage = storage.getState();
+let transitionDom: JSDOM | undefined;
 
 async function renderAppearance(element: React.ReactElement, options?: Parameters<typeof renderSettingsView>[1]) {
     await act(async () => {
@@ -83,34 +83,23 @@ installSessionSettingsEntryModuleMocks({
 vi.mock('expo-localization', () => ({ getLocales: () => [{ languageTag: 'en-US' }] }));
 vi.mock('expo-status-bar', () => ({ setStatusBarStyle: shared.setStatusBarStyle }));
 vi.mock('expo-system-ui', () => ({ setBackgroundColorAsync: shared.setSystemBackgroundColorAsync }));
-vi.mock('@/theme', async (importOriginal) => {
-    const actual = await importOriginal<typeof import('@/theme')>();
-    return {
-        ...actual,
-        darkTheme: {
-            ...actual.darkTheme,
-            colors: {
-                ...actual.darkTheme.colors,
-                groupped: { background: '#000' },
-            },
-        },
-        lightTheme: {
-            ...actual.lightTheme,
-            colors: {
-                ...actual.lightTheme.colors,
-                groupped: { background: '#fff' },
-            },
-        },
-    };
-});
+
+const { storage } = await import('@/sync/domains/state/storageStore');
+const initialStorage = storage.getState();
 
 // Resolve the real route graph during collection; cold transforms are not the reveal contract.
 const { APPEARANCE_SETTINGS } = await import('@/components/settings/appearance/appearanceSettings');
 const { DestinationInstanceHost } = await import('@/components/appShell/workspace/DestinationInstanceHost');
 const { default: GlassAppearanceScreen } = await import('@/app/(app)/settings/appearance/glass');
 
+// Load route graphs during collection; interaction deadlines measure the mounted contract.
+await import('@/app/(app)/settings/appearance/glass');
+await import('@/app/(app)/settings/appearance');
+
 afterEach(() => {
     standardCleanup();
+    transitionDom?.window.close();
+    transitionDom = undefined;
     storage.setState(initialStorage, true);
     resetSessionSettingsEntryState();
     Reflect.deleteProperty(globalThis, 'document');
@@ -193,14 +182,16 @@ describe('Appearance settings theme preference', () => {
     });
 
     it('wraps web theme changes in a view transition', async () => {
+        transitionDom = new JSDOM('<!doctype html><html><head></head><body></body></html>');
+        Object.defineProperty(transitionDom.window.document.documentElement, 'animate', {
+            configurable: true, value: shared.documentElementAnimate,
+        });
+        Object.defineProperty(transitionDom.window.document, 'startViewTransition', {
+            configurable: true, value: shared.startViewTransition,
+        });
         Object.defineProperty(globalThis, 'document', {
             configurable: true,
-            value: {
-                documentElement: {
-                    animate: shared.documentElementAnimate,
-                },
-                startViewTransition: shared.startViewTransition,
-            } as unknown as Document,
+            value: transitionDom.window.document,
         });
 
         const mod = await import('@/app/(app)/settings/appearance');

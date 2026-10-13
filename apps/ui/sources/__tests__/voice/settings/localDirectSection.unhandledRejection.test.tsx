@@ -1,81 +1,76 @@
 import React from 'react';
 import { act } from 'react-test-renderer';
-import { describe, expect, it, vi } from 'vitest';
-import { renderSettingsView } from '@/dev/testkit';
-import { installVoiceSettingsPanelCommonModuleMocks } from '@/voice/settings/panels/voiceSettingsPanelTestHelpers';
+import { afterEach, describe, expect, it, vi } from 'vitest';
+import { renderSettingsView, standardCleanup } from '@/dev/testkit';
+import { MAX_VOICE_TIMER_DELAY_MS } from '@happier-dev/protocol/voice/settings/timing';
 
 type PlatformSelectOptions<T> = {
     web?: T;
     default?: T;
 };
 
-(globalThis as any).IS_REACT_ACT_ENVIRONMENT = true;
-(globalThis as any).expo = { EventEmitter: class {} };
-
-const modalPrompt = vi.fn(async (..._args: any[]) => null);
-
-installVoiceSettingsPanelCommonModuleMocks({
-    storage: async () => await vi.importActual('@/sync/domains/state/storage'),
-    reactNative: async () => {
-        const { createReactNativeWebMock } = await import('@/dev/testkit/mocks/reactNative');
-        return createReactNativeWebMock({
-            Platform: {
-                OS: 'web',
-                select: <T,>(options: PlatformSelectOptions<T>) => options.web ?? options.default,
-            },
-            TurboModuleRegistry: {
-                getEnforcing: () => ({}),
-            },
-            Pressable: 'Pressable',
-        });
-    },
-    modal: async () => {
-        const { createModalModuleMock } = await import('@/dev/testkit/mocks/modal');
-        return createModalModuleMock({
-            spies: {
-                prompt: modalPrompt as unknown as (...args: any[]) => Promise<string | null>,
-            },
-        }).module;
-    },
-    icons: async () => {
-        const { createExpoVectorIconsMock } = await import('@/dev/testkit/mocks/icons');
-        return createExpoVectorIconsMock();
-    },
-    text: async () => {
-        const { createTextModuleMock } = await import('@/dev/testkit/mocks/text');
-        return createTextModuleMock({
-            translate: (key: string) => key,
-        });
-    },
-    unistyles: async () => {
-        const { createUnistylesMock } = await import('@/dev/testkit/mocks/unistyles');
-        return createUnistylesMock({
-            theme: { colors: { textSecondary: '#666' } },
-        });
-    },
+// Only rendering and user-interaction boundaries are substituted. In particular,
+// storage, settings declarations, provider registries and field commits stay real.
+vi.mock('react-native', async () => {
+    const { createReactNativeWebMock } = await import('@/dev/testkit/mocks/reactNative');
+    return createReactNativeWebMock({
+        Platform: {
+            OS: 'web',
+            select: <T,>(options: PlatformSelectOptions<T>) => options.web ?? options.default,
+        },
+        TurboModuleRegistry: {
+            getEnforcing: () => ({}),
+        },
+        Pressable: 'Pressable',
+    });
+});
+vi.mock('@expo/vector-icons', async () => {
+    const { createExpoVectorIconsMock } = await import('@/dev/testkit/mocks/icons');
+    return createExpoVectorIconsMock();
+});
+vi.mock('react-native-unistyles', async () => {
+    const { createUnistylesMock } = await import('@/dev/testkit/mocks/unistyles');
+    return createUnistylesMock({
+        theme: { colors: { textSecondary: '#666' } },
+    });
 });
 
 
 import { readLocalDirectVoiceSettings, voiceSettingsParse } from '@/sync/domains/settings/voiceSettings';
 
+afterEach(async () => {
+  await standardCleanup();
+  vi.restoreAllMocks();
+});
+
 describe('LocalDirectSection', () => {
   // The network timeout used to be edited through an async `Modal.prompt`, whose rejection leaked as an
-  // unhandledRejection. It is now an inline field: typing and leaving it commits a clamped value, with no
-  // prompt and nothing left pending.
-  it('commits the network timeout inline, clamped, without a prompt or an unhandledRejection', async () => {
+  // unhandledRejection. The inline field accepts the canonical setting range,
+  // including valid requests beyond the retired 60-second ceiling.
+  it.each([
+    { input: '120', expectedMs: 120_000 },
+    { input: '999999999', expectedMs: MAX_VOICE_TIMER_DELAY_MS },
+  ])('commits the network timeout $input inline without a prompt or an unhandledRejection', async ({ input, expectedMs }) => {
+    const { VoiceConnectionSection } = await import('@/voice/settings/panels/VoiceConnectionSection');
+    const { Modal, ModalProvider } = await import('@/modal');
+    // Observation only: any accidental prompt still executes the real owner.
+    const modalPrompt = vi.spyOn(Modal, 'prompt');
     const unhandledSpy = vi.fn();
     process.on('unhandledRejection', unhandledSpy);
-    const setVoice = vi.fn();
-    const { VoiceConnectionSection } = await import('@/voice/settings/panels/VoiceConnectionSection');
+    let committedVoice = voiceSettingsParse({ providerId: 'local_direct' });
 
     try {
-      const voice = voiceSettingsParse({ providerId: 'local_direct' });
       // Advanced connection settings owns the timeout for both local adapters.
-      const screen = await renderSettingsView(React.createElement(VoiceConnectionSection, { voice, setVoice }));
+      const screen = await renderSettingsView(React.createElement(ModalProvider, {
+        children: React.createElement(VoiceConnectionSection, {
+          voice: committedVoice,
+          setVoice: (next) => { committedVoice = next; },
+        }),
+      }));
       const field = () => screen.findByTestId('settings.voice.local.networkTimeoutMs.field')!.props;
 
       await act(async () => {
-        field().onChangeText('999999');
+        field().onChangeText(input);
       });
       await act(async () => {
         field().onBlur();
@@ -86,32 +81,8 @@ describe('LocalDirectSection', () => {
     }
 
     expect(modalPrompt).not.toHaveBeenCalled();
-    expect(setVoice).toHaveBeenCalledTimes(1);
-    expect(readLocalDirectVoiceSettings(setVoice.mock.calls[0]![0]).networkTimeoutMs).toBe(60000);
+    expect(readLocalDirectVoiceSettings(committedVoice).networkTimeoutMs).toBe(expectedMs);
     expect(unhandledSpy).not.toHaveBeenCalled();
   });
 
-  it('passes daemon route diagnostics to local neural STT and TTS groups', async () => {
-    const { LocalDirectSection } = await import('@/voice/settings/panels/LocalDirectSection');
-    const { LocalVoiceSttGroup } = await import('@/voice/settings/panels/localStt/LocalVoiceSttGroup');
-    const { LocalVoiceTtsGroup } = await import('@/voice/settings/panels/localTts/LocalVoiceTtsGroup');
-    const voice = voiceSettingsParse({
-      providerId: 'local_direct',
-      providers: {
-        local_direct: { schemaVersion: 1, config: {
-          stt: { provider: 'local_neural' },
-          tts: { provider: 'local_neural' },
-        } },
-      },
-    });
-
-    const screen = await renderSettingsView(React.createElement(LocalDirectSection, {
-      voice,
-      setVoice: vi.fn(),
-      daemonRouteDiagnosticReason: 'daemon_relay_disabled',
-    }));
-
-    expect(screen.findByType(LocalVoiceSttGroup).props.daemonRouteDiagnosticReason).toBe('daemon_relay_disabled');
-    expect(screen.findByType(LocalVoiceTtsGroup).props.daemonRouteDiagnosticReason).toBe('daemon_relay_disabled');
-  });
 });

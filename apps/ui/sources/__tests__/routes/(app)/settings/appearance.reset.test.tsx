@@ -4,6 +4,7 @@ import { afterEach, describe, expect, it, vi } from 'vitest';
 import 'fake-indexeddb/auto';
 
 import { renderSettingsView, standardCleanup } from '@/dev/testkit';
+import { setReducedMotionPreferenceOverride } from '@/hooks/ui/useReducedMotionPreference';
 import { localSettingsDefaults, localSettingsParse } from '@/sync/domains/settings/localSettings';
 import { settingsDefaults, settingsParse } from '@/sync/domains/settings/settings';
 import { storage } from '@/sync/domains/state/storageStore';
@@ -11,15 +12,22 @@ import { installDisconnectedServerSocketBoundary } from '@/dev/testkit/harness/s
 import { createSecretSettingsTestHarness } from '@/components/settings/secrets/secretSettingsTestHarness';
 import { InjectedAuthProvider } from '@/auth/context/AuthContext';
 import { createThemeProfileDraft } from '@/theme/profiles/createThemeProfileDraft';
+import { ThemeProfilesLocalStateSchema } from '@/theme/profiles/themeProfilePersistence';
 import { installSessionSettingsEntryModuleMocks, resetSessionSettingsEntryState } from './sessionSettingsEntryTestHelpers';
 
 const testGlobal = globalThis as typeof globalThis & { IS_REACT_ACT_ENVIRONMENT: boolean };
 testGlobal.IS_REACT_ACT_ENVIRONMENT = true;
+vi.mock('socket.io-client', async (importOriginal) => (
+    await import('@/dev/testkit/harness/serverAccountConnectionHarness')
+).createSocketIoClientBoundary(importOriginal));
 installDisconnectedServerSocketBoundary();
 const initialStorage = storage.getState();
 let account: Awaited<ReturnType<typeof createSecretSettingsTestHarness>> | undefined;
 
-const CUSTOM_PROFILE = createThemeProfileDraft({ id: 'custom-1', name: 'Mine', now: '2026-09-23T00:00:00.000Z' });
+const CUSTOM_PROFILE = ThemeProfilesLocalStateSchema.parse({
+    activeProfileIds: { light: null, dark: null },
+    profiles: [createThemeProfileDraft({ id: 'custom-1', name: 'Mine', now: '2026-09-23T00:00:00.000Z' })],
+}).profiles[0]!;
 
 function nonDefaultAppearanceState(): Record<string, unknown> {
     return {
@@ -88,10 +96,10 @@ installSessionSettingsEntryModuleMocks({
 vi.mock('expo-localization', () => ({ getLocales: () => [{ languageTag: 'en-US' }] }));
 vi.mock('expo-status-bar', () => ({ setStatusBarStyle: vi.fn() }));
 vi.mock('expo-system-ui', () => ({ setBackgroundColorAsync: vi.fn() }));
-vi.mock('@/hooks/ui/useReducedMotionPreference', () => ({ useReducedMotionPreference: () => true }));
 
 afterEach(async () => {
     standardCleanup();
+    setReducedMotionPreferenceOverride(null);
     await account?.dispose();
     account = undefined;
     storage.setState(initialStorage, true);
@@ -100,13 +108,15 @@ afterEach(async () => {
     shared.confirm.mockImplementation(async () => true);
 });
 
+const { default: AppearanceSettingsScreen } = await import('@/app/(app)/settings/appearance');
+
 async function pressReset() {
+    setReducedMotionPreferenceOverride(true);
     const fixture = nonDefaultAppearanceState();
     account = await createSecretSettingsTestHarness({ settings: settingsParse(fixture), sharedEnabled: false });
     storage.setState({ localSettings: localSettingsParse(fixture) });
-    const mod = await import('@/app/(app)/settings/appearance');
     const screen = await renderSettingsView(
-        <InjectedAuthProvider credentials={account.credentials}>{React.createElement(mod.default)}</InjectedAuthProvider>,
+        <InjectedAuthProvider credentials={account.credentials}>{React.createElement(AppearanceSettingsScreen)}</InjectedAuthProvider>,
         { flushOptions: { cycles: 0 } },
     );
     const reset = screen.findByTestId('settings-appearance-reset');

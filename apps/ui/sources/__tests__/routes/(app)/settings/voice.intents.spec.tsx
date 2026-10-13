@@ -3,29 +3,25 @@ import { afterEach, describe, expect, it, vi } from 'vitest';
 
 import { renderSettingsView, standardCleanup } from '@/dev/testkit';
 import { SETTINGS_ROUTES } from '@/components/settings/catalog/routes';
-import { installVoiceSettingsRouteModuleMocks } from './voiceSettingsRouteTestHelpers';
+import { InjectedAuthProvider } from '@/auth/context/AuthContext';
 
-(globalThis as any).IS_REACT_ACT_ENVIRONMENT = true;
+(globalThis as Record<string, unknown>).IS_REACT_ACT_ENVIRONMENT = true;
 
-const push = vi.fn();
-const replace = vi.fn();
+const { push, replace } = vi.hoisted(() => ({ push: vi.fn(), replace: vi.fn() }));
 const routeParams = vi.hoisted(() => ({
   current: {} as Record<string, string | string[] | undefined>,
 }));
 
-vi.mock('@/auth/context/AuthContext', () => ({
-  useAuth: () => ({ credentials: null }),
-}));
-
-installVoiceSettingsRouteModuleMocks({
-  routerModule: async () => {
-    const { createExpoRouterMock } = await import('@/dev/testkit/mocks/router');
-    return createExpoRouterMock({
-      params: () => routeParams.current,
-      router: { push, replace },
-    }).module;
-  },
+vi.mock('expo-router', async () => {
+  const { createExpoRouterMock } = await import('@/dev/testkit/mocks/router');
+  return createExpoRouterMock({
+    params: () => routeParams.current,
+    router: { push, replace },
+  }).module;
 });
+vi.mock('react-native', async () => (await import('@/dev/testkit/mocks/reactNative')).createReactNativeWebMock());
+vi.mock('react-native-unistyles', async () => (await import('@/dev/testkit/mocks/unistyles')).createUnistylesMock());
+vi.mock('@expo/vector-icons', async () => (await import('@/dev/testkit/mocks/icons')).createExpoVectorIconsMock());
 
 // Load the real route graph after installing boundaries, outside the mount assertions.
 const VoiceSettingsScreen = (await import('@/app/(app)/settings/voice')).default;
@@ -39,7 +35,7 @@ afterEach(() => {
 
 describe('Voice settings intent index', () => {
   it('opens on the Voice hub: both modes and every destination', async () => {
-    const screen = await renderSettingsView(<VoiceSettingsScreen />);
+    const screen = await renderSettingsView(<InjectedAuthProvider credentials={null}><VoiceSettingsScreen /></InjectedAuthProvider>);
 
     // Pressing each destination is covered by VoiceSettingsIntentIndexScreen.test.tsx.
     for (const testID of [
@@ -59,7 +55,7 @@ describe('Voice settings intent index', () => {
     ['privacy', SETTINGS_ROUTES.voicePrivacy],
   ] as const)('redirects the legacy %s focus link to its intent detail', async (focus, route) => {
     routeParams.current = { focus };
-    await renderSettingsView(<VoiceSettingsScreen />);
+    await renderSettingsView(<InjectedAuthProvider credentials={null}><VoiceSettingsScreen /></InjectedAuthProvider>);
 
     expect(replace).toHaveBeenCalledWith({ pathname: route, params: { focus } });
   });

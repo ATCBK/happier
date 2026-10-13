@@ -92,26 +92,6 @@ vi.doUnmock('@/components/ui/lists/ItemList');
 
 vi.mock('expo-localization', () => ({ getLocales: () => [{ languageTag: 'en-US' }] }));
 vi.mock('expo-system-ui', () => ({ setBackgroundColorAsync: vi.fn() }));
-vi.mock('@/theme', async (importOriginal) => {
-    const actual = await importOriginal<typeof import('@/theme')>();
-    return {
-        ...actual,
-        darkTheme: {
-            ...actual.darkTheme,
-            colors: {
-                ...actual.darkTheme.colors,
-                groupped: { background: '#000' },
-            },
-        },
-        lightTheme: {
-            ...actual.lightTheme,
-            colors: {
-                ...actual.lightTheme.colors,
-                groupped: { background: '#fff' },
-            },
-        },
-    };
-});
 
 // Transform the real route during collection, not inside an interaction's execution budget.
 const appearance = await import('@/app/(app)/settings/appearance/widgets');

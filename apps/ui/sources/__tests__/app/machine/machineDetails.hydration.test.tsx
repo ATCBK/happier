@@ -109,7 +109,7 @@ describe('MachineDetailScreen canonical Stop fallback', () => {
                     const { createAccountTokenForTests } = await import('@/dev/testkit/harness/homeGovernanceHarness');
                     expect(await TokenStorage.setCredentialsForServerUrl(home.home.serverUrl,
                         { serverId: home.home.id }, { token: createAccountTokenForTests('replacement-account') })).toBe(true);
-                    network.setAccount(home.home.serverUrl, 'replacement-account');
+                    await network.setAccount(home.home.serverUrl, 'replacement-account');
                 }
                 expect(account.accountLifetime.isCurrent()).toBe(false);
                 released.resolve();
