@@ -20,7 +20,11 @@ const { writeFileMock } = vi.hoisted(() => ({ writeFileMock: vi.fn() }));
 // preserved-field readers, renderers and rollback remain real and use temporary definition files.
 vi.mock('node:child_process', async (importOriginal) => ({
   ...await importOriginal<typeof import('node:child_process')>(),
-  spawnSync: vi.fn(() => ({ status: 0, stdout: Buffer.from(''), stderr: Buffer.from('') })),
+  spawnSync: vi.fn((command: string, args: readonly string[] = []) => ({
+    status: 0,
+    stdout: Buffer.from(command === 'powershell.exe' && args.some((arg) => arg.includes('.GetFolder("\\Happier")')) ? '[]' : ''),
+    stderr: Buffer.from(''),
+  })),
 }));
 vi.mock('node:fs/promises', async (importOriginal) => {
   const actual = await importOriginal<typeof import('node:fs/promises')>();
