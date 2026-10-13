@@ -20,6 +20,7 @@ import { readProcessIdentityByPid } from '../processIdentity';
 import { resolveTrackedSessionExitSettlementEvidence } from './resolveTrackedSessionExitSettlementEvidence';
 import { stageObservedExit } from './stageObservedExit';
 import { resolveTrackedSessionActiveTurn } from './trackedSessionActiveTurn';
+import type { SkillStore } from '@/prompts/skills/store/skillStore';
 
 export type ChildExit = {
   reason: string;
@@ -110,6 +111,7 @@ async function settleNoTurnFinalExit(params: Readonly<{
 }
 
 export function createOnChildExited(params: Readonly<{
+  skillStore?: SkillStore;
   pidToTrackedSession: Map<number, TrackedSession>;
   ownerRemainder?: OwnerRemainderPort;
   observeSessionScopeExit?: (tracked: TrackedSession) => Promise<void>;
@@ -305,6 +307,16 @@ export function createOnChildExited(params: Readonly<{
       }
 
       const finalSessionId = normalizeSessionId(tracked.happySessionId);
+      if (shouldReportSessionEnd && finalSessionId && params.skillStore) {
+        try {
+          await params.skillStore.releaseSkillSessionDirs(finalSessionId);
+          await params.skillStore.collectSkillCache();
+        } catch (error) {
+          // Startup reconciliation retries owner-local cleanup after an unavailable filesystem/library read.
+          logger.warn('[DAEMON RUN] Skill session directory cleanup unavailable', { sessionId: finalSessionId, error });
+        }
+        if (!isCurrentPidOwner()) return;
+      }
       if (shouldReportSessionEnd && finalSessionId && params.ownerRemainder) {
         const remainder = await params.ownerRemainder.end({ kind: 'session', sessionId: finalSessionId }, tracked.ownerRemainderCapture);
         if (!isCurrentPidOwner()) return;

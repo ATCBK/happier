@@ -345,6 +345,7 @@ describe('reattachTrackedSessionsFromMarkers', () => {
     const result = await reattachTrackedSessionsFromMarkers({ pidToTrackedSession });
 
     expect(result).toEqual({
+      inventoryReliable: true,
       orphanedDeadDaemonSessions: [
         {
           sessionId: 'session-123',
@@ -420,6 +421,7 @@ describe('reattachTrackedSessionsFromMarkers', () => {
 
     expect(adapter.evaluateLiveness).not.toHaveBeenCalled();
     expect(result).toEqual({
+      inventoryReliable: false,
       orphanedDeadDaemonSessions: [],
       unresolvedTerminalHostSessionIds: [marker.happySessionId],
       connectedServiceRestartIntents: [],
@@ -450,6 +452,7 @@ describe('reattachTrackedSessionsFromMarkers', () => {
     const result = await reattachTrackedSessionsFromMarkers({ pidToTrackedSession: new Map() });
 
     expect(result).toEqual({
+      inventoryReliable: false,
       orphanedDeadDaemonSessions: [],
       unresolvedTerminalHostSessionIds: [marker.happySessionId],
       connectedServiceRestartIntents: [],
@@ -501,6 +504,7 @@ describe('reattachTrackedSessionsFromMarkers', () => {
     const result = await reattachTrackedSessionsFromMarkers({ pidToTrackedSession: new Map() });
 
     expect(result).toEqual({
+      inventoryReliable: true,
       orphanedDeadDaemonSessions: [],
       disconnectedTerminalHostCandidates: [{
         sessionId: marker.happySessionId,
@@ -612,6 +616,7 @@ describe('reattachTrackedSessionsFromMarkers', () => {
     const result = await reattachTrackedSessionsFromMarkers({ pidToTrackedSession: new Map() });
 
     expect(result).toEqual({
+      inventoryReliable: false,
       orphanedDeadDaemonSessions: [],
       unresolvedTerminalHostSessionIds: [marker.happySessionId],
       connectedServiceRestartIntents: [],
@@ -674,6 +679,7 @@ describe('reattachTrackedSessionsFromMarkers', () => {
 
     expect(adapter.evaluateLiveness).not.toHaveBeenCalled();
     expect(result).toEqual({
+      inventoryReliable: true,
       orphanedDeadDaemonSessions: [{ sessionId: marker.happySessionId, pid: marker.pid }],
       connectedServiceRestartIntents: [],
     });
@@ -989,6 +995,7 @@ describe('reattachTrackedSessionsFromMarkers', () => {
     const result = await reattachTrackedSessionsFromMarkers({ pidToTrackedSession });
 
     expect(result).toEqual({
+      inventoryReliable: true,
       orphanedDeadDaemonSessions: [
         {
           sessionId: 'session-restart',
@@ -1036,6 +1043,7 @@ describe('reattachTrackedSessionsFromMarkers', () => {
     const result = await reattachTrackedSessionsFromMarkers({ pidToTrackedSession });
 
     expect(result).toEqual({
+      inventoryReliable: true,
       orphanedDeadDaemonSessions: [
         {
           sessionId: 'session-metadata-restart',
@@ -1080,6 +1088,7 @@ describe('reattachTrackedSessionsFromMarkers', () => {
     const result = await reattachTrackedSessionsFromMarkers({ pidToTrackedSession });
 
     expect(result).toEqual({
+      inventoryReliable: true,
       orphanedDeadDaemonSessions: [
         {
           sessionId: 'session-existing-session-restart',
@@ -1120,6 +1129,7 @@ describe('reattachTrackedSessionsFromMarkers', () => {
     const result = await reattachTrackedSessionsFromMarkers({ pidToTrackedSession });
 
     expect(result).toEqual({
+      inventoryReliable: true,
       orphanedDeadDaemonSessions: [
         {
           sessionId: 'session-terminal-restart',
@@ -1167,6 +1177,7 @@ describe('reattachTrackedSessionsFromMarkers', () => {
     const result = await reattachTrackedSessionsFromMarkers({ pidToTrackedSession });
 
     expect(result).toEqual({
+      inventoryReliable: true,
       orphanedDeadDaemonSessions: [],
       recoveredLiveSessionIds: ['session-terminal-live'],
       connectedServiceRestartIntents: [],
@@ -1197,6 +1208,7 @@ describe('reattachTrackedSessionsFromMarkers', () => {
     });
 
     expect(result).toEqual({
+      inventoryReliable: true,
       orphanedDeadDaemonSessions: [],
       recoveredLiveSessionIds: ['session-123'],
       connectedServiceRestartIntents: [],
@@ -2303,7 +2315,7 @@ describe('reattachTrackedSessionsFromMarkers', () => {
     const pidToTrackedSession = new Map<number, any>();
     const result = await reattachTrackedSessionsFromMarkers({ pidToTrackedSession });
 
-    expect(result).toEqual({ orphanedDeadDaemonSessions: [], connectedServiceRestartIntents: [] });
+    expect(result).toEqual({ inventoryReliable: true, orphanedDeadDaemonSessions: [], connectedServiceRestartIntents: [] });
     expect(pidToTrackedSession.size).toBe(0);
     expect(writeSessionMarker).not.toHaveBeenCalled();
   });

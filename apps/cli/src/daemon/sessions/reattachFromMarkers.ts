@@ -582,6 +582,7 @@ export type OrphanedDeadDaemonSession = Readonly<{
 }>;
 
 export type ReattachTrackedSessionsFromMarkersResult = Readonly<{
+  inventoryReliable: boolean;
   orphanedDeadDaemonSessions: ReadonlyArray<OrphanedDeadDaemonSession>;
   recoveredLiveSessionIds?: ReadonlyArray<string>;
   disconnectedTerminalHostCandidates?: ReadonlyArray<DisconnectedTerminalHostCandidate>;
@@ -591,6 +592,7 @@ export type ReattachTrackedSessionsFromMarkersResult = Readonly<{
 }>;
 
 function buildReattachResult(params: Readonly<{
+  inventoryReliable: boolean;
   orphanedDeadDaemonSessions: ReadonlyArray<OrphanedDeadDaemonSession>;
   recoveredLiveSessionIds: ReadonlySet<string>;
   disconnectedTerminalHostCandidates?: ReadonlyArray<DisconnectedTerminalHostCandidate>;
@@ -607,6 +609,7 @@ function buildReattachResult(params: Readonly<{
   }));
 
   return {
+    inventoryReliable: params.inventoryReliable,
     orphanedDeadDaemonSessions,
     ...(recoveredLiveSessionIds.size > 0
       ? { recoveredLiveSessionIds: Array.from(recoveredLiveSessionIds).sort() }
@@ -639,7 +642,7 @@ export async function reattachTrackedSessionsFromMarkers(params: Readonly<{
   const directoryMissingSessions: Array<Readonly<{ sessionId: string; errorCode: 'SESSION_DIRECTORY_MISSING' }>> = [];
   // On daemon restart, reattach to still-running sessions via disk markers (stack-scoped by HAPPIER_HOME_DIR).
   try {
-    const markers = await listSessionMarkers();
+    const markers = await listSessionMarkers({ requireComplete: true });
     const aliveMarkers = [];
     for (const marker of markers) {
       if (isPidPresent(marker.pid)) {
@@ -846,6 +849,7 @@ export async function reattachTrackedSessionsFromMarkers(params: Readonly<{
       });
     }
     return buildReattachResult({
+      inventoryReliable: unresolvedTerminalHostSessionIds.length === 0,
       orphanedDeadDaemonSessions,
       recoveredLiveSessionIds,
       disconnectedTerminalHostCandidates,
@@ -864,6 +868,7 @@ export async function reattachTrackedSessionsFromMarkers(params: Readonly<{
   );
 
   return buildReattachResult({
+    inventoryReliable: false,
     orphanedDeadDaemonSessions,
     recoveredLiveSessionIds,
     disconnectedTerminalHostCandidates,

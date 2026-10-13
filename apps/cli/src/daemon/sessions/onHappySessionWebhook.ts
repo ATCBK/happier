@@ -20,6 +20,7 @@ import { adoptTrackedSessionRunnerIdentity, bindTrackedSessionIdentity, getParen
 import { findHappyProcessByPid } from '../doctor';
 import { readProcessIdentityByPid } from '../processIdentity';
 import { readProcessRunState } from '../processRunState';
+import { classifySessionRunnerProcessPresence } from '../sessionRunnerLock';
 import type { DaemonSpawnStartupReadinessFailure, TrackedSession } from '../types';
 import {
   hashProcessCommand,
@@ -115,6 +116,99 @@ function adoptReportedSessionIdentity(
   _isPlaceholderSessionId: boolean,
 ): void {
   if (bindTrackedSessionIdentity(tracked, sessionId, true)) tracked.happySessionMetadataFromLocalWebhook = metadata;
+}
+
+/** Foreground identity registration is shared by reports and pre-runtime materialization. */
+function registerExternalTrackedSession(input: Readonly<{
+  pidToTrackedSession: Map<number, TrackedSession>;
+  pid: number;
+  sessionId: string;
+  metadata: Metadata;
+}>): TrackedSession {
+  const existing = input.pidToTrackedSession.get(input.pid);
+  if (existing) return existing;
+  const path = resolveSessionWebhookPath(input.metadata.path);
+  const metadata = path === input.metadata.path ? input.metadata : { ...input.metadata, path };
+  const tracked: TrackedSession = { startedBy: 'happy directly - likely by user from terminal',
+    happySessionId: input.sessionId, happySessionMetadataFromLocalWebhook: metadata, pid: input.pid };
+  input.pidToTrackedSession.set(input.pid, tracked);
+  return tracked;
+}
+
+/** Uses the report's existing marker writer without admitting runtime readiness. */
+async function persistForegroundSessionMarker(input: Readonly<{
+  tracked: TrackedSession;
+  sessionId: string;
+  metadata: Metadata;
+  processIdentity: Awaited<ReturnType<typeof readProcessIdentityByPid>>;
+  writeSessionMarkerFn?: typeof writeSessionMarker;
+}>): Promise<void> {
+  const processCommand = input.processIdentity?.command?.trim() ? input.processIdentity.command : undefined;
+  const processCommandHash = processCommand ? hashProcessCommand(processCommand) : undefined;
+  const processStartTimeMs = input.processIdentity?.processStartTimeMs;
+  input.tracked.processCommand = processCommand;
+  input.tracked.processCommandHash = processCommandHash;
+  input.tracked.processStartTimeMs = processStartTimeMs;
+  if (processStartTimeMs !== undefined && processCommandHash) adoptTrackedSessionRunnerIdentity(input.tracked, {
+    pid: input.tracked.pid, processStartTimeMs, processCommandHash,
+  });
+  await (input.writeSessionMarkerFn ?? writeSessionMarker)({ pid: input.tracked.pid, happySessionId: input.sessionId,
+    startedBy: input.metadata.startedBy ?? 'terminal', cwd: input.metadata.path, metadata: input.metadata,
+    processCommand, processCommandHash, processStartTimeMs });
+}
+
+/** Registers foreground process custody through the same tracker and marker owner as ordinary reports. */
+export async function registerExternalSessionIdentity(input: Readonly<{
+  pidToTrackedSession: Map<number, TrackedSession>;
+  pid: number;
+  sessionId: string;
+  metadata: Metadata;
+}>): Promise<TrackedSession | null> {
+  const existing = input.pidToTrackedSession.get(input.pid);
+  const tracked = registerExternalTrackedSession(input);
+  const custody = tracked.reportMarkerCustody ??= { pending: Promise.resolve(), retiring: false };
+  if (custody.retiring) return null;
+  const isCurrent = () => input.pidToTrackedSession.get(input.pid) === tracked && !custody.retiring;
+  let accepted = false;
+  // Register custody before the first OS await: exit retirement must include
+  // this pending observation, not allow it to publish a new owner afterwards.
+  const work = (async (): Promise<TrackedSession | null> => {
+    try {
+      const processIdentity = await readProcessIdentityByPid(input.pid);
+      const runState = await readProcessRunState(input.pid);
+      if (!isCurrent() || !processIdentity) return null;
+      const expectedStart = input.metadata.hostProcessStartTimeMs;
+      if (expectedStart !== undefined && !processIdentityMatches({ pid: input.pid, processStartTimeMs: expectedStart }, processIdentity)) {
+        return null;
+      }
+      const presence = classifySessionRunnerProcessPresence({ runState,
+        storedProcessStartTimeMs: expectedStart ?? tracked.processStartTimeMs,
+        observedProcessStartTimeMs: processIdentity.processStartTimeMs,
+        storedProcessCommandHash: tracked.processCommandHash,
+        observedProcessCommandHash: processIdentity.command ? hashProcessCommand(processIdentity.command) : undefined });
+      if (presence !== 'present' && presence !== 'recoverable_stopped') return null;
+      if (!bindTrackedSessionIdentity(tracked, input.sessionId)) return null;
+      if (tracked.startedBy !== 'daemon') {
+        tracked.sessionMarkerPersistence = marker;
+        await persistForegroundSessionMarker({ tracked, sessionId: input.sessionId,
+          metadata: tracked.happySessionMetadataFromLocalWebhook ?? input.metadata, processIdentity });
+      }
+      accepted = isCurrent();
+      return accepted ? tracked : null;
+    } catch {
+      return null;
+    } finally {
+      // Drop only this attempt's provisional record. An ordinary report can
+      // adopt the same tracker while OS I/O is pending; its custody is retained.
+      if (!existing && isCurrent() && tracked.sessionMarkerPersistence === marker && !accepted) {
+        input.pidToTrackedSession.delete(input.pid);
+      }
+    }
+  })();
+  const marker = work.then(result => result !== null);
+  if (!existing) tracked.sessionMarkerPersistence = marker;
+  custody.pending = Promise.all([custody.pending, work]).then(() => {});
+  return work;
 }
 
 function didDaemonWebhookPidTimeOut(
@@ -512,14 +606,8 @@ export function createOnHappySessionWebhook(params: Readonly<{
           }
 
           if (rejectDeadExternalDaemonReport()) return;
-          const trackedSession: TrackedSession = {
-            startedBy: 'happy directly - likely by user from terminal',
-            happySessionId: sessionId,
-            happySessionMetadataFromLocalWebhook: normalizedMetadata,
-            pid
-          };
+          const trackedSession = registerExternalTrackedSession({ pidToTrackedSession, pid, sessionId, metadata: normalizedMetadata });
           trackedForPid = trackedSession;
-          pidToTrackedSession.set(pid, trackedSession);
           logger.debug(`[DAEMON RUN] Registered externally-started session ${sessionId}`);
         } else {
           const ppid = ordinaryParentPid;
@@ -565,14 +653,8 @@ export function createOnHappySessionWebhook(params: Readonly<{
           } else {
             // New session started externally (not by this daemon)
             if (rejectDeadExternalDaemonReport()) return;
-            const trackedSession: TrackedSession = {
-              startedBy: 'happy directly - likely by user from terminal',
-              happySessionId: sessionId,
-              happySessionMetadataFromLocalWebhook: normalizedMetadata,
-              pid
-            };
+            const trackedSession = registerExternalTrackedSession({ pidToTrackedSession, pid, sessionId, metadata: normalizedMetadata });
             trackedForPid = trackedSession;
-            pidToTrackedSession.set(pid, trackedSession);
             logger.debug(`[DAEMON RUN] Registered externally-started session ${sessionId}`);
           }
         }
@@ -754,7 +836,7 @@ export function createOnHappySessionWebhook(params: Readonly<{
           : undefined;
       const processCommandHash = processCommand ? hashProcessCommand(processCommand) : undefined;
       const processStartTimeMs = processIdentity?.processStartTimeMs;
-      if (trackedForPid && processIdentity) {
+      if (trackedForPid && processIdentity?.pid === trackedForPid.pid) {
         trackedForPid.processCommandHash = processCommandHash;
         trackedForPid.processCommand = processCommand;
         trackedForPid.processStartTimeMs = processStartTimeMs;
@@ -789,6 +871,11 @@ export function createOnHappySessionWebhook(params: Readonly<{
       if (!requiresCanonicalMarkerAdoption && reportTargetsTrackedOwner && trackedForPid?.pid !== pid) return;
       if (currentSessionMarkerPid !== resolveSessionMarkerPid()) {
         await persistSessionMarker(beforeStartupReadiness);
+        return;
+      }
+      if (trackedForPid && trackedForPid.startedBy !== 'daemon') {
+        await persistForegroundSessionMarker({ tracked: trackedForPid, sessionId, metadata: persistedMetadata,
+          processIdentity, writeSessionMarkerFn });
         return;
       }
       await writeSessionMarkerFn(

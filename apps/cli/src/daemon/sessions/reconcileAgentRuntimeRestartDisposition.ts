@@ -5,6 +5,7 @@ import {
 
 import type { TrackedSession } from '../types';
 import { resolveTrackedSessionCatalogAgentId } from './resolveTrackedSessionCatalogAgentId';
+import { resolveTrackedSessionRunnerIdentity } from './sessionReportCorrelation';
 import type { StopSessionResult } from './stopSessionContract';
 
 type AcquireRegistryLease = typeof acquireAuthoritativePluginRuntimeRegistryLease;
@@ -18,8 +19,9 @@ function hasAttachedRunnerAuthority(
   const capabilityHash =
     tracked.agentRuntimeDaemonServiceCapabilityHash?.trim() ?? '';
   const sourceCustody = tracked.runnerAgentSourceCustodyV1;
-  const runnerPid = tracked.sessionRunnerPid ?? tracked.pid;
-  const processStartTimeMs = tracked.processStartTimeMs;
+  const runnerIdentity = resolveTrackedSessionRunnerIdentity(tracked);
+  if (!runnerIdentity) return false;
+  const { pid: runnerPid, processStartTimeMs, processCommandHash } = runnerIdentity;
 
   return sessionId.length > 0
     && authorityFilePath.length > 0
@@ -30,7 +32,7 @@ function hasAttachedRunnerAuthority(
     && typeof processStartTimeMs === 'number'
     && Number.isInteger(processStartTimeMs)
     && processStartTimeMs >= 0
-    && /^[a-f0-9]{64}$/u.test(tracked.processCommandHash ?? '');
+    && /^[a-f0-9]{64}$/u.test(processCommandHash ?? '');
 }
 
 /**
