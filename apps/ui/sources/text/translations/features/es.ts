@@ -13051,6 +13051,8 @@ const widgetAddTranslations = { es: {
         listOnePerLine: "Uno por línea",
         listCommaSeparated: "Separados por comas",
         previewAfterAdd: 'Se verá aquí cuando lo añadas',
+        adding: 'Añadiendo…',
+        savingInputs: 'Guardando…',
         needed: 'Necesario',
         stillNeeded: ({ field }) => `Aún falta ${field}`,
         followGroup: 'Seguir',

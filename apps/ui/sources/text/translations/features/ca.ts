@@ -13024,6 +13024,8 @@ const widgetAddTranslations = { ca: {
         listOnePerLine: "Un per línia",
         listCommaSeparated: "Separats per comes",
         previewAfterAdd: 'Es veurà aquí un cop afegit',
+        adding: 'Afegint…',
+        savingInputs: 'Desant…',
         needed: 'Cal',
         stillNeeded: ({ field }) => `Encara cal ${field}`,
         followGroup: 'Segueix',

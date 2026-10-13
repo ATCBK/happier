@@ -25,6 +25,8 @@ export type WidgetFlowPrimary = Readonly<{
     onPress: () => void;
     disabled?: boolean;
     busy?: boolean;
+    /** What is happening while it is busy, said in the footer line beside the spinner ("Adding…"). */
+    busyNote?: string;
     /** Why the primary is off, said beside it and read with it. */
     blockedReason?: string | null;
     /** A glyph before the words (Add's "+"). */
@@ -78,7 +80,7 @@ export function WidgetFlowPanel(props: Readonly<{
     const styles = stylesheet;
     const devicePhone = useDeviceType() === 'phone';
     const phone = props.phone ?? devicePhone;
-    const message = props.error ?? props.primary?.blockedReason ?? props.note ?? null;
+    const message = props.error ?? (props.primary?.busy === true ? props.primary.busyNote : undefined) ?? props.primary?.blockedReason ?? props.note ?? null;
     const caret = props.onBack ?? (phone ? props.onClose ?? props.onCancel : undefined);
     const closeInHeader = !phone && !props.onBack && !props.onCancel ? props.onClose : undefined;
     const mark = props.mark === undefined ? null
@@ -86,7 +88,7 @@ export function WidgetFlowPanel(props: Readonly<{
         : props.mark;
     const note = props.footerStart ?? (
         <Text
-            style={[styles.note, props.error ? styles.noteError : null]}
+            style={[styles.note, phone ? null : styles.noteWrap, props.error ? styles.noteError : null]}
             numberOfLines={2}
             testID={props.noteTestID ?? `${props.testID}.note`}
             accessibilityLiveRegion="polite"
@@ -164,13 +166,17 @@ export function WidgetFlowPanel(props: Readonly<{
                         {primary}
                     </View>
                 ) : (
-                    <View style={styles.footer}>
+                    <View style={[styles.footer, styles.footerWrap]}>
                         {note}
                         {props.footerAccessory ?? null}
-                        {props.onCancel ? (
-                            <RoundButton testID={`${props.testID}.cancel`} size="small" display="secondary" title={t('common.cancel')} onPress={props.onCancel} />
+                        {props.onCancel || primary ? (
+                            <View style={styles.footerActions}>
+                                {props.onCancel ? (
+                                    <RoundButton testID={`${props.testID}.cancel`} size="small" display="secondary" title={t('common.cancel')} onPress={props.onCancel} />
+                                ) : null}
+                                {primary}
+                            </View>
                         ) : null}
-                        {primary}
                     </View>
                 )
             ) : null}
@@ -301,6 +307,11 @@ const stylesheet = StyleSheet.create((theme) => ({
         borderTopWidth: StyleSheet.hairlineWidth,
         borderTopColor: theme.colors.border.default,
     },
+    // In a narrow surface (a rail, a card's popover) the note takes its own line above the buttons instead of
+    // being crushed beside them; Cancel and the primary action wrap together, never apart.
+    footerWrap: { flexWrap: 'wrap', justifyContent: 'flex-end' },
+    noteWrap: { flexGrow: 1, flexShrink: 1, flexBasis: 180 },
+    footerActions: { flexDirection: 'row', alignItems: 'center', gap: theme.space.s8 },
     footerPhone: { flexDirection: 'column', alignItems: 'stretch', paddingTop: theme.space.s8 },
     primaryPhone: { alignSelf: 'stretch' },
     note: {

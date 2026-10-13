@@ -13015,6 +13015,8 @@ const widgetAddTranslations = { pl: {
         listOnePerLine: "Jeden w wierszu",
         listCommaSeparated: "Oddzielone przecinkami",
         previewAfterAdd: 'Pojawi się tutaj po dodaniu',
+        adding: 'Dodawanie…',
+        savingInputs: 'Zapisywanie…',
         needed: 'Wymagane',
         stillNeeded: ({ field }) => `Nadal brakuje: ${field}`,
         followGroup: 'Śledź',

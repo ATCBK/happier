@@ -12985,6 +12985,8 @@ const widgetAddTranslations = { 'zh-Hans': {
         listOnePerLine: "每行一个",
         listCommaSeparated: "用逗号分隔",
         previewAfterAdd: '添加后会在这里显示',
+        adding: '正在添加…',
+        savingInputs: '正在保存…',
         needed: '必填',
         stillNeeded: ({ field }) => `仍需要 ${field}`,
         followGroup: '跟随',

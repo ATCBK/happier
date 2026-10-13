@@ -13048,6 +13048,8 @@ const widgetAddTranslations = { fr: {
         listOnePerLine: "Un par ligne",
         listCommaSeparated: "Séparés par des virgules",
         previewAfterAdd: 'Il s’affichera une fois ajouté',
+        adding: 'Ajout en cours…',
+        savingInputs: 'Enregistrement…',
         needed: 'Requis',
         stillNeeded: ({ field }) => `Il manque encore ${field}`,
         followGroup: 'Suivre',

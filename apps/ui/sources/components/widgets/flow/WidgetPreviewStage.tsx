@@ -71,7 +71,13 @@ export function WidgetPreviewStage(props: Readonly<{
     // The whole surface fits the room both ways: a tall one (a group of several widgets) is shown
     // smaller, never cut at the stage's foot.
     const laidWidth = props.alone && footprint ? cardWidthOf(footprint, referenceSurfaceWidthPx()) : surfaceWidth;
-    const scale = room > 0 ? Math.min(1, room / laidWidth, height > 0 && roomHeight > 0 ? roomHeight / height : 1) : 1;
+    // The scale the card would have if only the width limited it, and the room that scale asks for (up to
+    // a readable glance): the stage claims it, so a pane that scrolls its inputs above never squeezes the
+    // card to a thumbnail, while a tall group still shrinks to the cap instead of overflowing.
+    const widthScale = room > 0 ? Math.min(1, room / laidWidth) : 1;
+    const wantedRoomHeight = Math.min(height * widthScale, STAGE_MAX_ROOM_HEIGHT_PX);
+    const roomHeightLimit = Math.max(roomHeight, wantedRoomHeight);
+    const scale = room > 0 ? Math.min(widthScale, height > 0 && roomHeightLimit > 0 ? roomHeightLimit / height : 1) : 1;
     const gap = CARD_GRID.gapPx;
     const column = footprint ? (surfaceWidth - gap * (footprint.columns - 1)) / footprint.columns : surfaceWidth;
     const cardWidth = footprint ? column * footprint.columnSpan + gap * (footprint.columnSpan - 1) : surfaceWidth;
@@ -99,7 +105,7 @@ export function WidgetPreviewStage(props: Readonly<{
     }, [animatedWidth, bodyOpacity, cardWidth, chosen, reducedMotion]);
     const cardStyle = useAnimatedStyle(() => ({ width: animatedWidth.value, opacity: bodyOpacity.value }));
     return (
-        <View style={styles.stage} testID={props.testID}>
+        <View style={[styles.stage, wantedRoomHeight > 0 ? { minHeight: Math.max(STAGE_MIN_HEIGHT_PX, STAGE_CAPTION_ROOM_PX + wantedRoomHeight) } : null]} testID={props.testID}>
             <View style={styles.captionRow}>
                 {props.live ? <View style={styles.liveDot} testID={`${props.testID}.live`} /> : null}
                 <Text style={styles.caption} numberOfLines={1}>{props.caption}</Text>
@@ -124,13 +130,21 @@ export function WidgetPreviewStage(props: Readonly<{
     );
 }
 
+/** The stage never draws shorter than this, whatever it holds. */
+const STAGE_MIN_HEIGHT_PX = 160;
+/** The most room the stage claims for the card: a readable glance, not the whole pane. */
+const STAGE_MAX_ROOM_HEIGHT_PX = 360;
+/** The caption row and its gap above the room (meta line plus the stage's gap). */
+const STAGE_CAPTION_ROOM_PX = 28;
+
 const stylesheet = StyleSheet.create((theme) => ({
-    stage: { flex: 1, minHeight: 160, gap: theme.space.s8 },
+    stage: { flex: 1, minHeight: STAGE_MIN_HEIGHT_PX, gap: theme.space.s8 },
     captionRow: { flexDirection: 'row', alignItems: 'center', gap: theme.space.s6 },
     caption: { ...Typography.default('semiBold'), ...happierPageTextMetrics('meta'), color: theme.colors.text.tertiary },
     // Live is the one state the caption shows in colour.
     liveDot: { width: 6, height: 6, borderRadius: 3, backgroundColor: theme.colors.state.success.foreground },
-    room: { flex: 1, minHeight: 0, alignItems: 'center', justifyContent: 'center', overflow: 'hidden' },
+    // The card hangs under its caption: a tall pane leaves its spare room below, never above.
+    room: { flex: 1, minHeight: 0, alignItems: 'center', justifyContent: 'flex-start', overflow: 'hidden' },
     // Out of flow, so the room keeps the pane's height and the surface is scaled into it.
     frame: { position: 'absolute', overflow: 'visible' },
     // Laid out at the surface's own width, then scaled from its top-left corner into the frame.

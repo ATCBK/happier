@@ -13001,6 +13001,8 @@ const widgetAddTranslations = { it: {
         listOnePerLine: "Uno per riga",
         listCommaSeparated: "Separati da virgole",
         previewAfterAdd: 'Comparirà qui una volta aggiunto',
+        adding: 'Aggiunta in corso…',
+        savingInputs: 'Salvataggio…',
         needed: 'Obbligatorio',
         stillNeeded: ({ field }) => `Manca ancora ${field}`,
         followGroup: 'Segui',

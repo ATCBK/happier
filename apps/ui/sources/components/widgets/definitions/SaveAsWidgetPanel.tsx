@@ -102,7 +102,7 @@ export function SaveAsWidgetPanel(props: Readonly<{
             testID={props.testID}
         >
             {props.preview ? (
-                <WidgetPreviewWell testID={`${props.testID}.preview`} caption={t('widgetAdd.previewLive')}>
+                <WidgetPreviewWell testID={`${props.testID}.preview`} caption={t('widgetAdd.preview')}>
                     {props.preview}
                 </WidgetPreviewWell>
             ) : null}

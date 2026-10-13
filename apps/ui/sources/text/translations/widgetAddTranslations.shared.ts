@@ -59,6 +59,8 @@ export type WidgetAddTranslation = Readonly<{
     listOnePerLine: string;
     listCommaSeparated: string;
     previewAfterAdd: string;
+    adding: string;
+    savingInputs: string;
     needed: string;
     stillNeeded: (params: Readonly<{ field: string }>) => string;
     followGroup: string;
@@ -190,6 +192,8 @@ export const widgetAddTranslationsEnglish = { en: {
         listOnePerLine: "One per line",
         listCommaSeparated: "Separated by commas",
         previewAfterAdd: 'It shows here once it’s added',
+        adding: 'Adding…',
+        savingInputs: 'Saving…',
         needed: 'Needed',
         stillNeeded: ({ field }) => `${field} is still needed`,
         followGroup: 'Follow',

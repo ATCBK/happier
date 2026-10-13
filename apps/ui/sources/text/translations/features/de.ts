@@ -12495,6 +12495,8 @@ const widgetAddTranslations = { de: {
         listOnePerLine: "Eines pro Zeile",
         listCommaSeparated: "Durch Kommas getrennt",
         previewAfterAdd: 'Nach dem Hinzufügen erscheint es hier',
+        adding: 'Wird hinzugefügt…',
+        savingInputs: 'Wird gespeichert…',
         needed: 'Erforderlich',
         stillNeeded: ({ field }) => `${field} fehlt noch`,
         followGroup: 'Folgen',

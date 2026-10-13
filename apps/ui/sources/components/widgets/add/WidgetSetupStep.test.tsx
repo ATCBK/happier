@@ -46,6 +46,8 @@ const { buildWidgetGroupInputsCandidate } = await import('@/components/widgets/g
 const { RoundButton } = await import('@/components/ui/buttons/RoundButton');
 const { WidgetSetupStep } = await import('./WidgetSetupStep');
 const { WidgetSetupFieldRow } = await import('./WidgetSetupFieldRow');
+const { SurfaceStateCard } = await import('@/components/ui/surfaces/SurfaceStateCard');
+const { WidgetPreviewStage } = await import('@/components/widgets/flow/WidgetPreviewStage');
 const { storage } = await import('@/sync/domains/state/storage');
 const { getAppliedActiveServerSnapshot, isAppliedActiveServerRuntimeAvailable, publishAppliedActiveServerSnapshot } = await import('@/sync/runtime/orchestration/appliedActiveServerRuntime');
 const { AppShellPluginUiProjectionValueProvider } = await import('@/components/appShell/plugins/AppShellPluginUiProjection');
@@ -110,6 +112,17 @@ const candidate: WidgetCandidate = { key: 'acme.options/checks', title: 'Checks'
     ] } };
 
 describe('WidgetSetupStep discovery', () => {
+    it('does not claim a mounted error preview is live data when its inputs resolve', async () => {
+        const setup = buildWidgetCandidateSetup({ candidate: { ...candidate, target: 'app', sessionInputPath: undefined, inputs: { fields: [] } },
+            scope, audience: 'personal', context: {}, mode: { kind: 'add', submitLabel: 'Add' }, submit: async () => ({ ok: true }),
+            renderPreview: () => <SurfaceStateCard kind="error" replacesContent title="Read failed" /> });
+        const screen = await renderScreen(<WidgetSetupStep setup={setup} phone={false} presentation="pane" onDone={() => {}} testID="read-failed" />);
+        expect(screen.root.findAllByType(SurfaceStateCard).some(node => node.props.kind === 'error')).toBe(true);
+        expect(screen.root.findByType(WidgetPreviewStage).props.live).not.toBe(true);
+        expect(screen.findByTestId('read-failed.preview.live')).toBeNull();
+        expect(screen.root.findByType(WidgetPreviewStage).props.caption).toBe('widgetAdd.preview');
+    });
+
     it('shows an unreachable Home while a dispatched save remains pending, then accepts its actual receipt', async () => {
         const previous = storage.getState();
         const applied = getAppliedActiveServerSnapshot();
@@ -189,6 +202,19 @@ describe('WidgetSetupStep discovery', () => {
         expect(cancel).toHaveBeenCalledOnce();
         expect(submit).not.toHaveBeenCalled();
     });
+    it('names what the footer is doing while the Add is in flight, beside the button spinner', async () => {
+        let finish!: (value: { ok: true }) => void;
+        const setup = buildWidgetCandidateSetup({ candidate: { ...candidate, target: 'app', sessionInputPath: undefined, inputs: { fields: [] } },
+            scope: { ...scope, owner: { kind: 'home' } }, audience: 'personal', context: {},
+            mode: { kind: 'add', submitLabel: 'Add' }, submit: async () => new Promise(resolve => { finish = resolve; }) });
+        const screen = await renderScreen(<WidgetSetupStep setup={setup} phone={false} presentation="pane" onDone={() => {}} testID="adding-pane" />);
+        await act(async () => { screen.findByTestId('adding-pane.submit')!.props.onPress(); });
+        expect(screen.findAllByType(RoundButton).find(node => node.props.testID === 'adding-pane.submit')!.props.loading).toBe(true);
+        expect(screen.findByTestId('adding-pane.why')!.props.children).toBe('widgetAdd.adding');
+        await act(async () => { finish({ ok: true }); });
+        await screen.unmount();
+    });
+
     it('previews the chosen declared size and submits it together with the input bindings', async () => {
         const sized: WidgetCandidate = { ...candidate, target: 'app', sessionInputPath: undefined,
             inputs: { fields: [{ path: 'filter', title: 'Filter', widget: 'text' as const, required: true }] },

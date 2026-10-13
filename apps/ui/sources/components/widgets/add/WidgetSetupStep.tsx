@@ -41,6 +41,8 @@ const PREVIEW_MIN_HEIGHT_PX = 168;
 const POPOVER_PREVIEW_WIDTH_PX = 288;
 /** A phone shows the card's header and first rows under the inputs; the rest is clipped, never scaled. */
 const PHONE_PREVIEW_HEIGHT_PX = 168;
+/** Below this width the inputs and the preview column stack (a card's own popover in a rail), as on a phone. */
+const SIDE_BY_SIDE_MIN_WIDTH_PX = POPOVER_PREVIEW_WIDTH_PX + 260;
 
 const NO_OPTIONS: readonly WidgetSetupValue[] = Object.freeze([]);
 /** Cancels the untitled group's own inset and top spacer, so its sheet starts at the pane's edges. */
@@ -260,6 +262,8 @@ export function WidgetSetupStep(props: Readonly<{
             {unavailableWidth?.unavailableReason ? <Text style={styles.waiting} testID={`${props.testID}.width.unavailable`}>{unavailableWidth.unavailableReason}</Text> : null}
         </View> : null;
     const widgetTitle = setup.widget?.title ?? setup.title;
+    const [bodyWidth, setBodyWidth] = React.useState(0);
+    const stacked = props.phone === true || (bodyWidth > 0 && bodyWidth < SIDE_BY_SIDE_MIN_WIDTH_PX);
     // The card at its size on this surface: a grid surface lends it the footprint's rows, a column
     // (Companion, Project aside) its compact frame.
     // A phone shows a card still waiting for its inputs at its smallest declared footprint (lab A2p);
@@ -293,13 +297,14 @@ export function WidgetSetupStep(props: Readonly<{
     ) : null;
     const preview = card ? (
         pane && !props.phone ? (
-            <WidgetPreviewStage testID={`${props.testID}.preview`} surface={sizes?.surface ?? null} size={draft.size} live={live !== null}
+            // A mounted preview can still be loading or refused. Its body owns the read state.
+            <WidgetPreviewStage testID={`${props.testID}.preview`} surface={sizes?.surface ?? null} size={draft.size}
                 {...(widths && draft.width ? { footprint: widthFootprint(draft.width), alone: true } : {})}
-                caption={live ? t('widgetAdd.previewLiveData') : t('widgetAdd.preview')} accessibilityLabel={widgetTitle}>{card}</WidgetPreviewStage>
+                caption={t('widgetAdd.preview')} accessibilityLabel={widgetTitle}>{card}</WidgetPreviewStage>
         ) : (
             <WidgetPreviewWell
                 testID={`${props.testID}.preview`}
-                caption={pane && live ? t('widgetAdd.previewLiveData') : live ? t('widgetAdd.previewLive') : t('widgetAdd.preview')}
+                caption={t('widgetAdd.preview')}
                 // The Add pane on a phone shows the whole compact card; Edit inputs keeps its fixed room.
                 {...(props.phone ? (pane ? {} : { height: PHONE_PREVIEW_HEIGHT_PX }) : { minHeight: PREVIEW_MIN_HEIGHT_PX })}
             >
@@ -334,6 +339,7 @@ export function WidgetSetupStep(props: Readonly<{
             onPress: () => { void submit(); },
             disabled: busy || !finishable,
             busy: busy && !homeUnreachable,
+            busyNote: pane ? t('widgetAdd.adding') : t('widgetAdd.savingInputs'),
         },
     } satisfies Omit<React.ComponentProps<typeof WidgetFlowPanel>, 'children'>;
 
@@ -363,13 +369,13 @@ export function WidgetSetupStep(props: Readonly<{
     const aside = preview && sizePicker ? <View style={{ gap: theme.space.s12 }}>{preview}{sizePicker}</View> : preview ?? sizePicker;
     return (
         <WidgetFlowPanel {...panel}>
-            {props.phone ? (
-                <View style={styles.bodyPhone}>
+            {stacked ? (
+                <View style={styles.bodyPhone} onLayout={(event) => setBodyWidth(Math.round(event.nativeEvent.layout.width))}>
                     {inputs}
                     {aside}
                 </View>
             ) : aside ? (
-                <View style={styles.body}>
+                <View style={styles.body} onLayout={(event) => setBodyWidth(Math.round(event.nativeEvent.layout.width))}>
                     <View style={styles.inputs}>{inputs}</View>
                     <View style={styles.previewColumn}>{aside}</View>
                 </View>

@@ -613,6 +613,7 @@ function WidgetAddDetail(props: Readonly<{
                     onPress: () => props.onPick(entry),
                     disabled: entry.added === true,
                     busy: props.busy,
+                    busyNote: t('widgetAdd.adding'),
                 }}
             >
                 {preview}

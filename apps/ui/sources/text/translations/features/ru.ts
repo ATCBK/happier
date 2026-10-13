@@ -13027,6 +13027,8 @@ const widgetAddTranslations = { ru: {
         listOnePerLine: "По одному в строке",
         listCommaSeparated: "Через запятую",
         previewAfterAdd: 'Появится здесь после добавления',
+        adding: 'Добавляем…',
+        savingInputs: 'Сохраняем…',
         needed: 'Нужно',
         stillNeeded: ({ field }) => `Ещё нужно: ${field}`,
         followGroup: 'Следовать',

@@ -12989,6 +12989,8 @@ const widgetAddTranslations = { ja: {
         listOnePerLine: "1 行に 1 つ",
         listCommaSeparated: "カンマ区切り",
         previewAfterAdd: '追加するとここに表示されます',
+        adding: '追加中…',
+        savingInputs: '保存中…',
         needed: '必須',
         stillNeeded: ({ field }) => `${field} がまだ必要です`,
         followGroup: 'フォロー',
