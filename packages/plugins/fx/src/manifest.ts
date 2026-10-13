@@ -45,7 +45,8 @@ export const FX_PLUGIN = definePlugin({
       // The host keeps Session V1 canonical and exposes the separately
       // versioned detached Run context through the same declarative ACP core.
       capabilities: projectAgentCapabilitiesV2FromDefinition(AGENT_DEFINITION.core, {
-        skills: { delivery: 'none', nativeDisable: 'unsupported', liveReload: 'unsupported' },
+        skills: { delivery: 'none', nativeDisable: 'unsupported', liveReload: 'unsupported',
+          nativeRoots: { user: [['.fx', 'skills'], ['.config', 'opencode', 'skills'], ['.codex', 'skills'], ['.claude', 'skills'], ['.agents', 'skills'], ['.claw', 'skills']], project: [['.fx', 'skills'], ['skills'], ['.opencode', 'skills'], ['.codex', 'skills'], ['.claude', 'skills'], ['.agents', 'skills'], ['.claw', 'skills']] } },
         surfaces: ['externalSessions'],
         sessions: {
           open: ['create', 'resume'],
