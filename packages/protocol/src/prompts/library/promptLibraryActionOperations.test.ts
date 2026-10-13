@@ -121,11 +121,11 @@ describe('prompt library action operations', () => {
     expect(stored.header).toMatchObject({ kind: 'prompt_doc.v2', title: 'Edited', locked: false });
   });
 
-  it('creates one canonical memory Artifact with the first sanitized fact in its requested topic', async () => {
+  it.each([false, true])('creates one canonical memory Artifact with the first sanitized fact in its requested topic (receipt: %s)', async receipt => {
     let saved: Parameters<NonNullable<PromptLibraryArtifactStore['create']>>[0] | undefined;
     const result = await createMemoryDocInLibrary({
       store: { read: async () => null, update: async () => { throw new Error('Creation is not an update'); },
-        create: async input => { saved = input; return 'memory'; } },
+        create: async input => { saved = input; return receipt ? { artifactId: 'memory', revision: { headerVersion: 1, bodyVersion: 1 } } : 'memory'; } },
       request: { title: 'Account memory', text: 'Build rule; password=secret', topic: 'Build', expiresAtMs: 50 },
       randomId: () => 'first', nowMs: () => 10, sourceSessionRef: { serverId: 'home', sessionId: 'session' },
     });
@@ -335,10 +335,10 @@ describe('prompt library action operations', () => {
     expect(JSON.parse(stored.body!).index).toHaveLength(2);
     expect(JSON.parse(stored.body!).topics[0].facts).toHaveLength(2);
   });
-  it('creates canonical documents with verbatim text and content metadata', async () => {
+  it.each([false, true])('creates canonical documents with verbatim text and content metadata (receipt: %s)', async receipt => {
     let saved: Parameters<NonNullable<PromptLibraryArtifactStore['create']>>[0] | undefined;
     const result = await createPromptDocInLibrary({
-      store: { read: async () => null, update: async () => {}, create: async (input) => { saved = input; return 'new'; } },
+      store: { read: async () => null, update: async () => {}, create: async (input) => { saved = input; return receipt ? { artifactId: 'new', revision: { headerVersion: 1, bodyVersion: 1 } } : 'new'; } },
       request: { title: 'Prompt', markdown: '  keep\n\ntext  ', favorite: true },
       nowMs: () => 42,
     });
