@@ -20,12 +20,15 @@ const TILE_COLORS = {
 const SHEET_COLORS = { sheet: 'white', sheetBorder: 'gray', rowDivider: 'gray', groupDivider: 'gray' };
 
 function measureTiles(container: HTMLElement, width: number) {
-  // RNW exposes the actual layout callback on the measured host. jsdom does not fire ResizeObserver.
-  const measured = [...container.querySelectorAll<HTMLElement>('div')]
-    .find((node) => typeof Reflect.get(node, '__reactLayoutHandler') === 'function');
-  const handler = measured && Reflect.get(measured, '__reactLayoutHandler');
-  if (typeof handler === 'function') {
-    act(() => handler({ nativeEvent: { layout: { x: 0, y: 0, width, height: 240 } } }));
+  // jsdom has no ResizeObserver. Deliver real RNW layout events to the tile's
+  // measured ancestors, rather than an unrelated section header's first callback.
+  const tile = container.querySelector<HTMLElement>('[data-testid="action:phone"]');
+  expect(tile).not.toBeNull();
+  for (let node = tile?.parentElement; node && node !== container; node = node.parentElement) {
+    const handler = Reflect.get(node, '__reactLayoutHandler');
+    if (typeof handler === 'function') {
+      act(() => handler({ nativeEvent: { layout: { x: 0, y: 0, width, height: 240 } } }));
+    }
   }
 }
 

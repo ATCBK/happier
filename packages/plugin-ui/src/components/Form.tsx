@@ -30,6 +30,7 @@ import {
 } from '../presentation/form/actionInputFields.js';
 import { HappierInputField } from '../presentation/form/InputField.js';
 import { HAPPIER_SEGMENTED_METRICS, HappierSegmentedChoice } from '../presentation/form/SegmentedChoice.js';
+import { resolveHappierSegmentedChoiceRow } from '../presentation/form/SegmentedChoiceRow.js';
 import { PluginUiIconGlyph, type IconName } from './Icon.js';
 import {
   resolveHappierFieldKeyboardType,
@@ -68,6 +69,7 @@ type FormOption = Readonly<{
   value: FormOptionValue;
   label: string;
   description?: string;
+  unavailableReason?: string;
   /**
    * A segmented option's leading icon ("List" with its rows); decorative, the label names the option.
    * A `compact` segmented Select shows it alone.
@@ -441,21 +443,27 @@ function SelectSegmented(props: SelectProps): ReactElement {
   const iconByKey = new Map(props.options.flatMap((option) => (
     option.icon === undefined ? [] : [[actionInputOptionValueKey(option.value), option.icon] as const]
   )));
+  const model = resolveHappierSegmentedChoiceRow({
+    options: plan.options.map((entry) => ({
+      ...entry.option,
+      id: entry.key,
+      disabled: entry.disabled,
+      ...segmentLeading(iconByKey.get(entry.key), entry.selected),
+    })),
+    value: plan.options.find((entry) => entry.selected)?.key ?? '',
+  });
   return (
+    <View>
     <HappierSegmentedChoice
       accessibilityLabel={props.label}
-      segments={plan.options.map((entry) => ({
-        key: entry.key,
-        label: entry.option.label,
-        selected: entry.selected,
-        disabled: entry.disabled,
-        ...segmentLeading(iconByKey.get(entry.key), entry.selected),
-        ...(entry.option.accessibilityLabel === undefined ? {} : { accessibilityLabel: entry.option.accessibilityLabel }),
-        ...(entry.option.testID === undefined ? {} : { testID: entry.option.testID }),
+      segments={model.segments.map((segment, index) => ({
+        ...segment,
+        key: segment.id,
+        testID: plan.options[index]?.option.testID,
       }))}
       onSelect={(index) => {
         const entry = plan.options[index];
-        if (entry === undefined || entry.disabled || entry.selected) return;
+        if (entry === undefined || model.segments[index]?.disabled || entry.selected) return;
         props.onChange(entry.nextValue());
       }}
       disabled={props.disabled}
@@ -470,6 +478,8 @@ function SelectSegmented(props: SelectProps): ReactElement {
       }}
       {...(props.testID === undefined ? {} : { testID: props.testID })}
     />
+    {model.detail ? <Text variant="meta" tone="secondary" value={model.detail} /> : null}
+    </View>
   );
 }
 

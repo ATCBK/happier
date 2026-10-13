@@ -1,5 +1,5 @@
 import { expect, it } from 'vitest';
-import { BurnUpChart, StackedSeriesChart } from '@happier-dev/plugin-ui/presentation';
+import { BurnUpChart, StackedSeriesChart } from '@happier-dev/plugin-ui/components';
 import { SURFACE_CONTEXT_THEME_FIXTURE as theme } from '../../../../plugin-sdk/src/ui/surfaceContext.fixture.js';
 import { mountThroughReactNativeWeb } from '../../rnwMount.testSupport.js';
 import { act } from 'react';

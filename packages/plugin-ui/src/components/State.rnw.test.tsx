@@ -85,7 +85,10 @@ describe('plugin-ui resource state renders real React Native semantics', () => {
   });
   it('retains admitted content through refresh, failure and graceful subscription completion', async () => {
     const value = { contentType: 'text/plain', digest: 'sha256:retained', bytes: new TextEncoder().encode('Last known reviews') };
-    const context = createSurfaceContext();
+    const context = createSurfaceContext({ translations: {
+      'happier.plugin-ui.state.refreshing': 'Actualisation en cours',
+      'happier.plugin-ui.state.stale': 'Contenu à actualiser',
+    } });
     const render = (resource: PluginUiResourceSnapshot) => (
       <PluginUiProvider hostApi={createHostApiStub(context)} context={context}>
         <State resource={resource}>{(content) => <span data-testid="retained">{new TextDecoder().decode(content.bytes)}</span>}</State>
@@ -98,6 +101,10 @@ describe('plugin-ui resource state renders real React Native semantics', () => {
       await mount.render(render({ value, freshness: 'stale', pending: 'refresh', subscription: 'reconnecting' }));
       expect(mount.container.querySelector('[data-testid="retained"]')).toBe(retained);
       expect(mount.container.querySelector('[aria-busy="true"]')).not.toBeNull();
+      expect(mount.container.textContent).toContain('Actualisation en cours');
+      await mount.render(render({ value, freshness: 'stale', pending: 'idle', subscription: 'unsupported' }));
+      expect(mount.container.querySelector('[data-testid="retained"]')).toBe(retained);
+      expect(mount.container.textContent).toContain('Contenu à actualiser');
       await mount.render(render({ value, freshness: 'stale', pending: 'idle', subscription: 'reconnecting', error: { code: 'unavailable', message: 'Machine offline' } }));
       expect(mount.container.querySelector('[data-testid="retained"]')).toBe(retained);
       expect(mount.container.textContent).toContain('Machine offline');

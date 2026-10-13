@@ -17,6 +17,8 @@ export const HAPPIER_PAGE_METRICS = Object.freeze({
   cardPaddingPx: 16,
   /** Between cards or tiles in a grid. */
   cardGapPx: 12,
+  /** A long reading block inside a sheet (a skill's instructions) shows this much before "Show all". */
+  readingClipHeightPx: 420,
   /** Settings lab .page/.detail: 80px; work-document lab: 60px. Pages use the settings measure. */
   pagePaddingBottomPx: 80,
   /**
@@ -106,6 +108,19 @@ export const HAPPIER_PAGE_METRICS = Object.freeze({
   /** The back control's own box (a 20px glyph with its 4px sides): the height of its line above a title. */
   backControlSizePx: 28,
 } as const);
+
+/**
+ * The list column of a settings collection beside its detail, by role instead of one number per page,
+ * so every collection's rail is the same width unless its rows need more room. `standard` is the
+ * one-line row (a name, a glyph and a quiet fact); `detailed` is for rows that carry a description or
+ * a facts line of their own. Host-internal: no plugin draws a settings collection's rail.
+ */
+export const HAPPIER_COLLECTION_RAIL_WIDTH_PX = Object.freeze({
+  standard: 272,
+  detailed: 320,
+} as const);
+
+export type HappierCollectionRailWidth = keyof typeof HAPPIER_COLLECTION_RAIL_WIDTH_PX;
 
 export type HappierPageBackPlacement = 'gutter' | 'above-title';
 

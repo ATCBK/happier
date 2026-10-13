@@ -84,6 +84,11 @@ export type HappierSegmentedChoiceColors = Readonly<{
   label: string;
   activeLabel: string;
   focusRing: string;
+  /**
+   * The outline an inherited choice's segment draws instead of the thumb surface (`valueSource`
+   * `inherited`): ink border role, no fill, no lift. Absent, the host's track colour stands in.
+   */
+  inheritedThumbBorder?: string;
 }>;
 
 export type HappierSegmentedChoiceSegment = Readonly<{
@@ -114,6 +119,12 @@ export type HappierSegmentedChoiceProps = Readonly<{
    * keeps its label, since nothing else could name it on screen.
    */
   iconOnly?: boolean;
+  /**
+   * Where the chosen value comes from. `set` (default): the person chose it, drawn on the filled thumb.
+   * `inherited`: it follows a default (a tool on its server's default), drawn as an outlined thumb with
+   * the label in secondary ink, and announced with a "default" suffix. Selection semantics are unchanged.
+   */
+  valueSource?: 'set' | 'inherited';
 }>;
 
 /**
@@ -132,6 +143,10 @@ export function HappierSegmentedChoice(props: HappierSegmentedChoiceProps) {
   const localization = useOptionalHappierUiLocalization();
   const rtl = localization ? localization.direction === 'rtl' : I18nManager.isRTL;
   const size = props.size ?? 'default';
+  const inherited = props.valueSource === 'inherited';
+  const inheritedSuffix = inherited
+    ? (localization?.translate('happier.plugin-ui.segmented.inherited', 'default') ?? 'default')
+    : null;
   const groupDisabled = props.disabled === true;
   const segmentRefs = useRef(new Map<string, HappierFocusable>());
   const selectedIndex = props.segments.findIndex((segment) => segment.selected && !segment.disabled);
@@ -167,7 +182,9 @@ export function HappierSegmentedChoice(props: HappierSegmentedChoiceProps) {
           <HappierPressable
             key={segment.key}
             accessibilityRole="radio"
-            accessibilityLabel={segment.accessibilityLabel ?? segment.label}
+            accessibilityLabel={segment.selected && inheritedSuffix !== null
+              ? `${segment.accessibilityLabel ?? segment.label}, ${inheritedSuffix}`
+              : segment.accessibilityLabel ?? segment.label}
             checked={segment.selected}
             disabled={disabled}
             describedById={fieldIssue.descriptionId}
@@ -205,8 +222,12 @@ export function HappierSegmentedChoice(props: HappierSegmentedChoiceProps) {
               paddingHorizontal: horizontalPadding,
               borderRadius: HAPPIER_SEGMENTED_METRICS.segmentRadiusPx[size],
               ...happierFocusRingStyle({ visible: state.focused, color: props.colors.focusRing }),
-              backgroundColor: segment.selected ? paintColor(props.colors.thumb, undefined, 'solidControl') : 'transparent',
-              ...(segment.selected && !state.pressed ? props.colors.thumbLift : undefined),
+              backgroundColor: segment.selected && !inherited ? paintColor(props.colors.thumb, undefined, 'solidControl') : 'transparent',
+              // An inherited value is outlined: the same box (the border sits inside it), no fill, no lift.
+              ...(segment.selected && inherited
+                ? { borderWidth: 1, borderColor: props.colors.inheritedThumbBorder ?? props.colors.track, paddingVertical: verticalPadding - 1, paddingHorizontal: horizontalPadding - 1 }
+                : undefined),
+              ...(segment.selected && !inherited && !state.pressed ? props.colors.thumbLift : undefined),
               opacity: !groupDisabled && segment.disabled
                 ? HAPPIER_SEGMENTED_METRICS.disabledOpacity
                 : state.pressed ? HAPPIER_PRESS_FEEDBACK_V1.opacity : 1,
@@ -223,7 +244,7 @@ export function HappierSegmentedChoice(props: HappierSegmentedChoiceProps) {
                   lineHeight: HAPPIER_SEGMENTED_METRICS.labelSlotPx[size],
                   weight: segment.selected ? HAPPIER_SEGMENTED_METRICS.labelActiveEmphasis : 'regular',
                 }, typography),
-                color: segment.selected ? props.colors.activeLabel : props.colors.label,
+                color: segment.selected && !inherited ? props.colors.activeLabel : props.colors.label,
               }}
             >
               {segment.label}

@@ -9,7 +9,8 @@ type InputRecord = Readonly<Record<string, unknown>>;
  * passes it through structurally. Keeping this narrow contract here preserves
  * the dependency direction: presentation never imports host/SDK transport.
  */
-export type HappierActionInputField = Pick<InputFieldHint, 'widget'> & Partial<Pick<InputFieldHint, 'listSeparator' | 'inputType'>>;
+export type HappierActionInputField = Pick<InputFieldHint, 'widget'>
+  & Partial<Pick<InputFieldHint, 'listSeparator' | 'inputType' | 'options' | 'optionsSourceId' | 'connectedAccountOptions'>>;
 
 export function readHappierActionInputPath(input: InputRecord, path: string): unknown {
   return readInputPath(input, path);

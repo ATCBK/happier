@@ -200,6 +200,8 @@ export {
   type HappierPageRowDensity,
   type HappierPageRowShape,
   type HappierPageRowMetrics,
+  HAPPIER_ROW_TITLE_META_GAP_PX,
+  resolveHappierRowTitleMetaPlacement,
 } from './layout/pageRowMetrics.js';
 export {
   HappierListDetailLayout,
@@ -320,6 +322,8 @@ export {
   HAPPIER_PAGE_ADAPTIVE_ACCESSORY_MAX_ROW_SHARE,
   resolveHappierPageBackPlacement,
   type HappierPageBackPlacement,
+  HAPPIER_COLLECTION_RAIL_WIDTH_PX,
+  type HappierCollectionRailWidth,
 } from './layout/pageMetrics.js';
 export {
   HAPPIER_VIEWPORT_CLASS_MIN_EDGE_BREAKPOINTS_PX,

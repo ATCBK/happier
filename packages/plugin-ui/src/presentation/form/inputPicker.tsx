@@ -23,8 +23,8 @@ import type { HappierFocusable, HappierPortableStyle } from '../portableTypes.js
 import { HappierText } from '../text/Text.js';
 import { useHappierTypeRoleStyle } from '../text/typeRole.js';
 
-/** The part of a typed field a picker needs: which field, and which declared input type it holds. */
-export type HappierInputPickerField = Pick<HappierActionInputField, 'inputType'> & Readonly<{
+/** The declared field, input type and choice constraints needed by its picker. */
+export type HappierInputPickerField = Pick<HappierActionInputField, 'inputType' | 'options' | 'optionsSourceId' | 'connectedAccountOptions'> & Readonly<{
   path: string;
   title: string;
 }>;
@@ -41,7 +41,10 @@ export type HappierInputPickerRequest = Readonly<{
   field: HappierInputPickerField;
   /** The field's current value; the picker starts from it and never changes it itself. */
   value: unknown;
-  /** The choices the field shows now. The picker's answer is checked against the same list. */
+  /**
+   * Choices the field shows now. Declared field/type sources own inventory constraints;
+   * an empty presentation list alone declares none.
+   */
   options?: readonly HappierInputPickerOption[];
   /** Aborted when the field goes away; the host then answers `cancelled`. */
   signal: AbortSignal;
@@ -124,6 +127,7 @@ export function useHappierInputPicker(input: Readonly<{
       ? ['host', input.field.inputType.hostType, input.field.inputType.hostType === 'usageQuery' ? input.field.inputType.field : undefined]
       : ['plugin', input.field.inputType.pluginId, input.field.inputType.localId]),
     currentValue === undefined ? null : actionInputOptionValueKey(currentValue),
+    input.field.options, input.field.optionsSourceId, input.field.connectedAccountOptions,
     input.options?.flatMap(option => {
       const value = readActionInputOptionValue(option.value);
       return value === undefined ? [] : [[actionInputOptionValueKey(value), option.label, option.description, option.disabled === true]];

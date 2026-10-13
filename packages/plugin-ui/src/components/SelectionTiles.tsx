@@ -37,6 +37,7 @@ export type SelectionTilesOption<T extends string = string> = Readonly<{
    * what the option does.
    */
   preview?: ReactNode;
+  previewEdge?: 'solid' | 'dashed';
   disabled?: boolean;
 }>;
 
@@ -49,6 +50,10 @@ type SelectionTilesBaseProps<T extends string> = Readonly<{
    */
   variant?: 'card' | 'visual';
   tileSizing?: 'natural' | 'fill';
+  previewAspectRatio?: number;
+  labels?: 'shown' | 'hidden';
+  labelLines?: number;
+  surface?: 'tiles' | 'sheet';
   density?: 'regular' | 'compact';
   minimumColumns?: number;
   maximumColumns?: number;
@@ -166,6 +171,10 @@ export function SelectionTiles<T extends string>(props: SelectionTilesProps<T>):
   const shared = {
     options,
     tileSizing: props.tileSizing,
+    previewAspectRatio: props.previewAspectRatio,
+    labels: props.labels,
+    labelLines: props.labelLines,
+    surface: props.surface,
     density: props.density,
     minimumColumns: props.minimumColumns,
     maximumColumns: props.maximumColumns,
@@ -180,7 +189,7 @@ export function SelectionTiles<T extends string>(props: SelectionTilesProps<T>):
   } as const;
 
   if (props.variant === 'action') {
-    return <HappierSelectionTiles {...shared} variant="action" onPress={props.onPress} />;
+    return <HappierSelectionTiles {...shared} variant="action" onPress={props.onPress} theme={theme} pageColors={palette} />;
   }
   if (props.selectionMode === 'multiple') {
     return <HappierSelectionTiles {...shared} variant={props.variant} selectionMode="multiple" value={props.value} onChange={props.onChange} />;

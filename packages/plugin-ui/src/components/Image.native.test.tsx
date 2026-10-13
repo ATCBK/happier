@@ -176,7 +176,9 @@ describe('native BrandMark presentation', () => {
 
     const image = renderer.root.findByType('Image');
     expect(image.props.accessibilityLabel).toBeUndefined();
-    expect(image.props.style.tintColor).toBe(context.theme.colors.text);
+    // A prop, not a style: style-to-class compilers drop the non-CSS key on web (live dark marks stayed black).
+    expect(image.props.tintColor).toBe(context.theme.colors.text);
+    expect(image.props.style.tintColor).toBeUndefined();
     expect(image.props.style.backgroundColor).toBeUndefined();
   });
 
@@ -219,7 +221,7 @@ describe('native BrandMark presentation', () => {
       `data:image/png;base64,${Buffer.from(TRANSPARENT_BRAND_BYTES).toString('base64')}`,
     );
     expect(image.props.style.backgroundColor).toBeUndefined();
-    expect(image.props.style.tintColor).toBe(monochrome ? context.theme.colors.text : undefined);
+    expect(image.props.tintColor).toBe(monochrome ? context.theme.colors.text : undefined);
   });
 
   it('does not re-encode a digest-equal reread that arrives as fresh bytes', async () => {

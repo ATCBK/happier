@@ -16,6 +16,7 @@ export type HappierSegmentedChoiceRowOption<T extends string = string> =
   Readonly<{
     id: T;
     label: string;
+    accessibilityLabel?: string;
     /** What choosing this option means; the row shows the chosen option's description under its label. */
     description?: string;
     /** Not choosable right now, and the row's own description already says why. */
@@ -96,8 +97,8 @@ export function resolveHappierSegmentedChoiceRow<T extends string>(
       disabled:
         option.disabled === true || option.unavailableReason !== undefined,
       accessibilityLabel: option.unavailableReason
-        ? `${option.label}, ${option.unavailableReason}`
-        : option.label,
+        ? `${option.accessibilityLabel ?? option.label}, ${option.unavailableReason}`
+        : option.accessibilityLabel ?? option.label,
       ...(option.unavailableReason
         ? { unavailableReason: option.unavailableReason }
         : {}),

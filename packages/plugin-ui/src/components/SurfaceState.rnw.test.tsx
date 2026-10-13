@@ -108,6 +108,7 @@ describe('SurfaceState: the shared full state composition', () => {
         size="line"
         title="Couldn't load members"
         description="Offline"
+        details="E_MACHINE_UNREACHABLE"
         body={<span>never in a line</span>}
         action={{
           label: 'Retry',
@@ -130,6 +131,11 @@ describe('SurfaceState: the shared full state composition', () => {
       retry?.click();
     });
     expect(retried).toBe(0);
+    const details = mount.container.querySelector<HTMLElement>('[data-testid="row-details-toggle"]');
+    expect(details).not.toBeNull();
+    expect(textOf(mount.container)).not.toContain('E_MACHINE_UNREACHABLE');
+    await act(async () => { details?.click(); });
+    expect(textOf(mount.container)).toContain('E_MACHINE_UNREACHABLE');
     mount.unmount();
   });
 

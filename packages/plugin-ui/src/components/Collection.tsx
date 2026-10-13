@@ -22,6 +22,7 @@ import {
 } from '../environment/context.js';
 import { HAPPIER_PAGE_METRICS } from '../presentation/layout/pageMetrics.js';
 import { resolveHappierPageTextStyle } from '../presentation/layout/pageText.js';
+import { HAPPIER_ROW_TITLE_META_GAP_PX, resolveHappierRowTitleMetaPlacement } from '../presentation/layout/pageRowMetrics.js';
 import { useHappierPageSection } from '../presentation/layout/PageSection.js';
 import { useHappierPageChromeInternal } from '../presentation/layout/pageChrome.js';
 import { HAPPIER_RADIUS_V1 } from '../environment/radius.js';
@@ -138,6 +139,7 @@ export type CollectionAnatomy<Item> = Readonly<{
    * board's domain card draws its frame here, around both its open target and its `action`.
    */
   wrapItem?: (item: Item, content: ReactNode) => ReactNode;
+  /** The item's mark; `null` when the kind has none (skills): the list then draws no glyph column for the row. */
   glyph: (item: Item) => ReactNode;
   /**
    * A small mark pinned to the glyph's lower corner in the list (the agent working on the item), on a plate
@@ -164,6 +166,12 @@ export type CollectionAnatomy<Item> = Readonly<{
   agent?: (item: Item) => ReactNode;
   /** Tabular age ("18m"). */
   age?: (item: Item) => string | null;
+  /**
+   * The title line's end-aligned meta (a where-summary, "In your library ✓"): tabular, never truncated; the title
+   * gives way first, and when the two cannot share the line (`resolveHappierRowTitleMetaPlacement`) the meta wraps
+   * under the title, end-aligned. The table draws it as an end-aligned column titled `columnTitles.titleMeta`.
+   */
+  titleMeta?: (item: Item) => ReactNode;
   fields?: readonly CollectionField<Item>[];
   /** The table-only peek body. */
   peek?: (item: Item) => ReactNode;
@@ -173,12 +181,17 @@ export type CollectionAnatomy<Item> = Readonly<{
    * subscriptions or requests.
    */
   preview?: (item: Item) => ReactNode;
-  /** What the item is for, in a sentence; a grid card reserves exactly two lines for it. */
+  /**
+   * What the item is for, in a sentence; a grid card reserves exactly two lines for it. A list row draws it as its
+   * second line (one line, truncating first); `byline`/`where` and `reason` then form the third line, where a
+   * present `reason` (a status) takes the line in place of the byline (the facts).
+   */
   description?: (item: Item) => string | null;
   /**
    * A grid card's one footer action (Install, Manage, a switch), right of its status (`reason`); in a board, a
-   * domain card's (`boardContent`) action, on its own line under the body. It is its own press and focus target
-   * beside the card's, never inside it, and never opens the item.
+   * domain card's (`boardContent`) action, on its own line under the body; in a list at rest, the row's trailing
+   * action (beside an open detail the list leaves it to the detail). It is its own press and focus target beside the
+   * card's or row's, never inside it, and never opens the item.
    */
   action?: (item: Item) => ReactNode;
   /** The composed row name ("Pull request #2481, Review requested"). */
@@ -186,7 +199,7 @@ export type CollectionAnatomy<Item> = Readonly<{
   accessibilityHint?: (item: Item) => string | undefined;
   testID?: (item: Item) => string;
   /** Column titles for the table header, one per slot the anatomy declares. */
-  columnTitles: Readonly<{ title: string; where?: string; reason?: string; signal?: string; agent?: string; age?: string }>;
+  columnTitles: Readonly<{ title: string; where?: string; reason?: string; signal?: string; agent?: string; age?: string; titleMeta?: string }>;
 }>;
 
 /**
@@ -373,6 +386,11 @@ export type CollectionProps<Item> = Readonly<{
     onComposingValueChange?: (value: string | null) => void;
     placeholder?: string;
     tokens?: readonly ListCollectionSearchToken[];
+    /**
+     * Placed by a `header` render: `fill` takes the whole width the render gives it (a dialog's tools row, where
+     * the search is the row's last, growing field) instead of the toolbar's bounded width.
+     */
+    width?: 'bounded' | 'fill';
     testID?: string;
   }>;
   empty?: ReactNode;
@@ -426,9 +444,10 @@ const SLOT_COLUMNS = Object.freeze({
   signal: { minWidth: 124, priority: 2 },
   agent: { minWidth: 150, priority: 3 },
   age: { minWidth: 46, priority: 6, align: 'end' as const },
+  titleMeta: { minWidth: 120, priority: 7, align: 'end' as const },
 });
 type SlotKey = keyof typeof SLOT_COLUMNS;
-const SLOT_KEYS: readonly SlotKey[] = ['where', 'reason', 'signal', 'agent', 'age'];
+const SLOT_KEYS: readonly SlotKey[] = ['where', 'reason', 'signal', 'agent', 'titleMeta', 'age'];
 
 type ResolvedColumn<Item> = HappierCollectionTableColumn & Readonly<{
   title: string;
@@ -501,11 +520,19 @@ type RowMetrics = Readonly<{
 }>;
 
 const NO_TRACKS: HappierCollectionMotionTracks = Object.freeze({});
+/** The gap between a list row's lines. */
+const LIST_LINE_GAP = 4;
+/** A list row's title keeps this share of the table's title minimum before its title meta moves beneath it. */
+const LIST_TITLE_MIN_SHARE = 0.5;
+/** The list row's action stands at the row's end inset, mirroring where its text starts. */
+const listActionStyle: HappierPortableStyle = { marginRight: TABLE.insetStart - TABLE.insetEnd };
+/** The title meta: end-aligned, whole (it never shrinks; the title gives way). */
+const metaCellStyle: HappierPortableStyle = { flexShrink: 0, alignItems: 'flex-end', marginLeft: HAPPIER_ROW_TITLE_META_GAP_PX };
 const NO_ROW_ACTIONS: CollectionRowActions = Object.freeze({});
 const NO_CELLS: readonly never[] = Object.freeze([]);
 const CollectionStageContext = createContext<CollectionStage<unknown> | null>(null);
 
-function useRowMetrics(): RowMetrics {
+function useRowMetrics(described: boolean): RowMetrics {
   const theme = useHappierUiTheme();
   const typography = useOptionalHappierUiTypography();
   const { textScale } = useHappierUiAccessibility();
@@ -514,14 +541,16 @@ function useRowMetrics(): RowMetrics {
     const title = readCollectionLineHeight('label', theme, typography, textScale);
     const meta = readCollectionLineHeight('meta', theme, typography, textScale);
     const label = readCollectionLineHeight('label', theme, typography, textScale);
+    // A described anatomy's list row adds its description line (the row description role) between the two.
+    const description = described ? readCollectionLineHeight('body', theme, typography, textScale) + LIST_LINE_GAP : 0;
     return {
       // One exact height per geometry and text-size bucket, never measured per row (COLLECTION.md §7).
       tableRow: Math.max(40, title + 2 * TABLE.paddingY) + 2,
-      listRow: title + 4 + meta + 2 * TABLE.paddingY + 2,
+      listRow: title + LIST_LINE_GAP + description + meta + 2 * TABLE.paddingY + 2,
       groupHeader: label + 18,
       titleRole: 'label',
     };
-  }, [textScale, theme, typography]);
+  }, [described, textScale, theme, typography]);
 }
 
 function resolveColumns<Item>(
@@ -827,36 +856,83 @@ function ListCells<Item>(props: Readonly<{
   const age = anatomy.age?.(item) ?? null;
   const where = anatomy.byline === undefined ? anatomy.where?.(item) : anatomy.byline(item);
   const reason = anatomy.reason?.(item);
+  const description = anatomy.description?.(item) ?? null;
+  const described = anatomy.description !== undefined;
+  const titleMeta = anatomy.titleMeta?.(item);
+  const meta = titleMeta === undefined || titleMeta === null || titleMeta === false ? null : titleMeta;
   const badge = anatomy.glyphBadge?.(item) ?? null;
+  // An item with no mark (a skill) draws no glyph column in the list; its text starts at the row's inset.
+  const glyph = anatomy.glyph(item) ?? null;
+  const [metaPlacement, setMetaPlacement] = useState<'inline' | 'beneath'>('inline');
+  const measured = useRef({ row: 0, meta: 0 });
+  const titleMinWidth = TABLE.titleMinWidth * useHappierUiAccessibility().textScale * LIST_TITLE_MIN_SHARE;
+  const placeMeta = useCallback((next: Partial<{ row: number; meta: number }>) => {
+    measured.current = { ...measured.current, ...next };
+    setMetaPlacement(resolveHappierRowTitleMetaPlacement({
+      rowContentWidthPx: measured.current.row,
+      titleNaturalWidthPx: Number.POSITIVE_INFINITY,
+      metaNaturalWidthPx: measured.current.meta,
+      titleMinWidthPx: titleMinWidth,
+    }));
+  }, [titleMinWidth]);
   // In a page section the rows are page rows: the same inset, leading column, rhythm and type steps as every
   // other sheet on the page, so a collection's sheet and an `ItemGroup` below it read as one anatomy. The list
   // never travels there (no table), so its rows size to their text.
   const page = props.pageSection;
   const secondLine = page ? { ...resolveHappierPageTextStyle('rowDescription', typography), flexShrink: 1 } : undefined;
+  const metaCell = meta === null ? null : (
+    <View style={metaCellStyle} onLayout={(event) => { placeMeta({ meta: event.nativeEvent.layout.width }); }}>
+      <SlotContent value={meta} textStyle={secondLine} />
+    </View>
+  );
+  // A status takes the facts line: with a description, line 3 is the reason when there is one, else the byline.
+  const status = reason === undefined || reason === null || reason === false || reason === '' ? null : reason;
+  const factsLine = described ? (status ?? where) : null;
   return (
     <View style={[listRowContentStyle,
       page ? pageRowContentStyle : props.wrapTitle ? { minHeight: props.height } : { height: props.height }]}>
-      <View style={[glyphStyle, { justifyContent: 'flex-start' }, page ? pageRowGlyphStyle : null]}>
-        {badge === null ? anatomy.glyph(item) : (
-          <View style={glyphWithBadgeStyle}>
-            {anatomy.glyph(item)}
-            <GlyphBadgePlate badge={badge} {...(anatomy.testID === undefined ? {} : { testID: `${anatomy.testID(item)}:glyph-badge` })} />
-          </View>
-        )}
-      </View>
-      <View style={[flexCellStyle, { gap: page ? 2 : 4 }]}>
+      {glyph === null && badge === null ? null : (
+        <View style={[glyphStyle, { justifyContent: 'flex-start' }, page ? pageRowGlyphStyle : null]}>
+          {badge === null ? glyph : (
+            <View style={glyphWithBadgeStyle}>
+              {glyph}
+              <GlyphBadgePlate badge={badge} {...(anatomy.testID === undefined ? {} : { testID: `${anatomy.testID(item)}:glyph-badge` })} />
+            </View>
+          )}
+        </View>
+      )}
+      <View
+        style={[flexCellStyle, { gap: page ? 2 : LIST_LINE_GAP }]}
+        {...(meta === null ? {} : { onLayout: (event: HappierLayoutChangeEvent) => { placeMeta({ row: event.nativeEvent.layout.width }); } })}
+      >
         <View style={props.wrapTitle ? wrappedTitleLineStyle : lineStyle}>
           <HappierText variant="label" tone="neutral" numberOfLines={props.wrapTitle ? 2 : 1}
             style={[titleTextStyle, flexCellStyle, page ? resolveHappierPageTextStyle('rowTitle', typography) : null]}>
             {anatomy.title(item)}
           </HappierText>
+          {metaPlacement === 'inline' ? metaCell : null}
           {age === null ? null : (
             <HappierText variant="meta" tone="muted" numberOfLines={1} tabularNumbers>{age}</HappierText>
           )}
         </View>
+        {described ? (
+          <View style={lineStyle}>
+            <HappierText variant="body" tone="muted" numberOfLines={props.wrapTitle ? 2 : 1} style={[flexCellStyle, secondLine ?? null]}>
+              {description ?? ''}
+            </HappierText>
+            {metaPlacement === 'beneath' ? metaCell : null}
+          </View>
+        ) : null}
         <AnimatedView value={props.secondLine.value} tracks={props.secondLine.tracks} style={lineStyle}>
-          <View style={[flexCellStyle, lineStyle]}><SlotContent value={where} textStyle={secondLine} /></View>
-          <SlotContent value={reason} textStyle={secondLine} />
+          {described ? (
+            <View style={[flexCellStyle, lineStyle]}><SlotContent value={factsLine} textStyle={secondLine} /></View>
+          ) : (
+            <>
+              <View style={[flexCellStyle, lineStyle]}><SlotContent value={where} textStyle={secondLine} /></View>
+              <SlotContent value={reason} textStyle={secondLine} />
+              {metaPlacement === 'beneath' ? metaCell : null}
+            </>
+          )}
         </AnimatedView>
       </View>
     </View>
@@ -925,8 +1001,14 @@ function CollectionRow<Item>(props: Readonly<{ item: Item; itemKey: string }>): 
     : actions.accessory;
   // One accessory cell in every geometry, even when it is empty beside a detail: a row whose cells come and go
   // would remount its press target, and table and split must keep the same row.
-  const accessory = rowAccessory === undefined && anatomy.peek === undefined ? null : (
-    <View style={lineStyle}>{rowAccessory}{chevron}</View>
+  // The anatomy's action is the list row's trailing action at rest; beside an open detail the list leaves it to the
+  // detail (its primary). Its cell stays in every geometry so the row keeps its press target.
+  const listAction = anatomy.action === undefined || geometry !== 'list' || stage.composition === 'split' ? null : anatomy.action(item);
+  const accessory = rowAccessory === undefined && anatomy.peek === undefined && anatomy.action === undefined ? null : (
+    <View style={lineStyle}>
+      {anatomy.action === undefined || geometry !== 'list' || stage.composition === 'split' ? null : <View style={listActionStyle}>{listAction}</View>}
+      {rowAccessory}{chevron}
+    </View>
   );
   const travel = transition?.kind === 'travel' ? transition : null;
   const offset = travel === null ? 0 : travel.plan.offsets.get(itemKey) ?? 0;
@@ -1160,7 +1242,7 @@ export function Collection<Item>(props: CollectionProps<Item>): ReactElement {
   const accessibility = useHappierUiAccessibility();
   const platform = useOptionalHappierUiPlatform();
   const driver = useMotionDriver();
-  const metrics = useRowMetrics();
+  const metrics = useRowMetrics(anatomy.description !== undefined);
   const presentation = props.presentation ?? 'table';
   const detail = props.detail ?? 'auto';
   // A page-sized collection scrolls as the page: its header, items and footer in one scroller. A board's columns
@@ -1575,7 +1657,7 @@ export function Collection<Item>(props: CollectionProps<Item>): ReactElement {
   const pageChrome = useHappierPageChromeInternal();
   const header = typeof props.header === 'function' ? props.header({
     search: search.control === null ? null : (
-      <View style={[headerSearchStyle, { width: HEADER_SEARCH_WIDTH * accessibility.textScale }]}>{search.control}</View>
+      <View style={[headerSearchStyle, props.search?.width === 'fill' ? fillSearchStyle : { width: HEADER_SEARCH_WIDTH * accessibility.textScale }]}>{search.control}</View>
     ),
     selection: selectionMode,
     pageActions: pageChrome?.renderNavigationActions?.(null) ?? null,
@@ -1654,7 +1736,9 @@ export function Collection<Item>(props: CollectionProps<Item>): ReactElement {
   // The bar above the rows keeps its height in the table and beside a detail, so opening or closing never moves
   // the rows under it: the table's column titles, or the window's first fact beside a detail (the lab's list bar).
   const namedOrderHeader = rowGeometry === 'table' && props.sort?.orders !== undefined;
-  const headerBar = (hasRows || loadingFirstWindow || namedOrderHeader) && wide;
+  // A collection resting as a list has no bar at rest, so it draws none beside a detail either: opening an item
+  // never moves its rows.
+  const headerBar = (hasRows || loadingFirstWindow || namedOrderHeader) && wide && presentation === 'table';
   const statementLead = typeof props.windowStatement === 'string' ? props.windowStatement : props.windowStatement?.[0];
   const sortableHeader = props.sort !== undefined && (namedOrderHeader || columns.some((column) => column.sortable));
   const columnHeader = !headerBar ? null : rowGeometry === 'list' && transition === null ? (
@@ -2133,6 +2217,7 @@ const rootStyle: HappierPortableStyle = { flex: 1, minWidth: 0, minHeight: 0, ov
  */
 const HEADER_SEARCH_WIDTH = 380;
 const headerSearchStyle: HappierPortableStyle = { maxWidth: '100%', minWidth: 0, flexShrink: 1 };
+const fillSearchStyle: HappierPortableStyle = { width: '100%' };
 /** Inside the page's scroller the stage sizes to its rows instead of filling a fixed height. */
 const pageStageStyle: HappierPortableStyle = { minWidth: 0 };
 // No `overflow` here: an inline `hidden` would override the scroller's own overflow and stop it scrolling on the web.

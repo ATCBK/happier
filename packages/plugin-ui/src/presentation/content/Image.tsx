@@ -87,11 +87,9 @@ export function HappierImage(props: Readonly<{
         accessible={Boolean(props.accessibilityLabel)}
         testID={props.testID}
         resizeMode="contain"
-        style={{
-          width: pixels,
-          height: pixels,
-          ...(props.monochrome ? { tintColor: props.theme.colors.text } : {}),
-        }}
+        // A prop, not a style: style compilers (Unistyles on web) drop the non-CSS `tintColor` key.
+        tintColor={props.monochrome ? props.theme.colors.text : undefined}
+        style={{ width: pixels, height: pixels }}
       />
     );
   }

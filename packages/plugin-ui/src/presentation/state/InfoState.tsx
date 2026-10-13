@@ -80,8 +80,18 @@ export function HappierStateLine(props: Readonly<{
       alignItems: 'center',
       gap: metrics.gapPx,
     }}>
-      {props.icon ? <View style={{ flexShrink: 0 }} accessibilityElementsHidden importantForAccessibility="no-hide-descendants">{props.icon}</View> : null}
-      <View style={props.action ? { flexShrink: 1, flexGrow: 1, flexBasis: LINE_TEXT_BASIS_PX, minWidth: 0 } : { flexShrink: 1, minWidth: 0 }}>{props.children}</View>
+      {/* The glyph and its sentence wrap as one unit, so a narrow column never leaves the glyph alone above the text. */}
+      <View style={{
+        flexDirection: 'row',
+        alignItems: 'center',
+        gap: metrics.gapPx,
+        flexShrink: 1,
+        minWidth: 0,
+        ...(props.action ? { flexGrow: 1, flexBasis: LINE_TEXT_BASIS_PX } : {}),
+      }}>
+        {props.icon ? <View style={{ flexShrink: 0 }} accessibilityElementsHidden importantForAccessibility="no-hide-descendants">{props.icon}</View> : null}
+        <View style={{ flexShrink: 1, minWidth: 0 }}>{props.children}</View>
+      </View>
       {props.action ? <View style={{ flexShrink: 0, marginLeft: 'auto' }}>{props.action}</View> : null}
     </View>
   );

@@ -24,6 +24,7 @@ import {
 import {
   useOptionalHappierUiLocalization,
   useOptionalHappierUiPalette,
+  resolveHappierUiPalette,
 } from '../environment/context.js';
 import { HAPPIER_PAGE_METRICS } from '../presentation/layout/pageMetrics.js';
 import {
@@ -2336,7 +2337,7 @@ export type ItemGroupProps = Readonly<{
 export function ItemGroup(props: ItemGroupProps): ReactElement {
   const translate = usePluginTranslation();
   const theme = usePluginTheme();
-  const palette = useOptionalHappierUiPalette(theme);
+  const palette = useOptionalHappierUiPalette(theme) ?? resolveHappierUiPalette(theme);
   const pageChrome = useHappierPageChrome();
   const {
     accessibilityLabel,
@@ -2372,7 +2373,7 @@ export function ItemGroup(props: ItemGroupProps): ReactElement {
     columns: 1,
     virtualized: false,
   });
-  if (resolvedSurface === undefined || palette === null) {
+  if (resolvedSurface === undefined) {
     return (
       <HappierItemGroup
         {...rest}

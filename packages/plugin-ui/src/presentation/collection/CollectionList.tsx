@@ -347,8 +347,10 @@ export function HappierCollectionListGroupLabel(props: Readonly<{
       <View style={groupLabelLeadStyle}>
         {props.mark !== undefined ? <View style={groupLabelMarkStyle}>{props.mark}</View> : null}
         <Text role={pageSection ? 'groupHeading' : 'groupTitle'} numberOfLines={1}>{props.title}</Text>
+        {/* With a trailing state the count stays with its title ("Skills 6 … Loaded when used"); alone it is the end column. */}
+        {props.count !== undefined && props.trailing != null ? <Text role="groupCount">{props.count}</Text> : null}
       </View>
-      {props.count !== undefined ? <Text role="groupCount">{props.count}</Text> : null}
+      {props.count !== undefined && props.trailing == null ? <Text role="groupCount">{props.count}</Text> : null}
       {props.trailing ?? null}
     </View>
   );

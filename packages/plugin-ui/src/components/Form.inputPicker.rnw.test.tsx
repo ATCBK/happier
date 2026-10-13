@@ -198,6 +198,28 @@ describe('public Form custom pickers', () => {
     expect(onChange).not.toHaveBeenCalled();
     mount.unmount();
   });
+  it('retires an open picker when an author adds an empty static constraint to a picker-only field', async () => {
+    let settle: ((answer: HappierInputPickerResult) => void) | undefined;
+    let signal: AbortSignal | undefined;
+    const port: HappierInputPickerPort = {
+      describe: () => ({ label: 'Browse…', accessibilityLabel: 'Browse for Repository' }),
+      pick: request => { signal = request.signal; return new Promise(resolve => { settle = resolve; }); },
+    };
+    const field = { path: 'repository', title: 'Repository', widget: 'json' as const, inputType: repositoryType };
+    const original = { repository: 'happier' };
+    const { mount, browse, onChange } = mountForm(port, original, vi.fn(), { fields: [field] });
+    await choose(browse());
+    const context = createSurfaceContext();
+    await mount.render(<PluginUiProvider hostApi={createHostApiStub(context)} context={context}>
+      <HappierInputPickerProvider port={port}>
+        <Form hints={{ fields: [{ ...field, options: [] }] }} value={original} onChange={onChange} onSubmit={() => undefined} />
+      </HappierInputPickerProvider>
+    </PluginUiProvider>);
+    expect(signal?.aborted).toBe(true);
+    await act(async () => { settle?.({ status: 'selected', value: 'website' }); });
+    expect(onChange).not.toHaveBeenCalled();
+    mount.unmount();
+  });
   it('cancels a retired consumer context without changing its saved value and returns focus', async () => {
     let settle: ((answer: HappierInputPickerResult) => void) | undefined;
     let signal: AbortSignal | undefined;

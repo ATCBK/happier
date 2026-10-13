@@ -360,9 +360,7 @@ type HarnessOptions = Readonly<{
   groupAction?: (
     groupKey: string,
   ) => Readonly<{ label: string; onPress: () => void }> | null;
-  detailHeader?: (
-    key: string,
-  ) => Readonly<{
+  detailHeader?: (key: string) => Readonly<{
     title: string;
     subtitle?: string;
     actions?: React.ReactNode;
@@ -636,15 +634,13 @@ describe('Collection table', () => {
         expect(view.query('row:size-239')).toBeNull();
         await act(async () => {
           view.query('row:size-0')!.focus();
-          view
-            .query('row:size-0')!
-            .dispatchEvent(
-              new KeyboardEvent('keydown', {
-                key: 'End',
-                bubbles: true,
-                cancelable: true,
-              }),
-            );
+          view.query('row:size-0')!.dispatchEvent(
+            new KeyboardEvent('keydown', {
+              key: 'End',
+              bubbles: true,
+              cancelable: true,
+            }),
+          );
         });
         expect(choices).toEqual(['size-239']);
         expect(offsets.at(-1)).toBeGreaterThan(600);
@@ -683,15 +679,13 @@ describe('Collection table', () => {
         expect(offsets).toHaveLength(offsetsBeforeLeaving);
         await act(async () => {
           view.query('row:size-239')!.focus();
-          view
-            .query('row:size-239')!
-            .dispatchEvent(
-              new KeyboardEvent('keydown', {
-                key: 'Home',
-                bubbles: true,
-                cancelable: true,
-              }),
-            );
+          view.query('row:size-239')!.dispatchEvent(
+            new KeyboardEvent('keydown', {
+              key: 'Home',
+              bubbles: true,
+              cancelable: true,
+            }),
+          );
         });
         expect(choices).toEqual(['size-239', 'size-0']);
         expect(document.activeElement).toBe(view.query('row:size-0'));
@@ -759,15 +753,13 @@ describe('Collection table', () => {
         expect(choices).toEqual([]);
         act(() => {
           view.query('row:a')!.focus();
-          view
-            .query('row:a')!
-            .dispatchEvent(
-              new KeyboardEvent('keydown', {
-                key: presentation === 'board' ? 'ArrowRight' : 'End',
-                bubbles: true,
-                cancelable: true,
-              }),
-            );
+          view.query('row:a')!.dispatchEvent(
+            new KeyboardEvent('keydown', {
+              key: presentation === 'board' ? 'ArrowRight' : 'End',
+              bubbles: true,
+              cancelable: true,
+            }),
+          );
         });
         expect(choices).toEqual(['c']);
         expect(document.activeElement).toBe(view.query('row:c'));
@@ -778,15 +770,13 @@ describe('Collection table', () => {
         });
         expect(choices).toEqual(['c']);
         act(() => {
-          view
-            .query('row:c')!
-            .dispatchEvent(
-              new KeyboardEvent('keydown', {
-                key: presentation === 'board' ? 'ArrowLeft' : 'Home',
-                bubbles: true,
-                cancelable: true,
-              }),
-            );
+          view.query('row:c')!.dispatchEvent(
+            new KeyboardEvent('keydown', {
+              key: presentation === 'board' ? 'ArrowLeft' : 'Home',
+              bubbles: true,
+              cancelable: true,
+            }),
+          );
         });
         expect(choices).toEqual(['c', 'a']);
         expect(view.openChanges).toEqual([]);
@@ -830,30 +820,26 @@ describe('Collection table', () => {
       ]).toEqual([view.query('row:a')]);
       act(() => {
         view.query('row:a')!.focus();
-        view
-          .query('row:a')!
-          .dispatchEvent(
-            new KeyboardEvent('keydown', {
-              key: 'ArrowDown',
-              bubbles: true,
-              cancelable: true,
-            }),
-          );
+        view.query('row:a')!.dispatchEvent(
+          new KeyboardEvent('keydown', {
+            key: 'ArrowDown',
+            bubbles: true,
+            cancelable: true,
+          }),
+        );
       });
       expect(values).toEqual(['c']);
       expect(document.activeElement).toBe(view.query('row:c'));
       // A controlled callback is a request: the old value stays checked until its owner responds.
       expect(view.query('row:a')?.getAttribute('aria-checked')).toBe('true');
       act(() => {
-        view
-          .query('row:c')!
-          .dispatchEvent(
-            new KeyboardEvent('keydown', {
-              key: ' ',
-              bubbles: true,
-              cancelable: true,
-            }),
-          );
+        view.query('row:c')!.dispatchEvent(
+          new KeyboardEvent('keydown', {
+            key: ' ',
+            bubbles: true,
+            cancelable: true,
+          }),
+        );
       });
       expect(values).toEqual(['c', 'c']);
       await view.update({
@@ -863,15 +849,13 @@ describe('Collection table', () => {
         },
       });
       act(() => {
-        view
-          .query('row:c')!
-          .dispatchEvent(
-            new KeyboardEvent('keydown', {
-              key: ' ',
-              bubbles: true,
-              cancelable: true,
-            }),
-          );
+        view.query('row:c')!.dispatchEvent(
+          new KeyboardEvent('keydown', {
+            key: ' ',
+            bubbles: true,
+            cancelable: true,
+          }),
+        );
         view.query('row:b')!.click();
         view.query('row:a')!.click();
       });
@@ -997,16 +981,14 @@ describe('Collection table', () => {
       await view.update({ presentation: 'list' });
       expect([...store.getSnapshot().selectedKeys]).toEqual(['a', 'c']);
       act(() => {
-        view
-          .query('row:b')!
-          .dispatchEvent(
-            new KeyboardEvent('keydown', {
-              key: 'a',
-              ctrlKey: true,
-              bubbles: true,
-              cancelable: true,
-            }),
-          );
+        view.query('row:b')!.dispatchEvent(
+          new KeyboardEvent('keydown', {
+            key: 'a',
+            ctrlKey: true,
+            bubbles: true,
+            cancelable: true,
+          }),
+        );
       });
       expect([...store.getSnapshot().selectedKeys].sort()).toEqual([
         'a',
@@ -1251,12 +1233,20 @@ describe('Collection table', () => {
     },
   );
 
-  it('keeps a table row\'s actions out of sight on a precise pointer until the row is focused (or hovered, selected or open), and never removes them from the row', () => {
+  it("keeps a table row's actions out of sight on a precise pointer until the row is focused (or hovered, selected or open), and never removes them from the row", () => {
     const matchMedia = (globalThis as { matchMedia?: unknown }).matchMedia;
-    const viewportWidth = Object.getOwnPropertyDescriptor(document.documentElement, 'clientWidth');
-    Object.defineProperty(document.documentElement, 'clientWidth', { configurable: true, value: 1440 });
+    const viewportWidth = Object.getOwnPropertyDescriptor(
+      document.documentElement,
+      'clientWidth',
+    );
+    Object.defineProperty(document.documentElement, 'clientWidth', {
+      configurable: true,
+      value: 1440,
+    });
     window.dispatchEvent(new Event('resize'));
-    (globalThis as { matchMedia?: unknown }).matchMedia = (query: string) => ({ matches: query.includes('hover: hover') });
+    (globalThis as { matchMedia?: unknown }).matchMedia = (query: string) => ({
+      matches: query.includes('hover: hover'),
+    });
     let view: ReturnType<typeof mount> | undefined;
     try {
       view = mount({
@@ -1272,7 +1262,13 @@ describe('Collection table', () => {
       const row = view.query('row:a')!;
       const container = view.container;
       const opacityOf = () => {
-        for (let node: HTMLElement | null = container.querySelector<HTMLElement>('[aria-label="More actions"]'); node !== null; node = node.parentElement) {
+        for (
+          let node: HTMLElement | null = container.querySelector<HTMLElement>(
+            '[aria-label="More actions"]',
+          );
+          node !== null;
+          node = node.parentElement
+        ) {
           const opacity = getComputedStyle(node).opacity;
           if (opacity !== '' && opacity !== '1') return opacity;
           if (node === container) break;
@@ -1282,61 +1278,96 @@ describe('Collection table', () => {
       // Laid out and named, but not drawn at rest.
       expect(opacityOf()).toBe('0');
       // Keyboard focus inside the row reveals them (hover is the same state, checked in the live pass).
-      act(() => { row.focus(); });
+      act(() => {
+        row.focus();
+      });
       expect(opacityOf()).toBe('1');
-      act(() => { row.blur(); });
+      act(() => {
+        row.blur();
+      });
       expect(opacityOf()).toBe('0');
     } finally {
       view?.unmount();
       (globalThis as { matchMedia?: unknown }).matchMedia = matchMedia;
-      if (viewportWidth) Object.defineProperty(document.documentElement, 'clientWidth', viewportWidth);
+      if (viewportWidth)
+        Object.defineProperty(
+          document.documentElement,
+          'clientWidth',
+          viewportWidth,
+        );
       else Reflect.deleteProperty(document.documentElement, 'clientWidth');
       window.dispatchEvent(new Event('resize'));
     }
   });
 
-  it.each(['table', 'grid'] as const)('reveals %s row actions on mouse enter and hides them on leave', (presentation) => {
-    const matchMedia = (globalThis as { matchMedia?: unknown }).matchMedia;
-    const viewportWidth = Object.getOwnPropertyDescriptor(document.documentElement, 'clientWidth');
-    Object.defineProperty(document.documentElement, 'clientWidth', { configurable: true, value: 1440 });
-    window.dispatchEvent(new Event('resize'));
-    (globalThis as { matchMedia?: unknown }).matchMedia = (query: string) => ({ matches: query.includes('hover: hover') });
-    const view = mount({
-      presentation,
-      detail: 'none',
-      anatomy: { ...anatomy, peek: undefined },
-      useRowActions: () => ({
-        secondaryActions: [{ id: 'pin', label: 'Pin' }],
-        onSecondaryAction: () => undefined,
-      }),
-    });
-    try {
-      view.measure(1440);
-      const row = view.query('row:a')!;
-      const trigger = view.container.querySelector<HTMLElement>('[aria-label="More actions"]')!;
-      const opacityOf = () => {
-        for (let node: HTMLElement | null = trigger; node !== null && node !== view.container; node = node.parentElement) {
-          const opacity = getComputedStyle(node).opacity;
-          if (opacity !== '' && opacity !== '1') return opacity;
-        }
-        return '1';
-      };
-      expect(opacityOf()).toBe('0');
-      act(() => { row.dispatchEvent(new MouseEvent('mouseover', { bubbles: true })); });
-      expect(opacityOf()).toBe('1');
-      act(() => { row.dispatchEvent(new MouseEvent('mouseout', { bubbles: true })); });
-      expect(opacityOf()).toBe('0');
-      expect(view.container.contains(trigger)).toBe(true);
-    } finally {
-      view.unmount();
-      (globalThis as { matchMedia?: unknown }).matchMedia = matchMedia;
-      if (viewportWidth) Object.defineProperty(document.documentElement, 'clientWidth', viewportWidth);
-      else Reflect.deleteProperty(document.documentElement, 'clientWidth');
+  it.each(['table', 'grid'] as const)(
+    'reveals %s row actions on mouse enter and hides them on leave',
+    (presentation) => {
+      const matchMedia = (globalThis as { matchMedia?: unknown }).matchMedia;
+      const viewportWidth = Object.getOwnPropertyDescriptor(
+        document.documentElement,
+        'clientWidth',
+      );
+      Object.defineProperty(document.documentElement, 'clientWidth', {
+        configurable: true,
+        value: 1440,
+      });
       window.dispatchEvent(new Event('resize'));
-    }
-  });
+      (globalThis as { matchMedia?: unknown }).matchMedia = (
+        query: string,
+      ) => ({ matches: query.includes('hover: hover') });
+      const view = mount({
+        presentation,
+        detail: 'none',
+        anatomy: { ...anatomy, peek: undefined },
+        useRowActions: () => ({
+          secondaryActions: [{ id: 'pin', label: 'Pin' }],
+          onSecondaryAction: () => undefined,
+        }),
+      });
+      try {
+        view.measure(1440);
+        const row = view.query('row:a')!;
+        const trigger = view.container.querySelector<HTMLElement>(
+          '[aria-label="More actions"]',
+        )!;
+        const opacityOf = () => {
+          for (
+            let node: HTMLElement | null = trigger;
+            node !== null && node !== view.container;
+            node = node.parentElement
+          ) {
+            const opacity = getComputedStyle(node).opacity;
+            if (opacity !== '' && opacity !== '1') return opacity;
+          }
+          return '1';
+        };
+        expect(opacityOf()).toBe('0');
+        act(() => {
+          row.dispatchEvent(new MouseEvent('mouseover', { bubbles: true }));
+        });
+        expect(opacityOf()).toBe('1');
+        act(() => {
+          row.dispatchEvent(new MouseEvent('mouseout', { bubbles: true }));
+        });
+        expect(opacityOf()).toBe('0');
+        expect(view.container.contains(trigger)).toBe(true);
+      } finally {
+        view.unmount();
+        (globalThis as { matchMedia?: unknown }).matchMedia = matchMedia;
+        if (viewportWidth)
+          Object.defineProperty(
+            document.documentElement,
+            'clientWidth',
+            viewportWidth,
+          );
+        else Reflect.deleteProperty(document.documentElement, 'clientWidth');
+        window.dispatchEvent(new Event('resize'));
+      }
+    },
+  );
 
-  it('draws a board card\'s actions inside the card at its title line, not beside it', () => {
+  it("draws a board card's actions inside the card at its title line, not beside it", () => {
     const view = mount({
       presentation: 'board',
       detail: 'none',
@@ -1346,12 +1377,21 @@ describe('Collection table', () => {
       }),
     });
     view.measure(1440);
-    const trigger = view.container.querySelector<HTMLElement>('[aria-label="More actions"]')!;
+    const trigger = view.container.querySelector<HTMLElement>(
+      '[aria-label="More actions"]',
+    )!;
     expect(trigger).not.toBeNull();
     // The corner cell is out of the row's flow, so it cannot widen the row past the card's edge.
     let positioned = false;
-    for (let node: HTMLElement | null = trigger; node !== null && node !== view.container; node = node.parentElement) {
-      if (getComputedStyle(node).position === 'absolute') { positioned = true; break; }
+    for (
+      let node: HTMLElement | null = trigger;
+      node !== null && node !== view.container;
+      node = node.parentElement
+    ) {
+      if (getComputedStyle(node).position === 'absolute') {
+        positioned = true;
+        break;
+      }
     }
     expect(positioned).toBe(true);
     view.unmount();
@@ -1367,39 +1407,33 @@ describe('Collection table', () => {
       view.query('row:b')!.focus();
     });
     act(() => {
-      view
-        .query('row:b')!
-        .dispatchEvent(
-          new KeyboardEvent('keydown', {
-            key: 'ArrowRight',
-            bubbles: true,
-            cancelable: true,
-          }),
-        );
+      view.query('row:b')!.dispatchEvent(
+        new KeyboardEvent('keydown', {
+          key: 'ArrowRight',
+          bubbles: true,
+          cancelable: true,
+        }),
+      );
     });
     expect(document.activeElement).toBe(view.query('row:c'));
     act(() => {
-      view
-        .query('row:c')!
-        .dispatchEvent(
-          new KeyboardEvent('keydown', {
-            key: 'ArrowLeft',
-            bubbles: true,
-            cancelable: true,
-          }),
-        );
+      view.query('row:c')!.dispatchEvent(
+        new KeyboardEvent('keydown', {
+          key: 'ArrowLeft',
+          bubbles: true,
+          cancelable: true,
+        }),
+      );
     });
     expect(document.activeElement).toBe(view.query('row:a'));
     act(() => {
-      view
-        .query('row:a')!
-        .dispatchEvent(
-          new KeyboardEvent('keydown', {
-            key: 'ArrowDown',
-            bubbles: true,
-            cancelable: true,
-          }),
-        );
+      view.query('row:a')!.dispatchEvent(
+        new KeyboardEvent('keydown', {
+          key: 'ArrowDown',
+          bubbles: true,
+          cancelable: true,
+        }),
+      );
     });
     expect(document.activeElement).toBe(view.query('row:b'));
     await view.update({ presentation: 'grid' });
@@ -1564,7 +1598,9 @@ describe('Collection table', () => {
       },
     });
     view.measure(1440);
-    expect(view.container.querySelector('[aria-label="Everything else"]')).not.toBeNull();
+    expect(
+      view.container.querySelector('[aria-label="Everything else"]'),
+    ).not.toBeNull();
     expect(view.container.querySelector('[aria-label=""]')).toBeNull();
     view.unmount();
   });
@@ -1573,7 +1609,10 @@ describe('Collection table', () => {
     const view = mount({
       anatomy: {
         ...anatomy,
-        peek: (entry) => (entry.id === 'a' ? null : <Text testID={`peek-content:${entry.id}`}>{entry.title}</Text>),
+        peek: (entry) =>
+          entry.id === 'a' ? null : (
+            <Text testID={`peek-content:${entry.id}`}>{entry.title}</Text>
+          ),
       },
     });
     view.measure(1440);
@@ -1801,6 +1840,81 @@ describe('detail auto beside the host details pane', () => {
     expect(headerTitles(view.container)).toEqual(wideColumns);
     expect(view.query('row:a:peek')).not.toBeNull();
     expect(document.activeElement).toBe(view.query('row:b'));
+    view.unmount();
+  });
+});
+
+describe('list row lines (title meta, description, status takes the facts line)', () => {
+  const described: CollectionAnatomy<Entry> = {
+    ...anatomy,
+    peek: undefined,
+    age: undefined,
+    description: (entry) => `What ${entry.title} does`,
+    titleMeta: (entry) => (
+      <Text testID={`meta:${entry.id}`}>{`Everywhere ${entry.id}`}</Text>
+    ),
+    byline: (entry) => <Text testID={`facts:${entry.id}`}>{entry.repo}</Text>,
+    reason: (entry) =>
+      entry.reason ? (
+        <Text testID={`status:${entry.id}`}>{entry.reason}</Text>
+      ) : null,
+    action: (entry) => <Text testID={`action:${entry.id}`}>Add</Text>,
+  };
+
+  function textOrder(row: HTMLElement, needles: readonly string[]): number[] {
+    const text = row.textContent ?? '';
+    return needles.map((needle) => text.indexOf(needle));
+  }
+
+  it('draws title and meta, then the description, then the facts line where a status replaces the facts', () => {
+    const view = mount({ presentation: 'list', anatomy: described });
+    view.measure(1440);
+    const withStatus = view.query('row:a')!;
+    const [title, meta, description, status] = textOrder(withStatus, [
+      'Retry idempotent payment intents',
+      'Everywhere a',
+      'What Retry',
+      'Review requested',
+    ]);
+    expect(title).toBeGreaterThanOrEqual(0);
+    expect(meta).toBeGreaterThan(title);
+    expect(description).toBeGreaterThan(meta);
+    expect(status).toBeGreaterThan(description);
+    // A status takes the facts line: the byline is not drawn beside it.
+    expect(view.query('facts:a')).toBeNull();
+    expect(view.query('status:a')).not.toBeNull();
+
+    const quiet = view.query('row:c')!;
+    const [quietDescription, facts] = textOrder(quiet, [
+      'What Dark mode',
+      'mobile',
+    ]);
+    expect(quietDescription).toBeGreaterThanOrEqual(0);
+    expect(facts).toBeGreaterThan(quietDescription);
+    expect(view.query('meta:c')).not.toBeNull();
+    view.unmount();
+  });
+
+  it('keeps the two-line row for an anatomy without a description', () => {
+    const view = mount({
+      presentation: 'list',
+      anatomy: { ...described, description: undefined },
+    });
+    view.measure(1440);
+    const row = view.query('row:a')!;
+    // Without a description the byline and the reason share the second line, as before.
+    expect(view.query('facts:a')).not.toBeNull();
+    expect(row.textContent).toContain('Review requested');
+    view.unmount();
+  });
+
+  it('draws the row action at rest and leaves it to the detail beside an open item', async () => {
+    const view = mount({ presentation: 'list', anatomy: described });
+    view.measure(1440);
+    expect(view.query('action:b')).not.toBeNull();
+    await view.setOpen('b');
+    expect(visible(view.query('collection-detail'))).toBe(true);
+    expect(view.query('action:a')).toBeNull();
     view.unmount();
   });
 });
@@ -2112,7 +2226,6 @@ describe('a page-sized collection (scroll page)', () => {
     }
     expect(pressed).toEqual(['needs', 'needs']);
   });
-
 });
 
 describe('the table ⇄ split transition', () => {
@@ -2552,12 +2665,15 @@ describe('grid', () => {
       presentation: 'grid',
       anatomy: {
         ...anatomy,
-        description: (entry) => (entry.group === 'needs' ? 'Retries payment intents.' : null),
-        reason: (entry) => (entry.reason === '' ? null : <Text>{entry.reason}</Text>),
+        description: (entry) =>
+          entry.group === 'needs' ? 'Retries payment intents.' : null,
+        reason: (entry) =>
+          entry.reason === '' ? null : <Text>{entry.reason}</Text>,
       },
     });
     view.measure(1440);
-    const height = (id: string) => parseFloat(view.query(`row:${id}:card`)!.style.height);
+    const height = (id: string) =>
+      parseFloat(view.query(`row:${id}:card`)!.style.height);
     expect(height('a')).toBe(height('b'));
     // "Everything else" has neither a description nor a status: its card is just its head.
     expect(height('c')).toBeLessThan(height('a'));
@@ -2835,22 +2951,35 @@ describe('grid', () => {
       cardContent: {
         height: 180,
         ...(flag ? { ownsFooter: true } : {}),
-        render: (entry) => <View testID={`card-body:${entry.id}`}><Text>{`Live ${entry.title}`}</Text></View>,
+        render: (entry) => (
+          <View testID={`card-body:${entry.id}`}>
+            <Text>{`Live ${entry.title}`}</Text>
+          </View>
+        ),
       },
     });
     const draw = (flag: boolean) => {
-      const view = mount({ presentation: 'grid', grouped: false, anatomy: ownsFooter(flag) });
+      const view = mount({
+        presentation: 'grid',
+        grouped: false,
+        anatomy: ownsFooter(flag),
+      });
       view.measure(1440);
       return view;
     };
     const reserved = draw(false);
     const owned = draw(true);
-    const height = (view: ReturnType<typeof mount>) => Number.parseFloat(view.query('row:a:card')!.style.height);
+    const height = (view: ReturnType<typeof mount>) =>
+      Number.parseFloat(view.query('row:a:card')!.style.height);
     // The body draws its own footer, so the card is the body and nothing more.
     expect(height(owned)).toBeLessThan(height(reserved));
     expect(height(owned)).toBe(182);
     // The action is still its own target beside the card's, so it never nests a button in a button.
-    const nested = owned.query('row:a:card')!.querySelectorAll('[role="button"] [role="button"], button [role="button"], [role="button"] button, button button');
+    const nested = owned
+      .query('row:a:card')!
+      .querySelectorAll(
+        '[role="button"] [role="button"], button [role="button"], [role="button"] button, button button',
+      );
     expect(nested.length).toBe(0);
     act(() => {
       owned.query('action:a')!.click();
@@ -3669,7 +3798,10 @@ describe("the search in the caller's header row", () => {
   });
 
   it('hands the selection control to a header render, so the list pane draws no row of its own for it', () => {
-    const store = createListMultiSelectionStore({ scopeKey: 'entries', visibleOrderedKeys: [] });
+    const store = createListMultiSelectionStore({
+      scopeKey: 'entries',
+      visibleOrderedKeys: [],
+    });
     const view = mount({
       search,
       selection: { multiple: { store } },
@@ -3690,33 +3822,62 @@ describe("the search in the caller's header row", () => {
 
   it('on a pointer device selects by click and keys alone: no Select button, only the way back out while selecting', async () => {
     const matchMedia = (globalThis as { matchMedia?: unknown }).matchMedia;
-    (globalThis as { matchMedia?: unknown }).matchMedia = (query: string) => ({ matches: query === '(hover: hover) and (pointer: fine)' });
+    (globalThis as { matchMedia?: unknown }).matchMedia = (query: string) => ({
+      matches: query === '(hover: hover) and (pointer: fine)',
+    });
     let view: ReturnType<typeof mount> | null = null;
     try {
-      const store = createListMultiSelectionStore({ scopeKey: 'entries', visibleOrderedKeys: [] });
+      const store = createListMultiSelectionStore({
+        scopeKey: 'entries',
+        visibleOrderedKeys: [],
+      });
       view = mount({ search, selection: { multiple: { store } } });
       view.measure(1440);
       expect(view.query('happier-list-selection-mode')).toBeNull();
       await act(async () => {
-        view!.query('row:a')!.dispatchEvent(new MouseEvent('click', { shiftKey: true, bubbles: true, cancelable: true }));
+        view!
+          .query('row:a')!
+          .dispatchEvent(
+            new MouseEvent('click', {
+              shiftKey: true,
+              bubbles: true,
+              cancelable: true,
+            }),
+          );
       });
       expect(store.getSnapshot().isSelectionMode).toBe(true);
       expect([...store.getSnapshot().selectedKeys]).toEqual(['a']);
-      expect(view.query('happier-list-selection-mode')?.textContent).toContain('Done selecting');
+      expect(view.query('happier-list-selection-mode')?.textContent).toContain(
+        'Done selecting',
+      );
       expect(view.openChanges).toEqual([]);
-      await act(async () => { view!.query('happier-list-selection-mode')!.click(); });
+      await act(async () => {
+        view!.query('happier-list-selection-mode')!.click();
+      });
       expect(store.getSnapshot().isSelectionMode).toBe(false);
       expect([...store.getSnapshot().selectedKeys]).toEqual([]);
       expect(view.query('happier-list-selection-mode')).toBeNull();
       await act(async () => {
         view!.query('row:b')!.focus();
-        view!.query('row:b')!.dispatchEvent(new KeyboardEvent('keydown', { key: ' ', bubbles: true, cancelable: true }));
+        view!
+          .query('row:b')!
+          .dispatchEvent(
+            new KeyboardEvent('keydown', {
+              key: ' ',
+              bubbles: true,
+              cancelable: true,
+            }),
+          );
       });
       expect(store.getSnapshot().isSelectionMode).toBe(true);
       expect([...store.getSnapshot().selectedKeys]).toEqual(['b']);
-      expect(view.query('happier-list-selection-mode')?.textContent).toContain('Done selecting');
+      expect(view.query('happier-list-selection-mode')?.textContent).toContain(
+        'Done selecting',
+      );
       expect(view.openChanges).toEqual([]);
-      await act(async () => { view!.query('happier-list-selection-mode')!.click(); });
+      await act(async () => {
+        view!.query('happier-list-selection-mode')!.click();
+      });
       expect(store.getSnapshot().isSelectionMode).toBe(false);
       expect([...store.getSnapshot().selectedKeys]).toEqual([]);
     } finally {
@@ -3726,7 +3887,10 @@ describe("the search in the caller's header row", () => {
   });
 
   it('keeps the touch selection control on the search row and enters and exits selection through it', async () => {
-    const store = createListMultiSelectionStore({ scopeKey: 'entries', visibleOrderedKeys: [] });
+    const store = createListMultiSelectionStore({
+      scopeKey: 'entries',
+      visibleOrderedKeys: [],
+    });
     const view = mount({ search, selection: { multiple: { store } } });
     view.measure(1440);
     const mode = view.query('happier-list-selection-mode')!;
@@ -3735,12 +3899,18 @@ describe("the search in the caller's header row", () => {
     while (!row.contains(input)) row = row.parentElement!;
     // The nearest container holding both lays them out side by side.
     expect(getComputedStyle(row).flexDirection).toBe('row');
-    await act(async () => { mode.click(); });
+    await act(async () => {
+      mode.click();
+    });
     expect(store.getSnapshot().isSelectionMode).toBe(true);
-    await act(async () => { view.query('row:a')!.click(); });
+    await act(async () => {
+      view.query('row:a')!.click();
+    });
     expect([...store.getSnapshot().selectedKeys]).toEqual(['a']);
     expect(view.openChanges).toEqual([]);
-    await act(async () => { view.query('happier-list-selection-mode')!.click(); });
+    await act(async () => {
+      view.query('happier-list-selection-mode')!.click();
+    });
     expect(store.getSnapshot().isSelectionMode).toBe(false);
     expect([...store.getSnapshot().selectedKeys]).toEqual([]);
     expect(view.query('happier-list-selection-mode')).not.toBeNull();

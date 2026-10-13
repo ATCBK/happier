@@ -225,6 +225,16 @@ export function HappierSurfaceState(props: HappierSurfaceStateProps) {
       style={{ width: 0, height: 0 }}
     />
   ) : null;
+  const diagnosticDetails = props.diagnosticCode && disclosesDiagnostic(props.kind) ? (
+    <HappierStateDetails
+      testID={props.testID}
+      markerTestID={props.testID ? `${props.testID}-diagnostic-${props.diagnosticCode}` : undefined}
+      label={bindings.detailsLabel}
+      details={props.diagnosticCode}
+      renderToggle={bindings.renderDetailsToggle}
+      renderDetails={bindings.renderDetailsCode}
+    />
+  ) : diagnosticMarker;
 
   if (props.size === 'line') {
     const lineActions = actions.some(Boolean) ? (
@@ -269,25 +279,26 @@ export function HappierSurfaceState(props: HappierSurfaceStateProps) {
     );
     return (
       <View
-        {...liveRegionProps}
         style={
           props.fillsContainer
             ? { flexGrow: 1, justifyContent: 'center' }
             : undefined
         }
       >
-        <HappierStateLine
-          testID={props.testID}
-          icon={props.glyph}
-          action={lineActions}
-        >
-          {bindings.renderText({
-            role: 'line',
-            metrics: HAPPIER_STATE_LINE_METRICS.text,
-            children: props.lineText,
-          })}
-        </HappierStateLine>
-        {diagnosticMarker}
+        <View {...liveRegionProps}>
+          <HappierStateLine
+            testID={props.testID}
+            icon={props.glyph}
+            action={lineActions}
+          >
+            {bindings.renderText({
+              role: 'line',
+              metrics: HAPPIER_STATE_LINE_METRICS.text,
+              children: props.lineText,
+            })}
+          </HappierStateLine>
+        </View>
+        {diagnosticDetails}
       </View>
     );
   }
@@ -391,24 +402,7 @@ export function HappierSurfaceState(props: HappierSurfaceStateProps) {
   const supplemental = (
     <>
       {quietLine}
-      {props.diagnosticCode ? (
-        disclosesDiagnostic(props.kind) ? (
-          <HappierStateDetails
-            testID={props.testID}
-            markerTestID={
-              props.testID
-                ? `${props.testID}-diagnostic-${props.diagnosticCode}`
-                : undefined
-            }
-            label={bindings.detailsLabel}
-            details={props.diagnosticCode}
-            renderToggle={bindings.renderDetailsToggle}
-            renderDetails={bindings.renderDetailsCode}
-          />
-        ) : (
-          diagnosticMarker
-        )
-      ) : null}
+      {diagnosticDetails}
     </>
   );
   // The live region holds the state's sentence; a diagnostic disclosure stays outside it, so expanding

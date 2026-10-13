@@ -5,10 +5,11 @@ import { buildPublicSessionDeclarativeView, mountPublicSessionDeclarative } from
 import { mountThroughReactNativeWeb } from '../rnwMount.testSupport.js';
 import { createSurfaceContext } from '../surfaceFixture.testSupport.js';
 import { PluginDeclarativeNodeV2Schema } from '@happier-dev/protocol/plugins/contributions/ui/v2';
+import { projectWidgetSnapshotPreviewV1, WidgetSnapshotDocumentV1Schema } from '@happier-dev/protocol/widgets';
 import { publicSessionDeclarativeDocument as document } from './publicSession.fixture.testSupport.js';
 import { buildArtifactHtmlDocumentV1 } from '@happier-dev/plugin-sdk/ui';
 import { getActionSpec } from '@happier-dev/protocol/actions/actionSpecs';
-import { externalTableVisual, externalHtmlVisual, externalHtmlBundle } from '../../fixtures/external-authoring/src/sessionVisuals.js';
+import { externalTableVisual, externalChartVisual, externalHtmlVisual, externalHtmlBundle } from '../../fixtures/external-authoring/src/sessionVisuals.js';
 
 describe('public Session portable declarative rendering', () => {
     it('admits and renders source-driven external author visuals through public bundle and Action contracts', () => {
@@ -26,6 +27,38 @@ describe('public Session portable declarative rendering', () => {
         expect(html).toContain('External author visual');
         expect(html).toContain('Content-Security-Policy');
         expect(html).not.toContain('unsafe-eval');
+    });
+    it('renders the authored multi-series chart after snapshot projection while excluding undisplayed data', () => {
+        const authored = getActionSpec('session.board.item.upsert').inputSchema.parse({ ...externalChartVisual,
+            item: { ...externalChartVisual.item, source: { kind: 'declarative', document: {
+                ...externalChartVisual.item.source.document,
+                root: { ...externalChartVisual.item.source.document.root, data: { kind: 'value', value:
+                    externalChartVisual.item.source.document.root.data.value.map(row => ({ ...row, privateNote: 'undisplayed-secret' })) } },
+            } } },
+        });
+        if (authored.item.source.kind !== 'declarative') throw new Error('Expected the admitted chart document');
+        const preview = projectWidgetSnapshotPreviewV1({ document: authored.item.source.document,
+            frozenByPath: new Map(), asOf: '2026-10-12T00:00:00.000Z', provenance: [{ label: 'Rainfall measurements' }] });
+        expect(preview).not.toBeNull();
+        const document = WidgetSnapshotDocumentV1Schema.parse(preview!.document);
+        expect(JSON.stringify(document)).not.toContain('undisplayed-secret');
+        expect(JSON.stringify(document)).not.toContain('privateNote');
+        const mounted = mountThroughReactNativeWeb(createElement('div', null,
+            buildPublicSessionDeclarativeView(document, createSurfaceContext().theme)));
+        try {
+            const chart = mounted.container.querySelector('[data-testid="plugin-declarative-chart"]');
+            expect(chart?.getAttribute('aria-label')).toContain('North 0.00004');
+            expect(chart?.getAttribute('aria-label')).toContain('South 7');
+            act(() => mounted.container.querySelector<HTMLButtonElement>('[data-testid="plugin-declarative-chart-values-toggle"]')!.click());
+            const rows = [...mounted.container.querySelectorAll('[data-testid^="plugin-declarative-chart-values-row-"]')]
+                .map(row => row.getAttribute('aria-label'));
+            expect(rows).toHaveLength(2);
+            expect(rows[0]).toEqual(expect.stringContaining('North: 0.00004'));
+            expect(rows[0]).toEqual(expect.stringContaining('South: 7'));
+            expect(rows[1]).toEqual(expect.stringContaining('North: —'));
+            expect(rows[1]).toEqual(expect.stringContaining('South: 0'));
+            expect(mounted.container.textContent).not.toContain('undisplayed-secret');
+        } finally { mounted.unmount(); }
     });
     it('renders Markdown, exact table values and state semantics through the portable owner', () => {
         const mounted = mountThroughReactNativeWeb(createElement('div', null,

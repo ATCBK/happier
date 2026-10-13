@@ -1,6 +1,13 @@
+import { readFileSync } from 'node:fs';
+import { join } from 'node:path';
 import { describe, expect, it } from 'vitest';
 
-import { isHappierSectionActionStacked, resolveHappierPageBackMeasuringLine, resolveHappierPageBackPlacement } from './pageMetrics.js';
+import {
+  HAPPIER_COLLECTION_RAIL_WIDTH_PX,
+  isHappierSectionActionStacked,
+  resolveHappierPageBackMeasuringLine,
+  resolveHappierPageBackPlacement,
+} from './pageMetrics.js';
 
 describe('isHappierSectionActionStacked', () => {
   // A Work pane section at the pane's default width: a short title beside an ⓘ and a +.
@@ -62,5 +69,19 @@ describe('resolveHappierPageBackMeasuringLine', () => {
 
   it('reserves nothing for a page whose back is hidden (a collection-root detail beside its list)', () => {
     expect(resolveHappierPageBackMeasuringLine({ backShown: false, collectionMode: 'split' })).toBe(false);
+  });
+});
+
+describe('HAPPIER_COLLECTION_RAIL_WIDTH_PX', () => {
+  it('names two rail roles, the detailed one wider for rows that carry a description and facts', () => {
+    expect(HAPPIER_COLLECTION_RAIL_WIDTH_PX.standard).toBe(272);
+    expect(HAPPIER_COLLECTION_RAIL_WIDTH_PX.detailed).toBeGreaterThan(HAPPIER_COLLECTION_RAIL_WIDTH_PX.standard);
+  });
+
+  it('stays out of the plugin author layer: no plugin consumes a host collection rail', () => {
+    const srcRoot = join(new URL('.', import.meta.url).pathname, '..', '..');
+    for (const authorEntry of ['components/index.public.ts', 'index.public.ts']) {
+      expect(readFileSync(join(srcRoot, authorEntry), 'utf8'), authorEntry).not.toContain('HAPPIER_COLLECTION_RAIL_WIDTH_PX');
+    }
   });
 });

@@ -1,4 +1,4 @@
-import { act, type ReactNode } from 'react';
+import { act, useState, type ReactNode } from 'react';
 import { expect, it, vi } from 'vitest';
 import * as publicUi from '../../index.public.js';
 import { HappierUiEnvironmentProvider } from '../../environment/context.js';
@@ -16,21 +16,19 @@ function surface(children: ReactNode) {
   );
 }
 
+function ControlledTrigger(props: Readonly<{ disabled?: boolean; onOpen: () => void; onToggle: (enabled: boolean) => void }>) {
+  const [enabled, setEnabled] = useState(true);
+  return <publicUi.HappierTriggerRow testID="trigger" title="Daily digest" qualifier="Every morning"
+    enabled={enabled} toggleDisabled={props.disabled} toggleLabel="Toggle Daily digest"
+    onToggle={next => { props.onToggle(next); setEnabled(next); }} onPress={props.onOpen} />;
+}
+
 it('lets authors toggle a trigger independently from opening it, including disabled writes', async () => {
-  expect(publicUi.HappierTriggerRow).toBeTypeOf('function');
   const open = vi.fn();
   const toggle = vi.fn();
   const mounted = mountThroughReactNativeWeb(
     surface(
-      <publicUi.HappierTriggerRow
-        testID="trigger"
-        title="Daily digest"
-        qualifier="Every morning"
-        enabled
-        toggleLabel="Turn off Daily digest"
-        onToggle={toggle}
-        onPress={open}
-      />,
+      <ControlledTrigger onToggle={toggle} onOpen={open} />,
     ),
   );
   try {
@@ -45,20 +43,13 @@ it('lets authors toggle a trigger independently from opening it, including disab
     expect(control.getAttribute('aria-checked')).toBe('true');
     act(() => control.click());
     expect(toggle).toHaveBeenCalledWith(false);
+    expect(mounted.container.querySelector('[data-testid="trigger-switch"]')?.getAttribute('aria-checked')).toBe('false');
     expect(open).not.toHaveBeenCalled();
     act(() => row.click());
     expect(open).toHaveBeenCalledOnce();
     await mounted.render(
       surface(
-        <publicUi.HappierTriggerRow
-          testID="trigger"
-          title="Daily digest"
-          enabled
-          toggleDisabled
-          toggleLabel="Turn off Daily digest"
-          onToggle={toggle}
-          onPress={open}
-        />,
+        <ControlledTrigger disabled onToggle={toggle} onOpen={open} />,
       ),
     );
     act(() =>
@@ -67,49 +58,13 @@ it('lets authors toggle a trigger independently from opening it, including disab
         .click(),
     );
     expect(toggle).toHaveBeenCalledOnce();
-  } finally {
-    mounted.unmount();
-  }
-});
-
-it('lets the host place provenance: a linked chip and a static one follow the same cross-axis alignment', async () => {
-  // A transcript draws the chip above a right-aligned message; the link must not pin itself to the
-  // start edge while its static form follows the host (DESIGN-SESSION, lab lane12-final b-habit Q).
-  const alignment = (element: HTMLElement) =>
-    getComputedStyle(element).alignSelf;
-  const mounted = mountThroughReactNativeWeb(
-    surface(
-      <publicUi.HappierProvenanceChip
-        label="From Daily digest · step 1"
-        testID="linked"
-        onPress={() => {}}
-      />,
-    ),
-  );
-  try {
-    const linked = alignment(
-      mounted.container.querySelector<HTMLElement>('[data-testid="linked"]')!,
-    );
-    await mounted.render(
-      surface(
-        <publicUi.HappierProvenanceChip
-          label="From Daily digest · step 1"
-          testID="static"
-        />,
-      ),
-    );
-    const plain = alignment(
-      mounted.container.querySelector<HTMLElement>('[data-testid="static"]')!,
-    );
-    expect(linked).not.toBe('flex-start');
-    expect(linked).toBe(plain);
+    expect(mounted.container.querySelector('[data-testid="trigger-switch"]')?.getAttribute('aria-checked')).toBe('false');
   } finally {
     mounted.unmount();
   }
 });
 
 it('renders caller-qualified provenance as a named link or a non-interactive source', async () => {
-  expect(publicUi.HappierProvenanceChip).toBeTypeOf('function');
   const open = vi.fn();
   const mounted = mountThroughReactNativeWeb(
     surface(
@@ -127,6 +82,7 @@ it('renders caller-qualified provenance as a named link or a non-interactive sou
     )!;
     expect(chip.getAttribute('role')).toBe('link');
     expect(chip.getAttribute('aria-label')).toBe('Open producing step');
+    const linkedAlignment = getComputedStyle(chip).alignSelf;
     act(() => chip.click());
     expect(open).toHaveBeenCalledOnce();
     await mounted.render(
@@ -141,6 +97,8 @@ it('renders caller-qualified provenance as a named link or a non-interactive sou
       '[data-testid="source"]',
     )!;
     expect(plain.getAttribute('role')).not.toBe('link');
+    expect(linkedAlignment).not.toBe('flex-start');
+    expect(getComputedStyle(plain).alignSelf).toBe(linkedAlignment);
     act(() => plain.click());
     expect(open).toHaveBeenCalledOnce();
   } finally {

@@ -1,5 +1,7 @@
 import { useMemo, type ReactElement, type ReactNode } from 'react';
 import { View } from 'react-native';
+import type { ResourceContent } from '@happier-dev/plugin-sdk/ui';
+import type { PluginUiResourceSnapshot } from '../hostApi/resourceStore.js';
 
 import { useOptionalPluginUiPresentationHost } from '../presentationHost/context.js';
 import { resolveHappierFreshnessText } from '../presentation/state/asOfTime.js';
@@ -32,6 +34,7 @@ import {
   resolveHappierScene,
   resolveHappierSceneArtSize,
   type HappierSceneInput,
+  type HappierSceneArtSize,
 } from '../presentation/state/scenes.js';
 import { HappierPressable } from '../presentation/interaction/Pressable.js';
 import { HappierEmptySlot } from '../presentation/state/EmptySlot.js';
@@ -49,6 +52,8 @@ const STATE_ERROR_TRANSLATION_KEY = 'happier.plugin-ui.state.error';
 const STATE_DETAILS_TRANSLATION_KEY = 'happier.plugin-ui.state.details';
 const STATE_AS_OF_TRANSLATION_KEY = 'happier.plugin-ui.state.asOf';
 const STATE_RETRY_TRANSLATION_KEY = 'happier.plugin-ui.state.retry';
+const STATE_REFRESHING_TRANSLATION_KEY = 'happier.plugin-ui.state.refreshing';
+const STATE_STALE_TRANSLATION_KEY = 'happier.plugin-ui.state.stale';
 
 /**
  * The size a state is drawn at: the author's, else the container the host mounted the surface in
@@ -58,13 +63,6 @@ function useStateSize(size: HappierStateSize | undefined): HappierStateSize | un
   const hostSize = useOptionalPluginUiPresentationHost()?.stateSize;
   return size ?? hostSize;
 }
-
-export type PluginUiResourceState<Value = unknown> =
-  | Readonly<{ status: 'idle' | 'loading' }>
-  | Readonly<{ status: 'ready'; value: Value }>
-  | Readonly<{ status: 'empty' }>
-  | Readonly<{ status: 'unavailable' | 'stale' | 'complete'; diagnostics?: readonly string[] }>
-  | Readonly<{ status: 'error'; code?: string; message?: string; diagnostics?: readonly string[] }>;
 
 /**
  * The three resolvable presentations of a resource, rendered as real components
@@ -343,24 +341,45 @@ export function EmptySlot(props: EmptySlotProps): ReactElement {
   );
 }
 
-/**
- * The scene a state draws in its glyph's place, through the host's scene renderer — or `null` when
- * the state is too small for one, or the host has no renderer (the glyph stays).
- */
+export type SceneArtProps = Readonly<{
+  scene: HappierSceneInput;
+  size?: HappierSceneArtSize;
+  still?: boolean;
+  testID?: string;
+}>;
+
+/** Standalone scene art uses the same registry and mounted renderer as empty states. */
+export function SceneArt(props: SceneArtProps): ReactNode {
+  return useRenderedScene(props.scene, props.size ?? 'pane', props.testID, props.still);
+}
+
+function useRenderedScene(
+  input: HappierSceneInput | undefined,
+  size: HappierSceneArtSize | null,
+  testID: string | undefined,
+  still?: boolean,
+): ReactNode {
+  const host = useOptionalPluginUiPresentationHost();
+  const presented = useHappierUiAnimationActivityInternal();
+  const scene = useMemo(() => input && size && host?.renderScene ? resolveHappierScene(input, size) : null, [input, size, host]);
+  return scene && size && host?.renderScene
+    ? host.renderScene({ scene, size, still: still === true || !presented, testID })
+    : null;
+}
+
+/** The state's scene mark, or null when the host or container cannot render it. */
 function useStateScene(
   input: HappierSceneInput | undefined,
   layout: 'centered' | 'page' | 'line',
   stateSize: HappierStateSize | undefined,
   testID: string | undefined,
 ): ReactNode {
-  const host = useOptionalPluginUiPresentationHost();
-  const presented = useHappierUiAnimationActivityInternal();
   const artSize = input ? resolveHappierSceneArtSize({ size: stateSize, layout }) : null;
-  const scene = useMemo(() => (input && artSize && host?.renderScene ? resolveHappierScene(input, artSize) : null), [artSize, host, input]);
-  if (!scene || !artSize || !host?.renderScene) return null;
+  const art = useRenderedScene(input, artSize, testID ? `${testID}-scene` : undefined);
+  if (!art || !artSize) return null;
   return (
     <View style={{ marginBottom: HAPPIER_SCENE_ART_METRICS[artSize].gapPx }}>
-      {host.renderScene({ scene, size: artSize, still: !presented, testID: testID ? `${testID}-scene` : undefined })}
+      {art}
     </View>
   );
 }
@@ -630,50 +649,63 @@ function HappierSpinnerGlyph(props: Readonly<{ color: string; animationEnabled: 
   );
 }
 
-export type StateProps<Value> = Readonly<{
-  resource?: PluginUiResourceState<Value>;
+export type StateProps = Readonly<{
+  resource?: PluginUiResourceSnapshot;
+  /** The consumer knows whether the admitted Resource content is empty. */
+  isEmpty?: boolean;
+  onRetry?: () => unknown;
   /** Replaces the default {@link LoadingState}. */
   loading?: ReactNode;
   /** Replaces the default {@link EmptyState}. */
   empty?: ReactNode;
   /** Replaces the default {@link ErrorState}. */
-  error?: ReactNode | ((state: Extract<PluginUiResourceState<Value>, { status: 'error' }>) => ReactNode);
-  children?: ReactNode | ((value: Value) => ReactNode);
+  error?: ReactNode | ((state: PluginUiResourceSnapshot) => ReactNode);
+  children?: ReactNode | ((value: ResourceContent) => ReactNode);
 }>;
 
 /**
- * Render exactly one presentation for a resource snapshot.
- *
- * Every non-ready status resolves to a real component. The predecessor wrapped
- * whatever the author supplied in an inert marker element and rendered NOTHING
- * when a slot was omitted, so a surface waiting on a resource showed a blank
- * area. Framework-owned defaults resolve through the host's translation
- * projection; their English fallbacks keep isolated and older hosts readable.
+ * Present the Resource owner's independent value, pending and error facts.
+ * Retain admitted children while refreshing or reporting a failed refresh;
+ * before admission, render the shared loading, failure or empty presentation.
+ * Framework defaults resolve through the mounted host's translation projection.
  */
-export function State<Value>({
+export function State({
   resource,
+  isEmpty,
+  onRetry,
   loading,
   empty,
   error,
   children,
-}: StateProps<Value>): ReactElement | null {
+}: StateProps): ReactElement | null {
   const translate = usePluginTranslation();
-  if (!resource || resource.status === 'idle' || resource.status === 'loading') {
+  if (resource?.value !== undefined) {
+    const retained = isEmpty
+      ? empty ?? <EmptyState title={translate(STATE_EMPTY_TRANSLATION_KEY, 'Nothing to show')} />
+      : typeof children === 'function' ? children(resource.value) : children;
+    const refreshing = resource.pending === 'refresh';
+    return <>
+      {retained}
+      {refreshing || resource.error || resource.freshness === 'stale' ? (
+        <FreshnessLine
+          busy={refreshing}
+          reason={resource.error?.message ?? (refreshing
+            ? translate(STATE_REFRESHING_TRANSLATION_KEY, 'Refreshing plugin content')
+            : translate(STATE_STALE_TRANSLATION_KEY, 'Plugin content may be out of date'))}
+          tone={resource.error ? 'warning' : 'neutral'}
+          action={onRetry ? { label: translate(STATE_RETRY_TRANSLATION_KEY, 'Retry'), onPress: () => { void onRetry(); } } : undefined}
+        />
+      ) : null}
+    </>;
+  }
+  if (!resource || resource.pending === 'initial') {
     return <>{loading ?? <LoadingState />}</>;
   }
-  if (resource.status === 'empty') {
-    return <>{empty ?? <EmptyState title={translate(STATE_EMPTY_TRANSLATION_KEY, 'Nothing to show')} />}</>;
-  }
-  if (resource.status === 'error') {
+  if (resource.error) {
     if (error !== undefined) {
       return <>{typeof error === 'function' ? error(resource) : error}</>;
     }
-    return <ErrorState title={translate(STATE_ERROR_TRANSLATION_KEY, 'Something went wrong')} />;
+    return <ErrorState title={translate(STATE_ERROR_TRANSLATION_KEY, 'Something went wrong')} onRetry={onRetry} />;
   }
-  if (resource.status === 'ready') {
-    return <>{typeof children === 'function' ? children(resource.value) : children}</>;
-  }
-  // `unavailable` / `stale` / `complete` carry no value, so a render-prop child
-  // has nothing to receive; a static child still describes the surface.
-  return <>{typeof children === 'function' ? null : children}</>;
+  return <>{empty ?? <EmptyState title={translate(STATE_EMPTY_TRANSLATION_KEY, 'Nothing to show')} />}</>;
 }

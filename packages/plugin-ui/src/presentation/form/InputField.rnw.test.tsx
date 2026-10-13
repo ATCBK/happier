@@ -24,6 +24,18 @@ const segmentedIn = (element: ReactNode) =>
   );
 
 describe('one typed field decides how a fixed choice is drawn, for every form', () => {
+  it('states a settled empty options read and withdraws that state while loading or when choices arrive', async () => {
+    const props = { field: { path: 'session', title: 'Session', widget: 'select' as const }, value: undefined,
+      options: [], onChange: () => {}, frame: 'none' as const, theme, testID: 'session' };
+    const view = mountThroughReactNativeWeb(<HappierInputField {...props} optionsStatus="ready" />);
+    try {
+      expect(view.container.querySelector('[aria-live="polite"]')?.textContent?.trim()).toBeTruthy();
+      await view.render(<HappierInputField {...props} optionsStatus="loading" />);
+      expect(view.container.querySelector('[aria-live="polite"]')).toBeNull();
+      await view.render(<HappierInputField {...props} optionsStatus="ready" options={[{ value: 'session', label: 'Project session' }]} />);
+      expect(view.container.querySelector('[aria-live="polite"]')).toBeNull();
+    } finally { view.unmount(); }
+  });
   it('draws two to four short choices as one segmented control and pins the pressed value', () => {
     const onChange = vi.fn();
     const view = mountThroughReactNativeWeb(
