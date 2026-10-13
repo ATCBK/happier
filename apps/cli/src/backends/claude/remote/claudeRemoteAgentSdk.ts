@@ -40,7 +40,6 @@ import {
     resolveClaudeEffortForModel,
     resolveClaudeUltracodeForModel,
 } from '@/backends/claude/utils/claudeEffort';
-import { resolveClaudeCodeXdgIsolation } from '@/backends/claude/utils/resolveClaudeCodeXdgIsolation';
 import { withCurrentHappierSessionId } from '@/agent/runtime/session/currentSessionIdEnv';
 
 import type { SDKMessage, SDKSystemMessage, SDKUserMessage } from '@/backends/claude/sdk';
@@ -48,7 +47,8 @@ import type { PermissionResult } from '@/backends/claude/sdk/types';
 import type { JsRuntime } from '@/backends/claude/runClaude';
 import { createSubprocessStderrAppender, resolveSubprocessArtifactsDir } from '@/agent/runtime/subprocessArtifacts';
 import { join } from 'node:path';
-import { spawn } from 'node:child_process';
+import { ChildProcess, spawn } from 'node:child_process';
+import { killProcessTree } from '@/agent/runtime/process/killProcessTree';
 import { createEventShapeLoggerForLog } from '@/diagnostics/eventShapeForLog';
 import { readTailTextFile } from '@/utils/fs/readTailTextFile';
 import { buildClaudeAgentSdkHooks } from './agentSdk/buildClaudeAgentSdkHooks';
@@ -175,6 +175,8 @@ export async function claudeRemoteAgentSdk(opts: {
 
     // Callbacks
     onSessionFound: (id: string, data?: SessionHookData) => void;
+    /** Authenticated SDK hooks share the existing workflow observation channel without transcript output. */
+    onSessionHook?: (data: SessionHookData) => void;
     onThinkingChange?: (thinking: boolean) => void;
     onProviderPromptStarted?: () => void | Promise<void>;
     onMessage: (message: SDKMessage) => void;
@@ -369,7 +371,6 @@ export async function claudeRemoteAgentSdk(opts: {
 
         let mode = initial.mode;
         let response: any;
-        let handleClaudeRuntimeActivityLossForCurrentQuery: ((reason: string) => void) | null = null;
         let didSettleRuntimeActivityForCurrentTurn = false;
 		    let latestClaudeSessionId: string | null =
 		        typeof opts.sessionId === 'string' && opts.sessionId.trim().length > 0 ? opts.sessionId.trim() : startFrom ?? null;
@@ -489,12 +490,6 @@ export async function claudeRemoteAgentSdk(opts: {
         logPrefix: '[claudeRemoteAgentSdk]',
         runtimeActivityAdapter: opts.runtimeActivityAdapter,
     };
-    // Only called once the query is finalized, which ends its Claude process.
-    handleClaudeRuntimeActivityLossForCurrentQuery = (reason: string) => handleClaudeRuntimeActivityLoss({
-        ...runtimeActivityEffectParams,
-        reason,
-        providerStopped: true,
-    });
     const runtimeExecutable = await ensureClaudeJsRuntimeExecutable(opts.jsRuntime);
 
     const stderrAppender = await createSubprocessStderrAppender({
@@ -607,6 +602,7 @@ export async function claudeRemoteAgentSdk(opts: {
 	        getMode: () => mode,
 	        onSessionFound: (sessionId, data) => recordSessionFound(sessionId, data as any),
 	        onSessionHook: (data) => {
+	            opts.onSessionHook?.(data);
 	            const activity = readClaudeSessionHookProviderTaskActivity(data);
 	            if (!activity) return;
 	            publishClaudeProviderTaskRuntimeActivity({
@@ -692,14 +688,6 @@ export async function claudeRemoteAgentSdk(opts: {
             claudeCodeExperimentalAgentTeamsEnabled: mode.claudeCodeExperimentalAgentTeamsEnabled,
             claudeCodeIncludeInNativeHistory: mode.claudeCodeIncludeInNativeHistory,
         });
-        const xdgIsolationEnv = resolveClaudeCodeXdgIsolation({
-            backendId: 'claude',
-            scope: 'session',
-            isolationId:
-                typeof opts.sessionId === 'string' && opts.sessionId.trim().length > 0
-                    ? opts.sessionId.trim()
-                    : `pid_${process.pid}`,
-        });
         const resumeSessionAt =
             typeof opts.resumeSessionAt === 'string' && opts.resumeSessionAt.trim().length > 0
                 ? opts.resumeSessionAt.trim()
@@ -728,7 +716,6 @@ export async function claudeRemoteAgentSdk(opts: {
             return Object.keys(out).length > 0 ? out : undefined;
         })();
         const claudeSubprocessEnv = withCurrentHappierSessionId({
-            ...xdgIsolationEnv,
             ...buildClaudeSubprocessEnv({ envOverlay: sessionEnvOverlay }),
         }, opts.happySessionId ?? '');
         logClaudeRuntimeAuthEnvDiagnostic({
@@ -877,7 +864,31 @@ export async function claudeRemoteAgentSdk(opts: {
     };
 
     const spawnBaseProcess = opts.spawnClaudeCodeProcess ?? defaultSpawnClaudeCodeProcess;
-    queryOptions.spawnClaudeCodeProcess = spawnBaseProcess;
+    const ownedProcess: {
+        child: ChildProcess | null;
+        exit: Promise<'exited' | 'spawn-failed'> | null;
+    } = { child: null, exit: null };
+    queryOptions.spawnClaudeCodeProcess = (spawnOptions: AgentSdkSpawnOptions): AgentSdkSpawnedProcess => {
+        const child = spawnBaseProcess(spawnOptions);
+        ownedProcess.child = child instanceof ChildProcess ? child : null;
+        ownedProcess.exit = new Promise((resolve) => {
+            const settle = (outcome: 'exited' | 'spawn-failed') => {
+                child.off('exit', onExit);
+                child.off('error', onError);
+                resolve(outcome);
+            };
+            const onExit = () => settle('exited');
+            const onError = () => {
+                // Node emits no exit after a failed spawn. Errors on a running child do not
+                // prove it stopped; its assigned pid keeps cleanup waiting for actual exit.
+                if ('pid' in child && child.pid === undefined) settle('spawn-failed');
+            };
+            child.once('exit', onExit);
+            child.on('error', onError);
+            if (child.exitCode !== null || ('signalCode' in child && child.signalCode != null)) onExit();
+        });
+        return child;
+    };
     let nextMessagePump: Promise<void> | null = null;
     let deferredUntilForegroundTurnEnds: ClaudeRemoteProviderAcceptedPrompt<EnhancedMode> | null = null;
     const swallowOptionalPromise = async (promise: Promise<void> | null): Promise<void> => {
@@ -2352,7 +2363,10 @@ export async function claudeRemoteAgentSdk(opts: {
         opts.setUserMessageSender?.(null);
         opts.setTurnInterrupt?.(null);
         if (!didSettleRuntimeActivityForCurrentTurn || providerActivityLedger.hasActiveProviderTasks()) {
-            handleClaudeRuntimeActivityLossForCurrentQuery?.('claude_agent_sdk_stream_finalized');
+            handleClaudeRuntimeActivityLoss({
+                ...runtimeActivityEffectParams,
+                reason: 'claude_agent_sdk_stream_finalized',
+            });
         }
         updateThinking(false);
         cleanupBufferedAssistantMessages?.(null);
@@ -2369,8 +2383,27 @@ export async function claudeRemoteAgentSdk(opts: {
             // ignore
         }
 
-        await repairTranscriptAfterAbort();
-        await stderrAppender?.close().catch(() => {});
+        try {
+            // Agent SDK 0.2.123 close() can return before process exit.
+            // Keep query cleanup authoritative until that owned process stops, so its late exit
+            // cannot abandon a replacement query's tasks in the shared provider ledger.
+            // Abort can set ChildProcess.killed while it is still alive, causing the SDK to skip
+            // its delayed termination. The canonical process-tree owner finishes owned cleanup.
+            const child = ownedProcess.child;
+            if (child && child.exitCode === null && child.signalCode === null) {
+                await killProcessTree(child);
+            }
+            if (ownedProcess.exit && await ownedProcess.exit === 'exited') {
+                handleClaudeRuntimeActivityLoss({
+                    ...runtimeActivityEffectParams,
+                    reason: 'claude_agent_sdk_process_exit',
+                    providerStopped: true,
+                });
+            }
+        } finally {
+            await repairTranscriptAfterAbort();
+            await stderrAppender?.close().catch(() => {});
+        }
     }
     } finally {
         promptSettlements.settleUnresolved();

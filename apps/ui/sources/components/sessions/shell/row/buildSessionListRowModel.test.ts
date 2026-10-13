@@ -1,3 +1,4 @@
+import { buildSessionListRenderableMetadata } from '@/sync/domains/session/listing/sessionListRenderable';
 import { describe, expect, it } from 'vitest';
 
 import type { Message } from '@/sync/domains/messages/messageTypes';
@@ -964,6 +965,21 @@ describe('buildSessionListRowModel', () => {
         it('states a workflow and its agent complement, exactly as the composer chip does', () => {
             expect(buildWithSetting(true, { live: 1, liveWorkflowRuns: 1, liveWorkflowAgents: 5 }).agentActivityLabel)
                 .toBe('1 workflow, 5 agents');
+        });
+
+        it('retires a metadata-only live claim after loss without requiring transcript hydration', () => {
+            const session = createRenderable('s-agents', {
+                active: false, activeAt: NOW_MS - 300_000, presence: NOW_MS - 300_000,
+                metadata: buildSessionListRenderableMetadata({ path: '', host: '', sessionAgentActivityHeadlineV1: {
+                    v: 1, backendId: 'claude', updatedAt: NOW_MS - 400_000,
+                    activeEntries: [{ entryId: 'workflow_agent:run_1:alpha', kind: 'workflow_agent', title: 'Audit', status: 'running', updatedAt: NOW_MS - 400_000 }],
+                } }),
+            });
+            expect(session.metadata?.agentActivityCounts?.live).toBe(1);
+            expect(buildSessionListRowModel({
+                item: createSessionItem(session), isFirst: true, isLast: true, isSingle: true,
+                settings: createSettings({ agentActivityCountEnabled: true }),
+            }).agentActivityLabel).toBeNull();
         });
 
         it('says nothing for a session with no published activity', () => {

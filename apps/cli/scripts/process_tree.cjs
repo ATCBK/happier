@@ -71,7 +71,7 @@ async function waitForAllGone(pids, timeoutMs, isAlive) {
 
 async function killProcessTree(proc, opts, enumerate = psList) {
   const pid = proc.pid;
-  if (!pid) return;
+  if (!pid) return { rootObservedAlive: false };
 
   const graceMs = Math.max(1, opts?.graceMs ?? 1000);
   let signallingFailed = false;
@@ -85,7 +85,8 @@ async function killProcessTree(proc, opts, enumerate = psList) {
   // freshly spawned descendant can be reported to its parent before it is visible in the
   // process listing; killing the parent then reparents that descendant and loses the only
   // relationship that lets this owner find it.
-  const rootStopped = process.platform !== 'win32' && isAlive(pid);
+  const rootObservedAlive = proc.exitCode == null && proc.signalCode == null && isAlive(pid);
+  const rootStopped = process.platform !== 'win32' && rootObservedAlive;
   if (rootStopped) kill(pid, 'SIGSTOP');
 
   let descendants;
@@ -109,7 +110,7 @@ async function killProcessTree(proc, opts, enumerate = psList) {
   await waitForAllGone(all, graceMs, isAlive);
 
   const remaining = all.filter((p) => isAlive(p));
-  if (remaining.length === 0 && !discoveryFailed && !signallingFailed) return;
+  if (remaining.length === 0 && !discoveryFailed && !signallingFailed) return { rootObservedAlive };
 
   for (const targetPid of remaining) kill(targetPid, 'SIGKILL');
   await waitForAllGone(remaining, Math.min(250, graceMs), isAlive);
@@ -120,6 +121,7 @@ async function killProcessTree(proc, opts, enumerate = psList) {
       code: 'process_tree_termination_incomplete',
     });
   }
+  return { rootObservedAlive };
 }
 
 module.exports = { isPidAliveBySignal, killProcessTree };

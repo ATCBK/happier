@@ -2145,6 +2145,9 @@ export const SessionsListContent = React.memo(function SessionsListContent(props
         [reachableSessionDisplayByKey],
     );
     const virtualizedRowExtraData = React.useMemo(() => ({
+        // Stable renderItem refs do not update mounted engine cells. Viewport membership
+        // must reach the row boundary before its local store subscription can activate.
+        rowStoreSubscriptionKeys,
         activeServerId: selection.activeServerId ?? null,
         allKnownTagsSignature,
         attentionStandingEnabled,
@@ -2180,6 +2183,7 @@ export const SessionsListContent = React.memo(function SessionsListContent(props
         workspaceLabelsSignature,
         workspaceMachineSubtitlesEnabled,
     }), [
+        rowStoreSubscriptionKeys,
         selection.activeServerId,
         allKnownTagsSignature,
         attentionStandingEnabled,

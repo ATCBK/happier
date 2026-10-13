@@ -15,7 +15,7 @@ describe('killProcessTree', () => {
       pid === child.pid ? true : signal(pid, requestedSignal)
     ));
     try {
-      await expect(killProcessTree(child, { graceMs: 25 })).resolves.toBeUndefined();
+      await expect(killProcessTree(child, { graceMs: 25 })).resolves.toEqual({ rootObservedAlive: false });
     } finally {
       defunct.mockRestore();
     }
@@ -50,7 +50,7 @@ describe('killProcessTree', () => {
     expect(isPidAlive(parent.pid!)).toBe(true);
     expect(isPidAlive(childPid)).toBe(true);
 
-    await killProcessTree(parent, { graceMs: 250 });
+    await expect(killProcessTree(parent, { graceMs: 250 })).resolves.toEqual({ rootObservedAlive: true });
 
     await expect(waitForProcessExit(parent.pid!, { timeoutMs: 10_000 })).resolves.toBe(true);
     await expect(waitForProcessExit(childPid, { timeoutMs: 10_000 })).resolves.toBe(true);

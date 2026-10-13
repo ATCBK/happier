@@ -41,6 +41,101 @@ describe('Claude provider task lifecycle', () => {
         })).toBeNull();
     });
 
+    it('does not admit an errored async launch acknowledgement', () => {
+        expect(readClaudeProviderTaskActivity({
+            type: 'user', sessionId: 's1',
+            toolUseResult: { status: 'async_launched', agentId: 'failed-launch' },
+            message: { content: [{ type: 'tool_result', tool_use_id: 'launch', is_error: true }] },
+        })).toBeNull();
+    });
+
+    it('admits an exact successful native asynchronous resume even before local inventory reconstruction', () => {
+        expect(readClaudeProviderTaskActivity({ type: 'user', sessionId: 's1',
+            toolUseResult: { success: true, resumedAgentId: 'resumed' },
+        })).toEqual({ type: 'started', source: 'hook-agent-resume', sessionId: 's1', taskId: 'resumed' });
+    });
+
+    it.each(['transcript', 'hook', 'child-hook'] as const)(
+        'retires only a resumed child explicitly reported stopped by native SendMessage (%s)',
+        (delivery) => {
+            const ledger = createClaudeProviderActivityLedger();
+            ledger.noteOwnedSessionId('s1');
+            ledger.apply({ type: 'started', sessionId: 's1', taskId: 'stopped-child' });
+            ledger.apply({ type: 'terminal', sessionId: 's1', taskId: 'stopped-child', terminalStatus: 'failed' });
+            ledger.apply({ type: 'started', sessionId: 's1', taskId: 'stopped-child', source: 'hook-agent-resume' });
+            ledger.apply({ type: 'started', sessionId: 's1', taskId: 'sibling' });
+            // Claude 2.1.296 native response, observed after a rejected tool/interrupted child.
+            const response = { success: false, message: "Agent stopped-child was stopped by the user and won't be resumed. Treat its work as cancelled; only launch a new agent if the user explicitly asks." };
+            const activity = delivery === 'transcript'
+                ? readClaudeProviderTaskActivity({ type: 'user', sessionId: 's1', toolUseResult: response,
+                    message: { content: [{ type: 'tool_result', tool_use_id: 'send', content: JSON.stringify(response) }] } })
+                : readClaudeSessionHookProviderTaskActivity({ hook_event_name: 'PostToolUse', session_id: 's1',
+                    ...(delivery === 'child-hook' ? { agent_id: 'sibling' } : {}),
+                    tool_name: 'SendMessage', tool_input: { to: 'stopped-child' }, tool_response: response });
+            expect(activity).toEqual({ type: 'terminal', sessionId: 's1', taskId: 'stopped-child', terminalStatus: 'stopped' });
+            if (activity) ledger.apply(activity);
+            expect(ledger.getObservedActiveProviderTaskCount()).toBe(1);
+            expect(ledger.getActiveProviderTaskBlockers().map(blocker => blocker.taskId)).toEqual(['sibling']);
+        },
+    );
+
+    it('does not infer child cancellation from arbitrary failed responses or copied text', () => {
+        const message = "Agent stopped-child was stopped by the user and won't be resumed. Treat its work as cancelled; only launch a new agent if the user explicitly asks.";
+        for (const row of [
+            { type: 'user', sessionId: 's1', message: { content: message } },
+            { hook_event_name: 'PostToolUse', session_id: 's1', tool_name: 'Bash', tool_input: { to: 'stopped-child' }, tool_response: { success: false, message } },
+            { hook_event_name: 'PostToolUse', session_id: 's1', tool_name: 'SendMessage', tool_input: { to: 'other-child' }, tool_response: { success: false, message } },
+            { hook_event_name: 'PostToolUse', session_id: 's1', tool_name: 'SendMessage', tool_input: { to: 'stopped-child' }, tool_response: { success: false, message: 'Delivery timed out' } },
+        ]) {
+            expect(readClaudeProviderTaskActivity(row)).toBeNull();
+            expect(readClaudeSessionHookProviderTaskActivity(row)).toBeNull();
+        }
+    });
+
+    it('requires background admission rather than a terminal-only identity for SubagentStart', () => {
+        const ledger = createClaudeProviderActivityLedger();
+        const apply = (value: unknown) => {
+            const activity = readClaudeProviderTaskActivity(value);
+            if (activity) ledger.apply(activity);
+        };
+        const complete = (taskId: string) => apply({ type: 'attachment', sessionId: 's1',
+            attachment: { type: 'task_status', taskId, taskType: 'local_agent', status: 'completed' } });
+        const start = (agentId: string) => apply({ hook_event_name: 'SubagentStart', session_id: 's1', agent_id: agentId });
+        complete('foreground');
+        start('foreground');
+        expect(ledger.getActiveProviderTaskCount()).toBe(0);
+        complete('fast-background');
+        apply({ hook_event_name: 'PostToolUse', session_id: 's1', tool_name: 'Agent',
+            tool_response: { status: 'async_launched', agentId: 'fast-background' } });
+        expect(ledger.getActiveProviderTaskCount()).toBe(0);
+        start('fast-background');
+        expect(ledger.getActiveProviderTaskCount()).toBe(1);
+        complete('fast-background');
+        start('fast-background');
+        expect(ledger.getActiveProviderTaskCount()).toBe(1);
+        apply({ hook_event_name: 'PostToolUse', session_id: 's1', tool_name: 'SendMessage',
+            tool_response: { success: true, resumedAgentId: 'foreground' } });
+        expect(ledger.getActiveProviderTaskCount()).toBe(2);
+    });
+
+    it('ignores copied user XML and ordinary queued prompts while reading native notification provenance', () => {
+        const content = '<task-notification><task-id>known</task-id><status>completed</status></task-notification>';
+        const user = { type: 'user', sessionId: 's1', message: { content } };
+        expect(readClaudeProviderTaskActivity(user)).toBeNull();
+        const queued = { type: 'attachment', sessionId: 's1', attachment: { type: 'queued_command', prompt: content } };
+        expect(readClaudeProviderTaskActivity(queued)).toBeNull();
+        const ledger = createClaudeProviderActivityLedger();
+        ledger.apply({ type: 'started', sessionId: 's1', taskId: 'known' });
+        expect(readClaudeProviderTaskActivity({ type: 'queue-operation', operation: 'enqueue', sessionId: 's1', content })).toBeNull();
+        expect(ledger.getActiveProviderTaskCount()).toBe(1);
+        const native = readClaudeProviderTaskActivity({ ...user, origin: { kind: 'task-notification' } });
+        expect(native?.type).toBe('terminal');
+        if (native) ledger.apply(native);
+        expect(ledger.getActiveProviderTaskCount()).toBe(0);
+        expect(readClaudeProviderTaskActivity({ ...queued, attachment: { ...queued.attachment,
+            commandMode: 'task-notification' } })?.type).toBe('terminal');
+    });
+
     it('accepts only exact typed lifecycle rows and aliases explicit Workflow', () => {
         expect(readClaudeProviderTaskActivity({
             type: 'system', subtype: 'task_started', session_id: ' s1 ', task_id: ' t1 ',
@@ -150,20 +245,20 @@ describe('readClaudeSessionHookProviderTaskActivity', () => {
             tool_name: 'Agent',
             tool_input: {},
             tool_response: { status: 'async_launched', agentId: ' local-agent ' },
-        })).toEqual({ type: 'started', sessionId, taskId: 'local-agent' });
+        })).toEqual({ type: 'started', source: 'hook-agent-launch', sessionId, taskId: 'local-agent' });
         expect(readClaudeSessionHookProviderTaskActivity({
             hook_event_name: 'PostToolUse',
             session_id: sessionId,
             tool_name: 'Agent',
             tool_input: { run_in_background: false },
             tool_response: { status: 'async_launched', agentId: 'local-agent', isAsync: false },
-        })).toEqual({ type: 'started', sessionId, taskId: 'local-agent' });
+        })).toEqual({ type: 'started', source: 'hook-agent-launch', sessionId, taskId: 'local-agent' });
         expect(readClaudeSessionHookProviderTaskActivity({
             hook_event_name: 'PostToolUse',
             session_id: sessionId,
             tool_name: 'Agent',
             tool_response: { status: 'remote_launched', taskId: ' remote-task ' },
-        })).toEqual({ type: 'started', sessionId, taskId: 'remote-task' });
+        })).toEqual({ type: 'started', source: 'hook-agent-launch', sessionId, taskId: 'remote-task' });
     });
 
     it('re-admits only a successful main-chain SendMessage resumed Agent id', () => {
@@ -212,7 +307,7 @@ describe('readClaudeSessionHookProviderTaskActivity', () => {
                 tool_name: 'Workflow',
                 tool_response: { status, taskId: ` ${taskId} ` },
             });
-            expect(activity).toEqual({ type: 'started', sessionId, taskId });
+            expect(activity).toEqual({ type: 'started', source: 'hook-agent-launch', sessionId, taskId });
             if (!activity) throw new Error('expected exact Workflow activity');
             expect(ledger.apply(activity)).toBe(true);
             expect(ledger.apply(activity)).toBe(false);
@@ -222,8 +317,8 @@ describe('readClaudeSessionHookProviderTaskActivity', () => {
             hook_event_name: 'PostToolUse',
             session_id: sessionId,
             tool_name: 'Workflow',
-            tool_response: { status: 'async_launched', task_id: 'unproven-alias' },
-        })).toBeNull();
+            tool_response: { status: 'async_launched', task_id: 'native-alias' },
+        })).toEqual({ type: 'started', source: 'hook-agent-launch', sessionId, taskId: 'native-alias' });
     });
 
     it('keeps foreground, PreToolUse, and unknown SubagentStart evidence inert', () => {
@@ -243,7 +338,7 @@ describe('readClaudeSessionHookProviderTaskActivity', () => {
             hook_event_name: 'SubagentStart',
             session_id: sessionId,
             agent_id: 'unknown-agent',
-        })).toEqual({ type: 'progress', sessionId, taskId: 'unknown-agent' });
+        })).toEqual({ type: 'started', admission: 'known-only', source: 'hook-agent-resume', sessionId, taskId: 'unknown-agent' });
     });
 
     it('requires matching nested terminal TaskOutput evidence and terminal TaskStop confirmation', () => {
@@ -280,17 +375,60 @@ describe('readClaudeSessionHookProviderTaskActivity', () => {
         })).toEqual({ type: 'terminal', sessionId, taskId: 'task-1' });
     });
 
-    it('maps exact SubagentStop to bounded terminal-before-confirmation evidence', () => {
-        expect(readClaudeSessionHookProviderTaskActivity({
-            hook_event_name: 'SubagentStop',
-            session_id: sessionId,
-            agent_id: ' agent-1 ',
-        })).toEqual({
-            type: 'terminal',
-            sessionId,
-            taskId: 'agent-1',
-            rememberIfUnknown: true,
+    it('treats a vetoable SubagentStop as progress and re-admits a known resumed invocation', () => {
+        const ledger = createClaudeProviderActivityLedger();
+        ledger.apply({ type: 'started', sessionId, taskId: 'agent-1' });
+        const stop = readClaudeSessionHookProviderTaskActivity({
+            hook_event_name: 'SubagentStop', session_id: sessionId, agent_id: 'agent-1',
         });
+        if (stop) ledger.apply(stop);
+        expect(ledger.hasActiveProviderTask({ sessionId, taskId: 'agent-1' })).toBe(true);
+        ledger.apply({ type: 'terminal', sessionId, taskId: 'agent-1', terminalStatus: 'completed' });
+        const resume = readClaudeSessionHookProviderTaskActivity({
+            hook_event_name: 'SubagentStart', session_id: sessionId, agent_id: 'agent-1',
+        });
+        if (resume) ledger.apply(resume);
+        expect(ledger.hasActiveProviderTask({ sessionId, taskId: 'agent-1' })).toBe(true);
+        const unknown = readClaudeSessionHookProviderTaskActivity({
+            hook_event_name: 'SubagentStart', session_id: sessionId, agent_id: 'unadmitted',
+        });
+        if (unknown) ledger.apply(unknown);
+        expect(ledger.getActiveProviderTaskCount()).toBe(1);
+    });
+
+    it('folds native task-status evidence while retaining handbacks as report-delivery progress', () => {
+        const ledger = createClaudeProviderActivityLedger();
+        ledger.apply({ type: 'started', sessionId, taskId: 'native-agent' });
+        const handback = readClaudeProviderTaskActivity({
+            type: 'user', sessionId,
+            origin: { kind: 'peer', from: 'native-agent', senderTaskId: 'native-agent', handback: true },
+            message: { content: '<agent-message agent_id="native-agent">report</agent-message>' },
+        });
+        expect(handback).toEqual({ type: 'progress', confirmsActivity: false, sessionId, taskId: 'native-agent' });
+        if (handback) ledger.apply(handback);
+        expect(ledger.getActiveProviderTaskCount()).toBe(1);
+        const terminal = readClaudeProviderTaskActivity({ type: 'attachment', sessionId,
+            attachment: { type: 'task_status', taskId: 'native-agent', taskType: 'local_agent', status: 'completed' },
+        });
+        expect(terminal).toEqual({ type: 'terminal', sessionId, taskId: 'native-agent', terminalStatus: 'completed' });
+        if (terminal) ledger.apply(terminal);
+        expect(ledger.getActiveProviderTaskCount()).toBe(0);
+    });
+
+    it('ignores bare queue XML for known and unknown tasks without poisoning future native admission', () => {
+        const ledger = createClaudeProviderActivityLedger();
+        const xml = (operation: string, taskId: string) => ({ type: 'queue-operation', operation, sessionId,
+            content: `<task-notification><task-id>${taskId}</task-id><status>completed</status></task-notification>` });
+        ledger.apply({ type: 'started', sessionId, taskId: 'known' });
+        const remove = readClaudeProviderTaskActivity(xml('remove', 'known'));
+        if (remove) ledger.apply(remove);
+        expect(ledger.getActiveProviderTaskCount()).toBe(1);
+        const unknown = readClaudeProviderTaskActivity(xml('enqueue', 'future'));
+        if (unknown) ledger.apply(unknown);
+        ledger.apply({ type: 'started', sessionId, taskId: 'future' });
+        expect(ledger.getActiveProviderTaskCount()).toBe(2);
+        expect(readClaudeProviderTaskActivity(xml('enqueue', 'known'))).toBeNull();
+        expect(ledger.getActiveProviderTaskCount()).toBe(2);
     });
 
     it('terminalizes only the exact admitted sidechain on StopFailure', () => {
@@ -324,7 +462,7 @@ describe('readClaudeSessionHookProviderTaskActivity', () => {
         expect(ledger.getActiveProviderTaskBlockers()).toEqual([{
             sessionId,
             taskId: 'sibling-agent',
-            sources: ['system-task-started'],
+            sources: ['hook-agent-launch'],
         }]);
 
         const siblingStopFailure = readClaudeSessionHookProviderTaskActivity({
@@ -527,7 +665,7 @@ describe('createClaudeProviderActivityLedger', () => {
             const ledger = createClaudeProviderActivityLedger();
             ledger.apply({ type: 'started', sessionId: 's1', taskId: 'same' });
             ledger.apply({ type: 'started', sessionId: 's2', taskId: 'same' });
-            const [first, second] = rows.map(readClaudeProviderTaskActivity);
+            const [first, second] = rows.map(row => readClaudeProviderTaskActivity(row));
             if (!first || !second) throw new Error('expected exact terminal activity');
 
             expect(ledger.apply(first)).toBe(true);

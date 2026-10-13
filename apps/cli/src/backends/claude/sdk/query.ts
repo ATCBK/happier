@@ -20,7 +20,8 @@ import {
     type CanUseToolControlResponse,
     type ControlCancelRequest,
     type PermissionResult,
-    AbortError
+    AbortError,
+    ClaudeNativeProviderExitUnverifiedError
 } from './types'
 import { getDefaultClaudeCodePath, getCleanEnv, logDebug, streamToStdin } from './utils'
 import type { Writable } from 'node:stream'
@@ -57,6 +58,7 @@ export class Query implements AsyncIterableIterator<SDKMessage> {
         private processExitPromise: Promise<void>,
         canCallTool?: CanCallToolCallback,
         onMessageReceived?: (message: SDKMessage) => void,
+        private disposeProcess?: () => Promise<void>,
     ) {
         this.canCallTool = canCallTool
         this.onMessageReceived = onMessageReceived
@@ -78,7 +80,8 @@ export class Query implements AsyncIterableIterator<SDKMessage> {
         return this.sdkMessages.next(...args)
     }
 
-    return(value?: any): Promise<IteratorResult<SDKMessage>> {
+    async return(value?: unknown): Promise<IteratorResult<SDKMessage>> {
+        await this.disposeProcess?.()
         if (this.sdkMessages.return) {
             return this.sdkMessages.return(value)
         }
@@ -93,7 +96,7 @@ export class Query implements AsyncIterableIterator<SDKMessage> {
     }
 
     [Symbol.asyncIterator](): AsyncIterableIterator<SDKMessage> {
-        return this.sdkMessages
+        return this
     }
 
     /**
@@ -293,6 +296,11 @@ export function query(config: {
     prompt: QueryPrompt
     options?: QueryOptions
     onMessageReceived?: (message: SDKMessage) => void
+    /** Fires after an actual child exit and stdout/stderr closure, never a spawn/transport error. */
+    onProcessExited?: (evidence: Readonly<{
+        signal: NodeJS.Signals | null
+        processTreeStopped: boolean
+    }>) => void | Promise<void>
 }): Query {
 	    const {
 	        prompt,
@@ -450,17 +458,17 @@ export function query(config: {
 
     // Setup cleanup
     let cleanupStarted = false
-    const cleanup = () => {
-        if (cleanupStarted) return
+    let cleanupPromise: ReturnType<typeof killProcessTree> | null = null
+    const cleanup = (): ReturnType<typeof killProcessTree> => {
+        if (cleanupPromise) return cleanupPromise
+        if (cleanupStarted) return Promise.resolve({ rootObservedAlive: false })
         cleanupStarted = true
-        void killProcessTree(child, { graceMs: 250 }).catch(() => {
-            if (!child.killed) {
-                try {
-                    child.kill('SIGTERM')
-                } catch {
-                    // ignore
-                }
-            }
+        cleanupPromise = killProcessTree(child, { graceMs: 250 })
+        return cleanupPromise
+    }
+    const cleanupInBackground = (): void => {
+        void cleanup().catch((error) => {
+            logger.infoFile('[claude-sdk-query] Owned provider cleanup failed', error)
         })
     }
     const cleanupOnExit = () => {
@@ -496,15 +504,40 @@ export function query(config: {
         }
     }
 
-    config.options?.abort?.addEventListener('abort', cleanup)
-    const cleanupOnSigterm = () => cleanup()
-    const cleanupOnSigint = () => cleanup()
+    config.options?.abort?.addEventListener('abort', cleanupInBackground)
+    const cleanupOnSigterm = () => cleanupInBackground()
+    const cleanupOnSigint = () => cleanupInBackground()
     process.on('SIGTERM', cleanupOnSigterm)
     process.on('SIGINT', cleanupOnSigint)
     process.on('exit', cleanupOnExit)
 
+    let processExit: Readonly<{ signal: NodeJS.Signals | null }> | null = null
+    let processExitObservationError: Error | null = null
+    child.once('exit', (_code, signal) => { processExit = { signal } })
+    const processClosedPromise = new Promise<void>((resolve) => {
+        child.once('close', () => {
+            void (async () => {
+                if (!processExit) return
+                const processTreeStopped = cleanupPromise
+                    ? await cleanupPromise.then((result) => result.rootObservedAlive, () => false)
+                    : false
+                try {
+                    await config.onProcessExited?.({ signal: processExit.signal, processTreeStopped })
+                } catch (error) {
+                    processExitObservationError = error instanceof Error ? error : new Error(String(error))
+                    if (!(error instanceof ClaudeNativeProviderExitUnverifiedError)) {
+                        logger.debug('[claude-sdk-query] Provider process-exit observation failed', error)
+                    }
+                    query.setError(processExitObservationError)
+                }
+            })().finally(resolve)
+        })
+    })
+
     // Handle process exit
-    const processExitPromise = managedChild.waitForTermination().then((event) => {
+    const processExitPromise = managedChild.waitForTermination().then(async (event) => {
+        await processClosedPromise
+        if (processExitObservationError) return
         if (config.options?.abort?.aborted) {
             query.setError(new AbortError('Claude Code process aborted by user'))
             return
@@ -529,7 +562,18 @@ export function query(config: {
     })
 
     // Create query instance
-    const query = new Query(childStdin, child.stdout, processExitPromise, canCallTool, config.onMessageReceived)
+    const query = new Query(childStdin, child.stdout, processExitPromise, canCallTool, config.onMessageReceived, async () => {
+        try {
+            await cleanup()
+        } catch (error) {
+            if (processExitObservationError) {
+                throw new AggregateError([processExitObservationError, error], 'Claude process exit was unverified and cleanup failed', { cause: processExitObservationError })
+            }
+            throw error
+        }
+        await processClosedPromise
+        if (processExitObservationError) throw processExitObservationError
+    })
 
     // Keep the stdin pump inside the Query failure lifecycle. A rejected transport must surface
     // through the returned AsyncIterable instead of becoming an unobserved fire-and-forget task.
@@ -540,7 +584,7 @@ export function query(config: {
             config.options?.abort,
         ).catch((error: unknown) => {
             query.setError(error instanceof Error ? error : new Error(String(error)))
-            cleanup()
+            cleanupInBackground()
         })
     }
 
@@ -555,8 +599,8 @@ export function query(config: {
 
     // Cleanup on exit
     processExitPromise.finally(() => {
-        cleanup()
-        config.options?.abort?.removeEventListener('abort', cleanup)
+        cleanupInBackground()
+        config.options?.abort?.removeEventListener('abort', cleanupInBackground)
         process.off('SIGTERM', cleanupOnSigterm)
         process.off('SIGINT', cleanupOnSigint)
         process.off('exit', cleanupOnExit)

@@ -434,10 +434,6 @@ function buildVendorRecipePath(providerId: AgentId, env: NodeJS.ProcessEnv): str
     .split(delimiter)
     .map((value) => value.trim())
     .filter(Boolean);
-  if (process.platform === 'win32') {
-    return currentEntries.join(delimiter);
-  }
-
   const homeDir = typeof env.HOME === 'string' ? env.HOME.trim() : '';
   if (!homeDir) {
     return currentEntries.join(delimiter);
@@ -1129,10 +1125,12 @@ export async function installProviderCli(params: Readonly<{
         const childEnv = {
           ...process.env,
           ...env,
-          PATH: buildVendorRecipePath(params.providerId, {
+          // Windows retains the original case-insensitive Path key. Only POSIX
+          // recipes need the additional user install directories.
+          ...(process.platform === 'win32' ? {} : { PATH: buildVendorRecipePath(params.providerId, {
             ...process.env,
             ...env,
-          }),
+          }) }),
           ...(vendorScratchDir ? { TMPDIR: vendorScratchDir, TMP: vendorScratchDir, TEMP: vendorScratchDir } : {}),
         };
         const outcome = await runLoggedProviderCommand({ cmd: c.cmd, args: c.args, env: childEnv, logPath, timeoutMs, runCommand });

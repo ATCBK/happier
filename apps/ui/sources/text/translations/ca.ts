@@ -479,6 +479,15 @@ const promptLibraryUxRefinementTranslationExtension = {
 
 const sessionHandoffTranslationExtensions = {
   ca: {
+    transferSessionData: {
+      title: "Transfereix les dades de la sessió",
+      subtitle: "Copia l’historial de conversa d’aquesta sessió a l’altra màquina. Desactiva-ho si ja hi és.",
+      checking: "Comprovant la compatibilitat de totes dues màquines…",
+      agentRequiresTransfer: "Aquest Agent requereix transferir les dades de la sessió entre màquines.",
+      updateRequired: "Actualitza Happier a totes dues màquines per desactivar aquesta opció.",
+      sessionMissing: "L’historial d’aquesta sessió no és a la màquina de destinació. Activa «Transfereix les dades de la sessió» i torna-ho a provar.",
+      workspaceRequiresTransfer: "Activa «Transfereix les dades de la sessió» per copiar o sincronitzar fitxers de l’espai de treball.",
+    },
     activeWarning: {
       title: 'Aquesta sessió encara s’està executant aquí',
       message: 'La transferència aturarà aquesta sessió en aquesta màquina abans de transferir-la a la màquina seleccionada.',
@@ -2353,6 +2362,19 @@ export const ca: TranslationStructure = {
     },
 
     connectedServices: {
+        importAccounts: {
+            unknownResult: "El resultat de la importació és desconegut. Actualitza la llista de comptes i revisa aquest perfil abans de tornar-ho a provar.",
+            title: "Importa un inici de sessió existent",
+            failed: "No s’ha pogut importar. Comprova que has iniciat sessió a la màquina seleccionada i torna-ho a provar.",
+            actionDescription: "Copia una sessió d’una de les teves màquines",
+            description: "Copia la sessió al perfil xifrat. Els tokens de renovació compartits poden canviar i l’app local pot demanar que tornis a iniciar sessió.",
+            unsupported: "Importació no disponible. Tria una altra màquina o actualitza la seva CLI.",
+            credentialsUnavailable: "No s’ha trobat cap sessió vàlida. Inicia sessió a l’app local i torna-ho a provar.",
+            profileConflict: "El perfil pertany a un altre compte o ha canviat durant la importació. Tria un nom nou.",
+            reauthorizationRequired: "Torna a iniciar sessió a l’app local i torna-ho a provar.",
+            imported: "Sessió importada",
+            refreshFailed: "La sessió s’ha importat, però la llista de comptes no s’ha actualitzat. Torna a obrir els serveis connectats.",
+        },
         subscription: {
             title: "Subscripció",
             currentPeriod: "Període actual",
@@ -2382,6 +2404,7 @@ export const ca: TranslationStructure = {
             openai: 'Clau API d\'OpenAI',
             anthropic: 'Clau API d\'Anthropic',
             gemini: 'Gemini de Google',
+            antigravity: 'Google Antigravity',
             github: 'GitHub',
         },
         title: 'Serveis connectats',
@@ -2617,6 +2640,21 @@ export const ca: TranslationStructure = {
             resets: {
                 use: 'Usa',
                 available: 'Restabliment disponible',
+                remainingCount: ({ count }: { count: number }) => `Restabliments desats: ${count}`,
+                appliesTo: ({ limits }: { limits: string }) => `S’aplica a: ${limits}`,
+                fiveHourLimit: "Límit de 5 hores",
+                weeklyLimit: "Límit setmanal",
+                unavailableReasons: {
+                    paused: "En pausa",
+                    cooldown: "Esperant que acabi el temps d’espera",
+                    ineligible: "No elegible",
+                    not_selected: "No seleccionat",
+                    provider_unavailable: "Proveïdor no disponible",
+                    not_started: "Encara no ha començat",
+                    expired: "Caducat",
+                    consumed: "Ja utilitzat",
+                    unknown: "No disponible ara",
+                },
                 rowLabel: ({ date, countdown }: { date: string; countdown: string }) => `Caduca ${date} · ${countdown}`,
                 now: 'ara',
                 inDays: ({ days }: { days: number }) => `d’aquí a ${days}d`,
@@ -2638,6 +2676,12 @@ export const ca: TranslationStructure = {
             pasteRedirectUrlPromptBody:
                 'Després de completar OAuth, copia l\'URL final redirigida de la barra d\'adreces del navegador i enganxa-la aquí.',
             providerOverrides: {
+                antigravity: {
+                    connectWebDescription: "Pas següent: inicia sessió amb Google. Antigravity mostra un codi d’autorització per copiar.",
+                    pasteRedirectUrlPromptBody: "1) Inicia sessió amb Google. 2) Copia el codi d’autorització que apareix a antigravity.google. 3) Enganxa’l a continuació i mantén obert aquest inici de sessió.",
+                    pasteRedirectUrlPlaceholder: "Enganxa el codi d’autorització d’Antigravity",
+                    pasteRedirectUrlTitle: "Enganxa el codi d’autorització",
+                },
                 claudeSubscription: {
                     connectWebDescription:
                         'Pas següent: inicia sessió a la pàgina que s\'obre. Claude pot mostrar una cadena de codi en lloc de redirigir automàticament.',
@@ -2719,6 +2763,7 @@ export const ca: TranslationStructure = {
             addOauthProfileDeviceTitle: 'Afegeix amb autenticació de dispositiu',
             addOauthProfileDeviceSubtitle: 'Recomanat per a web/entorns remots',
             addOauthProfilePasteTitle: 'Afegeix enganxant la redirecció',
+            signInWithGoogle: 'Inicia la sessió amb Google',
             addOauthProfilePasteSubtitle: 'Flux manual de copiar/enganxar URL de redirecció',
             addOauthProfileBrowserTitle: 'Afegeix amb navegador integrat',
             addOauthProfileBrowserSubtitle: 'Utilitza un navegador integrat quan sigui compatible',
@@ -2762,6 +2807,7 @@ export const ca: TranslationStructure = {
             errors: {
                 credentialReferencedByGroup: 'Aquest compte encara s’utilitza en un Pool de comptes. Treu-lo del Pool i torna-ho a provar.',
                 credentialNotFound: 'Aquest compte connectat ja s’ha eliminat.',
+                serviceUnsupportedServer: 'Aquest relay no admet aquest servei connectat. Actualitza el relay per connectar-lo.',
                 credentialRequestFailed: 'La sol·licitud del compte connectat ha fallat. Actualitza els serveis connectats i torna-ho a provar.',
                 groupRequestFailed: 'La sol·licitud del Pool de comptes ha fallat. Actualitza els serveis connectats i torna-ho a provar.',
                 generationConflict: 'Aquest Pool de comptes ha canviat abans que l’acció acabés. Actualitza els serveis connectats i torna-ho a provar.',
@@ -9979,6 +10025,7 @@ settingsSession: {
         providerStateSharingDegraded: 'Compartició d\'estat del proveïdor aplicada parcialment',
         connectedServiceRuntimeAuthRecoveryRecovered: 'Autenticació del proveïdor recuperada',
         connectedServiceRuntimeAuthRecoveryCancelled: 'Recuperació d\'autenticació del proveïdor cancel·lada',
+        connectedServiceRuntimeAuthRecoveryStopped: "La recuperació del proveïdor s’ha aturat; no es tornarà a intentar automàticament",
         runtimeConfigOutcomeAppliesBeforeNextMessage: 'S’aplicarà abans del teu proper missatge',
         runtimeConfigOutcomeQueuedUntilReady: 'En cua fins que estigui a punt',
         runtimeConfigOutcomeAlreadySet: 'Ja està configurat',

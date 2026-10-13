@@ -124,19 +124,23 @@ provider launch. Those runners start their provider process only after input arr
 Waiting for their stream observer to publish activity would deadlock delivery
 configured as `after_runtime_idle`.
 
-After a local provider stops or a remote provider relaunches, a lost observer can
-publish prelaunch idle when no unresolved provider tasks remain. When the provider
-process stops (local process exit, or a finalized Agent SDK query), the observer
-abandons the provider tasks it was tracking, because Claude Code orphans a stopped
-process's background agents and their terminal events never arrive. The abandoned
-tasks are written to the session log at the default `info` file level, activity
-stays unknown until the next prelaunch publication, and only tasks observed after
-the stop can make activity active again. Losing only the observer (for example the
-transcript feed) keeps the tasks, since the process may still be running them. Prelaunch publication
-does not install the new stream observer. Each owned local process attempt also
-uses this prelaunch publication before activating its installed scanner, including
-retries after process failure. Unified-terminal attachment retains its observation
-startup because the attached provider may already be working.
+A confirmed exit of an owned Claude process retires its tracked provider tasks
+through the shared activity ledger and publishes idle immediately. Local, legacy
+remote, Agent SDK, and unified-terminal runners use that same owner. The retired
+tasks are recorded at the default `info` file-log level. Closing an SDK stream or
+transport alone does not prove process exit: its owned child must actually exit,
+and the remote query finishes that cleanup before a replacement query can reuse
+the ledger. Unverified owned cleanup or an abrupt native launcher exit whose
+provider termination cannot be confirmed ends the runner instead of retrying into
+the same ledger; unresolved task identities remain unknown.
+
+Losing only observation, such as the transcript feed, retains task identities and
+demotes their activity to unknown. Fresh native evidence can confirm a task again;
+a confirmed process exit settles the retained inventory. Prelaunch publication
+does not install the new stream observer. Each owned local process attempt uses
+this publication before activating its installed scanner, including retries after
+process failure. Unified-terminal attachment retains its observation startup
+because the attached provider may already be working.
 
 Local fast-start retains a deferred session client across the switch to remote.
 That wrapper must forward provider input outcomes and delivery-state reads to the

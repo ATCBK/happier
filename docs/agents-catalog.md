@@ -36,6 +36,7 @@ Where:
 - `packages/agents/src/localCli.ts`
 - `packages/agents/src/auth.ts`
 - `packages/agents/src/acp.ts`
+- `packages/agents/src/sessionModes.ts`
 
 What belongs here:
 - canonical ids/types (`AgentId`, `AGENT_IDS`)
@@ -50,6 +51,19 @@ What does **not** belong here:
 - app-only visual assets (images/icons)
 - app navigation/routes
 - CLI implementation details (argv/env/paths)
+
+ACP transport support and session-mode semantics are related declarations with
+different purposes. `acp.ts` describes the transport; `sessionModes.ts` controls
+preflight discovery, accepted initial mode selection and UI mode semantics. A
+mode-bearing transport must not be contradicted by a `none` mode descriptor.
+Antigravity uses the shared model/mode probes and startup overrides, with no
+provider-owned picker or static mode catalog.
+
+The session-control compatibility reader derives an implicit Plan request from
+legacy permission metadata only when the advertised or static options actually
+contain that mode. Explicit requested modes retain their pending state even when
+discovery is unavailable. ACP usage notifications remain the authority for live
+context counts; a mode descriptor or model name cannot supply usage telemetry.
 
 ### 2) Cross-boundary contracts: `@happier-dev/protocol`
 
@@ -173,6 +187,14 @@ Instead:
 Kimi Code discovery is a development exception for executable identity: current Kimi Code and legacy Python `kimi-cli` share the command name and cannot be distinguished by version ordering. Its provider-owned discovery uses a no-auth `initialize` fingerprint (including close/delete/fork and SSE), honors explicit executable overrides, and refuses unknown or legacy launches. This does not create a second resume policy. Probe cache identity includes the effective process environment, hashed in memory to avoid retaining credentials in cache keys.
 
 Built-in ACP `supportsModes: 'no'` disables mode projection and both mode mutation paths at the shared backend. Kimi uses that policy until authenticated live mode behavior is verified; model controls remain available.
+
+In development, Antigravity admits the exact quota diagnostic rendered by the pinned ACP 1.3.0 server through its provider-owned turn hook. The shared ACP runtime preserves earlier output and settles the failed turn before reporting the selected profile or pool tuple to the existing daemon recovery owner. Native authentication has no Connected Account recovery target. Advisory reset prose supplies no exact reset timestamp, so inactive recovery uses the existing shared backoff policy. Managed account launches remove only `AGY_ACP_CCPA_BASE_URL` and `AGY_ACP_CCPA_PROJECT`, which otherwise override that account's endpoint and project; native launches retain those customizations. The same provider owns the pinned authentication setup classifier: ACP code `-32000` with the exact onboarding failure reason produces only `authenticationSetupFailure: true` in the canonical request failure log. The peer strips provider error data before downstream consumers; logs retain the numeric request code and fixed boolean, without exposing the reason or credential-bearing values. Generic missing authentication remains distinct from a diagnosed setup failure.
+
+The development Antigravity connected-service adapter returns the selected profile's durable home through the existing materialization result, including when that profile is a pool member. It uses the existing destination lock and validates group currentness before writing credentials, with the same profile identity used to resolve the home. A superseded selection returns a blocking diagnostic without replacing the current credential files. Probe materialization uses the passed temporary root and isolated configuration/state. The common materialization and descriptor/import owners retain lifecycle and adoption authority; the adapter has no old-attempt-root adoption flow. That AGY connected-home transition is unreleased, while same-account history preservation in the durable home has owner-test coverage. Authenticated continuation and the evolved 0.3 selected-account-home contract remain pending integration validation.
+
+### Native-login import
+
+Native-login import in development uses each cloud-connect catalog target's optional `importSources` and `importCredentials` hooks. `runConnectedServiceImport` admits the selected service and the relay's revision-guarded write capability before invoking a provider reader, normalizes its result through the existing OAuth credential-record builder, and stores it through `storeConnectedServiceCredentialForAccount` with `same_account_or_empty`. The CLI and `daemon.connectedService.import` consume that same owner; the machine response contains status and source/profile identifiers, never credential material. There is no shared mandatory refresh or native credential write. Provider readers retain authority over native file/Keychain/keyring selection. A lost storage acknowledgement is `storage_result_unknown`, requiring profile reconciliation before another import; the app holds imports and uses its existing profile refresh path. Owner and rendered tests cover these contracts; actual native-platform reads and authenticated imported-account launches remain unverified.
 
 ### ACP session listing (resume-only candidates)
 
@@ -306,6 +328,16 @@ Provider-owned probing:
   that map as the profile authority, including an empty map for machine-environment secret choices.
   Provider adapters consume the
   resulting `processEnv`; they must not rebuild a competing profile environment from ambient state.
+- In development source, adapters declare selected-account preparation for each discovery method:
+  `provider-owned` resolves credentials inside its account-aware owner, `materialized-env` uses
+  the shared materializer, and `not-required` describes authentication-independent static data.
+  Claude model discovery uses its account-aware model catalog; its modes and config-option queries
+  return static data without launching Claude. Gemini ACP discovery uses the selected materialized
+  OAuth account. Its runtime auth owner excludes ambient API-key, Vertex and gateway controls when
+  that exact connected account is selected; native API-key launches retain their normal behavior.
+  Materialized probes pass `materializationPurpose: 'probe'` through the common owner. Provider
+  materializers consume that purpose to isolate config and state in the temporary probe root
+  without adopting persisted provider state.
 - Implement the probe in `apps/cli/src/backends/<provider>/preflight/**` and register it through
   `getPreflightSessionControlsProbeAdapter`. Type it as `PreflightSessionControlsProbeAdapter` —
   that is the shape the caller invokes, and its params carry `connectedServices` and
@@ -512,6 +544,38 @@ If you’re running this repo via happy-stacks, prefer:
 - `happys test happy`
 
 ---
+
+## Connected-account quota recovery (development)
+
+Provider-owned quota fetchers discover recovery credits and implement the existing
+consume hook. The daemon quota coordinator owns selection, operation joining,
+receipts, ambiguous-debit holds, post-operation refresh and account-usage publication.
+Account and Session UI consume those shared facts; they do not redeem directly.
+The shared agent declaration supplies reset support to both pool policy admission
+and UI configuration. Subscription support does not imply API-key or setup-token support.
+
+Claude's OAuth integration evaluates reset programs through the usage endpoint with
+the provider-native CLI HTTP identity. Its installed-version resolver is shared
+with other Claude HTTP consumers. Supplemental reset reads preserve the ordinary
+usage response. Grant balance and current usability are separate: only redeemable
+units enter `availableCount`; saved unusable grants remain non-actionable details.
+Redemption resolves the organization with the same OAuth credential and submits one
+program-specific POST without retries. Automatic requests additionally carry the
+exhausted allowance ids and require fresh matching provider evidence.
+
+The canonical consume-key owner includes the inventory observation for named
+credits when supplied, permitting another legitimate use of a multi-use grant.
+Caller-supplied RPC keys remain unchanged. The coordinator joins overlapping uses
+of the same selector and retains an uncertain debit across newer observations.
+If an automatic operation proves no effect, a waiting manual request or request
+for a different exhausted allowance re-enters that same consume owner. Successful
+or uncertain debits remain shared, preventing a second redemption.
+No newer snapshot alone proves that a lost reset response had no effect.
+
+The external contract basis is the October 2026 read-only OAuth probe and
+[oh-my-pi's pinned reset implementation](https://github.com/can1357/oh-my-pi/blob/ca18a903c5d7c946c26c728a66d3a9151f0c26b1/packages/ai/src/usage/claude-reset.ts).
+The POST contract is source-backed; live redemption and server request-id
+idempotency guarantees remain unverified.
 
 ## Node-safe imports (tests)
 

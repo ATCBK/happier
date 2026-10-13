@@ -28,8 +28,9 @@ import type {
   ConnectedServiceBridgeRefreshProfileHooks,
 } from './bridgeRefreshHooks';
 import { computeConnectedServiceAccessTokenFingerprint } from './credentialFreshness/tokenFingerprint';
-import { resolveConnectedServiceCredentials } from '@/cloud/connectedServices/resolveConnectedServiceCredentials';
+import { resolveConnectedServiceCredentialsWithRevisions } from '@/cloud/connectedServices/resolveConnectedServiceCredentials';
 import { materializeConnectedServicesForSpawn } from '../materialize/materializeConnectedServicesForSpawn';
+import { createConnectedServiceGroupMutationCurrentnessValidator } from '../credentials/createConnectedServiceGroupMutationCurrentnessValidator';
 import { collectBlockingConnectedServicesMaterializationDiagnostics } from '../materialize/providerMaterializerTypes';
 import { refreshConnectedAccountOauthTokens } from './serviceRefreshers';
 import { ConnectedServiceOauthRefreshError } from './serviceRefreshers';
@@ -442,7 +443,7 @@ export class ConnectedServiceRefreshCoordinator {
           reason: input.forceRefresh === true ? 'adopted_current' : 'not_needed',
           accessToken: probe.accessToken,
         });
-        return probe.buildResponse();
+        return probe.buildResponse(selection);
       }
     }
 
@@ -481,11 +482,13 @@ export class ConnectedServiceRefreshCoordinator {
       }),
       isOauthSourceStillValid: (source) => this.isOauthSourceStillValidForBridge(source),
       resolveSourceExpiresAt: (source) => this.resolveExpiresAtForSource(source),
-      rematerializeTargets: (binding) => this.rematerializeTargetsForBinding(binding),
-      activeServerDir: this.params.activeServerDir,
-      baseDir: this.params.baseDir,
-      accountSettings: this.params.accountSettingsProvider?.() ?? null,
-      processEnv: this.params.processEnv ?? process.env,
+      rematerializeTargets: async (binding) => {
+        const targets = await this.rematerializeTargetsForBinding(binding);
+        // Initial bridge authorization is anchored to a live target. If none remains writable,
+        // a cutover or release has removed authority to return this captured credential as current.
+        if (targets.length === 0) throw new ConnectedServiceBridgeSelectionAuthorizationError();
+        return targets;
+      },
     };
   }
 
@@ -1675,11 +1678,12 @@ export class ConnectedServiceRefreshCoordinator {
         });
         continue;
       }
-      const records = await resolveConnectedServiceCredentials({
+      const resolvedCredentials = await resolveConnectedServiceCredentialsWithRevisions({
         credentials: this.params.credentials,
         api: this.params.api,
         bindings: target.bindings,
       });
+      const records = new Map(Array.from(resolvedCredentials, ([serviceId, resolved]) => [serviceId, resolved.record] as const));
       const materialized = await materializeConnectedServicesForSpawn({
         agentId: target.agentId,
         materializationKey: target.materializationKey,
@@ -1695,8 +1699,12 @@ export class ConnectedServiceRefreshCoordinator {
         recordsByServiceId: records,
         accountSettings: this.params.accountSettingsProvider?.() ?? null,
         processEnv: this.params.processEnv ?? process.env,
+        validateGroupMutationCurrentness: createConnectedServiceGroupMutationCurrentnessValidator({
+          api: this.params.api,
+          credentials: this.params.credentials,
+        }),
         ...(target.selectionsByServiceId.size > 0
-          ? { selectionsByServiceId: buildResolvedSelectionsForTarget(target, records) }
+          ? { selectionsByServiceId: buildResolvedSelectionsForTarget(target, resolvedCredentials) }
           : {}),
       });
       const blockingDiagnostics = collectBlockingConnectedServicesMaterializationDiagnostics(materialized?.diagnostics);

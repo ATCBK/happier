@@ -15,7 +15,7 @@ import {
 } from '../../runtimeAuth/connectedServiceAuthGenerationApplyFailure';
 import type { AcceptedConnectedServiceAccountVerificationByServiceId } from '../../accountTransitions/acceptedConnectedServiceAccountVerification';
 import { evaluatePredictiveSoftSwitchSessionApplyPolicy } from './predictiveSoftSwitchPolicy';
-import type { ConnectedServiceGroupQuotaProbeResult, ConnectedServiceQuotaRecoveryCreditConsumeResult } from '../../quotas/ConnectedServiceQuotasCoordinator';
+import type { AutomaticQuotaResetContext, ConnectedServiceGroupQuotaProbeResult, ConnectedServiceQuotaRecoveryCreditConsumeResult } from '../../quotas/ConnectedServiceQuotasCoordinator';
 import { logger } from '@/ui/logger';
 import type { ConnectedServiceQuotaRecoveryCreditConsumeReceiptV1 } from '@happier-dev/protocol';
 import {
@@ -139,7 +139,7 @@ export class ConnectedServiceAuthGroupSwitchCoordinator {
     consumeAvailableRecoveryCreditForProfile?(input: Readonly<{
       serviceId: string;
       profileId: string;
-      automaticResetContext: Readonly<{ groupId: string; sessionId?: string }>;
+      automaticResetContext: AutomaticQuotaResetContext;
     }>): Promise<ConnectedServiceQuotaRecoveryCreditConsumeResult>;
     loadState(input: Readonly<{
       serviceId: string;
@@ -999,19 +999,11 @@ export class ConnectedServiceAuthGroupSwitchCoordinator {
         });
       }
       if (!shouldApplyLeaseCompletion(observed)) {
-        this.maybeEmitSwitchPipelineResult({
-          trigger,
-          phase: 'lease_loser_non_apply',
-          request: input,
-          loaded: observed,
-          resultStatus: observed.result.status,
-          toProfileId: observed.activeProfileId,
-          toGeneration: observed.generation,
-          success: false,
-          startedAtMs,
-          decisionTrace: readSwitchResultDecisionTrace(observed.result),
-        });
-        return observed.result;
+        // A committed generation is shared group truth; a rejected decision is
+        // specific to its request's failure evidence, policy and session budget.
+        // Re-enter the same serialized owner with this request instead of
+        // inheriting another session's rejection.
+        return await this.runSwitchPipeline(input, trigger);
       }
       if (
         trigger === 'classified_failure'
@@ -1367,10 +1359,15 @@ export class ConnectedServiceAuthGroupSwitchCoordinator {
           const beforeResetPolicyResult = await reconsider();
           if (beforeResetPolicyResult) return beforeResetPolicyResult;
           if (selected.selected || loaded.policy.autoUseQuotaResetsWhenExhausted !== true) break;
-          if (!resetCandidates().some((member) => member.profileId === candidate.profileId)) break;
+          const currentResetCandidate = resetCandidates().find((member) => member.profileId === candidate.profileId);
+          if (!currentResetCandidate) break;
           const reset = await this.deps.consumeAvailableRecoveryCreditForProfile({
             serviceId: input.serviceId, profileId: candidate.profileId,
-            automaticResetContext: { groupId: input.groupId, ...(input.sessionId ? { sessionId: input.sessionId } : {}) },
+            automaticResetContext: {
+              groupId: input.groupId,
+              ...(input.sessionId ? { sessionId: input.sessionId } : {}),
+              providerLimitIds: input.providerLimitId?.trim() ? [input.providerLimitId.trim()] : currentResetCandidate.providerLimitIds,
+            },
           });
           logger.info('[ConnectedServiceAuthGroupSwitch] quota reset result', {
             serviceId: input.serviceId, groupId: input.groupId, profileId: candidate.profileId,

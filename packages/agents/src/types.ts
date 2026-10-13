@@ -85,7 +85,7 @@ export type VendorResumeIdField =
     | 'droidSessionId'
     | 'codebuddySessionId';
 
-export type CloudVendorKey = 'openai' | 'anthropic' | 'gemini';
+export type CloudVendorKey = 'openai' | 'anthropic' | 'gemini' | 'antigravity';
 export type CloudConnectTargetStatus = 'wired' | 'experimental';
 
 export type ConnectedServiceKind = 'oauth' | 'token';
@@ -136,6 +136,7 @@ export type AgentResumeConfig = Readonly<{
 
 export type AgentHandoffConfig = Readonly<{
     vendorStateTransfer: VendorHandoffSupportLevel;
+    existingState?: boolean;
     requiresExplicitSessionId?: boolean;
 }>;
 

@@ -485,6 +485,15 @@ const promptLibraryUxRefinementTranslationExtension = {
 
 const sessionHandoffTranslationExtensions = {
   'zh-Hant': {
+    transferSessionData: {
+      title: "傳輸工作階段資料",
+      subtitle: "將此工作階段的對話記錄複製到另一台機器。如果那裡已有記錄，請關閉此選項。",
+      checking: "正在檢查兩台機器是否支援…",
+      agentRequiresTransfer: "此智慧體需要在機器之間傳輸工作階段資料。",
+      updateRequired: "請更新兩台機器上的 Happier 以關閉此選項。",
+      sessionMissing: "目標機器上沒有此工作階段的對話記錄。請開啟「傳輸工作階段資料」後重試。",
+      workspaceRequiresTransfer: "請開啟「傳輸工作階段資料」以複製或同步工作區檔案。",
+    },
     activeWarning: {
       title: '此工作階段仍在這台裝置上執行',
       message: '開始移交前，Happier 會先在這台裝置上停止此工作階段，再將其轉移到所選裝置。',
@@ -1144,6 +1153,19 @@ const zhHantOverrides: DeepPartial<TranslationStructure> = {
     },
 
     connectedServices: {
+        importAccounts: {
+            unknownResult: "匯入結果未知。請更新帳號清單並檢查此設定檔後再重試。",
+            title: "匯入現有登入",
+            failed: "無法匯入登入。請確認已在所選機器登入，然後重試。",
+            actionDescription: "從你的某台機器複製登入",
+            description: "將登入複製到加密設定檔。共用的更新權杖可能輪換，本機應用程式可能要求重新登入。",
+            unsupported: "無法匯入。請選擇其他機器或更新其CLI。",
+            credentialsUnavailable: "沒有可用的登入。請在本機應用程式中登入後重試。",
+            profileConflict: "設定檔屬於其他帳號，或在匯入期間發生了變更。請選擇新名稱。",
+            reauthorizationRequired: "請在本機應用程式中重新登入後重試。",
+            imported: "登入已匯入",
+            refreshFailed: "登入已匯入，但帳號清單未更新。請重新開啟已連結服務。",
+        },
         subscription: {
             title: "訂閱",
             currentPeriod: "目前週期",
@@ -1173,6 +1195,7 @@ const zhHantOverrides: DeepPartial<TranslationStructure> = {
             openai: 'OpenAI API 金鑰',
             anthropic: 'Anthropic API 金鑰',
             gemini: 'Google Gemini（Google）',
+            antigravity: 'Google Antigravity',
             github: 'GitHub',
         },
         title: '已連線服務',
@@ -1309,6 +1332,21 @@ const zhHantOverrides: DeepPartial<TranslationStructure> = {
             resets: {
                 use: '使用',
                 available: '可用重設',
+                remainingCount: ({ count }: { count: number }) => `已儲存的重設：${count}`,
+                appliesTo: ({ limits }: { limits: string }) => `適用於：${limits}`,
+                fiveHourLimit: "5 小時限制",
+                weeklyLimit: "每週限制",
+                unavailableReasons: {
+                    paused: "已暫停",
+                    cooldown: "等待冷卻結束",
+                    ineligible: "不符合條件",
+                    not_selected: "未選取",
+                    provider_unavailable: "供應商無法使用",
+                    not_started: "尚未開始",
+                    expired: "已過期",
+                    consumed: "已使用",
+                    unknown: "目前無法使用",
+                },
                 rowLabel: ({ date, countdown }: { date: string; countdown: string }) => `${date} 到期 · ${countdown}`,
                 now: '現在',
                 inDays: ({ days }: { days: number }) => `${days} 天後`,
@@ -1330,6 +1368,12 @@ const zhHantOverrides: DeepPartial<TranslationStructure> = {
             pasteRedirectUrlPromptBody:
                 '完成 OAuth 後，從瀏覽器網址列複製最終重新導向的 URL 並貼上到這裡。',
             providerOverrides: {
+                antigravity: {
+                    connectWebDescription: "下一步：使用 Google 登入。Antigravity 會顯示可複製的授權碼。",
+                    pasteRedirectUrlPromptBody: "1) 使用 Google 登入。2) 複製 antigravity.google 顯示的授權碼。3) 保持此登入頁面開啟，並貼到下方。",
+                    pasteRedirectUrlPlaceholder: "貼上 Antigravity 授權碼",
+                    pasteRedirectUrlTitle: "貼上授權碼",
+                },
                 claudeSubscription: {
                     connectWebDescription:
                         '下一步：在開啟的頁面登入。Claude 可能會顯示一段程式碼字串，而不是自動重新導向。',
@@ -1507,6 +1551,7 @@ const zhHantOverrides: DeepPartial<TranslationStructure> = {
             addOauthProfileDeviceTitle: '透過裝置驗證新增',
             addOauthProfileDeviceSubtitle: '建議用於 Web/遠端環境',
             addOauthProfilePasteTitle: '透過貼上重新導向新增',
+            signInWithGoogle: '使用 Google 登入',
             addOauthProfilePasteSubtitle: '手動複製/貼上重新導向 URL 流程',
             addOauthProfileBrowserTitle: '透過應用程式內瀏覽器新增',
             addOauthProfileBrowserSubtitle: '在支援的環境中使用內嵌瀏覽器',
@@ -1540,6 +1585,7 @@ const zhHantOverrides: DeepPartial<TranslationStructure> = {
             errors: {
                 credentialReferencedByGroup: '此帳號仍被帳號池使用。請先從池中移除，然後重試。',
                 credentialNotFound: '此已連線帳號已被移除。',
+                serviceUnsupportedServer: '此中繼不支援此連線服務。請更新中繼以連線該服務。',
                 credentialRequestFailed: '已連線帳號請求失敗。請重新整理已連線服務後重試。',
                 groupRequestFailed: '帳號池請求失敗。請重新整理已連線服務後重試。',
                 generationConflict: '此帳號池在操作完成前已變更。請重新整理已連線服務後重試。',
@@ -8675,6 +8721,7 @@ settingsSession: {
         providerStateSharingDegraded: '提供者狀態共用已部分套用',
         connectedServiceRuntimeAuthRecoveryRecovered: '供應商驗證已復原',
         connectedServiceRuntimeAuthRecoveryCancelled: '供應商驗證復原已取消',
+        connectedServiceRuntimeAuthRecoveryStopped: "供應商復原已停止；不會自動重試",
         runtimeConfigOutcomeAppliesBeforeNextMessage: '將在你下一則訊息前生效',
         runtimeConfigOutcomeQueuedUntilReady: '已排隊，等待就緒',
         runtimeConfigOutcomeAlreadySet: '已設定',

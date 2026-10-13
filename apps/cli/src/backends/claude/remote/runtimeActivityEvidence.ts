@@ -5,6 +5,7 @@ import {
     type ClaudeProviderTaskActivity,
 } from '@/backends/claude/providerActivity/createClaudeProviderActivityLedger';
 import type { createClaudeProviderRuntimeActivityAdapter } from '@/backends/claude/providerActivity/createClaudeProviderRuntimeActivityAdapter';
+import { logger } from '@/ui/logger';
 
 type LoggerLike = Readonly<{
     debug: (message: string, ...args: unknown[]) => void;
@@ -111,7 +112,16 @@ export function handleClaudeRuntimeActivityLoss(params: RuntimeActivityEffectPar
     reason: string;
     providerStopped?: boolean;
 }>): void {
-    if (!params.runtimeActivityAdapter) return;
+    if (!params.runtimeActivityAdapter) {
+        params.evidence.providerActivityLedger.noteObservationLost();
+        if (params.providerStopped === true) {
+            const abandoned = params.evidence.providerActivityLedger.abandonActiveProviderTasks();
+            if (abandoned.length > 0) {
+                logger.infoFile(`${params.logPrefix} abandoned provider tasks after process exit`, { reason: params.reason, abandoned });
+            }
+        }
+        return;
+    }
     runRuntimeActivityEffect({
         ...params,
         label: 'runtime-loss',

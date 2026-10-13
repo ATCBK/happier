@@ -32,6 +32,12 @@ Before adding or changing a provider/runtime/install/update flow, classify it as
 
 Provider detection, install status, daemon validation, runtime spawning, and UI/installables must reuse the same source of truth. Backend CLIs should prefer user/system installs by default over Happier-managed installs unless an explicit setting says otherwise.
 
+In current development source, vendor installers preserve the Windows process
+environment's `Path` spelling; cloning that environment and replacing it with an
+empty `PATH` prevents executable resolution. Only POSIX recipes prepend user
+install directories. Windows recipes declare `powershell.exe` in the shared
+provider catalog, which also supplies the copyable installation guidance.
+
 In current development source, Pi's vendor-managed launcher is a system-install candidate
 in the shared provider resolver: `PI_CODING_AGENT_DIR/bin/pi`, then `~/.pi/agent/bin/pi`,
 when `PATH` has no matching executable. Explicit `HAPPIER_PI_PATH` remains exclusive and
@@ -41,6 +47,23 @@ An unresolved required CLI throws `ProviderCliNotFoundError` at the shared comma
 boundary. The primary-session classifier preserves it as `dependency_failure` with code
 `provider_cli_not_found` and the canonical remediation, without exposing raw paths or
 mistaking runner turn allocation for provider prompt acceptance.
+
+## Installer state home
+
+Both shell installers resolve the data home from an explicit `HAPPIER_HOME_DIR`,
+otherwise following `HAPPIER_INSTALL_DIR` or the default `.happier` directory.
+In current development source, the POSIX installer uses that same resolved home
+for daemon commands and shell startup-file exports, preserving an explicit data
+home when the binary install directory differs.
+
+In current development source, `install.ps1` persists its resolved state home as
+the user-scoped `HAPPIER_HOME_DIR` and applies it to the installer process before
+post-install CLI commands. The background service and new terminals therefore
+read the same credentials. An explicit `HAPPIER_HOME_DIR` selects the data home;
+otherwise it follows `HAPPIER_INSTALL_DIR`, falling back to `%USERPROFILE%\.happier`.
+The binary install directory can remain separate from an explicit data home.
+On Windows, `HAPPIER_NO_PATH_UPDATE` skips PATH changes only, not state-home persistence.
+This does not copy or migrate credentials from a previous data home.
 
 ## Desktop-initiated CLI acquisition
 

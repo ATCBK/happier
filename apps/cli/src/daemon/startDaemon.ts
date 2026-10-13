@@ -462,7 +462,8 @@ import { warmActiveAccountSettingsSnapshotBestEffort } from '@/settings/accountS
 import { getActiveAccountSettingsSnapshot } from '@/settings/accountSettings/activeAccountSettingsSnapshot';
 import { isBackendEnabledByAccountSettings } from '@/settings/backendEnabled';
 import { resolveConfiguredAcpBackendFromAccountSettings } from '@/agent/acp/catalog/configured/resolveConfiguredAcpBackendFromAccountSettings';
-import { fetchSessionByIdCompat, fetchSessionsPage, type RawSessionRecord } from '@/session/transport/http/sessionsHttp';
+import { fetchSessionByIdCompat, type RawSessionRecord } from '@/session/transport/http/sessionsHttp';
+import { listRetainedConnectedServiceMaterializationIdentityIds } from './connectedServices/materialize/cleanup/listRetainedConnectedServiceMaterializationIdentityIds';
 import { updateSessionMetadataWithRetry } from '@/session/metadata/updateSessionMetadataWithRetry';
 import { persistExplicitSessionStopUsageLimitRecoveryCancellation } from '@/session/usageLimitRecoveryControls/persistUsageLimitRecoveryFieldDurably';
 import { UsageLimitRecoveryScheduler } from './connectedServices/usageLimitRecovery/UsageLimitRecoveryScheduler';
@@ -523,7 +524,6 @@ import { resolveCurrentCodexRuntimeAuthFailureSource } from './connectedServices
 import { resolveRuntimeAuthFailureSourceProfile } from './connectedServices/runtimeAuth/resolveRuntimeAuthFailureSourceProfile';
 import { resolveConnectedServiceGroupMemberByProviderAccountId } from './connectedServices/shared/resolveConnectedServiceGroupMemberByProviderAccountId';
 import { readCredentialAccountIdentity } from './connectedServices/quotas/coordinator/support';
-import { startConnectedServiceStableHomeReconcileScheduler } from './connectedServices/startup/stableHomeReconcile';
 import { tryDecryptSessionMetadata } from '@/session/transport/encryption/sessionEncryptionContext';
 import { sendSessionMessage } from '@/session/services/sendSessionMessage';
 
@@ -771,36 +771,6 @@ function resolveConnectedServiceRestartProcessGroupPid(tracked: TrackedSession):
   return tracked.startedBy === 'daemon' && tracked.childProcess && Number.isInteger(tracked.pid) && tracked.pid > 0
     ? tracked.pid
     : null;
-}
-
-async function listRetainedConnectedServiceMaterializationIdentityIds(params: Readonly<{
-  credentials: Credentials;
-}>): Promise<ReadonlySet<string>> {
-  const retained = new Set<string>();
-  let cursor: string | undefined;
-  const seenCursors = new Set<string>();
-  for (let page = 0; page < 50; page += 1) {
-    const result = await fetchSessionsPage({
-      token: params.credentials.token,
-      ...(cursor ? { cursor } : {}),
-      limit: 200,
-    });
-    for (const rawSession of result.sessions as ReadonlyArray<RawSessionRecord>) {
-      const metadata = tryDecryptSessionMetadata({
-        credentials: params.credentials,
-        rawSession,
-      });
-      const identity = readConnectedServiceMaterializationIdentityV1(
-        metadata?.connectedServiceMaterializationIdentityV1,
-      );
-      if (identity) retained.add(identity.id);
-    }
-    if (!result.hasNext || !result.nextCursor) break;
-    if (seenCursors.has(result.nextCursor)) break;
-    seenCursors.add(result.nextCursor);
-    cursor = result.nextCursor;
-  }
-  return retained;
 }
 
 async function resumeInactiveSessionWhenUsageLimitReady(params: Readonly<{
@@ -1890,7 +1860,6 @@ export async function startDaemon(options: Readonly<{ takeover?: boolean }> = {}
         resume: () => void;
       }> | null = null;
       let connectedServiceQuotasCoordinator: ConnectedServiceQuotasCoordinator | null = null;
-      let connectedServiceStableHomeReconcileHandle: Readonly<{ stop: () => void }> | null = null;
       const connectedServiceRuntimeRegistry = new ConnectedServiceRuntimeRegistry();
       const connectedServiceRuntimeQuotaSnapshots = new ConnectedServiceAuthGroupRuntimeQuotaSnapshotStore();
       const providerAccountUsageStore = createProviderAccountUsageStore();
@@ -2037,6 +2006,7 @@ export async function startDaemon(options: Readonly<{ takeover?: boolean }> = {}
       };
       const connectedServiceGroupHomeCleanupScheduler = new ConnectedServiceGroupHomeCleanupScheduler({
         activeServerDir: configuration.activeServerDir,
+        runtimeRegistry: connectedServiceRuntimeRegistry,
         hasLiveTarget: ({ serviceId, groupId, agentId }) => getCurrentChildren().some((tracked) => {
           const trackedAgentId = resolveTrackedSessionCatalogAgentId(tracked);
           if (trackedAgentId !== agentId) return false;
@@ -2050,6 +2020,7 @@ export async function startDaemon(options: Readonly<{ takeover?: boolean }> = {}
       });
       const connectedServiceMaterializedHomeCleanupScheduler = new ConnectedServiceMaterializedHomeCleanupScheduler({
         baseDir: connectedServicesMaterializationBaseDir,
+        runtimeRegistry: connectedServiceRuntimeRegistry,
         nowMs: () => Date.now(),
         rootTtlMs: resolvePositiveIntEnv(
           process.env.HAPPIER_CONNECTED_SERVICES_MATERIALIZED_HOME_TTL_MS,
@@ -2067,7 +2038,7 @@ export async function startDaemon(options: Readonly<{ takeover?: boolean }> = {}
           return readTrackedConnectedServiceMaterializationIdentityId(tracked) === materializationIdentityId;
         }),
         listRetainedIdentityIds: async () =>
-          await listRetainedConnectedServiceMaterializationIdentityIds({ credentials }),
+          await listRetainedConnectedServiceMaterializationIdentityIds({ credentials, baseDir: connectedServicesMaterializationBaseDir }),
       });
       let connectedServiceQuotasLoopHandle: ConnectedServiceQuotasLoopHandle | null = null;
       let connectedServiceMaterializedHomeCleanupLoopHandle: Readonly<{
@@ -3704,11 +3675,15 @@ export async function startDaemon(options: Readonly<{ takeover?: boolean }> = {}
                       processEnv: process.env,
                       credentialRefreshService: connectedServiceRefreshCoordinator,
                       vendorResumeId: effectiveResume || null,
+                      existingSessionMetadata: existingSessionPersistedMetadata,
                       resumeReachabilityRequired: spawnSharedStateContinuityRequested,
-                      candidatePersistedSessionFile: resolveConnectedServiceCandidatePersistedSessionFile(
-                        catalogAgentId,
-                        existingSessionPersistedMetadata,
-                      ),
+                      sessionStateMode: normalizedOptions.handoffStateTransfer,
+                      candidatePersistedSessionFile: normalizedOptions.handoffStateTransfer === 'existing'
+                        ? null
+                        : resolveConnectedServiceCandidatePersistedSessionFile(
+                            catalogAgentId,
+                            existingSessionPersistedMetadata,
+                          ),
                     });
                     if (repairedMissingMaterializationIdentity && normalizedExistingSessionId) {
                       try {
@@ -3828,6 +3803,7 @@ export async function startDaemon(options: Readonly<{ takeover?: boolean }> = {}
                   logInfo: (message) => logger.info(message),
                   logWarn: (message) => logger.warn(message),
                   connectedServiceAuth,
+                  existingSessionMetadata: existingSessionPersistedMetadata,
                 });
                 spawnResourceCleanupOnFailure = spawnEnvironment.cleanupOnFailure;
                 spawnResourceCleanupOnExit = spawnEnvironment.cleanupOnExit;
@@ -6745,6 +6721,7 @@ export async function startDaemon(options: Readonly<{ takeover?: boolean }> = {}
         sessionDirectory: params.sessionDirectory ?? null,
         connectedServicesBindingsRaw: params.connectedServicesBindingsRaw,
         materializationKey: params.materializationKey,
+        ...(params.previousMaterializedRoot ? { previousMaterializedRoot: params.previousMaterializedRoot } : {}),
         activeServerDir: configuration.activeServerDir,
         baseDir: connectedServicesMaterializationBaseDir,
         credentials,
@@ -6757,12 +6734,13 @@ export async function startDaemon(options: Readonly<{ takeover?: boolean }> = {}
         credentialRefreshService: connectedServiceRefreshCoordinator,
       }),
       runtimeRegistry: connectedServiceRuntimeRegistry,
-      createAdoptedRootCleanup: ({ materializedRoot, materializationKey, agentId }) => {
+      createAdoptedRootCleanup: ({ materializedRoot, materializationKey, agentId, retentionPolicy }) => {
         return createAdoptedExecutionRunRootCleanup({
           materializationBaseDir: connectedServicesMaterializationBaseDir,
           materializedRoot,
           materializationKey,
           agentId,
+          retentionPolicy,
           removeRoot: async (root) => await fs.rm(root, { recursive: true, force: true }),
         });
       },
@@ -6837,6 +6815,7 @@ export async function startDaemon(options: Readonly<{ takeover?: boolean }> = {}
           materializationKey: input.materializationKey,
           connectedServicesBindingsRaw: input.connectedServicesBindingsRaw,
           sessionDirectory: input.sessionDirectory ?? null,
+          ...(input.previousMaterializedRoot ? { previousMaterializedRoot: input.previousMaterializedRoot } : {}),
           ...(input.sessionId ? { sessionId: input.sessionId } : {}),
         });
       },
@@ -6981,6 +6960,7 @@ export async function startDaemon(options: Readonly<{ takeover?: boolean }> = {}
             vendorResumeId,
             cwd: inactiveCwd,
             candidatePersistedSessionFile: inactiveCandidatePersistedSessionFile,
+            persistedSessionMetadata: inactivePersistedSessionMetadata,
           }) => {
             const persistedSessionMetadata = tracked
               ? await resolvePersistedConnectedServiceSwitchSessionMetadata({
@@ -6988,7 +6968,7 @@ export async function startDaemon(options: Readonly<{ takeover?: boolean }> = {}
                   sessionId,
                   agentId,
                 })
-              : null;
+              : inactivePersistedSessionMetadata ?? null;
             const continuityContext = resolveTrackedConnectedServiceSwitchContinuityContext({
               agentId,
               baseDir: connectedServicesMaterializationBaseDir,
@@ -7652,25 +7632,6 @@ export async function startDaemon(options: Readonly<{ takeover?: boolean }> = {}
       });
       connectedServiceRefreshCoordinator = refreshStartup.coordinator;
       connectedServiceRefreshLoopHandle = refreshStartup.loopHandle;
-
-      // Triage #4 systemic leg: format+freshness-reconcile stable provider homes (e.g. codex
-      // homes, which are not refresh-target bound and otherwise drift stale/malformed) at startup
-      // and on a coarse cadence, provider-owned via the lifecycle-descriptor home-maintenance hook.
-      if (parseBooleanEnv(process.env.HAPPIER_CONNECTED_SERVICES_STABLE_HOME_RECONCILE_ENABLED, true)) {
-        connectedServiceStableHomeReconcileHandle = startConnectedServiceStableHomeReconcileScheduler({
-          activeServerDir: configuration.activeServerDir,
-          api,
-          credentials,
-          intervalMs: resolvePositiveIntEnv(
-            process.env.HAPPIER_CONNECTED_SERVICES_STABLE_HOME_RECONCILE_INTERVAL_MS,
-            15 * 60_000,
-            { min: 60_000, max: 6 * 60 * 60_000 },
-          ),
-          onError: (error) => {
-            logger.debug('[DAEMON RUN] Connected services stable-home reconcile failed (non-fatal)', error);
-          },
-        });
-      }
 
       const connectedServicesQuotasEnabled = await resolveConnectedServicesQuotasDaemonEnabled({
         env: process.env,
@@ -8533,6 +8494,14 @@ export async function startDaemon(options: Readonly<{ takeover?: boolean }> = {}
                     connectedServiceProjectionEpoch += 1;
                   }
                   latestConnectedServiceProjectionSnapshot = projectionSnapshot;
+                  if (isInitialProjection || projectionDelta.changedCredentialBoundaries.length > 0) {
+                    const readyCredentials = isInitialProjection
+                      ? projectionSnapshot.credentials
+                      : projectionDelta.changedCredentialBoundaries;
+                    connectedServiceQuotasLoopHandle?.wake(readyCredentials
+                      .filter(credential => credential.boundary.status === 'present')
+                      .map(({ serviceId, profileId }) => ({ serviceId, profileId, bindingKind: 'profile' as const })));
+                  }
                   const projectionRegistrations = connectedServiceRuntimeRegistry.listTargetRegistrations();
                   // Changed projection scopes are owned by the global reconcilers below. The
                   // registration sweep is only for an unchanged replay, where a late/re-registered
@@ -8619,6 +8588,31 @@ export async function startDaemon(options: Readonly<{ takeover?: boolean }> = {}
                 stopSession,
                 isSessionActive: isSessionAlreadyRunning,
                 loadLocalSessionMetadata: loadLocalSessionMetadataForHandoff,
+                resolveExistingStateEnvironment: async ({ sessionId, metadata, targetPath }) => {
+                  const agentId = resolveCatalogAgentId(resolveAgentIdFromSessionMetadata(metadata));
+                  const materialized = await resolveConnectedServiceAuthForSpawn({
+                    agentId,
+                    sessionDirectory: targetPath,
+                    connectedServicesBindingsRaw: metadata.connectedServices,
+                    materializationKey: sessionId,
+                    connectedServiceMaterializationIdentityV1: readConnectedServiceMaterializationIdentityV1(
+                      metadata.connectedServiceMaterializationIdentityV1,
+                    ),
+                    activeServerDir: configuration.activeServerDir,
+                    baseDir: connectedServicesMaterializationBaseDir,
+                    credentials,
+                    api,
+                    accountUsageStore: providerAccountUsageStore,
+                    runtimeQuotaSnapshots: connectedServiceRuntimeQuotaSnapshots,
+                    sessionId,
+                    accountSettings: getActiveAccountSettingsSnapshot()?.settings ?? null,
+                    processEnv: process.env,
+                    credentialRefreshService: connectedServiceRefreshCoordinator,
+                    sessionStateMode: 'existing',
+                    existingSessionMetadata: metadata,
+                  });
+                  return { ...process.env, ...materialized?.env };
+                },
                 requestShutdown: () => {
                   void beforeShutdown().finally(() => requestShutdown('happier-app'));
                 },
@@ -9035,10 +9029,6 @@ export async function startDaemon(options: Readonly<{ takeover?: boolean }> = {}
       if (connectedServiceRefreshLoopHandle) {
         connectedServiceRefreshLoopHandle.stop();
         connectedServiceRefreshLoopHandle = null;
-      }
-      if (connectedServiceStableHomeReconcileHandle) {
-        connectedServiceStableHomeReconcileHandle.stop();
-        connectedServiceStableHomeReconcileHandle = null;
       }
       if (connectedServiceQuotasLoopHandle) {
         await connectedServiceQuotasLoopHandle.stop();

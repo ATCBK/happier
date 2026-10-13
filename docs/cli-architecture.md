@@ -90,6 +90,25 @@ flowchart TD
 - Ensures auth and machine setup when needed (`authAndSetupMachineIfNeeded`).
 - Starts the daemon or runs an agent directly based on subcommand/context.
 
+## Automated session targets and permissions (development)
+
+Action machine discovery reads the authenticated account inventory on the selected
+relay, independently of the caller's local daemon profiles. Revoked and replaced
+rows are excluded; offline machines remain visible with `daemonRunning: false`.
+An unreadable inventory reports an error instead of an empty fleet.
+
+An explicit `machineId` in session creation dispatches and resolves its launch nonce
+through exact-machine RPC. An unavailable target fails without local execution or
+replacement-chain redirection. An older daemon's legacy spawn method is retried only
+on the same selected machine after a method-capability refusal. Untargeted local
+creation and trusted in-daemon transports retain their existing control paths.
+
+`--auto` is an alias for `--permission-mode auto` and uses the existing permission
+intent parser. For OpenCode, this allows reads and edits while other tools can still
+require approval. Happier's session permission policy takes precedence over the
+native agent's defaults; `--yolo` requests full access. Permission flags retain their
+command-line ordering, with the last flag taking effect.
+
 ## Desktop-driven setup
 
 The desktop app never asks the user to open a terminal to connect the computer it is running on.
@@ -963,6 +982,52 @@ Local state lives under `~/.happier` (or `HAPPIER_HOME_DIR`):
 Configuration lives in `src/configuration.ts`:
 - `HAPPIER_SERVER_URL` and `HAPPIER_WEBAPP_URL` override defaults.
 - `HAPPIER_VARIANT`, `HAPPIER_EXPERIMENTAL`, `HAPPIER_DISABLE_CAFFEINATE` control behavior.
+
+### Connected Agent storage (0.2 development)
+
+The connected-services materialization owner resolves durable account or pool
+homes through the existing home resolver and updates their managed files in
+place. Claude and Codex use account/pool homes; Antigravity uses the selected
+member's account home and retains restart-based switching. Shared state uses the
+existing state-sharing descriptor; isolated state stays local to that binding.
+Antigravity's isolated-state policy still refuses continuation across different
+accounts, including a pool rotation; the storage change does not relax it.
+Configuration inheritance remains a separate policy. Discovery probes and other
+temporary materializers retain disposable roots.
+
+When isolated history is imported into shared state and the same file already
+exists with different bytes, the existing importer preserves the destination
+and saves the incoming version under a `.happier-import-*` name. This preserves
+both versions but does not merge divergent conversations or make the incoming
+version authoritative at the original path. In particular, switching Antigravity
+to shared state is not conflict resolution for an already-diverged conversation.
+
+Resume preparation imports declared state from the previous root through the
+existing preservation owner. Legacy per-session roots may contribute their
+declared private state; moving an isolated Codex conversation between durable
+account homes imports only that resumed conversation, not the other account's
+history or memories. Adoption alone does not authorize deletion. Legacy
+Run cleanup requires explicit ephemeral retention; resumable and unidentified
+hashed roots are kept. The cleanup scheduler checks actual runtime registrations
+before deleting live Run homes, including pending cleanup after release. Session
+reference lookup remains current-server scoped; retaining an unidentified root
+does not establish that its original Run can resume. Both ordinary and archived
+Session references protect retained history; an unreadable or incomplete listing
+defers deletion rather than supplying partial deletion authority.
+
+Managed Codex app-server startup records the account whose access token was
+actually applied. Connected-account reset-credit reads use the daemon's current
+selection, not the launch home's credential; native sessions use their native
+home's auth store without invoking the connected-account refresh bridge.
+The daemon prepares managed credential projections;
+live runtime application verifies that preparation without becoming another file
+writer. Refresh distribution checks pool generation and credential revision
+inside the existing materialization lock.
+
+Execution-run isolation no longer assigns private XDG cache, data or state
+directories. User-configured locations and ordinary tool caches are preserved,
+while inherited connected-service authentication is still scrubbed. Account
+selection, pool cutover, refresh and recovery remain with their existing owners.
 
 ## API client architecture
 

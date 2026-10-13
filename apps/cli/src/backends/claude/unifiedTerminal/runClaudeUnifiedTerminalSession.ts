@@ -27,6 +27,7 @@ import {
 } from './createClaudeUnifiedHookLifecycleBridge';
 import { createReplayableHookSubscription } from './createReplayableHookSubscription';
 import { createClaudeUnifiedTranscriptBridge } from './createClaudeUnifiedTranscriptBridge';
+import type { ClaudeWorkflowActivityObservationContext } from '../workflows/claudeWorkflowActivitySource';
 import { isClaudeMainChainCompactBoundary } from '../localControl/readClaudeTranscriptTurnSignal';
 import type { ClaudeRemoteSubagentFileCollector } from '../remote/sidechains/claudeRemoteSubagentFileCollector';
 import {
@@ -330,7 +331,7 @@ export type ClaudeUnifiedTerminalSessionOptions<Mode extends EnhancedMode = Enha
    */
   onRawTranscriptValue?: ((
     value: unknown,
-    observation: Readonly<{ historicalReplay: boolean }>,
+    observation: ClaudeWorkflowActivityObservationContext,
   ) => void) | undefined;
   /**
    * Invoked for every transcript row the runner suppresses from `onMessage` (controller-typed
@@ -966,6 +967,15 @@ export async function runClaudeUnifiedTerminalSession<Mode extends EnhancedMode 
   const allowReadinessBeforeSessionStart = Boolean(first && opts.allowFirstInputBeforeSessionStart);
   const allowEmptyStartupInputBeforeSessionStart = first === null && Boolean(opts.initialMode);
   let lifecycleBridge: ReturnType<typeof createClaudeUnifiedHookLifecycleBridge> | undefined;
+  const observeProviderProcessExit = (): void => {
+    if (lifecycleBridge) {
+      lifecycleBridge.observeProcessExit();
+    } else {
+      void opts.runtimeActivityAdapter?.handleRuntimeLoss('claude_process_exit', { providerStopped: true }).catch((error) => {
+        logger.debug('[unified]: Claude process-exit activity observation failed', error);
+      });
+    }
+  };
   const acceptedPromptTranscriptDiscovery = createClaudeUnifiedAcceptedPromptTranscriptDiscovery({
     acceptedPromptWindowMs: configuration.claudeUnifiedTerminalAcceptedPromptEchoWindowMs,
     onControlCommandConsumed: opts.onTranscriptMessageSuppressed,
@@ -1163,9 +1173,17 @@ export async function runClaudeUnifiedTerminalSession<Mode extends EnhancedMode 
   let handle: TerminalHostHandle | null = null;
   let terminalHostLifecycle: 'owned' | 'borrowed' = 'owned';
   let currentTerminalProcess: Pick<OwnedTerminalProcess, 'whenExited' | 'terminate'> | null = null;
+  let runtimeExitError: unknown;
   // The process owner coalesces termination, retains success, and permits retry
   // after failure. A second promise cache here would override that contract.
-  const terminateCurrentTerminalProcess = (): Promise<void> => currentTerminalProcess?.terminate() ?? Promise.resolve();
+  const terminateCurrentTerminalProcess = async (): Promise<void> => {
+    const ownedProcess = currentTerminalProcess;
+    if (!ownedProcess) return;
+    await ownedProcess.terminate();
+    // The session adapter survives runner replacement. Complete this process's exit observation
+    // before another runner can admit tasks to the same ledger.
+    await ownedProcess.whenExited;
+  };
   let controller: ClaudeUnifiedController | null = null;
   let runtimeControlBridge: ClaudeUnifiedRuntimeControlBridge | null = null;
   let dialogChoiceScreenProbe: ClaudeUnifiedDialogChoiceScreenProbe | null = null;
@@ -1307,8 +1325,13 @@ export async function runClaudeUnifiedTerminalSession<Mode extends EnhancedMode 
       });
       terminalHostLifecycle = currentTerminalHost.lifecycle;
       spawnArtifactsHandedOff = true;
-      void currentTerminalProcess.whenExited.then(
-        () => runtimeAbortController.abort('claude-unified-current-terminal-process-exited'),
+      const ownedProcess = currentTerminalProcess;
+      void ownedProcess.whenExited.then(
+        () => {
+          if (currentTerminalProcess !== ownedProcess) return;
+          observeProviderProcessExit();
+          runtimeAbortController.abort('claude-unified-current-terminal-process-exited');
+        },
         (error) => {
           fatalRuntimeError ??= error;
           runtimeAbortController.abort(error);
@@ -2548,6 +2571,7 @@ export async function runClaudeUnifiedTerminalSession<Mode extends EnhancedMode 
             transcriptMissingWarningMs: configuration.claudeTranscriptMissingWarningMs,
             subscribeClaudeSessionHooks: activeHookSubscription.subscribe,
             // Discover identity without settling Pending ahead of the ordered importer.
+            onStartupReplayComplete: () => activeHookSubscription.finishStartup(),
             classifyDiscoveredSession: ({ messages }) => (
               acceptedPromptTranscriptDiscovery.findMatchingTranscript(messages) ? 'main' : null
             ),
@@ -2628,11 +2652,13 @@ export async function runClaudeUnifiedTerminalSession<Mode extends EnhancedMode 
             startupGraceActive: () => startupHostLivenessGraceActive,
             isExpectedHostExit: (liveness) => expectedPromptInputExit && isCleanTerminalExit(liveness),
             onHostExited: () => {
+              observeProviderProcessExit();
               if (!runtimeAbortController.signal.aborted) {
                 runtimeAbortController.abort('claude-unified-terminal-graceful-exit');
               }
             },
             onHostDead: (error) => {
+              observeProviderProcessExit();
               void publishHostDeadHealth(activeHandle, error.liveness);
               fatalRuntimeError ??= error;
               runtimeAbortController.abort(error);
@@ -2646,6 +2672,9 @@ export async function runClaudeUnifiedTerminalSession<Mode extends EnhancedMode 
       await controller.run();
     } catch (error) {
       if (error instanceof ClaudeUnifiedTerminalHostDeadError) {
+        if (error.liveness?.paneAlive === false && error.liveness.probeInconclusive !== true) {
+          observeProviderProcessExit();
+        }
         await publishHostDeadHealth(activeHandle, error.liveness);
         emitClaudeUnifiedHostDead(telemetry, {
           hostKind: activeHandle.kind,
@@ -2675,6 +2704,9 @@ export async function runClaudeUnifiedTerminalSession<Mode extends EnhancedMode 
     if (fatalRuntimeError) {
       throw fatalRuntimeError;
     }
+  } catch (error) {
+    runtimeExitError = error;
+    throw error;
   } finally {
     runtimeAbortController.abort('claude-unified-runtime-disposed');
     arbiterForResumeSummaryCompaction = null;
@@ -2706,16 +2738,34 @@ export async function runClaudeUnifiedTerminalSession<Mode extends EnhancedMode 
     } else {
       await preserveActiveTerminalHost('wrapper_exit');
     }
+    let incompleteOwnedCleanup: unknown;
+    const noteOwnedCleanupFailure = async (error: unknown): Promise<void> => {
+      if (error && typeof error === 'object' && 'code' in error && error.code === 'process_tree_termination_incomplete') {
+        incompleteOwnedCleanup = error;
+      }
+      await opts.runtimeActivityAdapter?.handleRuntimeLoss('claude_process_cleanup_failed').catch((observationError) => {
+        logger.debug('[unified]: failed to publish provider cleanup observation loss', observationError);
+      });
+    };
     if (currentTerminalProcess && terminalHostLifecycle !== 'borrowed') {
-      await terminateCurrentTerminalProcess().catch((error) => {
-        logger.infoFile('[unified]: failed to terminate current terminal provider process (non-fatal)', error);
+      await terminateCurrentTerminalProcess().catch(async (error: unknown) => {
+        await noteOwnedCleanupFailure(error);
+        logger.infoFile('[unified]: failed to terminate current terminal provider process', error);
       });
     }
     if (terminalHostLifecycle === 'borrowed') {
-      await releaseBorrowedTerminalHost('wrapper_exit').catch((error) => {
-        logger.infoFile('[unified]: failed to release borrowed terminal attachment (non-fatal)', error);
+      await releaseBorrowedTerminalHost('wrapper_exit').catch(async (error: unknown) => {
+        await noteOwnedCleanupFailure(error);
+        logger.infoFile('[unified]: failed to release borrowed terminal attachment', error);
       });
     }
+    currentTerminalProcess = null;
     activeHookSubscription.dispose();
+    if (incompleteOwnedCleanup) {
+      if (runtimeExitError) {
+        throw new AggregateError([runtimeExitError, incompleteOwnedCleanup], 'Claude runtime failed with incomplete owned process cleanup', { cause: runtimeExitError });
+      }
+      throw incompleteOwnedCleanup;
+    }
   }
 }

@@ -129,7 +129,7 @@ describe('createClaudeSubscriptionQuotaFetcher', () => {
       headers: expect.objectContaining({
         Authorization: 'Bearer at',
         'anthropic-beta': 'oauth-2025-04-20',
-        'User-Agent': expect.stringMatching(/^claude-code\/[0-9][a-zA-Z0-9._+-]*$/u),
+        'User-Agent': expect.stringMatching(/^claude-cli\/[0-9][a-zA-Z0-9._+-]* \(external, cli\)$/u),
       }),
     }));
   });
@@ -168,7 +168,7 @@ describe('createClaudeSubscriptionQuotaFetcher', () => {
 
     const snapshot = await fetcher.fetch({ record, now, signal: new AbortController().signal });
     expect(snapshot?.meters.find((meter) => meter.meterId === 'five_hour')?.utilizationPct).toBe(20);
-    expect(fetchMock).toHaveBeenCalledTimes(1);
+    expect(fetchMock).toHaveBeenCalledTimes(2);
   });
 
   it('fetches and parses Claude subscription oauth usage into a quota snapshot', async () => {
@@ -690,7 +690,7 @@ describe('createClaudeSubscriptionQuotaFetcher', () => {
       if (!url.includes('/anthropic/oauth/usage')) {
         throw new Error(`Unexpected URL in test: ${url}`);
       }
-      usageCalls += 1;
+      if (!url.includes('?')) usageCalls += 1;
       const auth = (() => {
         const headers: unknown =
           init && typeof init === 'object' && 'headers' in init ? (init as { headers?: unknown }).headers : undefined;
@@ -860,7 +860,7 @@ describe('createClaudeSubscriptionQuotaFetcher', () => {
       if (!url.includes('/anthropic/oauth/usage')) {
         throw new Error(`Unexpected URL in test: ${url}`);
       }
-      usageCalls += 1;
+      if (!url.includes('?')) usageCalls += 1;
       if (usageCalls === 1) {
         return {
           ok: false,

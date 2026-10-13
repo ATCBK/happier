@@ -23,9 +23,9 @@ export function createClaudeProviderRuntimeActivityAdapter(params: Readonly<{
     let publicationTail: Promise<void> = Promise.resolve();
 
     const currentProjection = (): ClaudeProviderRuntimeActivityProjection => {
-        const activeCount = params.providerActivityLedger.getActiveProviderTaskCount();
+        const activeCount = params.providerActivityLedger.getObservedActiveProviderTaskCount();
         if (activeCount > 0) return { state: 'active', activeCount };
-        return observationComplete
+        return observationComplete && !params.providerActivityLedger.hasActiveProviderTasks()
             ? { state: 'idle', activeCount: 0 }
             : { state: 'unknown', activeCount: 0 };
     };
@@ -41,13 +41,17 @@ export function createClaudeProviderRuntimeActivityAdapter(params: Readonly<{
     ): Promise<void> => {
         const publish = async (): Promise<void> => {
             if (!isCurrentRuntime() || sameProjection(lastPublishedProjection, projection)) return;
-            if (projection.state === 'unknown') {
-                await params.contributionHandle.markUnknown(reason);
-            } else {
-                await params.contributionHandle.report(
-                    projection,
-                    reason,
-                );
+            try {
+                if (projection.state === 'unknown') {
+                    await params.contributionHandle.markUnknown(reason);
+                } else {
+                    await params.contributionHandle.report(projection, reason);
+                }
+            } catch (error) {
+                // Every producer uses this transport boundary, including local lifecycle hooks
+                // whose best-effort caller cannot otherwise surface a rejected publication.
+                logger.infoFile('[claudeProviderRuntimeActivity] Activity publication failed', { state: projection.state });
+                throw error;
             }
             lastPublishedProjection = projection;
         };
@@ -108,7 +112,8 @@ export function createClaudeProviderRuntimeActivityAdapter(params: Readonly<{
             options?: Readonly<{ providerStopped?: boolean }>,
         ): Promise<void> {
             if (!isCurrentRuntime()) return;
-            observationComplete = false;
+            observationComplete = options?.providerStopped === true;
+            if (!observationComplete) params.providerActivityLedger.noteObservationLost();
             // A stopped provider process orphans its background tasks: no terminal event for them
             // can arrive, and kept in the ledger the next turn-end publish would project them as
             // `active` again for the rest of the process. A lost observer alone proves nothing about
@@ -117,13 +122,13 @@ export function createClaudeProviderRuntimeActivityAdapter(params: Readonly<{
                 ? params.providerActivityLedger.abandonActiveProviderTasks()
                 : [];
             if (abandoned.length > 0) {
-                logger.infoFile('[claudeProviderRuntimeActivity] Abandoned provider tasks after observation loss', {
+                logger.infoFile('[claudeProviderRuntimeActivity] Abandoned provider tasks after process exit', {
                     reasonCode,
                     abandoned,
                 });
             }
             if (observationState !== 'active') return;
-            await enqueueProjection({ state: 'unknown', activeCount: 0 }, reasonCode);
+            await enqueueProjection(currentProjection(), reasonCode);
         },
     };
 }

@@ -105,7 +105,7 @@ export async function launchOwnedTerminalProcess(params: Readonly<{
   }
 
   const terminateProcess = params.terminateProcess
-    ?? (async (target: OwnedTerminalChild) => await killProcessTree(target));
+    ?? (async (target: OwnedTerminalChild) => { await killProcessTree(target); });
   let termination: Promise<void> | null = null;
   const processInstanceFingerprint = typeof child.pid === 'number'
     ? readProcessInstanceFingerprintSync(child.pid) : null;

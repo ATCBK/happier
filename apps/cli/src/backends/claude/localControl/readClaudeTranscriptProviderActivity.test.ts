@@ -4,6 +4,11 @@ import type { RawJSONLines } from '@/backends/claude/types';
 import { readClaudeTranscriptProviderActivity } from './readClaudeTranscriptProviderActivity';
 
 describe('readClaudeTranscriptProviderActivity', () => {
+  it('leaves native task-start activity to the typed runtime owner', () => {
+    expect(readClaudeTranscriptProviderActivity({ type: 'system', uuid: 'native-start', subtype: 'task_started',
+      session_id: 'session', task_id: 'native', tool_use_id: 'tool', task_type: 'local_agent', is_backgrounded: true })).toBeNull();
+  });
+
   it('leaves async workflow launches to the workflow runtime-activity owner', () => {
     expect(readClaudeTranscriptProviderActivity({
       type: 'user',
@@ -49,7 +54,7 @@ describe('readClaudeTranscriptProviderActivity', () => {
     } as unknown as RawJSONLines)).toBeNull();
   });
 
-  it('does not treat queued or copied prompt XML as delivered task activity', () => {
+  it('ignores bare queue XML without native delivery provenance', () => {
     expect(readClaudeTranscriptProviderActivity({
       type: 'queue-operation',
       operation: 'enqueue',
@@ -108,8 +113,9 @@ describe('readClaudeTranscriptProviderActivity', () => {
 
   it('preserves missing task-notification status as unknown instead of inventing running', () => {
     expect(readClaudeTranscriptProviderActivity({
-      type: 'user', uuid: 'unknown-task', origin: { kind: 'task-notification' },
-      message: { content: '<task-notification><task-id>task-unknown</task-id></task-notification>' },
+      type: 'attachment',
+      attachment: { type: 'queued_command', commandMode: 'task-notification',
+      prompt: '<task-notification><task-id>task-unknown</task-id></task-notification>' },
     } as unknown as RawJSONLines)).toEqual({
       type: 'task_notification_unknown',
       taskId: 'task-unknown',
@@ -119,8 +125,9 @@ describe('readClaudeTranscriptProviderActivity', () => {
 
   it('preserves a tool-use-only task notification so workflow ownership can be classified', () => {
     expect(readClaudeTranscriptProviderActivity({
-      type: 'user', uuid: 'unknown-tool', origin: { kind: 'task-notification' },
-      message: { content: '<task-notification><tool-use-id>toolu-workflow</tool-use-id></task-notification>' },
+      type: 'attachment',
+      attachment: { type: 'queued_command', commandMode: 'task-notification',
+      prompt: '<task-notification><tool-use-id>toolu-workflow</tool-use-id></task-notification>' },
     } as unknown as RawJSONLines)).toEqual({
       type: 'task_notification_unknown',
       taskId: null,

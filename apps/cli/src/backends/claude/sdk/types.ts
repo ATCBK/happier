@@ -237,3 +237,12 @@ export class AbortError extends Error {
         this.name = 'AbortError'
     }
 }
+
+export class ClaudeNativeProviderExitUnverifiedError extends Error {
+    readonly code = 'claude_native_provider_exit_unverified'
+
+    constructor() {
+        super('Claude launcher exited without verified native provider termination')
+        this.name = 'ClaudeNativeProviderExitUnverifiedError'
+    }
+}

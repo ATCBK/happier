@@ -2277,6 +2277,19 @@ export const en = {
     },
 
     connectedServices: {
+        importAccounts: {
+            unknownResult: "The import result is unknown. Refresh the account list and check this profile before retrying.",
+            title: "Import existing login",
+            failed: "Could not import this login. Check that you are signed in on the selected machine, then retry.",
+            actionDescription: "Copy a login from one of your machines",
+            description: "Copy the selected login into this encrypted profile. Shared refresh tokens may rotate, and the native app may ask you to sign in again.",
+            unsupported: "Import is unavailable here. Choose another machine or update its CLI.",
+            credentialsUnavailable: "No usable login was found. Sign in to the native app, then try again.",
+            profileConflict: "This profile belongs to another account or changed during import. Choose a new profile name.",
+            reauthorizationRequired: "Sign in to the native app again, then retry.",
+            imported: "Login imported",
+            refreshFailed: "The login was imported, but the account list could not refresh. Reopen Connected Services.",
+        },
         subscription: {
             title: "Subscription",
             currentPeriod: "Current period",
@@ -2306,6 +2319,7 @@ export const en = {
             openai: 'OpenAI API key',
             anthropic: 'Anthropic API key',
             gemini: 'Google Gemini',
+            antigravity: 'Google Antigravity',
             github: 'GitHub',
         },
         title: 'Connected services',
@@ -2541,6 +2555,21 @@ export const en = {
             resets: {
                 use: 'Use',
                 available: 'Reset available',
+                remainingCount: ({ count }: { count: number }) => `Saved resets: ${count}`,
+                appliesTo: ({ limits }: { limits: string }) => `Applies to: ${limits}`,
+                fiveHourLimit: "5-hour limit",
+                weeklyLimit: "Weekly limit",
+                unavailableReasons: {
+                    paused: "Paused",
+                    cooldown: "Waiting for cooldown",
+                    ineligible: "Not eligible",
+                    not_selected: "Not selected",
+                    provider_unavailable: "Provider unavailable",
+                    not_started: "Not started yet",
+                    expired: "Expired",
+                    consumed: "Already used",
+                    unknown: "Unavailable now",
+                },
                 rowLabel: ({ date, countdown }: { date: string; countdown: string }) => `Expires ${date} · ${countdown}`,
                 now: 'now',
                 inDays: ({ days }: { days: number }) => `in ${days}d`,
@@ -2562,6 +2591,12 @@ export const en = {
             pasteRedirectUrlPromptBody:
                 '1) Sign in on the page that opens. 2) Copy the final URL from your browser address bar. 3) Paste it in the field below.',
             providerOverrides: {
+                antigravity: {
+                    connectWebDescription: "Next step: sign in with Google. Antigravity shows an authorization code to copy.",
+                    pasteRedirectUrlPromptBody: "1) Sign in with Google. 2) Copy the authorization code shown on antigravity.google. 3) Paste it below, keeping this sign-in open.",
+                    pasteRedirectUrlPlaceholder: "Paste the Antigravity authorization code",
+                    pasteRedirectUrlTitle: "Paste authorization code",
+                },
                 claudeSubscription: {
                     connectWebDescription:
                         'Next step: sign in on the page that opens. Claude may show a code string instead of redirecting automatically.',
@@ -2643,6 +2678,7 @@ export const en = {
             addOauthProfileDeviceTitle: 'Add via device auth',
             addOauthProfileDeviceSubtitle: 'Recommended for web/headless flows',
             addOauthProfilePasteTitle: 'Add via redirect paste',
+            signInWithGoogle: 'Sign in with Google',
             addOauthProfilePasteSubtitle: 'Manual copy/paste redirect URL flow',
             addOauthProfileBrowserTitle: 'Add via in-app browser',
             addOauthProfileBrowserSubtitle: 'Use an embedded browser where supported',
@@ -2686,6 +2722,7 @@ export const en = {
             errors: {
                 credentialReferencedByGroup: 'This account is still used by an account pool. Remove it from the pool, then try again.',
                 credentialNotFound: 'This connected account was already removed.',
+                serviceUnsupportedServer: 'This relay does not support this connected service. Update the relay to connect it.',
                 credentialRequestFailed: 'The connected account request failed. Refresh connected services and try again.',
                 groupRequestFailed: 'The account pool request failed. Refresh connected services and try again.',
                 generationConflict: 'This account pool changed before the action completed. Refresh connected services and try again.',
@@ -4859,6 +4896,15 @@ export const en = {
     },
 
     sessionHandoff: {
+        transferSessionData: {
+          title: "Transfer session data",
+          subtitle: "Copies this session's conversation history to the other machine. Turn off if it's already there.",
+          checking: "Checking both machines for support…",
+          agentRequiresTransfer: "This Agent requires session data transfer between machines.",
+          updateRequired: "Update Happier on both machines to turn this off.",
+          sessionMissing: "This session's conversation history isn't on the target machine. Turn on “Transfer session data” and try again.",
+          workspaceRequiresTransfer: "Turn on “Transfer session data” to copy or sync workspace files.",
+        },
         activeWarning: {
             title: 'This session is still running here',
             message: 'Handoff will stop this session on this machine before transferring it to the selected machine.',
@@ -10075,6 +10121,7 @@ settingsSession: {
         providerStateSharingDegraded: 'Provider state sharing partially applied',
         connectedServiceRuntimeAuthRecoveryRecovered: 'Provider authentication recovered',
         connectedServiceRuntimeAuthRecoveryCancelled: 'Provider authentication recovery cancelled',
+        connectedServiceRuntimeAuthRecoveryStopped: "Provider recovery stopped; it will not retry automatically",
         runtimeConfigOutcomeAppliesBeforeNextMessage: 'Applies before your next message',
         runtimeConfigOutcomeQueuedUntilReady: 'Queued until ready',
         runtimeConfigOutcomeAlreadySet: 'Already set',

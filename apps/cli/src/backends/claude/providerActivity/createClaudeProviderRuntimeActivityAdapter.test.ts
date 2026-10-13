@@ -1,6 +1,7 @@
 import { describe, expect, it, vi } from 'vitest';
+import { logger } from '@/ui/logger';
 import type { SessionRuntimeActivityContribution } from '@/session/runtimeActivity/types';
-import { createClaudeProviderActivityLedger } from './createClaudeProviderActivityLedger';
+import { createClaudeProviderActivityLedger, readClaudeProviderTaskActivity } from './createClaudeProviderActivityLedger';
 import {
     createClaudeProviderRuntimeActivityAdapter,
     createClaudeProviderRuntimeActivityBindingOwner,
@@ -22,6 +23,24 @@ function harness() {
 }
 
 describe('createClaudeProviderRuntimeActivityAdapter', () => {
+    it('publishes settled inventory from the native stopped-child response while preserving another active child', async () => {
+        const { adapter, reports, markUnknown } = harness();
+        await adapter.activateObservation('observer-installed');
+        for (const taskId of ['stopped-child', 'sibling']) {
+            await adapter.observeActivity({ activity: { type: 'started', sessionId: 's1', taskId }, evidence: 'live' });
+        }
+        const response = { success: false, message: "Agent stopped-child was stopped by the user and won't be resumed. Treat its work as cancelled; only launch a new agent if the user explicitly asks." };
+        const activity = readClaudeProviderTaskActivity({ type: 'user', sessionId: 's1', toolUseResult: response,
+            message: { content: [{ type: 'tool_result', tool_use_id: 'send', content: JSON.stringify(response) }] } });
+        expect(activity?.type).toBe('terminal');
+        if (!activity) throw new Error('Expected native cancellation activity');
+        await adapter.observeActivity({ activity, evidence: 'live' });
+        expect(reports.at(-1)).toEqual({ state: 'active', activeCount: 1 });
+        await adapter.observeActivity({ activity: { type: 'terminal', sessionId: 's1', taskId: 'sibling' }, evidence: 'live' });
+        expect(reports.at(-1)).toEqual({ state: 'idle', activeCount: 0 });
+        expect(markUnknown).not.toHaveBeenCalled();
+    });
+
     it('publishes prelaunch inventory without installing the provider observer', async () => {
         const { adapter, reports } = harness();
 
@@ -86,7 +105,8 @@ describe('createClaudeProviderRuntimeActivityAdapter', () => {
         // A model/mode change relaunches the provider; Claude Code reports the previous process's
         // background agents as orphaned, so no terminal event for them can ever arrive.
         await adapter.handleRuntimeLoss('claude_agent_sdk_stream_finalized', { providerStopped: true });
-        expect(markUnknown).toHaveBeenLastCalledWith('claude_agent_sdk_stream_finalized');
+        expect(markUnknown).not.toHaveBeenCalled();
+        expect(reports.at(-1)).toEqual({ state: 'idle', activeCount: 0 });
         await adapter.publishBeforeRuntimeStart('claude-remote-provider-not-started');
         await adapter.activateObservation('claude-agent-sdk-provider-observer-installed');
         await adapter.publishCurrent('claude_agent_sdk_foreground_result');
@@ -248,7 +268,28 @@ describe('createClaudeProviderRuntimeActivityAdapter', () => {
         expect(ledger.hasActiveProviderTasks()).toBe(true);
     });
 
-    it('publishes unknown when observation is lost while provider tasks are still in flight', async () => {
+    it('settles a stopped provider to idle without requiring another launch', async () => {
+        const { adapter, ledger, reports, markUnknown } = harness();
+        await adapter.activateObservation('observer-installed');
+        await adapter.observeActivity({
+            activity: { type: 'started', sessionId: 's1', taskId: 'orphaned' }, evidence: 'live',
+        });
+        await adapter.handleRuntimeLoss('claude_process_exited', { providerStopped: true });
+        expect(ledger.hasActiveProviderTasks()).toBe(false);
+        expect(reports.at(-1)).toEqual({ state: 'idle', activeCount: 0 });
+        expect(markUnknown).not.toHaveBeenCalled();
+        await adapter.publishCurrent('later-inventory-refresh');
+        await adapter.observeActivity({
+            activity: { type: 'started', sessionId: 's1', taskId: 'replacement' }, evidence: 'live',
+        });
+        expect(reports.at(-1)).toEqual({ state: 'active', activeCount: 1 });
+        await adapter.observeActivity({
+            activity: { type: 'terminal', sessionId: 's1', taskId: 'replacement' }, evidence: 'live',
+        });
+        expect(reports.at(-1)).toEqual({ state: 'idle', activeCount: 0 });
+    });
+
+    it('keeps provider tasks when only observation is lost and the provider may still run them', async () => {
         const { adapter, ledger, reports, markUnknown } = harness();
         await adapter.activateObservation('observer-installed');
         await adapter.observeActivity({
@@ -259,26 +300,43 @@ describe('createClaudeProviderRuntimeActivityAdapter', () => {
         });
         expect(reports.at(-1)).toEqual({ state: 'active', activeCount: 2 });
 
-        await adapter.handleRuntimeLoss('claude_agent_sdk_stream_finalized', { providerStopped: true });
+        await adapter.handleRuntimeLoss('claude_agent_sdk_stream_finalized');
 
-        // The query that owned those tasks is gone: they can never settle, so the ledger drops them
-        // and the session projects unknown rather than staying active forever.
+        // The query that owned those tasks is gone: a non-empty ledger is evidence of ignorance,
+        // not of liveness, so the session must project unknown rather than stay active forever.
         expect(markUnknown).toHaveBeenLastCalledWith('claude_agent_sdk_stream_finalized');
         expect(reports.at(-1)).toEqual({ state: 'active', activeCount: 2 });
-        expect(ledger.hasActiveProviderTasks()).toBe(false);
-    });
-
-    it('keeps provider tasks when only observation is lost and the provider may still run them', async () => {
-        const { adapter, ledger, markUnknown } = harness();
-        await adapter.activateObservation('observer-installed');
-        await adapter.observeActivity({
-            activity: { type: 'started', sessionId: 's1', taskId: 'still-running' }, evidence: 'live',
-        });
-
-        await adapter.handleRuntimeLoss('claude_legacy_required_hook_failed');
-
-        expect(markUnknown).toHaveBeenLastCalledWith('claude_legacy_required_hook_failed');
+        // Inventory evidence is preserved for blocker diagnostics; only the projection changes.
         expect(ledger.hasActiveProviderTasks()).toBe(true);
+        const reportsAfterLoss = [...reports];
+        await adapter.publishCurrent('later-inventory-refresh');
+        expect(reports).toEqual(reportsAfterLoss);
+
+        await adapter.observeActivity({
+            activity: { type: 'started', sessionId: 's1', taskId: 'workflow-1' }, evidence: 'historical-replay',
+        });
+        expect(reports).toEqual(reportsAfterLoss);
+        const handback = readClaudeProviderTaskActivity({
+            type: 'user', sessionId: 's1',
+            origin: { kind: 'peer', from: 'workflow-1', senderTaskId: 'workflow-1', handback: true },
+        });
+        if (!handback) throw new Error('expected native handback report delivery');
+        await adapter.observeActivity({ activity: handback, evidence: 'live' });
+        expect(reports).toEqual(reportsAfterLoss);
+        await adapter.observeActivity({
+            activity: { type: 'progress', sessionId: 's1', taskId: 'workflow-1' }, evidence: 'live',
+        });
+        expect(reports.at(-1)).toEqual({ state: 'active', activeCount: 1 });
+        await adapter.observeActivity({
+            activity: { type: 'terminal', sessionId: 's1', taskId: 'workflow-1' }, evidence: 'live',
+        });
+        expect(markUnknown).toHaveBeenCalledTimes(2);
+        expect(ledger.hasActiveProviderTask({ sessionId: 's1', taskId: 'subagent-1' })).toBe(true);
+
+        await adapter.observeActivity({
+            activity: { type: 'started', sessionId: 's1', taskId: 'subagent-1' }, evidence: 'live',
+        });
+        expect(reports.at(-1)).toEqual({ state: 'active', activeCount: 1 });
     });
 
     it('does not republish a projection after an in-flight observation loss already marked unknown', async () => {
@@ -381,27 +439,58 @@ describe('createClaudeProviderRuntimeActivityAdapter', () => {
         expect(ledger.hasActiveProviderTasks()).toBe(false);
     });
 
-    it('keeps inventory truth when projection publication rejects', async () => {
+    it('keeps an uncertain admitted invocation unknown without hiding a fresh sibling or unconfirming it', async () => {
         const ledger = createClaudeProviderActivityLedger();
-        const report = vi.fn(async () => {
-            if (report.mock.calls.length === 2) throw new Error('publish failed');
-        });
-        const adapter = createClaudeProviderRuntimeActivityAdapter({
-            providerActivityLedger: ledger,
+        const states: Array<{ state: string; activeCount: number }> = [];
+        const adapter = createClaudeProviderRuntimeActivityAdapter({ providerActivityLedger: ledger,
             contributionHandle: {
-                report,
-                markUnknown: vi.fn(async () => {}),
-                dispose: vi.fn(async () => {}),
+                report: async (value) => { states.push(value); },
+                markUnknown: async () => { states.push({ state: 'unknown', activeCount: 0 }); },
+                dispose: async () => {},
             },
         });
-        await adapter.activateObservation('observer-installed');
-        await expect(adapter.observeActivity({
-            activity: { type: 'started', sessionId: 's1', taskId: 't1' }, evidence: 'live',
-        })).rejects.toThrow('publish failed');
-        expect(ledger.hasActiveProviderTasks()).toBe(true);
-        await expect(adapter.observeActivity({
-            activity: { type: 'progress', sessionId: 's1', taskId: 't1' }, evidence: 'live',
-        })).resolves.toBeUndefined();
-        expect(report).toHaveBeenCalledTimes(3);
+        await adapter.activateObservation('test');
+        await adapter.observeActivity({ activity: { type: 'started', source: 'hook-agent-resume',
+            confirmsActivity: false, sessionId: 's1', taskId: 'uncertain' }, evidence: 'live' });
+        expect(states.at(-1)).toEqual({ state: 'unknown', activeCount: 0 });
+        await adapter.observeActivity({ activity: { type: 'started', sessionId: 's1', taskId: 'fresh' }, evidence: 'live' });
+        await adapter.observeActivity({ activity: { type: 'started', source: 'hook-agent-resume',
+            confirmsActivity: false, sessionId: 's1', taskId: 'fresh' }, evidence: 'live' });
+        expect(states.at(-1)).toEqual({ state: 'active', activeCount: 1 });
+        await adapter.observeActivity({ activity: { type: 'terminal', sessionId: 's1', taskId: 'uncertain' }, evidence: 'live' });
+        expect(states.at(-1)).toEqual({ state: 'active', activeCount: 1 });
+        await adapter.observeActivity({ activity: { type: 'terminal', sessionId: 's1', taskId: 'fresh' }, evidence: 'live' });
+        expect(states.at(-1)).toEqual({ state: 'idle', activeCount: 0 });
+    });
+
+    it('keeps inventory truth when projection publication rejects', async () => {
+        const fileLog = vi.spyOn(logger, 'infoFile').mockImplementation(() => {});
+        try {
+            const ledger = createClaudeProviderActivityLedger();
+            const report = vi.fn(async () => {
+                if (report.mock.calls.length === 2) throw new Error('publish failed');
+            });
+            const adapter = createClaudeProviderRuntimeActivityAdapter({
+                providerActivityLedger: ledger,
+                contributionHandle: {
+                    report,
+                    markUnknown: vi.fn(async () => {}),
+                    dispose: vi.fn(async () => {}),
+                },
+            });
+            await adapter.activateObservation('observer-installed');
+            await expect(adapter.observeActivity({
+                activity: { type: 'started', sessionId: 's1', taskId: 't1' }, evidence: 'live',
+            })).rejects.toThrow('publish failed');
+            expect(fileLog).toHaveBeenCalledWith(expect.any(String), { state: 'active' });
+            expect(JSON.stringify(fileLog.mock.calls)).not.toContain('publish failed');
+            expect(ledger.hasActiveProviderTasks()).toBe(true);
+            await expect(adapter.observeActivity({
+                activity: { type: 'progress', sessionId: 's1', taskId: 't1' }, evidence: 'live',
+            })).resolves.toBeUndefined();
+            expect(report).toHaveBeenCalledTimes(3);
+        } finally {
+            fileLog.mockRestore();
+        }
     });
 });

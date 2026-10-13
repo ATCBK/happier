@@ -481,6 +481,15 @@ const promptLibraryUxRefinementTranslationExtension = {
 
 const sessionHandoffTranslationExtensions = {
   es: {
+    transferSessionData: {
+      title: "Transferir datos de la sesión",
+      subtitle: "Copia el historial de conversación de esta sesión a la otra máquina. Desactívalo si ya está allí.",
+      checking: "Comprobando la compatibilidad de ambas máquinas…",
+      agentRequiresTransfer: "Este Agente requiere transferir los datos de la sesión entre máquinas.",
+      updateRequired: "Actualiza Happier en ambas máquinas para desactivar esta opción.",
+      sessionMissing: "El historial de esta sesión no está en la máquina de destino. Activa «Transferir datos de la sesión» e inténtalo de nuevo.",
+      workspaceRequiresTransfer: "Activa «Transferir datos de la sesión» para copiar o sincronizar archivos del espacio de trabajo.",
+    },
     activeWarning: {
       title: 'Esta sesión sigue ejecutándose aquí',
       message: 'La transferencia detendrá esta sesión en esta máquina antes de transferirla a la máquina seleccionada.',
@@ -2482,6 +2491,19 @@ export const es: TranslationStructure = {
   },
 
   connectedServices: {
+    importAccounts: {
+        unknownResult: "El resultado de la importación es desconocido. Actualiza la lista de cuentas y revisa este perfil antes de reintentar.",
+        title: "Importar inicio de sesión existente",
+        failed: "No se pudo importar. Comprueba que has iniciado sesión en el equipo seleccionado y reinténtalo.",
+        actionDescription: "Copiar una sesión de una de tus máquinas",
+        description: "Copia la sesión al perfil cifrado. Los tokens de renovación compartidos pueden rotar y la app local puede pedirte que inicies sesión de nuevo.",
+        unsupported: "Importación no disponible. Elige otra máquina o actualiza su CLI.",
+        credentialsUnavailable: "No se encontró una sesión válida. Inicia sesión en la app local y vuelve a intentarlo.",
+        profileConflict: "El perfil pertenece a otra cuenta o cambió durante la importación. Elige un nombre nuevo.",
+        reauthorizationRequired: "Inicia sesión de nuevo en la app local y vuelve a intentarlo.",
+        imported: "Sesión importada",
+        refreshFailed: "La sesión se importó, pero la lista de cuentas no se actualizó. Abre de nuevo los servicios conectados.",
+    },
       subscription: {
           title: "Suscripción",
           currentPeriod: "Período actual",
@@ -2511,6 +2533,7 @@ export const es: TranslationStructure = {
       openai: "Clave API de OpenAI",
       anthropic: "Clave API de Anthropic",
       gemini: "Gemini de Google",
+      antigravity: 'Google Antigravity',
       github: "GitHub",
     },
     title: "Servicios conectados",
@@ -2761,6 +2784,21 @@ export const es: TranslationStructure = {
       resets: {
         use: "Usar",
         available: "Reinicio disponible",
+        remainingCount: ({ count }: { count: number }) => `Reinicios guardados: ${count}`,
+        appliesTo: ({ limits }: { limits: string }) => `Se aplica a: ${limits}`,
+        fiveHourLimit: "Límite de 5 horas",
+        weeklyLimit: "Límite semanal",
+        unavailableReasons: {
+          paused: "En pausa",
+          cooldown: "Esperando el periodo de espera",
+          ineligible: "No elegible",
+          not_selected: "No seleccionado",
+          provider_unavailable: "Proveedor no disponible",
+          not_started: "Aún no ha comenzado",
+          expired: "Caducado",
+          consumed: "Ya usado",
+          unknown: "No disponible ahora",
+        },
         rowLabel: ({ date, countdown }: { date: string; countdown: string }) => `Caduca ${date} · ${countdown}`,
         now: "ahora",
         inDays: ({ days }: { days: number }) => `en ${days}d`,
@@ -2782,6 +2820,12 @@ export const es: TranslationStructure = {
       pasteRedirectUrlPromptBody:
         "Después de completar OAuth, copia la URL final redirigida desde la barra de direcciones del navegador y pégala aquí.",
       providerOverrides: {
+        antigravity: {
+          connectWebDescription: "Siguiente paso: inicia sesión con Google. Antigravity muestra un código de autorización para copiar.",
+          pasteRedirectUrlPromptBody: "1) Inicia sesión con Google. 2) Copia el código de autorización que aparece en antigravity.google. 3) Pégalo abajo y mantén abierto este inicio de sesión.",
+          pasteRedirectUrlPlaceholder: "Pega el código de autorización de Antigravity",
+          pasteRedirectUrlTitle: "Pegar código de autorización",
+        },
         claudeSubscription: {
           connectWebDescription:
             "Siguiente paso: inicia sesión en la página que se abre. Claude puede mostrar un código en lugar de redirigir automáticamente.",
@@ -2867,6 +2911,7 @@ export const es: TranslationStructure = {
       addOauthProfileDeviceTitle: "Añadir con autenticación del dispositivo",
       addOauthProfileDeviceSubtitle: "Recomendado para web/entornos remotos",
       addOauthProfilePasteTitle: "Añadir pegando redirección",
+      signInWithGoogle: 'Iniciar sesión con Google',
       addOauthProfilePasteSubtitle: "Flujo manual de copiar/pegar URL de redirección",
       addOauthProfileBrowserTitle: "Añadir con navegador en la app",
       addOauthProfileBrowserSubtitle: "Usa un navegador integrado cuando sea compatible",
@@ -2910,6 +2955,7 @@ export const es: TranslationStructure = {
       errors: {
         credentialReferencedByGroup: "Esta cuenta todavía se usa en un Pool de cuentas. Quítala del Pool y vuelve a intentarlo.",
         credentialNotFound: "Esta cuenta conectada ya se eliminó.",
+        serviceUnsupportedServer: 'Este relay no admite este servicio conectado. Actualiza el relay para conectarlo.',
         credentialRequestFailed: "La solicitud de la cuenta conectada falló. Actualiza los servicios conectados y vuelve a intentarlo.",
         groupRequestFailed: "La solicitud del Pool de cuentas falló. Actualiza los servicios conectados y vuelve a intentarlo.",
         generationConflict: "Este Pool de cuentas cambió antes de que terminara la acción. Actualiza los servicios conectados y vuelve a intentarlo.",
@@ -10716,6 +10762,7 @@ settingsSession: {
     providerStateSharingDegraded: "Compartición de estado del proveedor aplicada parcialmente",
     connectedServiceRuntimeAuthRecoveryRecovered: "Autenticación del proveedor recuperada",
     connectedServiceRuntimeAuthRecoveryCancelled: "Recuperación de autenticación del proveedor cancelada",
+        connectedServiceRuntimeAuthRecoveryStopped: "La recuperación del proveedor se detuvo; no se reintentará automáticamente",
     runtimeConfigOutcomeAppliesBeforeNextMessage: "Se aplicará antes de tu próximo mensaje",
     runtimeConfigOutcomeQueuedUntilReady: "En cola hasta que esté listo",
     runtimeConfigOutcomeAlreadySet: "Ya está configurado",
