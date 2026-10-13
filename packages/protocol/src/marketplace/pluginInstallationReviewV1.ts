@@ -3,6 +3,7 @@ import { z } from 'zod';
 
 import { asProtocolZod } from '../plugins/actions/internalProtocolZodAdapter.js';
 import { PluginUpdatePolicyV1Schema, type PluginUpdatePolicyV1 } from './pluginUpdatePolicyV1.js';
+import { MarketplaceIndexSourceKindV1Schema, type MarketplaceIndexSourceKindV1 } from './marketplaceIndexV1.js';
 import {
   ConnectedAccountMaterializationRequestSchema,
   ConnectedAccountPurposeIdSchema,
@@ -193,7 +194,7 @@ export type PluginInstallationReview = Readonly<{
         registryProfileId?: string;
         marketplaceSource?: Readonly<{
           id: string;
-          kind: 'curated' | 'community-npm' | 'user';
+          kind: MarketplaceIndexSourceKindV1;
           sourceUrl: string;
         }>;
       }>;
@@ -315,7 +316,7 @@ export const PluginInstallationReviewSchema: z.ZodType<PluginInstallationReview>
       registryProfileId: ReviewNonEmptyStringSchema.optional(),
       marketplaceSource: z.object({
         id: ReviewNonEmptyStringSchema,
-        kind: z.enum(['curated', 'community-npm', 'user']),
+        kind: MarketplaceIndexSourceKindV1Schema,
         sourceUrl: ReviewNonEmptyStringSchema,
       }).strict().optional(),
     }).strict(),

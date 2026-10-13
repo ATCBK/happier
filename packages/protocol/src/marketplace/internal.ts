@@ -28,11 +28,6 @@ export {
 } from './pluginInstallationReviewV1.js';
 
 export {
-  HostPrivateMarketplaceSourceRegistryMutationResponseV1Schema,
-  type HostPrivateMarketplaceSourceRegistryMutationResponseV1,
-} from './marketplaceSourceRegistryMutationResponseV1.js';
-
-export {
   parseMarketplaceIndexSourceSnapshotV1,
   readMarketplaceNpmDiscoveryProjectionV1,
   type MarketplaceNpmDiscoveryProjectionReadV1Result,

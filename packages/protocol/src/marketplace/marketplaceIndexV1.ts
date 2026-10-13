@@ -6,10 +6,12 @@ import { PluginDiagnosticTextV1Schema } from '../daemon/pluginContributionIntros
 import { createCanonicalJsonSigningInput } from '../crypto/canonicalJson.js';
 import type { PluginCompatibilityProjectionV1 } from '../plugins/availability/v1.js';
 import { PluginIdSchema } from '../plugins/pluginId.js';
-import { PluginEnginesV2Schema } from '../plugins/manifest/v2.js';
+import { parseQualifiedPluginContributionKey } from '../plugins/contributionIdentity.js';
+import { PluginEnginesV2Schema } from '../plugins/manifest/engines.js';
 import { NpmRegistryOriginV1Schema } from '../rpc/npmRegistryProfiles.js';
 import { asProtocolZod } from "../plugins/actions/internalProtocolZodAdapter.js";
 import { PluginUpdatePolicyV1Schema } from './pluginUpdatePolicyV1.js';
+import { REGISTRY_FORMAT_KINDS_V1, RegistryFormatV1Schema } from '../registries/registrySourcesV1.js';
 
 const NonEmptyText = z.string().trim().min(1);
 const Identifier = z.string().trim().min(1).regex(/^[a-z0-9][a-z0-9._-]*$/);
@@ -220,16 +222,31 @@ export function deriveMarketplaceNpmCompatibilityPlatformsV1(
   return platformOrder.filter((platform) => supported.has(platform));
 }
 
+export const HappierPickV1Schema = lazyZodSchema(() => z.object({
+  kind: z.enum(['skill', 'mcpServer', 'agent']), format: RegistryFormatV1Schema,
+  sourceUrl: HttpsUrl, itemId: z.string(), path: z.string().optional(),
+}).strict().superRefine((pick, context) => {
+  if (pick.format === 'happier-catalog' || !REGISTRY_FORMAT_KINDS_V1[pick.format].includes(pick.kind)) {
+    context.addIssue({ code: 'custom', path: ['format'], message: 'Pick must point into a registry for its kind' });
+  }
+}));
+export type HappierPickV1 = z.infer<typeof HappierPickV1Schema>;
+
 export const MarketplaceIndexSourceSnapshotV1Schema = lazyZodSchema(() => z.object({
-  source: z.object({ id: OpaqueId, title: NonEmptyText, kind: MarketplaceIndexSourceKindV1Schema, sourceUrl: HttpsUrl }).strict(),
+  source: z.object({ id: z.union([OpaqueId, z.string().refine(value => parseQualifiedPluginContributionKey(value) !== null,
+    'Expected a canonical qualified plugin contribution key')]), title: NonEmptyText, kind: MarketplaceIndexSourceKindV1Schema, sourceUrl: HttpsUrl }).strict(),
   freshness: z.object({
     state: z.enum(['fresh', 'stale', 'stale-offline', 'unavailable', 'auth-unavailable', 'corrupt']),
     fetchedAtMs: z.number().int().nonnegative().nullable(),
     staleSinceMs: z.number().int().nonnegative().optional(),
   }).strict(),
   entries: z.array(MarketplaceIndexEntryV1Schema),
+  picks: z.array(HappierPickV1Schema).default([]),
   diagnostics: z.array(MarketplaceDiagnosticV1Schema),
 }).strict().superRefine((value, context) => {
+  if (value.source.kind !== 'curated' && value.picks.length > 0) {
+    context.addIssue({ code: 'custom', path: ['picks'], message: 'Only curated catalogs may carry picks' });
+  }
   value.entries.forEach((entry, index) => {
     const invalid = value.source.kind === 'curated'
       ? entry.review.status === 'unreviewed'
@@ -260,22 +277,6 @@ export function parseMarketplaceIndexSourceSnapshotV1(value: unknown): Marketpla
 
 /** A processing page, not a catalog capacity; continuation retains the rest. */
 export const MARKETPLACE_INDEX_PAGE_MAX_SIZE_V1 = 100;
-
-export const MarketplaceIndexQueryV1Schema = lazyZodSchema(() => z.object({
-  text: z.string().trim().default(''),
-  cursor: z.string().trim().min(1).nullable().default(null),
-  limit: z.number().int().min(1).max(MARKETPLACE_INDEX_PAGE_MAX_SIZE_V1).default(50),
-  filters: z.object({
-    categories: z.array(Identifier).optional(),
-    platforms: z.array(z.enum(['darwin', 'linux', 'windows', 'web', 'ios', 'android'])).optional(),
-    sourceKinds: z.array(MarketplaceIndexSourceKindV1Schema).optional(),
-    sourceIds: z.array(OpaqueId).optional(),
-    /** Exact-listing lookup: one query resolves one source's listing by plugin id. */
-    pluginIds: z.array(asProtocolZod(PluginIdSchema)).optional(),
-    includeUnavailable: z.boolean().optional(),
-  }).strict().default({}),
-}).strict());
-export type MarketplaceIndexQueryV1 = z.infer<typeof MarketplaceIndexQueryV1Schema>;
 
 /**
  * The one admission projection for a listing.
@@ -333,7 +334,7 @@ export type MarketplaceListingInstallDecisionV1 =
  * This decides listing admission only — exact package/version/SRI/registry
  * verification stays with the daemon acquisition owner.
  */
-export function decideMarketplaceListingInstallV1(item: MarketplaceIndexItemV1): MarketplaceListingInstallDecisionV1 {
+export function decideMarketplaceListingReviewV1(item: Readonly<Pick<MarketplaceIndexItemV1, 'source' | 'review'>>): MarketplaceListingInstallDecisionV1 {
   if (item.source.kind !== 'curated' && item.source.kind !== 'user' && item.source.kind !== 'community-npm') {
     return { installable: false, block: 'unsupported-source-kind' };
   }
@@ -344,7 +345,16 @@ export function decideMarketplaceListingInstallV1(item: MarketplaceIndexItemV1):
     if (item.review.status !== 'approved' || item.review.reviewedAt === null) {
       return { installable: false, block: 'curated-review-not-approved' };
     }
-  } else if (item.review.status !== 'unreviewed' || item.admission.install !== 'full-review') {
+  } else if (item.review.status !== 'unreviewed') {
+    return { installable: false, block: 'full-review-unavailable' };
+  }
+  return { installable: true };
+}
+
+export function decideMarketplaceListingInstallV1(item: MarketplaceIndexItemV1): MarketplaceListingInstallDecisionV1 {
+  const review = decideMarketplaceListingReviewV1(item);
+  if (!review.installable) return review;
+  if (item.source.kind !== 'curated' && item.admission.install !== 'full-review') {
     return { installable: false, block: 'full-review-unavailable' };
   }
   if (item.freshness.state !== 'fresh') {

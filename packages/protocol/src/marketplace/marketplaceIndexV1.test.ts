@@ -6,7 +6,6 @@ import {
   deriveMarketplaceNpmCompatibilityPlatformsV1,
   draftMarketplaceRegistryProfileV1,
   MarketplaceIndexQueryResultV1Schema,
-  MarketplaceIndexQueryV1Schema,
   MarketplaceIndexEntryV1Schema,
   MarketplaceNpmDiscoveryProjectionV1Schema,
   MarketplaceIndexSourceSnapshotV1Schema,
@@ -20,7 +19,20 @@ import {
 import { PluginCompatibilityProjectionV1Schema } from '../plugins/availability/v1.js';
 
 describe('MarketplaceIndexV1', () => {
-  it('preserves large listing facts and filters through canonical projections', () => {
+  it('admits registry pointers only as curated picks and preserves strict catalog envelopes', () => {
+    const pick = { kind: 'skill', format: 'git', sourceUrl: 'https://github.com/example/skills', itemId: '', path: 'review' };
+    const snapshot = { source: { id: 'catalog', title: 'Picks', kind: 'curated', sourceUrl: 'https://marketplace.happier.dev/catalog.json' },
+      freshness: { state: 'fresh', fetchedAtMs: null }, entries: [], diagnostics: [], picks: [pick] };
+    expect(parseMarketplaceIndexSourceSnapshotV1(snapshot).picks).toEqual([pick]);
+    expect(MarketplaceIndexSourceSnapshotV1Schema.safeParse({ ...snapshot, source: { ...snapshot.source, kind: 'user' } }).success).toBe(false);
+    expect(MarketplaceIndexSourceSnapshotV1Schema.safeParse({ ...snapshot, picks: [{ ...pick, kind: 'plugin' }] }).success).toBe(false);
+    expect(MarketplaceIndexSourceSnapshotV1Schema.safeParse({ ...snapshot, picks: [{ ...pick, format: 'acp-registry' }] }).success).toBe(false);
+    expect(MarketplaceIndexSourceSnapshotV1Schema.safeParse({ ...snapshot, picks: [{ ...pick, sourceUrl: 'https://user:token@github.com/example/skills' }] }).success).toBe(false);
+    expect(MarketplaceIndexSourceSnapshotV1Schema.safeParse({ ...snapshot, extra: true }).success).toBe(false);
+    const { picks: _picks, ...prior } = snapshot;
+    expect(parseMarketplaceIndexSourceSnapshotV1(prior).picks).toEqual([]);
+  });
+  it('preserves large listing facts through canonical projections', () => {
     const ids = Array.from({ length: 140 }, (_, index) => `entry-${index}`);
     const categories = Array.from({ length: 40 }, (_, index) => `category-${index}-${'a'.repeat(140)}`);
     const entry = {
@@ -37,19 +49,6 @@ describe('MarketplaceIndexV1', () => {
       version: 1, pluginId: entry.pluginId, manifestDigest: entry.manifestDigest, display: entry.display, summary: entry.summary,
     }).summary).toEqual(entry.summary);
   });
-  it('preserves large query filter collections without competing count cutoffs', () => {
-    const filters = {
-      categories: Array.from({ length: 40 }, (_, index) => `category-${index}`),
-      pluginIds: Array.from({ length: 12 }, (_, index) => `acme.plugin-${index}`),
-      platforms: Array.from({ length: 8 }, () => 'linux'),
-      sourceKinds: Array.from({ length: 5 }, () => 'user'),
-    };
-    expect(MarketplaceIndexQueryV1Schema.parse({ filters }).filters).toEqual(filters);
-  });
-  it('preserves full query text beyond the former cutoff', () => {
-    const text = 'terminal theme '.repeat(100).trim();
-    expect(MarketplaceIndexQueryV1Schema.parse({ text }).text).toBe(text);
-  });
 
   it('preserves valid catalogs beyond the former entry cutoff', () => {
     const entry = {
@@ -63,18 +62,16 @@ describe('MarketplaceIndexV1', () => {
       source: { id: `source-${'a'.repeat(300)}`, title: 'title'.repeat(200), kind: 'user', sourceUrl: `https://catalog.example/index.json?key=${'x'.repeat(3_000)}` },
       freshness: { state: 'fresh', fetchedAtMs: 1 }, entries: Array.from({ length: 5_001 }, () => entry), diagnostics: [],
     };
-    expect(MarketplaceIndexSourceSnapshotV1Schema.parse(catalog)).toEqual(catalog);
-    expect(parseMarketplaceIndexSourceSnapshotV1(catalog)).toEqual(catalog);
+    expect(MarketplaceIndexSourceSnapshotV1Schema.parse(catalog)).toEqual({ ...catalog, picks: [] });
+    expect(parseMarketplaceIndexSourceSnapshotV1(catalog)).toEqual({ ...catalog, picks: [] });
   });
-  it('preserves every queried source and diagnostic beyond the former count limits', () => {
+  it('preserves source diagnostics through the exact review projection', () => {
     const diagnostics = Array.from({ length: 140 }, (_, index) => ({ code: `reason_${index}`, message: `Reason ${index}` }));
-    const sources = Array.from({ length: 70 }, (_, index) => ({
-      source: { id: `source-${index}`, title: `Source ${index}`, kind: 'user' as const, sourceUrl: `https://catalog.example/${index}.json` },
+    const sources = [{
+      source: { id: 'source', title: 'Source', kind: 'user' as const, sourceUrl: 'https://catalog.example/index.json' },
       freshness: { state: 'fresh' as const, fetchedAtMs: 1 },
       diagnostics,
-    }));
-    const query = MarketplaceIndexQueryV1Schema.parse({ filters: { sourceIds: sources.map(({ source }) => source.id) } });
-    expect(query.filters.sourceIds).toHaveLength(70);
+    }];
     expect(MarketplaceIndexSourceSnapshotV1Schema.parse({ ...sources[0], entries: [] }).diagnostics).toEqual(diagnostics);
     expect(MarketplaceIndexQueryResultV1Schema.parse({ revision: 1, items: [], nextCursor: null, sources, diagnostics }))
       .toEqual({ revision: 1, items: [], nextCursor: null, sources, diagnostics });
@@ -141,8 +138,7 @@ describe('MarketplaceIndexV1', () => {
     expect(MarketplaceNpmDiscoveryProjectionV1Schema.safeParse(projection).success).toBe(true);
   });
 
-  it('bounds query page size and rejects malformed source entries', () => {
-    expect(MarketplaceIndexQueryV1Schema.safeParse({ text: 'x'.repeat(257), limit: 101, cursor: null, filters: {} }).success).toBe(false);
+  it('rejects malformed source entries', () => {
     expect(MarketplaceIndexSourceSnapshotV1Schema.safeParse({
       source: { id: 'user', title: 'User', kind: 'user', sourceUrl: 'https://catalog.example/index.json' },
       freshness: { state: 'fresh', fetchedAtMs: 1 },
@@ -289,7 +285,7 @@ describe('parseMarketplaceIndexSourceSnapshotV1', () => {
   };
   const snapshot = {
     source: { id: 'user', title: 'User', kind: 'user', sourceUrl: 'https://catalog.example/index.json' },
-    freshness: { state: 'fresh', fetchedAtMs: 1 }, entries: [entry], diagnostics: [],
+    freshness: { state: 'fresh', fetchedAtMs: 1 }, entries: [entry], picks: [], diagnostics: [],
   };
 
   it('preserves an absent author engine floor in the canonical listing and its reader', () => {

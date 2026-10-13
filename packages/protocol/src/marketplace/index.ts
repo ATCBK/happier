@@ -1,4 +1,6 @@
 export * from './marketplaceIndexV1.js';
+export * from './communityNpmDiscoveryV1.js';
+export * from './marketplaceSourceListingsV1.js';
 
 export {
   readMarketplaceNpmDiscoveryProjectionV1,
@@ -18,24 +20,10 @@ export {
 } from './expectedMarketplaceListingV1.js';
 
 export {
-  MarketplaceSourceOriginV1Schema,
-  MarketplaceSourceRegistryV1Schema,
-  MarketplaceSourceRegistryMutationV1Schema,
-  MarketplaceSourceV1Schema,
-  createCuratedMarketplaceSourceV1,
-  createMarketplaceSourceV1,
-  createDefaultCuratedMarketplaceSourceRegistryV1,
   deriveMarketplaceSourceId,
   deriveMarketplaceSourceTitle,
-  seedCuratedMarketplaceSourceRegistryV1,
   normalizeMarketplaceSourceUrlV1,
-  resolvePreferredMarketplaceSource,
   DEFAULT_CURATED_MARKETPLACE_SOURCE_DESCRIPTION,
   DEFAULT_CURATED_MARKETPLACE_SOURCE_TITLE,
   DEFAULT_CURATED_MARKETPLACE_SOURCE_URL,
-  type MarketplaceSourceOriginV1,
-  type MarketplaceSourceRecordInputV1,
-  type MarketplaceSourceRegistryV1,
-  type MarketplaceSourceRegistryMutationV1,
-  type MarketplaceSourceV1,
 } from './marketplaceSourceRegistryV1.js';

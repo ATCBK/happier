@@ -2,11 +2,15 @@ import { lazyZodSchema } from '../lazyZodSchema.js';
 import { z } from 'zod';
 
 import { NpmRegistryProfileIdV1Schema } from '../rpc/npmRegistryProfiles.js';
+import { COMMUNITY_NPM_MARKETPLACE_SOURCE_ID_V1 } from './marketplaceSourceRegistryV1.js';
+export { COMMUNITY_NPM_MARKETPLACE_SOURCE_ID_V1 } from './marketplaceSourceRegistryV1.js';
 
 import {
   MarketplaceIndexEntryV1Schema,
   MarketplaceIndexSourceSnapshotV1Schema,
-  type MarketplaceIndexItemV1,
+  decideMarketplaceListingReviewV1,
+  type MarketplaceIndexEntryV1,
+  type MarketplaceIndexSourceSnapshotV1,
 } from './marketplaceIndexV1.js';
 import {
   PluginUpdatePolicyV1Schema,
@@ -17,7 +21,6 @@ const distribution = entry.distribution.shape;
 const source = MarketplaceIndexSourceSnapshotV1Schema.shape.source.shape;
 
 /** The one synthesized community npm source id; it is never a persisted row. */
-export const COMMUNITY_NPM_MARKETPLACE_SOURCE_ID_V1 = 'marketplace:community-npm';
 
 /**
  * The untrusted exact distribution facts a present user acted on when they
@@ -99,9 +102,12 @@ export type ExpectedMarketplaceListingV1 = z.infer<typeof ExpectedMarketplaceLis
  * comes from a catalog document.
  */
 export function projectExpectedMarketplaceListing(
-  listing: MarketplaceIndexItemV1,
+  listing: Pick<MarketplaceIndexEntryV1, 'pluginId' | 'publisher' | 'distribution' | 'manifestDigest' | 'review' | 'updatePolicy'>
+    & Readonly<{ source: MarketplaceIndexSourceSnapshotV1['source'] }>,
   registryProfileId: string | null,
 ): ExpectedMarketplaceListingV1 {
+  const reviewDecision = decideMarketplaceListingReviewV1(listing);
+  if (!reviewDecision.installable) throw Object.assign(new Error(reviewDecision.block), { code: reviewDecision.block });
   const distribution = {
     pluginId: listing.pluginId,
     publisher: listing.publisher,
