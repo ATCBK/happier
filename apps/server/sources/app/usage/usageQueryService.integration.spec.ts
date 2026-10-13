@@ -85,6 +85,40 @@ describe("usageQueryService scoped aggregation", () => {
         ]);
     });
 
+    it("counts real messages only within their Account, publication ceiling and half-open query range", async () => {
+        const owner = await createUsageOwner("message-publication");
+        const partial = await db.session.create({ data: {
+            accountId: owner.accountId, tag: "message-partial", encryptionMode: "e2ee", metadata: "ciphertext",
+            currentStorageState: "server_partial", acceptedThroughServerSeq: 4, seq: 5,
+        } });
+        const foreign = await createUsageOwner("message-foreign");
+        await db.session.update({ where: { id: owner.sessionId }, data: { currentStorageState: "hosted" } });
+        await db.usageEvent.createMany({ data: [
+            owner,
+            { accountId: owner.accountId, sessionId: partial.id },
+            foreign,
+        ].map(subject => buildUsageEvent({ ...subject, observedAt: "1970-01-01T00:00:00.150Z",
+            scope: "turn_delta", totalTokens: 1 })) });
+        await db.sessionMessage.createMany({ data: [
+            { sessionId: owner.sessionId, seq: 1, at: 100 },
+            { sessionId: owner.sessionId, seq: 2, at: 200 },
+            { sessionId: partial.id, seq: 1, at: 100 },
+            { sessionId: partial.id, seq: 2, at: 150 },
+            { sessionId: partial.id, seq: 3, at: 90 },
+            { sessionId: partial.id, seq: 4, at: 199 },
+            { sessionId: partial.id, seq: 5, at: 150 },
+            { sessionId: foreign.sessionId, seq: 1, at: 150 },
+        ].map(({ at, ...row }) => ({ ...row, content: { t: "encrypted", c: "ciphertext" }, createdAt: new Date(at) })) });
+        const request = UsageAnalyticsQueryRequestSchema.parse({ includeMessageStats: true,
+            dateRange: { startMs: 100, endMs: 200 },
+            filters: { sessionIds: [owner.sessionId, partial.id, foreign.sessionId] },
+        });
+        const result = await queryUsageAnalytics(owner.accountId, request);
+        expect(result.messageStats).toEqual({ sessionCount: 2, messageCount: 4 });
+        await db.session.update({ where: { id: partial.id }, data: { acceptedThroughServerSeq: 1 } });
+        expect((await queryUsageAnalytics(owner.accountId, request)).messageStats).toEqual({ sessionCount: 2, messageCount: 2 });
+    });
+
     it("filters both real QA Haiku 4.5 spellings through their one model identity", async () => {
         const owner = await createUsageOwner("haiku-aliases");
         await db.usageEvent.createMany({ data: ["claude-haiku-4-5", "claude-haiku-4-5-20251001", "claude-haiku-5-5"].map((modelId, index) => ({
