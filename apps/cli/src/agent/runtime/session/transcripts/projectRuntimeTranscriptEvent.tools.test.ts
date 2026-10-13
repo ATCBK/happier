@@ -10,6 +10,8 @@ import { NormalizedToolTurnChangeTracker } from '@/agent/tools/diff/normalizedTo
 import { createAcpToolIdentity } from '@/agent/acp/toolCalls';
 import { normalizeToolCallV2 } from '@/agent/tools/normalization';
 import type { EphemeralSendOutcome } from '@/api/session/client/transcript/ephemeralSendOutcome';
+import { buildAcpAgentMessageEnvelope } from '@/api/session/acpMessageEnvelope';
+import { TranscriptRawAgentRecordV1Schema } from '@happier-dev/protocol/sessions/messages/transcriptRawRecordV1';
 
 let nextRuntimeEventSequence = 0;
 
@@ -104,6 +106,78 @@ function mergedToolProgress(overrides: Record<string, unknown> = {}) {
 }
 
 describe('projectRuntimeTranscriptEvent tool lifecycle', () => {
+  it('settles only pending foreground tools and preserves the projection identity of late native results', async () => {
+    const { createRuntimeTranscriptProjector } = await import('./projectRuntimeTranscriptEvent');
+    const fixture = createRuntimeToolProjectionFixture();
+    const projector = createRuntimeTranscriptProjector();
+    const project = (event: Record<string, unknown>) => projector({
+      session: fixture.session, provider: 'claude', runtimeMessageDeltaBridge: fixture.runtimeMessageDeltaBridge,
+      event: canonicalRuntimeEvent({ sessionId: 'session-1', emittedAtMs: nextRuntimeEventSequence + 1, ...event }),
+    });
+    for (const scope of [{ turnId: 'turn-1' }, { turnId: 'other-turn' },
+      { turnId: 'turn-1', sidechainId: 'child' }, {}]) {
+      await project({ kind: 'tool-call', ...scope, toolCallId: 'pending-action', toolName: 'action_execute',
+        input: { actionId: 'session.presentation.apply', input: { intent: { kind: 'viewer.open', source: 'computer' } } } });
+    }
+    for (const isError of [false, true]) {
+      await project({ kind: 'tool-call', turnId: 'turn-1', toolCallId: `settled-${isError}`, toolName: 'action_execute', input: {} });
+      await project({ kind: 'tool-result', turnId: 'turn-1', toolCallId: `settled-${isError}`, output: { ok: !isError }, isError });
+    }
+    await project({ kind: 'turn-cancelled', turnId: 'turn-1', cause: 'user' });
+    const resultId = toolIdentity({ toolCallId: 'pending-action' }).resultLocalId;
+    expect([...fixture.durableRows.values()].filter(row => row.type === 'tool-result')).toEqual([
+      expect.objectContaining({ callId: 'settled-false', output: { ok: true }, isError: false }),
+      expect.objectContaining({ callId: 'settled-true', output: { ok: false }, isError: true }),
+      expect.objectContaining({ callId: 'pending-action', id: resultId, isError: true,
+        output: expect.objectContaining({ status: 'cancelled' }) }),
+    ]);
+    const resultsBeforeDuplicate = fixture.durableWrites.filter(write => write.body.type === 'tool-result');
+    await project({ kind: 'turn-cancelled', turnId: 'turn-1', cause: 'user' });
+    await project({ kind: 'turn-cancelled', turnId: 'empty-turn', cause: 'user' });
+    expect(fixture.durableWrites.filter(write => write.body.type === 'tool-result')).toEqual(resultsBeforeDuplicate);
+    await project({ kind: 'tool-result', turnId: 'turn-1', toolCallId: 'pending-action', output: { ok: true }, isError: false });
+    expect(fixture.durableRows.get(resultId)).toMatchObject({ callId: 'pending-action', output: { ok: true }, isError: false });
+    expect(fixture.durableWrites.filter(write => write.localId === resultId)).toHaveLength(2);
+    for (const { body } of fixture.durableWrites) {
+      const envelope = buildAcpAgentMessageEnvelope({ provider: 'claude', body });
+      expect(TranscriptRawAgentRecordV1Schema.parse(envelope.content)).toMatchObject({ type: 'acp', data: body });
+    }
+  });
+
+  it('retains the settlement obligation when durable result custody is refused', async () => {
+    const { createRuntimeTranscriptProjector } = await import('./projectRuntimeTranscriptEvent');
+    const fixture = createRuntimeToolProjectionFixture();
+    const projector = createRuntimeTranscriptProjector();
+    const project = (event: Record<string, unknown>) => projector({ session: fixture.session, provider: 'claude',
+      runtimeMessageDeltaBridge: fixture.runtimeMessageDeltaBridge,
+      event: canonicalRuntimeEvent({ sessionId: 'session-1', turnId: 'turn-1', emittedAtMs: 10, ...event }),
+    });
+    await project({ kind: 'tool-call', toolCallId: 'pending-action', toolName: 'action_execute', input: {} });
+    fixture.session.enqueueAgentMessageCommitted.mockResolvedValueOnce({ persisted: false, delivered: false });
+    await expect(project({ kind: 'turn-cancelled', cause: 'user' })).rejects.toMatchObject({
+      code: 'runtime_transcript_required_admission_failed', reason: 'durable_custody_rejected', eventKind: 'tool-result',
+    });
+    await project({ kind: 'turn-cancelled', cause: 'user' });
+    expect([...fixture.durableRows.values()].filter(row => row.type === 'tool-result')).toEqual([
+      expect.objectContaining({ callId: 'pending-action', isError: true, output: expect.objectContaining({ status: 'cancelled' }) }),
+    ]);
+  });
+
+  it.each(['turn-complete', 'turn-failed'] as const)('settles a missing result as failed rather than success on %s', async kind => {
+    const { createRuntimeTranscriptProjector } = await import('./projectRuntimeTranscriptEvent');
+    const fixture = createRuntimeToolProjectionFixture();
+    const projector = createRuntimeTranscriptProjector();
+    const project = (event: Record<string, unknown>) => projector({ session: fixture.session, provider: 'claude',
+      runtimeMessageDeltaBridge: fixture.runtimeMessageDeltaBridge,
+      event: canonicalRuntimeEvent({ sessionId: 'session-1', turnId: 'turn-1', emittedAtMs: 10, ...event }),
+    });
+    await project({ kind: 'tool-call', toolCallId: 'pending-action', toolName: 'action_execute', input: {} });
+    await project({ kind, ...(kind === 'turn-failed' ? { diagnostic: { code: 'provider_failed', severity: 'error' } } : {}) });
+    expect([...fixture.durableRows.values()].filter(row => row.type === 'tool-result')).toEqual([
+      expect.objectContaining({ callId: 'pending-action', isError: true, output: expect.objectContaining({ status: 'failed' }) }),
+    ]);
+  });
+
   it.each([{}, { sidechainId: 'child-1' }, { sidechainId: 'child-1', turnId: 'old-turn', agentTurnId: 'native-child' }])(
     'retains session-scoped tools without flushing or changing the foreground turn: %j', async (scope) => {
       const { projectRuntimeTranscriptEvent } = await import('./projectRuntimeTranscriptEvent');
