@@ -70,6 +70,8 @@
     "ci:act": "bash scripts/ci/run-act-tests.sh",
     "test": "apps/stack/bin/hstack-exec --script=test:local",
     "test:local": "yarn -s test:unit:local",
+    "test:gate-unit": "apps/stack/bin/hstack-exec --script=test:gate-unit:local",
+    "test:gate-unit:local": "node --experimental-strip-types scripts/testing/runRootTests.ts gate-unit",
     "test:plugin-workspaces": "apps/stack/bin/hstack-exec --script=test:plugin-workspaces:local",
     "test:plugin-workspaces:local": "node --experimental-strip-types scripts/testing/runPluginWorkspaceTests.ts",
     "test:import-cycles": "yarn workspace @happier-dev/cli test:import-cycles",
