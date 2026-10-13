@@ -1,7 +1,7 @@
 import { z } from 'zod';
 import { lazyZodSchema } from '../../lazyZodSchema.js';
 import { createStoredReadSchema } from '../../json/storedReadSchema.js';
-import { applyPromptStackIntentV1, PromptStackEntryV1Schema, PromptStackSetEnabledIntentV1Schema } from '../../prompts/library/promptStacksV1.js';
+import { applyPromptStackIntentV1, PromptStackEntryV1Schema, PromptStackEntryAuthoringV1Schema, PromptStackSetEnabledIntentV1Schema } from '../../prompts/library/promptStacksV1.js';
 import { PromptDocArtifactRefV1Schema, PromptArtifactRefV1Schema } from '../../prompts/library/promptArtifactRefsV1.js';
 import { readSessionBotV1 } from '../identity/sessionBotV1.js';
 import { assertPromptStackArtifactHeaderV1, PromptStackPreparationError, type PromptStackSystemAppendInputV1 } from '../../prompts/library/resolvePromptStackSystemAppendBlocksV1.js';
@@ -12,9 +12,8 @@ export const SessionPromptStackV1StoredSchema = createStoredReadSchema(SessionPr
 export type SessionPromptStackV1 = Readonly<z.infer<typeof SessionPromptStackV1Schema>>;
 export const SessionDisabledInheritedEntryIdsV1Schema = lazyZodSchema(() => z.array(z.string().min(1))
   .refine((ids) => new Set(ids).size === ids.length, { message: 'Duplicate inherited entry id' }));
-const NewEntrySchema = lazyZodSchema(() => PromptStackEntryV1Schema.extend({
+const NewEntrySchema = lazyZodSchema(() => PromptStackEntryAuthoringV1Schema.extend({
   ref: PromptArtifactRefV1Schema.strict(),
-  placement: z.literal('system_append').default('system_append'),
 }).strict());
 export const SessionContextIntentV1Schema = lazyZodSchema(() => z.discriminatedUnion('kind', [
   z.object({ kind: z.literal('set'), entry: NewEntrySchema }).strict(),

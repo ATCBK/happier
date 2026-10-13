@@ -40,8 +40,13 @@ describe('stored Session voice preference', () => {
     expect(readSessionVoicePreferenceV1(stored)).toEqual(preference);
     expect(SessionVoicePreferenceV1Schema.safeParse(stored).success).toBe(false);
     const metadata = { work: { memoryEnabled: false, voicePreference: stored } };
-    expect(writeSessionVoicePreferenceV1ToMetadata(metadata, readSessionVoicePreferenceV1(stored)))
-      .toEqual({ work: { memoryEnabled: false, voicePreference: preference } });
+    const written: Record<string, unknown> = JSON.parse(JSON.stringify(writeSessionVoicePreferenceV1ToMetadata(metadata, readSessionVoicePreferenceV1(stored))));
+    expect(written).toEqual({ work: { memoryEnabled: false, voicePreference: preference } });
+    const work = written.work;
+    if (!work || typeof work !== 'object' || !('voicePreference' in work)) throw new Error('Missing persisted Voice preference');
+    expect(SessionVoicePreferenceV1Schema.parse(work.voicePreference)).toEqual(preference);
+    expect(readSessionVoicePreferenceV1(work.voicePreference)).toEqual(preference);
+    expect(writeSessionVoicePreferenceV1ToMetadata(written, null)).toEqual({ work: { memoryEnabled: false } });
     expect(readSessionVoicePreferenceV1({ ...stored, providerContributionId: 'unqualified' })).toBeNull();
     expect(readSessionVoicePreferenceV1({ ...stored, settingFieldPath: 'tts.__proto__.voice' })).toBeNull();
   });

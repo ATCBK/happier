@@ -22,6 +22,7 @@ export const SESSION_RUNNER_RESTART_REASONS_V1 = [
   'doctor_repair',
   'restart_session_runners_on_update_config',
   'daemon_dist_generation_rollout',
+  'capability_selection_change',
 ] as const;
 export const SessionRunnerRestartReasonV1Schema = lazyZodSchema(() => z.enum(SESSION_RUNNER_RESTART_REASONS_V1));
 export type SessionRunnerRestartReasonV1 = z.infer<typeof SessionRunnerRestartReasonV1Schema>;
@@ -50,6 +51,16 @@ export const SESSION_RUNNER_RESTART_DISABLED_REASONS = [
 export const SessionRunnerRestartDisabledReasonSchema = lazyZodSchema(() => z.enum(SESSION_RUNNER_RESTART_DISABLED_REASONS));
 export type SessionRunnerRestartDisabledReason =
   z.infer<typeof SessionRunnerRestartDisabledReasonSchema>;
+
+/** Daemon restart custody belongs only to a daemon-started runner. */
+export function readSessionRunnerDaemonLaunchRefusalV1(startedBy: unknown): 'not_daemon_started' | null {
+  return startedBy === 'daemon' ? null : 'not_daemon_started';
+}
+
+/** Includes the retained legacy `visible` launch spelling at daemon custody. */
+export function isSessionRunnerWindowsHostedLaunchV1(launchMode: unknown): boolean {
+  return launchMode === 'windows_terminal' || launchMode === 'console' || launchMode === 'visible';
+}
 
 export const SESSION_RUNNER_RESTART_STATUSES_V1 = [
   'restarted',

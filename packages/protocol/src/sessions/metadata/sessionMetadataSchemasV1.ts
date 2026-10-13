@@ -75,7 +75,8 @@ import { createSessionTerminalMetadataSchema } from './terminalMetadata.js';
 import { SessionGuardStateV1Schema } from '../../machines/guard/sessionGuardStateV1.js';
 import { SessionMcpSelectionAuthoringV1Schema, SessionMcpSelectionRestartRequiredAuthoringV1Schema } from '../../mcp/servers/sessionSelectionV1.js';
 import { SessionSkillSelectionAuthoringV1Schema } from '../../reach/sessionCapabilitySelectionV1.js';
-import { SessionSkillSelectionRestartRequiredAuthoringV1Schema } from '../../reach/sessionCapabilityMetadataV1.js';
+import { CapabilitySelectionApplyAuthoringV1Schema, SessionSkillSelectionRestartRequiredAuthoringV1Schema } from '../../reach/sessionCapabilityMetadataV1.js';
+import { SessionCapabilityAgentFactsV1Schema } from '../../reach/capabilityApplyTimingV1.js';
 
 export const SESSION_METADATA_LAYOUT_VERSION_V1 = 1 as const;
 export const SESSION_SHARED_METADATA_VERSION_V1 = 1 as const;
@@ -853,6 +854,7 @@ const SessionOwnerAgentRuntimeCapabilitySupportLevelV1Schema = lazyZodSchema(() 
   'unsupported',
 ]));
 const SessionOwnerAgentRuntimeCapabilitiesV1Schema = lazyZodSchema(() => z.object({
+  capabilitySelection: SessionCapabilityAgentFactsV1Schema.optional(),
   localControl: z.object({
     supported: z.boolean(),
     topology: z.enum(['exclusive', 'shared']).optional(),
@@ -1029,6 +1031,7 @@ const SessionOwnerRuntimeV1Schema = lazyZodSchema(() => z.object({
   mcpSelectionRestartRequiredV1: SessionMcpSelectionRestartRequiredAuthoringV1Schema.optional(),
   skillSelectionV1: SessionSkillSelectionAuthoringV1Schema.optional(),
   skillSelectionRestartRequiredV1: SessionSkillSelectionRestartRequiredAuthoringV1Schema.optional(),
+  capabilitySelectionApplyV1: CapabilitySelectionApplyAuthoringV1Schema.optional(),
   runtimeActivity: z.union([
     SessionRuntimeActivitySnapshotSchema,
     SessionRuntimeActivityProjectionSchema,
@@ -1175,6 +1178,13 @@ const SessionOwnerWorkStateItemV1Schema = lazyZodSchema(() => z.object({
   startedAt: TimestampSchema.optional(),
   completedAt: TimestampSchema.optional(),
   updatedAt: TimestampSchema,
+  providerData: PluginJsonValueV2Schema.optional(),
+}).strict());
+
+const SessionOwnerWorkStateTruncationV1Schema = lazyZodSchema(() => z.object({
+  reason: z.enum(['item_limit', 'provider_limit']),
+  omittedCount: z.number().int().nonnegative().optional(),
+  sourceReason: z.enum(['providerLimit', 'byteLimit']).optional(),
 }).strict());
 
 const SessionOwnerWorkStateV1Schema = lazyZodSchema(() => z.object({
@@ -1184,10 +1194,8 @@ const SessionOwnerWorkStateV1Schema = lazyZodSchema(() => z.object({
   updatedAt: TimestampSchema,
   items: z.array(SessionOwnerWorkStateItemV1Schema).max(20_000),
   primaryItemId: OptionalOwnerIdentifierSchema.optional(),
-  truncated: z.object({
-    reason: z.enum(['item_limit', 'provider_limit']),
-    omittedCount: z.number().int().nonnegative().optional(),
-  }).strict().optional(),
+  sourceTruncations: z.record(z.string().min(1), SessionOwnerWorkStateTruncationV1Schema).optional(),
+  truncated: SessionOwnerWorkStateTruncationV1Schema.optional(),
 }).strict());
 
 const SessionOwnerWorkflowRunHeadlineV1Schema = lazyZodSchema(() => z.object({
@@ -1975,6 +1983,7 @@ const RUNTIME_OWNER_KEYS = [
   'mcpSelectionRestartRequiredV1',
   'skillSelectionV1',
   'skillSelectionRestartRequiredV1',
+  'capabilitySelectionApplyV1',
 ] as const;
 const CONNECTED_SERVICE_OWNER_KEYS = [
   'connectedServices',

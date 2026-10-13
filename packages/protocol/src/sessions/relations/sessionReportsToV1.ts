@@ -2,6 +2,7 @@ import { lazyZodSchema } from '../../lazyZodSchema.js';
 import { z } from 'zod';
 import { SessionIdSchema } from '../idsV1.js';
 import { asProtocolZod } from '../../plugins/actions/internalProtocolZodAdapter.js';
+import { SessionFollowSourceKeyPreparationResultV1Schema, type SessionFollowSourceKeyPreparationResultV1 } from '../follow/sessionFollowSourceKeyPreparationV1.js';
 
 const SessionIdV1Schema = asProtocolZod(SessionIdSchema);
 
@@ -33,6 +34,7 @@ export const SessionReportsToSetResultV1Schema = lazyZodSchema(() => z.union([
     ok: z.literal(true), sessionId: SessionIdV1Schema,
     leadSessionId: SessionIdV1Schema.nullable(),
     attachedAt: z.number().int().nonnegative().nullable(),
+    sourceKeyPreparation: SessionFollowSourceKeyPreparationResultV1Schema.optional(),
   }).strict(),
   z.object({ ok: z.literal(false), error: z.literal('reports_to_cycle') }).strict(),
   z.object({ ok: z.literal(false), error: z.literal('reports_to_cas_conflict') }).strict(),
@@ -42,6 +44,14 @@ export const SessionReportsToSetResultV1Schema = lazyZodSchema(() => z.union([
   }).strict(),
 ]));
 export type SessionReportsToSetResultV1 = z.infer<typeof SessionReportsToSetResultV1Schema>;
+
+/** Key readiness is retryable delivery state, never a refusal of an already committed relation. */
+export function projectSessionReportsToSourceKeyPreparationV1(
+  committed: Extract<SessionReportsToSetResultV1, Readonly<{ ok: true }>>,
+  preparation: SessionFollowSourceKeyPreparationResultV1,
+): Extract<SessionReportsToSetResultV1, Readonly<{ ok: true }>> {
+  return preparation.kind === 'waiting' ? { ...committed, sourceKeyPreparation: preparation } : committed;
+}
 
 /** Read-only, request-scoped admission evidence; it never grants write authority. */
 export const SessionReportsToOptionsRequestV1Schema = lazyZodSchema(() => z.object({

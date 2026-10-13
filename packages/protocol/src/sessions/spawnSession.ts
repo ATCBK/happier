@@ -13,6 +13,8 @@ import {
 } from '../connect/connectedServiceUxDiagnostics.js';
 import { ProviderErrorV1Schema, type ProviderErrorV1 } from '../providers/errors.js';
 import { SpawnFailureV1Schema } from '../machines/processes/spawnFailureV1.js';
+export { SessionSpawnLaunchErrorV1Schema, type SessionSpawnLaunchErrorV1 } from './creation/sessionSpawnLaunchErrorV1.js';
+import { SessionSpawnLaunchErrorV1Schema, type SessionSpawnLaunchErrorV1 } from './creation/sessionSpawnLaunchErrorV1.js';
 
 // Process launch accepts the existing daemon modes, not integrated UI authoring.
 export const SpawnSessionTerminalSchema = lazyZodSchema(() => SessionAuthoringTerminalV1Schema.pick({ mode: true, tmux: true, herdr: true }).extend({
@@ -91,10 +93,13 @@ export type SpawnSessionErrorCode = (typeof SPAWN_SESSION_ERROR_CODES)[keyof typ
  * Structured, machine-recognizable detail attached to a spawn error so clients can react
  * programmatically instead of parsing the human-readable `errorMessage`.
  *
- * This is a discriminated union keyed by `kind`; it is ADDITIVE and OPTIONAL on the spawn error
- * result. Existing consumers that only read `errorCode`/`errorMessage` keep working unchanged.
+ * This closed union is optional on the spawn error result. Consumers of only
+ * `errorCode`/`errorMessage` retain the failure. A current 0.3 `launch_retired`
+ * detail additionally supplies exact custody evidence, not presentation text.
  */
 export const SPAWN_SESSION_ERROR_DETAIL_KINDS = {
+  LAUNCH_ERROR: 'launch_error',
+  LAUNCH_RETIRED: 'launch_retired',
   SPAWN_FAILURE: 'spawn_failure',
   TERMINAL_HOST_UNAVAILABLE: 'terminal_host_unavailable',
   /**
@@ -238,7 +243,17 @@ export const SpawnFailureSpawnErrorDetailSchema = lazyZodSchema(() => SpawnFailu
 }).strict());
 export type SpawnFailureSpawnErrorDetail = z.infer<typeof SpawnFailureSpawnErrorDetailSchema>;
 
+/** Exact daemon proof: startup failed before input, and its wrapper/runner custody was retired. */
+export const SessionLaunchRetiredV1Schema = lazyZodSchema(() => z.object({
+  kind: z.literal('launch_retired'),
+  spawnNonce: z.string().min(1),
+  wrapperPid: z.number().int().positive().safe(),
+}).strict());
+export type SessionLaunchRetiredV1 = z.infer<typeof SessionLaunchRetiredV1Schema>;
+
 export type SpawnSessionErrorDetail =
+  | SessionSpawnLaunchErrorV1
+  | SessionLaunchRetiredV1
   | SpawnFailureSpawnErrorDetail
   | TerminalHostUnavailableSpawnErrorDetail
   | ConnectedServiceResumeUnreachableSpawnErrorDetail
@@ -501,7 +516,9 @@ export function isSessionCreationTerminalSpawnErrorDetail(
 }
 
 export function isSpawnSessionErrorDetail(value: unknown): value is SpawnSessionErrorDetail {
-  return SpawnFailureSpawnErrorDetailSchema.safeParse(value).success
+  return SessionSpawnLaunchErrorV1Schema.safeParse(value).success
+    || SessionLaunchRetiredV1Schema.safeParse(value).success
+    || SpawnFailureSpawnErrorDetailSchema.safeParse(value).success
     || TerminalHostUnavailableSpawnErrorDetailSchema.safeParse(value).success
     || isConnectedServiceResumeUnreachableSpawnErrorDetail(value)
     || isConnectedServiceUxDiagnosticSpawnErrorDetail(value)
@@ -512,7 +529,9 @@ export function isSpawnSessionErrorDetail(value: unknown): value is SpawnSession
 export function normalizeSpawnSessionErrorDetail(value: unknown): SpawnSessionErrorDetail | undefined {
   const detail = asRecord(value);
   if (!detail) return undefined;
-  return SpawnFailureSpawnErrorDetailSchema.safeParse(detail).data
+  return SessionSpawnLaunchErrorV1Schema.safeParse(detail).data
+    ?? SessionLaunchRetiredV1Schema.safeParse(detail).data
+    ?? SpawnFailureSpawnErrorDetailSchema.safeParse(detail).data
     ?? TerminalHostUnavailableSpawnErrorDetailSchema.safeParse(detail).data
     ?? normalizeConnectedServiceResumeUnreachableDetail(detail)
     ?? normalizeConnectedServiceUxDiagnosticDetail(detail)

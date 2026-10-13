@@ -8,7 +8,7 @@ export const SESSION_CAPABILITY_NOTICE_SIDECAR_KEY = 'capabilityNoticeV1';
 export const SessionCapabilityNoticeV1Schema = lazyZodSchema(() => z.object({
   v: z.literal(1),
   items: z.array(z.object({
-    kind: z.enum(['mcp_server', 'skill']),
+    kind: z.enum(['mcp_server', 'skill', 'prompt_library']),
     name: z.string().min(1),
     itemId: z.string().min(1).optional(),
     code: z.string().min(1),

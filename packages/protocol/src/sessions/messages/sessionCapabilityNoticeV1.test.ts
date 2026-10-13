@@ -10,6 +10,13 @@ describe('session capability notice sidecar', () => {
     expect(read({ type: 'message', message: 'linear could not start', capabilityNoticeV1: notice })).toEqual(notice);
     expect(read({ type: 'ready', capabilityNoticeV1: notice })).toBeNull();
   });
+  it('reads an optional prompt-library failure through the existing message and transcript contract', () => {
+    const prompt = { v: 1, items: [{ kind: 'prompt_library', name: 'Prompt library',
+      code: 'prompt_library_unavailable', detail: 'unavailable' }] };
+    const event = { type: 'message', message: 'Prompt library could not load', capabilityNoticeV1: prompt };
+    const record = TranscriptRawRecordV1Schema.parse({ role: 'agent', content: { type: 'event', id: 'prompt', data: event } });
+    expect(read(record.content.type === 'event' ? record.content.data : null)).toEqual(prompt);
+  });
   it('ignores malformed and future sidecars while preserving the fallback message', () => {
     for (const sidecar of [null, { ...notice, v: 2 }, { v: 1, items: [{ kind: 'mcp_server', name: '', code: 'bad' }] }]) {
       expect(read({ type: 'message', message: 'Still visible', capabilityNoticeV1: sidecar })).toBeNull();

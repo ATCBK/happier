@@ -2,6 +2,7 @@ import { describe, expect, it } from 'vitest';
 import { projectSessionMetadataForWire } from './terminalMetadata.js';
 import { readSessionRoleIdV1, readSessionRolesV1, writeSessionRoleIdV1ToMetadata } from '../../prompts/roles/sessionRolesSnapshot.js';
 import { z } from 'zod';
+import { writeSessionWorkStateV1ToMetadata } from '../work/state/sessionWorkStateV1.js';
 import { SessionPublisherGenerationV1Schema } from '../control/machineSessionTerminalV1.js';
 import { zodSchemaToJsonSchemaObject } from '../../actions/actionInputJsonSchema.js';
 
@@ -62,6 +63,26 @@ import {
 } from './sessionMetadataEnvelopesV1.js';
 
 describe('metadata schema consumer contracts', () => {
+  it('round-trips native work-state source bookkeeping through the private owner envelope', () => {
+    const source = 'plugin-agent/acme.native-runtime-proof/agent/tasks';
+    const metadata = writeSessionWorkStateV1ToMetadata({}, {
+      v: 1, backendId: 'acme.native-runtime-proof/agent', updatedAt: 1,
+      items: [{ id: 'task:fixture', kind: 'task', origin: 'vendor', status: 'active',
+        title: 'Fixture task', updatedAt: 1, providerData: { correlation: 'native-task' } }],
+      sourceTruncations: { [source]: { reason: 'provider_limit', sourceReason: 'byteLimit' } },
+      truncated: { reason: 'provider_limit', sourceReason: 'byteLimit' },
+    });
+    const created = createSessionOwnerMetadataV1({ metadata });
+    expect(created, created.ok ? '' : created.unsupportedFields.join(', ')).toMatchObject({ ok: true });
+    if (!created.ok) throw new Error('native work state rejected');
+    const sharedMetadata = projectSessionSharedMetadataV1({ metadata });
+    expect(sharedMetadata).not.toHaveProperty('sessionWorkStateV1');
+    expect(projectSessionOwnerCompatibilityViewV1({ sharedMetadata, ownerMetadata: created.ownerMetadata }))
+      .toMatchObject(metadata);
+    expect(SessionOwnerMetadataV1Schema.safeParse({ ...created.ownerMetadata,
+      work: { ...created.ownerMetadata.work,
+        sessionWorkStateV1: { ...metadata.sessionWorkStateV1, undeclaredAuthority: true } } })).toMatchObject({ success: false });
+  });
   it('round-trips both selections and pending apply markers without a local item cap', () => {
     const selection = { v: 1 as const, managedServersEnabled: true,
       forceIncludeServerIds: Array.from({ length: 2_049 }, (_, i) => `server-${i}`), forceExcludeServerIds: [] };
