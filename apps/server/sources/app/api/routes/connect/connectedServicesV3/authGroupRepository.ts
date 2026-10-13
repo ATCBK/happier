@@ -106,24 +106,6 @@ function parseAuthGroupStateJson(stateJson: string | null): AuthGroupState {
     }
 }
 
-/** Active-member mutations own switch provenance; runtime projections cannot replace it. */
-export function encodeAuthGroupStateForActiveProfile(input: Readonly<{
-    currentStateJson: string | null;
-    nextState?: AuthGroupState;
-    previousActiveProfileId: string | null;
-    nextActiveProfileId: string | null;
-    switchReason?: string;
-}>): string {
-    const previous = parseAuthGroupStateJson(input.currentStateJson);
-    const next = input.nextState ?? previous;
-    const changed = input.previousActiveProfileId !== input.nextActiveProfileId;
-    return JSON.stringify(ConnectedServiceAuthGroupStateSchema.parse({
-        ...next,
-        lastSwitchReason: input.switchReason ?? (changed ? "manual" : previous.lastSwitchReason ?? next.lastSwitchReason),
-        lastSwitchAt: changed ? Date.now() : previous.lastSwitchAt ?? next.lastSwitchAt,
-    }));
-}
-
 function parseAuthGroupMemberStateJson(stateJson: string | null): AuthGroupMemberState {
     if (!stateJson) return ConnectedServiceAuthGroupMemberStateSchema.parse({});
     try {
@@ -337,7 +319,6 @@ export async function deleteConnectedServiceCredentialInTx(tx: Tx, params: {
             select: {
                 id: true,
                 activeProfileId: true,
-                stateJson: true,
                 members: {
                     select: { profileId: true, priority: true, enabled: true },
                 },
@@ -356,10 +337,7 @@ export async function deleteConnectedServiceCredentialInTx(tx: Tx, params: {
                 data: {
                     generation: { increment: 1 },
                     ...(group.activeProfileId !== nextActiveProfileId
-                        ? { activeProfileId: nextActiveProfileId, stateJson: encodeAuthGroupStateForActiveProfile({
-                            currentStateJson: group.stateJson, previousActiveProfileId: group.activeProfileId,
-                            nextActiveProfileId,
-                        }) }
+                        ? { activeProfileId: nextActiveProfileId }
                         : {}),
                 },
             });
@@ -410,7 +388,6 @@ export async function createAuthGroupMemberAndBumpGenerationInTx(tx: Tx, params:
         select: {
             id: true,
             activeProfileId: true,
-            stateJson: true,
             generation: true,
             members: {
                 select: { profileId: true, priority: true, enabled: true },
@@ -446,9 +423,7 @@ export async function createAuthGroupMemberAndBumpGenerationInTx(tx: Tx, params:
         where: { id: group.id, generation: params.expectedGeneration },
         data: {
             generation: { increment: 1 },
-            ...(group.activeProfileId !== nextActiveProfileId ? { activeProfileId: nextActiveProfileId,
-                stateJson: encodeAuthGroupStateForActiveProfile({ currentStateJson: group.stateJson,
-                    previousActiveProfileId: group.activeProfileId, nextActiveProfileId }) } : {}),
+            ...(group.activeProfileId !== nextActiveProfileId ? { activeProfileId: nextActiveProfileId } : {}),
         },
     });
     if (generationUpdate.count !== 1) {
@@ -496,7 +471,6 @@ export async function updateAuthGroupMemberAndBumpGenerationInTx(tx: Tx, params:
         select: {
             id: true,
             activeProfileId: true,
-            stateJson: true,
             generation: true,
             runtimeStateRevision: true,
             members: {
@@ -571,9 +545,7 @@ export async function updateAuthGroupMemberAndBumpGenerationInTx(tx: Tx, params:
             ...(changesRuntimeState
                 ? { runtimeStateRevision: { increment: 1 } }
                 : {}),
-            ...(changesActiveProfile ? { activeProfileId: nextActiveProfileId,
-                stateJson: encodeAuthGroupStateForActiveProfile({ currentStateJson: group.stateJson,
-                    previousActiveProfileId: group.activeProfileId, nextActiveProfileId }) } : {}),
+            ...(changesActiveProfile ? { activeProfileId: nextActiveProfileId } : {}),
         },
     });
     if (generationUpdate.count !== 1) {
@@ -623,7 +595,6 @@ export async function deleteAuthGroupMemberAndBumpGenerationInTx(tx: Tx, params:
         select: {
             id: true,
             activeProfileId: true,
-            stateJson: true,
             generation: true,
             members: {
                 select: { id: true, profileId: true, priority: true, enabled: true },
@@ -646,9 +617,7 @@ export async function deleteAuthGroupMemberAndBumpGenerationInTx(tx: Tx, params:
         where: { id: group.id, generation: params.expectedGeneration },
         data: {
             generation: { increment: 1 },
-            ...(group.activeProfileId !== nextActiveProfileId ? { activeProfileId: nextActiveProfileId,
-                stateJson: encodeAuthGroupStateForActiveProfile({ currentStateJson: group.stateJson,
-                    previousActiveProfileId: group.activeProfileId, nextActiveProfileId }) } : {}),
+            ...(group.activeProfileId !== nextActiveProfileId ? { activeProfileId: nextActiveProfileId } : {}),
         },
     });
     if (generationUpdate.count !== 1) {
