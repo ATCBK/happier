@@ -3,6 +3,7 @@ const CODEBUDDY_AGENT_ID = 'codebuddy';
 // IMPORTANT: this must stay JSON-serializable (data-only).
 export const AGENT_DEFINITION = Object.freeze({
   id: CODEBUDDY_AGENT_ID,
+  acpRegistryIds: ['codebuddy-code'] as const,
   core: {
     id: CODEBUDDY_AGENT_ID,
     cliSubcommand: 'codebuddy',

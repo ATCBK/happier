@@ -38,9 +38,10 @@ export const CODEBUDDY_PLUGIN = definePlugin({
         },
       },
       primary: 'sessions',
-      catalog: { vendorResume: { support: AGENT_DEFINITION.core.resume.vendorResume } },
+      catalog: { acpRegistryIds: [...AGENT_DEFINITION.acpRegistryIds], vendorResume: { support: AGENT_DEFINITION.core.resume.vendorResume } },
       capabilities: projectAgentCapabilitiesV2FromDefinition(AGENT_DEFINITION.core, {
-        skills: { delivery: 'none', nativeDisable: 'unsupported', liveReload: 'unsupported' },
+        skills: { delivery: 'none', nativeDisable: 'unsupported', liveReload: 'unsupported',
+          nativeRoots: { user: [['.codebuddy', 'skills']], project: [['.codebuddy', 'skills']] } },
         sessions: {
           open: ['create', 'resume'], delivery: ['newTurn', 'followUp'], cancel: true,
           configuration: true, executionRunContext: { versions: [1] },
