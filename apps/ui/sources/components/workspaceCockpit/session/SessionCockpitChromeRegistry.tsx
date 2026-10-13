@@ -135,8 +135,10 @@ const SessionCockpitVoicePresenceRectContext = React.createContext<FrameRect | n
 const SessionCockpitVoicePresenceRectReporterContext = React.createContext(NOOP_MEASURED_RECT_REPORTER);
 const SessionCockpitPetRectContext = React.createContext<FrameRect | null>(null);
 const SessionCockpitPetRectReporterContext = React.createContext(NOOP_MEASURED_RECT_REPORTER);
+const SessionCockpitActionRailRectContext = React.createContext<FrameRect | null>(null);
+const SessionCockpitActionRailRectReporterContext = React.createContext(NOOP_MEASURED_RECT_REPORTER);
 
-/** A named mounted shell fact; viewer, Voice and in-app pet each have one slot. */
+/** A named mounted shell fact; viewer, Voice, in-app pet and the pane action rail each have one slot. */
 function useMountedMeasuredRect(): Readonly<{ rect: FrameRect | null; reporter: MeasuredRectReporter }> {
     const [mounted, setMounted] = React.useState<MountedMeasuredRect | null>(null);
     const mount = React.useCallback((binding: MeasuredRectBinding) => {
@@ -178,6 +180,7 @@ export function SessionCockpitChromeRegistryProvider(props: Readonly<{ children:
     const viewer = useMountedMeasuredRect();
     const voicePresence = useMountedMeasuredRect();
     const pet = useMountedMeasuredRect();
+    const actionRail = useMountedMeasuredRect();
     const [bottomChromeHeight, setBottomChromeHeightState] = React.useState(0);
     const [floatingBottomChromeHeight, setFloatingBottomChromeHeight] = React.useState(0);
     const [composerChromeById, setComposerChromeById] = React.useState<Readonly<Record<string, SessionCockpitComposerChromeMeasurement>>>({});
@@ -310,7 +313,11 @@ export function SessionCockpitChromeRegistryProvider(props: Readonly<{ children:
                                                             <SessionCockpitVoicePresenceRectContext.Provider value={voicePresence.rect}>
                                                                 <SessionCockpitPetRectReporterContext.Provider value={pet.reporter}>
                                                                     <SessionCockpitPetRectContext.Provider value={pet.rect}>
-                                                                        {props.children}
+                                                                        <SessionCockpitActionRailRectReporterContext.Provider value={actionRail.reporter}>
+                                                                            <SessionCockpitActionRailRectContext.Provider value={actionRail.rect}>
+                                                                                {props.children}
+                                                                            </SessionCockpitActionRailRectContext.Provider>
+                                                                        </SessionCockpitActionRailRectReporterContext.Provider>
                                                                     </SessionCockpitPetRectContext.Provider>
                                                                 </SessionCockpitPetRectReporterContext.Provider>
                                                             </SessionCockpitVoicePresenceRectContext.Provider>
@@ -359,6 +366,15 @@ export function useSessionCockpitPetRect(): FrameRect | null {
 
 export function useReportSessionCockpitPetRect(enabled: boolean): (rect: FrameRect | null) => void {
     return useMountedMeasuredRectReporter(React.useContext(SessionCockpitPetRectReporterContext), null, enabled);
+}
+
+/** The pane action rail's window rectangle (the session's tool rail): a floating companion keeps clear of it. */
+export function useSessionCockpitActionRailRect(): FrameRect | null {
+    return React.useContext(SessionCockpitActionRailRectContext);
+}
+
+export function useReportSessionCockpitActionRailRect(enabled: boolean): (rect: FrameRect | null) => void {
+    return useMountedMeasuredRectReporter(React.useContext(SessionCockpitActionRailRectReporterContext), null, enabled);
 }
 
 export function useSessionCockpitChromeRegistration(): SessionCockpitChromeRegistration | null {

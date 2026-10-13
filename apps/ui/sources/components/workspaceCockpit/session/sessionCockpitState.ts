@@ -1,3 +1,5 @@
+import type { SessionPaneUrlState } from '@/components/sessions/panes/url/sessionPaneUrlState';
+
 export type SessionPluginMobileSurface = `plugin:${string}:${string}`;
 export type SessionMobileSurface =
     | 'chat'
@@ -298,6 +300,7 @@ export function shouldRouteSessionCockpitSurfacePressThroughUrl(input: Readonly<
     surface: SessionMobileSurface;
     terminalTabAvailable?: boolean;
     explicitRootSurfaceHint?: string | null;
+    paneUrlState?: SessionPaneUrlState | null;
 }>): boolean {
     const currentRoute = resolveSessionCockpitRouteFromPathname(
         input.pathname,
@@ -308,5 +311,10 @@ export function shouldRouteSessionCockpitSurfacePressThroughUrl(input: Readonly<
     if (!currentRoute || currentRoute.sessionId !== input.sessionId) {
         return true;
     }
+    // A root URL carrying desktop pane intent still needs the phone route
+    // projection, even when the selected tab already matches that intent.
+    const path = input.pathname?.split(/[?#]/, 1)[0]?.replace(/\/+$/, '');
+    if (path === `/session/${encodeURIComponent(input.sessionId)}`
+        && (input.paneUrlState?.details || input.paneUrlState?.rightTabId)) return true;
     return currentRoute.surface !== input.surface;
 }
