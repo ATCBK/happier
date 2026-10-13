@@ -37,6 +37,17 @@ class RejectedSettingMutation extends Error {
   }
 }
 
+function lacksCurrentAccountMaterial(
+  context: ActionExecutorContext,
+  credentials: StoredCredentials | undefined,
+): boolean {
+  if (context.externalActionCredential) return true;
+  const authorization = context.externalActionExecutionAuthorization;
+  if (!authorization) return false;
+  const currentAccountId = credentials ? readAccountIdFromToken(credentials.token) : null;
+  return !currentAccountId || authorization.binding.accountId !== currentAccountId;
+}
+
 /** Shared declarations; Account CAS and nested domain Actions retain mutation ownership. */
 export function createCliSettingsDeclarationAction(params: Readonly<{
   credentials?: StoredCredentials;
@@ -78,7 +89,7 @@ export function createCliSettingsDeclarationAction(params: Readonly<{
       if (actionId !== 'settings.get' && actionId !== 'settings.set') return refuse('setting_reset_unsupported');
       const key = MachineTerminalHostSettingKeySchema.safeParse('key' in parsed ? parsed.key : undefined);
       if (!key.success) return refuse('setting_key_required');
-      if (context.externalActionCredential || context.externalActionExecutionAuthorization) return refuse('requester_account_material_unavailable');
+      if (lacksCurrentAccountMaterial(context, params.credentials)) return refuse('requester_account_material_unavailable');
       if (!params.credentials) return refuse('not_authenticated');
       if (params.isCredentialCurrent && !await params.isCredentialCurrent()) return refuse('credential_scope_retired');
       if (actionId === 'settings.get') {
@@ -149,8 +160,9 @@ export function createCliSettingsDeclarationAction(params: Readonly<{
       const read = await readHomeSettingsDeclarationOwner(executeScopedOwner, context, isCurrent);
       return await executeHomeSettingDeclaration({ ...request, key: binding.key, read });
     }
-    // Remote admission is not permission to borrow this host's Account bearer.
-    if (context.externalActionCredential || context.externalActionExecutionAuthorization) return refuse('requester_account_material_unavailable');
+    // Session admission may use only material already bound to this exact
+    // Account; it never authorizes borrowing a custodian's bearer.
+    if (lacksCurrentAccountMaterial(context, params.credentials)) return refuse('requester_account_material_unavailable');
     if (!params.credentials) return refuse('not_authenticated');
     const credentials = params.credentials;
     if (params.isCredentialCurrent && !await params.isCredentialCurrent()) return refuse('credential_scope_retired');

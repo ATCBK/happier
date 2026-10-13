@@ -1,6 +1,7 @@
-import { describe, expect, it } from 'vitest';
+import { describe, expect, it, vi } from 'vitest';
+import axios from 'axios';
 import { createCliSettingsDeclarationAction } from './settingsDeclarationAction';
-import { API_TOKEN_FULL_GRANT_V1 } from '@happier-dev/protocol';
+import { API_TOKEN_FULL_GRANT_V1, ExternalActionExecutionAuthorizationV1Schema } from '@happier-dev/protocol';
 
 describe('headless settings conditional writes', () => {
     it('routes catalog-dependent atmosphere and private Project settings to an answering client', async () => {
@@ -26,6 +27,32 @@ describe('headless settings conditional writes', () => {
         expect(await action({ actionId: 'settings.get', input: { anchor: 'usage.coachPreferences', includeVersion: true },
             context: { surface: 'agent', externalActionCredential: { accountId: 'account', principalId: 'principal',
                 credentialId: 'credential', grant: API_TOKEN_FULL_GRANT_V1 } } }))
+            .toMatchObject({ ok: false, errorCode: 'requester_account_material_unavailable' });
+    });
+    it('uses the current Account material for a same-Account Session Action authorization', async () => {
+        const encode = (value: unknown) => Buffer.from(JSON.stringify(value)).toString('base64url');
+        const token = `${encode({ alg: 'none' })}.${encode({ sub: 'owner', tokenEpoch: 1,
+            provenance: { v: 1, kind: 'account', authority: 'present_user' } })}.signature`;
+        const authorization = ExternalActionExecutionAuthorizationV1Schema.parse({ v: 1, token: 'home-proof', binding: {
+            serverIdentityId: 'home', accountId: 'owner', principalId: 'owner', credentialId: 'credential',
+            custodianAccountId: 'owner', installationId: 'installation', grant: API_TOKEN_FULL_GRANT_V1,
+            machineId: 'machine', actionId: 'settings.get', requestId: 'request',
+            requestEnvelopeDigest: 'A'.repeat(43), target: { kind: 'machine', machineId: 'machine' },
+        } });
+        vi.spyOn(axios, 'get').mockResolvedValue({ status: 200, data: {
+            content: { t: 'plain', v: {} }, version: 1,
+        } });
+        const action = createCliSettingsDeclarationAction({ credentials: { token, encryption: null } });
+
+        expect(await action({ actionId: 'settings.get', input: { anchor: 'appearance.atmospherePlanetDigits' },
+            context: { surface: 'agent', externalActionExecutionAuthorization: authorization } }))
+            .toEqual({ anchor: 'appearance.atmospherePlanetDigits', value: true });
+
+        const foreignToken = `${encode({ alg: 'none' })}.${encode({ sub: 'custodian', tokenEpoch: 1,
+            provenance: { v: 1, kind: 'account', authority: 'present_user' } })}.signature`;
+        const foreignAction = createCliSettingsDeclarationAction({ credentials: { token: foreignToken, encryption: null } });
+        expect(await foreignAction({ actionId: 'settings.get', input: { anchor: 'appearance.atmospherePlanetDigits' },
+            context: { surface: 'agent', externalActionExecutionAuthorization: authorization } }))
             .toMatchObject({ ok: false, errorCode: 'requester_account_material_unavailable' });
     });
 });
