@@ -36,10 +36,10 @@ import { ArtifactsBrowser } from './ArtifactsBrowserScreen';
 import { NavigationTitleChromeProvider } from '@/components/ui/layout/navigationTitleChrome';
 
 const initialState = getStorage().getState();
-let disposeHome: (() => void) | undefined;
+let disposeHome: (() => Promise<void>) | undefined;
 afterEach(async () => {
     await act(async () => {
-        disposeHome?.();
+        await disposeHome?.();
         disposeHome = undefined;
         retireActiveServerAccountScopeLifetime();
         invalidateAccountEncryptionModeCache();

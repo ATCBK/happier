@@ -4,13 +4,12 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { renderScreen } from '@/dev/testkit';
 import { loadSyncSingletonForTests } from '@/dev/testkit/harness/syncSingletonLoader';
 import type { DecryptedArtifact } from '@/sync/domains/artifacts/artifactTypes';
-import { installRealActionExecutorModuleLoader, serveActionHomes } from '@/dev/testkit/harness/actionHomesHttpHarness';
-import { createArtifactStoreBoundary } from '@/dev/testkit/harness/artifactStoreBoundary';
-import { createHomeGovernanceHarness, installHomeGovernanceBoundaries } from '@/dev/testkit/harness/homeGovernanceHarness';
+import { installRealActionExecutorModuleLoader } from '@/dev/testkit/harness/actionHomesHttpHarness';
+import { createHomeGovernanceHarness, createAccountTokenForTests, installHomeGovernanceBoundaries } from '@/dev/testkit/harness/homeGovernanceHarness';
 import { createPlainAccountEncryptionCurrentnessFixture } from '@/dev/testkit/fixtures/accountEncryptionCurrentness';
 import { restoreServerAccountForTest } from '@/dev/testkit/harness/serverAccountConnectionHarness';
 import { Modal } from '@/modal';
-import { ActionsSettingsV1Schema, ApprovalRequestSchema, ARTIFACT_PLAIN_DATA_KEY_MARKER, encodePlainArtifactStoredContent } from '@happier-dev/protocol';
+import { ApprovalRequestSchema } from '@happier-dev/protocol';
 
 vi.mock('socket.io-client', async (importOriginal) =>
     (await import('@/dev/testkit/harness/serverAccountConnectionHarness')).createSocketIoClientBoundary(importOriginal));
@@ -54,16 +53,28 @@ async function loadArtifactEditor() {
 
 describe('ArtifactEditor', () => {
     const initialState = getStorage().getState();
-    let disposeHome: (() => void) | undefined;
+    let disposeHome: (() => Promise<void>) | undefined;
     let connection: Awaited<ReturnType<typeof restoreServerAccountForTest>> | undefined;
     afterEach(async () => {
         await connection?.dispose();
         connection = undefined;
-        disposeHome?.();
+        await disposeHome?.();
         disposeHome = undefined;
         await act(async () => { getStorage().setState(initialState, true); });
         vi.restoreAllMocks();
     });
+    async function restoreEditorHome(serverUrl: string) {
+        installHomeGovernanceBoundaries(homes);
+        await homes.reset();
+        const serverId = await homes.addHome({ name: 'Editor', serverUrl, accountId: 'owner', currentAccount: true });
+        homes.answer(serverId, '/v1/account/encryption/currentness', { body: createPlainAccountEncryptionCurrentnessFixture() });
+        await loadSyncSingletonForTests();
+        disposeHome = await installRealActionExecutorModuleLoader();
+        connection = await restoreServerAccountForTest({ serverUrl, accountId: 'owner', request: homes.request,
+            credentials: { token: createAccountTokenForTests('owner', { currentAccount: true }) } });
+        installHomeGovernanceBoundaries(homes);
+        return serverId;
+    }
     beforeEach(() => {
         navigation.canGoBack = true;
         navigation.back.mockClear();
@@ -79,14 +90,7 @@ describe('ArtifactEditor', () => {
             ownerAccountId: 'owner', access: 'owner', storageMode: 'plain' };
         const current = { ...opening, title: 'Concurrent', body: 'Concurrent body', headerVersion: 2, bodyVersion: 2,
             header: { kind: 'artifact.legacy', title: 'Concurrent' }, rawHeader: { kind: 'artifact.legacy', title: 'Concurrent' } };
-        installHomeGovernanceBoundaries(homes);
-        await homes.reset();
-        const serverId = await homes.addHome({ name: 'Editor', serverUrl: 'https://artifact-editor-cas.test', accountId: 'owner' });
-        homes.answer(serverId, '/v1/account/encryption/currentness', { body: createPlainAccountEncryptionCurrentnessFixture() });
-        await loadSyncSingletonForTests();
-        disposeHome = await installRealActionExecutorModuleLoader();
-        connection = await restoreServerAccountForTest({ serverUrl: 'https://artifact-editor-cas.test', accountId: 'owner', request: homes.request });
-        installHomeGovernanceBoundaries(homes);
+        const serverId = await restoreEditorHome('https://artifact-editor-cas.test');
         const { sync } = await import('@/sync/sync');
         const id = await sync.createArtifactWithHeader(opening.rawHeader!, opening.body ?? '');
         opening.id = id;
@@ -115,31 +119,25 @@ describe('ArtifactEditor', () => {
             header: { kind: 'artifact.legacy', title: 'Opening' }, rawHeader: { kind: 'artifact.legacy', title: 'Opening' },
             body: 'Opening body', headerVersion: 3, bodyVersion: 7, seq: 1, createdAt: 1, updatedAt: 1,
             ownerAccountId: 'owner', access: 'owner', storageMode: 'plain' };
-        const persisted = createArtifactStoreBoundary({ ownerAccountId: () => 'owner', encryptionMode: 'plain' });
-        const served = await serveActionHomes({ homes: [{ key: 'owner', serverUrl: 'https://artifact-editor-approval.test', accountId: 'owner' }],
-            route: request => request.path === `/v1/artifacts/${artifact.id}` && request.method === 'GET'
-                ? Response.json({ ...artifact, encryptionMode: 'plain', publicAudience: 'none', dataEncryptionKey: ARTIFACT_PLAIN_DATA_KEY_MARKER,
-                    header: encodePlainArtifactStoredContent(artifact.header), body: encodePlainArtifactStoredContent({ body: artifact.body }) })
-                : persisted.handle(request.path, { method: request.method, body: JSON.stringify(request.body) }) ?? undefined });
-        disposeHome = served.dispose;
-        getStorage().setState(state => ({ settings: { ...state.settings,
-            actionsSettingsV1: ActionsSettingsV1Schema.parse({ v: 1, actions: {
-                'artifact.create': { approvalRequiredSurfaces: ['ui'] }, 'artifact.update': { approvalRequiredSurfaces: ['ui'] },
-            } }) } }));
+        const serverId = await restoreEditorHome('https://artifact-editor-approval.test');
+        const persisted = homes.artifacts(serverId);
+        const { sync } = await import('@/sync/sync');
+        if (mode === 'edit') artifact.id = await sync.createArtifactWithHeader(artifact.rawHeader!, artifact.body ?? '');
+        await homes.requireUiApproval(serverId, mode === 'new' ? 'artifact.create' : 'artifact.update');
         const ArtifactEditor = await loadArtifactEditor();
         const screen = await renderScreen(<ArtifactEditor artifact={mode === 'edit' ? artifact : null} mode={mode} />);
         await act(async () => { screen.changeTextByTestId('artifact-editor:body:source', 'Approval draft'); });
         await screen.pressByTestIdAsync('artifact-editor:save');
-        const approval = persisted.list()[0];
+        const approval = persisted.list().find(row => row.id !== artifact.id);
         expect(approval).toBeDefined();
         const request = ApprovalRequestSchema.parse(JSON.parse(persisted.readPlainBody(approval!.id)!));
         expect(request).toMatchObject({ actionId: mode === 'new' ? 'artifact.create' : 'artifact.update',
             actionArgs: { body: 'Approval draft', ...(mode === 'edit' ? { expectedRevision: { headerVersion: 3, bodyVersion: 7 } } : {}) } });
-        expect(navigation.push).toHaveBeenCalledWith(`/inbox/approvals/${approval!.id}?serverId=${encodeURIComponent(served.homes.owner!.id)}`);
+        expect(navigation.push).toHaveBeenCalledWith(`/inbox/approvals/${approval!.id}?serverId=${encodeURIComponent(serverId)}`);
         expect(navigation.back).not.toHaveBeenCalled();
         expect(navigation.replace).not.toHaveBeenCalled();
         expect(screen.findByTestId('artifact-editor:body:source')?.props.value).toBe('Approval draft');
-        expect(served.requests.filter(request => request.method === 'POST' && request.path === `/v1/artifacts/${artifact.id}`)).toEqual([]);
+        expect(homes.requestsFor(`/v1/artifacts/${artifact.id}`).filter(request => request.input !== null)).toEqual([]);
         await screen.unmount();
     });
 
@@ -154,10 +152,8 @@ describe('ArtifactEditor', () => {
     });
 
     it('creates and updates a Markdown document through the real admitted Action and acknowledged store publication', async () => {
-        const persisted = createArtifactStoreBoundary({ ownerAccountId: () => 'owner', encryptionMode: 'plain' });
-        const served = await serveActionHomes({ homes: [{ key: 'owner', serverUrl: 'https://artifact-editor-success.test', accountId: 'owner' }],
-            route: request => persisted.handle(request.path, { method: request.method, body: JSON.stringify(request.body) }) ?? undefined });
-        disposeHome = served.dispose;
+        const serverId = await restoreEditorHome('https://artifact-editor-success.test');
+        const persisted = homes.artifacts(serverId);
         const ArtifactEditor = await loadArtifactEditor();
         const screen = await renderScreen(<ArtifactEditor artifact={null} mode="new" />);
         await act(async () => { screen.changeTextByTestId('artifact-editor:body:source', 'First body'); });
@@ -178,10 +174,9 @@ describe('ArtifactEditor', () => {
     });
 
     it('keeps the draft and reports the named budget when the create Action refuses quota', async () => {
-        const served = await serveActionHomes({ homes: [{ key: 'owner', serverUrl: 'https://artifact-editor-quota.test', accountId: 'owner' }],
-            route: request => request.path === '/v1/artifacts' && request.method === 'POST'
-                ? Response.json({ error: 'quota_exceeded', budget: 'document', limitBytes: 1, usedBytes: 10 }, { status: 413 }) : undefined });
-        disposeHome = served.dispose;
+        const serverId = await restoreEditorHome('https://artifact-editor-quota.test');
+        homes.answer(serverId, 'POST /v1/artifacts', { status: 413,
+            body: { error: 'quota_exceeded', budget: 'document', limitBytes: 1, usedBytes: 10 } });
         const ArtifactEditor = await loadArtifactEditor();
         const screen = await renderScreen(<ArtifactEditor artifact={null} mode="new" />);
         await act(async () => { screen.changeTextByTestId('artifact-editor:body:source', 'My document'); });

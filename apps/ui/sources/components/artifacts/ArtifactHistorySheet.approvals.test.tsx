@@ -27,11 +27,11 @@ vi.mock('@/text', async () => {
 });
 
 const initialState = getStorage().getState();
-let disposeHome: (() => void) | undefined;
+let disposeHome: (() => Promise<void>) | undefined;
 afterEach(async () => {
     await act(async () => {
         Modal.hideAll();
-        disposeHome?.();
+        await disposeHome?.();
         disposeHome = undefined;
         retireActiveServerAccountScopeLifetime();
         invalidateAccountEncryptionModeCache();

@@ -51,10 +51,10 @@ let homeCount = 0;
 beforeEach(() => {
     webLocks = installWebLockManagerMock();
 });
-afterEach(() => {
+afterEach(async () => {
     resetPromptLibraryCatalogEngineForTests();
     resetPromptLibraryCatalogSnapshotsForTests();
-    fixture?.dispose(); fixture = undefined;
+    await fixture?.dispose(); fixture = undefined;
     webLocks?.restore(); webLocks = undefined;
     vi.clearAllMocks();
 });

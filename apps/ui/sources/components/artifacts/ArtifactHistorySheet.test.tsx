@@ -39,11 +39,11 @@ const storedHead = { ...artifact, header: encodePlainArtifactStoredContent({ tit
     body: encodePlainArtifactStoredContent({ body: 'Current notes' }), dataEncryptionKey: ARTIFACT_PLAIN_DATA_KEY_MARKER, encryptionMode: 'plain' };
 const revisions = { retentionCount: 10, revisions: [3, 2, 1].map(bodyVersion => ({ bodyVersion,
     body: encodePlainArtifactStoredContent({ body: `Notes ${bodyVersion}` }), createdAt: bodyVersion, sizeBytes: 20 })) };
-let disposeHome: (() => void) | undefined;
+let disposeHome: (() => Promise<void>) | undefined;
 afterEach(async () => {
     await act(async () => {
         Modal.hideAll();
-        disposeHome?.();
+        await disposeHome?.();
         disposeHome = undefined;
         retireActiveServerAccountScopeLifetime();
         invalidateAccountEncryptionModeCache();

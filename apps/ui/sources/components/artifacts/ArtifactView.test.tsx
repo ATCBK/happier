@@ -35,10 +35,10 @@ import { ArtifactView } from './ArtifactView';
 
 const initialState = getStorage().getState();
 const platform = Platform.OS;
-let disposeHome: (() => void) | undefined;
+let disposeHome: (() => Promise<void>) | undefined;
 afterEach(async () => {
     await act(async () => {
-        disposeHome?.();
+        await disposeHome?.();
         disposeHome = undefined;
         retireActiveServerAccountScopeLifetime();
         getStorage().setState(initialState, true);
@@ -124,7 +124,7 @@ describe('Artifact composed view reads', () => {
         await vi.waitFor(() => expect(file.findByTestId('artifact:download')).not.toBeNull());
         expect(served.requests.some(request => request.path.includes('/blobs/'))).toBe(false);
         await file.unmount();
-        disposeHome?.();
+        await disposeHome?.();
         const pending = createDeferred<Response>();
         const next = await setup('image', pending.promise);
         const image = await renderScreen(<OpenView id="document" />);
