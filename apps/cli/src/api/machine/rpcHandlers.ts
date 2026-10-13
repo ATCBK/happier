@@ -1261,6 +1261,13 @@ export function registerMachineRpcHandlers(params: Readonly<{
             request: payload,
           }));
           const coordinator = createSessionHandoffCoordinator({
+            assertExistingStateSupported: async () => {
+              const { resolveExistingSessionHandoffEligibilityThroughCatalog } = await import('@/backends/catalog');
+              const eligibility = resolveExistingSessionHandoffEligibilityThroughCatalog(sourceMetadata);
+              if (!eligibility.eligible) {
+                throw Object.assign(new Error(`Existing-state handoff is unsupported: ${eligibility.reasonCode}`), { errorCode: 'existing_state_unsupported' });
+              }
+            },
             readServerFeatures: async (signal) => await readSessionHandoffServerFeatures({
               token: credentials.token,
               ...(signal ? { signal } : {}),

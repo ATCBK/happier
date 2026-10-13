@@ -40,6 +40,11 @@ function createHarness(overrides: Partial<Parameters<typeof createSessionHandoff
   const calls: string[] = [];
   const update = vi.fn();
   const port = {
+    assertExistingStateSupported: async () => {
+      const { resolveExistingSessionHandoffEligibilityThroughCatalog } = await import('@/backends/catalog');
+      const eligibility = resolveExistingSessionHandoffEligibilityThroughCatalog({ flavor: 'claude', machineId: baseInput.sourceMachineId, claudeSessionId: 'native-1' });
+      if (!eligibility.eligible) throw new Error(eligibility.reasonCode);
+    },
     readServerFeatures: async () => FeaturesResponseSchema.parse({
       features: {
         sessions: { enabled: true, handoff: { enabled: true } },
@@ -74,6 +79,20 @@ function createHarness(overrides: Partial<Parameters<typeof createSessionHandoff
 }
 
 describe('sessionHandoffCoordinator', () => {
+  it('applies actual catalog admission before source mutation for unsupported existing-state Agents', async () => {
+    const harness = createHarness({
+      probeSourceCapability: async () => ({ protocolVersion: 2, atomicTargetResume: true, targetCleanup: true, existingState: true }),
+      probeTargetCapability: async () => ({ protocolVersion: 2, atomicTargetResume: true, targetCleanup: true, existingState: true }),
+      assertExistingStateSupported: async () => {
+        const { resolveExistingSessionHandoffEligibilityThroughCatalog } = await import('@/backends/catalog');
+        const eligibility = resolveExistingSessionHandoffEligibilityThroughCatalog({ flavor: 'opencode', machineId: baseInput.sourceMachineId, opencodeSessionId: 'native-1' });
+        if (!eligibility.eligible) throw new Error(eligibility.reasonCode);
+      },
+    });
+    await expect(harness.coordinator.admit({ ...baseInput, stateTransfer: 'existing' })).rejects.toThrow('existing_state_unsupported');
+    expect(harness.calls).toEqual([]);
+  });
+
   it('refuses existing state before source mutation unless both peers advertise support', async () => {
     for (const [sourceSupports, targetSupports] of [[false, true], [true, false], [undefined, true]]) {
       const harness = createHarness({

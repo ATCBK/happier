@@ -43,6 +43,15 @@ function createDeps(overrides: Partial<ActionExecutorDeps> = {}): ActionExecutor
 }
 
 describe('createActionExecutor (session.handoff)', () => {
+  it('preserves the App handoff dependency errorMessage as the Action error', async () => {
+    const executor = createActionExecutor(createDeps({
+      sessionHandoffStart: async () => ({ ok: false, errorCode: 'existing_session_state_unavailable', errorMessage: 'Claude existing native session is unreachable' }),
+    }));
+    expect(await executor.execute('session.handoff', { sessionId: 'sess_1', targetMachineId: 'machine_2' }, { surface: 'ui_button' })).toEqual({
+      ok: false, errorCode: 'existing_session_state_unavailable', error: 'Claude existing native session is unreachable',
+    });
+  });
+
   it('forwards existing-state intent through the public CLI handoff action', async () => {
     const sessionHandoffStart = vi.fn(async () => ({ handoffId: 'handoff_1' }));
     const executor = createActionExecutor(createDeps({ sessionHandoffStart }));

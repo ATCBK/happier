@@ -488,6 +488,7 @@ const sessionHandoffTranslationExtensions = {
       title: "传输会话数据",
       subtitle: "将此会话的对话历史复制到另一台机器。如果那里已有记录，请关闭此选项。",
       checking: "正在检查两台机器是否支持…",
+      agentRequiresTransfer: "此智能体需要在机器之间传输会话数据。",
       updateRequired: "请更新两台机器上的 Happier 以关闭此选项。",
       sessionMissing: "目标机器上没有此会话的对话历史。请开启“传输会话数据”后重试。",
       workspaceRequiresTransfer: "请开启“传输会话数据”以复制或同步工作区文件。",

@@ -2,7 +2,7 @@ import { mkdir, mkdtemp, readFile, rm, stat, writeFile } from 'node:fs/promises'
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 
-import { buildCodexAgentRuntimeDescriptor } from '@happier-dev/agents';
+import { buildCodexAgentRuntimeDescriptor, supportsExistingSessionHandoffState } from '@happier-dev/agents';
 import { describe, expect, it } from 'vitest';
 
 import { openSqliteDatabaseSync } from '@/utils/sqlite/sqliteSync';
@@ -36,6 +36,12 @@ async function writeCodexIndex(env: NodeJS.ProcessEnv, id: string, rolloutPath: 
 }
 
 describe('existing-state session handoff through the catalog', () => {
+  it('projects exactly the catalog existing-state hooks through shared Agent policy', () => {
+    for (const entry of Object.values(catalog.AGENTS)) {
+      expect(supportsExistingSessionHandoffState(entry.id), entry.id).toBe(typeof entry.resolveExistingSessionHandoffState === 'function');
+    }
+  });
+
   it('resolves Claude from the actual target transcript without changing bytes and projects the requested storage mode', async () => {
     await withNativeHomes(async (root, env) => {
       const projectId = '-replicated-original-workspace';
@@ -71,7 +77,7 @@ describe('existing-state session handoff through the catalog', () => {
         metadata: { flavor: 'claude', machineId: 'source-machine', claudeSessionId: 'claude-thread', claudeTranscriptPath: sourceTranscript },
         targetPath: join(root, 'target-workspace'),
         env: { ...env, HAPPIER_CONNECTED_SERVICES_LEGACY_CLAUDE_RESTART_SAME_HOME: '1' },
-      })).rejects.toThrow(/Claude.*unreachable/i);
+      })).rejects.toMatchObject({ errorCode: 'existing_session_state_unavailable' });
     });
   });
 
@@ -114,7 +120,7 @@ describe('existing-state session handoff through the catalog', () => {
         metadata: { flavor: 'codex', machineId: 'source-machine', codexSessionId: id, codexBackendMode: 'appServer' },
         targetPath: root,
         env,
-      })).rejects.toThrow(/Codex.*unreachable/i);
+      })).rejects.toMatchObject({ errorCode: 'existing_session_state_unavailable' });
       expect(await readFile(indexPath)).toEqual(beforeIndex);
     });
   });

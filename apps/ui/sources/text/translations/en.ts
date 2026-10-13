@@ -4900,6 +4900,7 @@ export const en = {
           title: "Transfer session data",
           subtitle: "Copies this session's conversation history to the other machine. Turn off if it's already there.",
           checking: "Checking both machines for support…",
+          agentRequiresTransfer: "This Agent requires session data transfer between machines.",
           updateRequired: "Update Happier on both machines to turn this off.",
           sessionMissing: "This session's conversation history isn't on the target machine. Turn on “Transfer session data” and try again.",
           workspaceRequiresTransfer: "Turn on “Transfer session data” to copy or sync workspace files.",

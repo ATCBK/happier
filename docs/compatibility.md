@@ -300,7 +300,10 @@ The CLI observes the shared Action Operations owner after its historical prepara
 The development picker exposes one default-on **Transfer session data** toggle for
 cross-machine moves. Its Action adapter and delegated start preserve explicit `existing`;
 that selection disables workspace transfer. Both peer capabilities must prove support
-before the option can be turned off. An `existing_session_state_unavailable` refusal is
+before the option can be turned off, and the shared Agent handoff policy must admit the
+native-state mode. Source admission also requires the actual catalog resolver before it
+stops the session. Missing target-native state is checked after that stop and produces
+`existing_session_state_unavailable` through immediate and persisted prepare results. That refusal is
 kept inline in the same picker, without retrying transfer automatically; turning the toggle
 on and submitting again is a new explicit choice. Same-machine moves hide the toggle and
 retain default transfer. The current 0.3 V3 capability is not a V2 compatibility proof.
