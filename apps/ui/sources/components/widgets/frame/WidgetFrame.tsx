@@ -104,8 +104,18 @@ export type WidgetFrameProps = Readonly<{
     source?: string | React.ReactElement | HappierWidgetFrameSourceDescriptor;
     /** Freshness ("As of 10:42") or a count, only when the source actually knows it. */
     meta?: React.ReactNode;
-    /** A live fact that belongs to the title itself (a running call's clock), set right after it. */
+    /**
+     * A live fact that belongs to the title itself (a running call's clock), set right after it. The title
+     * line is then full, so the source reads on its own line beneath (lab Voice glance "Voice 2:14" over
+     * "Global Voice · OpenAI Realtime") instead of being squeezed to an ellipsis beside them.
+     */
     titleMeta?: React.ReactNode;
+    /**
+     * Where the source reads: inline after the title, or on its own line beneath. The default puts it
+     * beneath on a phone or beside a `titleMeta`; a title that is a user-chosen name (a Session's) and can
+     * run long asks for `below` so the source is never pushed out of the header by it.
+     */
+    sourcePlacement?: 'inline' | 'below';
     /** The widget's controls at the end of the header: its ⋯ menu. */
     menu?: React.ReactNode;
     /** The move handle, before the mark, while the widget's surface is being arranged. */
@@ -351,7 +361,7 @@ export const WidgetFrame = React.memo(function WidgetFrame(props: WidgetFramePro
             ) : props.title}
             {...(props.source ? { source: props.source } : {})}
             renderSourceGlyph={renderSourceGlyph}
-            sourcePlacement={phone ? 'below' : 'inline'}
+            sourcePlacement={props.sourcePlacement ?? (phone || props.titleMeta ? 'below' : 'inline')}
             meta={meta}
             {...(refreshingMark && !compactHeader ? { compactMeta: refreshingMark } : {})}
             {...(props.leading ? { leading: props.leading } : {})}
@@ -394,7 +404,7 @@ export const WidgetFrame = React.memo(function WidgetFrame(props: WidgetFramePro
                         </View>
                     </HappierScrollArea>
                 ) : rows > 0 ? (
-                    <WidgetFrameReservedRows rows={rows} rowHeight={rowHeight}>
+                    <WidgetFrameReservedRows rows={rows} rowHeight={rowHeight} centered={props.body.kind !== 'content'}>
                         <WidgetFrameBodyView testID={props.testID} body={props.body} rows={rows} />
                     </WidgetFrameReservedRows>
                 ) : (
@@ -425,8 +435,9 @@ function useWidgetBodyRowHeight(): number {
     );
 }
 
-function WidgetFrameReservedRows(props: Readonly<{ rows: number; rowHeight: number; children: React.ReactNode }>) {
-    return <View style={{ flexGrow: 1, minHeight: props.rows * props.rowHeight, justifyContent: 'center' }}>{props.children}</View>;
+/** A state (loading, empty, failed) sits centred in the reserved room; rows start at its top, like any list. */
+function WidgetFrameReservedRows(props: Readonly<{ rows: number; rowHeight: number; centered: boolean; children: React.ReactNode }>) {
+    return <View style={{ flexGrow: 1, minHeight: props.rows * props.rowHeight, justifyContent: props.centered ? 'center' : 'flex-start' }}>{props.children}</View>;
 }
 
 /**

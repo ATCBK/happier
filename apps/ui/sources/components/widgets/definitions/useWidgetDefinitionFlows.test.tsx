@@ -16,7 +16,15 @@ import type { WidgetAddSection } from '../add/widgetAddModel';
  */
 const harness = createHomeGovernanceHarness();
 installHomeGovernanceBoundaries(harness);
-installDisconnectedServerSocketBoundary();
+// The fixture Home is reachable. Deliver only the external transport event;
+// the real connection owner still establishes scoped request authority.
+installDisconnectedServerSocketBoundary(socket => {
+    vi.mocked(socket.connect).mockImplementation(() => {
+        socket.connected = true;
+        for (const listener of socket.listeners('connect')) listener();
+        return socket;
+    });
+});
 await loadSyncSingletonForTests();
 const { BoardWidgetAddPopover } = await import('../add/BoardWidgetAddPopover');
 
@@ -53,8 +61,17 @@ const DRAFT = {
 } as const;
 
 describe('widget definition flows', () => {
-    beforeEach(async () => { await harness.reset(); });
-    afterEach(() => { standardCleanup(); restoreUuid?.(); restoreUuid = null; });
+    beforeEach(async () => {
+        await harness.reset();
+        // Connection readiness and scoped requests use one canonical Home boundary.
+        const { setRuntimeFetch } = await import('@/utils/system/runtimeFetch');
+        setRuntimeFetch(harness.request);
+    });
+    afterEach(async () => {
+        standardCleanup(); restoreUuid?.(); restoreUuid = null;
+        const { resetRuntimeFetch } = await import('@/utils/system/runtimeFetch');
+        resetRuntimeFetch();
+    });
 
     it.each(['home', 'project'] as const)('copies resolved page inputs to %s through the shared menu and the existing Add Action approval path', async destinationKind => {
         const serverId = await addDefinitionHome();
@@ -765,8 +782,9 @@ describe('widget definition flows', () => {
             .every(source => source.machine === null && !source.usesViewerConnection)).toBe(true);
     });
 
-    it('keeps the saved copy on its original Home while a refused link is retried after switching Homes', async () => {
+    it.each(['hostedHtml', 'builtin'] as const)('keeps the saved %s copy on its original Home while a refused link is retried after switching Homes', async kind => {
         const serverId = await addDefinitionHome();
+        const disconnect = kind === 'builtin' ? await applyDefinitionHomeConnection() : null;
         const { renderScreen } = await import('@/dev/testkit/render/renderScreen');
         const { SessionVisualCopyPanel } = await import('@/components/sessions/board/SessionVisualCopyPanel');
         const { storage } = await import('@/sync/domains/state/storage');
@@ -778,7 +796,10 @@ describe('widget definition flows', () => {
         const React = await import('react');
         const features = createRootLayoutFeaturesResponse();
         if (!tryWriteServerEnabledBitInPlace(features, 'sharing.public', true)) throw new Error('Missing public feature');
+        if (!tryWriteServerEnabledBitInPlace(features, 'sessions.board', true)) throw new Error('Missing Board feature');
         primeServerFeaturesSnapshot({ serverId, snapshot: { status: 'ready', features } });
+        harness.answer(serverId, '/v1/features', { body: features });
+        harness.answer(serverId, '/v1/features/authenticated', { body: features });
         harness.answer(serverId, 'GET /v1/public-shares', { body: { publicShares: [] } });
         harness.answer(serverId, 'GET /v1/public-shares?subjectKind=artifact', { body: { publicShares: [] } });
         harness.answer(serverId, 'POST /v1/public-shares', { status: 503, body: { error: 'public_share_isolation_unavailable' } });
@@ -787,22 +808,73 @@ describe('widget definition flows', () => {
             harness.answer(serverId, `GET /v1/public-shares?subjectKind=artifact&subjectId=${artifactId}`, { body: { publicShares: [] } });
         });
         const item = SessionSurfaceItemV1Schema.parse({ v: 1, destination: 'transcript', title: 'Saved copy', frame: 'card',
-            height: { mode: 'auto', fallback: 'regular' }, source: { kind: 'hostedHtml', source: artifactHtmlBundleFromBodyV1('<p>Copy</p>') } });
-        const screen = await renderScreen(React.createElement(SessionVisualCopyPanel, { account: { serverId, accountId: ACCOUNT_ID },
+            height: { mode: 'auto', fallback: 'regular' }, source: kind === 'hostedHtml'
+                ? { kind: 'hostedHtml', source: artifactHtmlBundleFromBodyV1('<p>Copy</p>') }
+                : { kind: 'widget', instance: { v: 1, id: 'html', definition: { kind: 'builtin', id: 'usage_period_summary' }, bindings: {} } } });
+        if (kind === 'builtin') {
+            const { SessionSystemRecordStoredSchema } = await import('@happier-dev/protocol');
+            const { createSessionSystemRecordHttpFixture } = await import('@/dev/testkit/harness/serverAccountConnectionHarness');
+            const { projectSessionAccessCapabilitiesV1 } = await import('@happier-dev/protocol/sessions/access/sessionEffectiveAccessV1');
+            const fixture = createSessionSystemRecordHttpFixture({ sessionId: 'source', effectiveAccess: { v: 1, level: 'owner',
+                sources: [{ kind: 'owner' }], capabilities: projectSessionAccessCapabilitiesV1({ owner: true, grants: [] }) },
+                records: [SessionSystemRecordStoredSchema.parse({
+                    id: 'source-record', address: { owner: 'host', namespace: 'surface', kind: 'item.v1', localId: 'html' },
+                    content: { t: 'plain', v: item }, revision: 'ssr1.AAAACHN5c3JlY18xAAAAAQ',
+                    createdAt: '2026-10-12T00:00:00.000Z', updatedAt: '2026-10-12T00:00:00.000Z',
+                })] });
+            for (const path of ['/v2/sessions/source', '/v2/sessions/source?accessProjectionVersion=1',
+                '/v2/sessions/source/system-records/record?owner=host&namespace=surface&kind=layout.v1&localId=layout',
+                '/v2/sessions/source/system-records/record?owner=host&namespace=surface&kind=item.v1&localId=html']) {
+                harness.answer(serverId, `GET ${path}`, { body: await (await fixture.request(`https://definitions-home.example${path}`)).json() });
+            }
+        }
+        let screen = await renderScreen(React.createElement(SessionVisualCopyPanel, { account: { serverId, accountId: ACCOUNT_ID },
             sessionId: 'source', itemId: 'html', item, share: true, onClose: () => {}, testID: 'copyHandoff' }));
         try {
             await screen.pressByTestIdAsync('copyHandoff.save');
+            if (kind === 'builtin') {
+                const { ApprovalRequestV2Schema } = await import('@happier-dev/protocol');
+                const { decideApprovalAsInbox } = await import('@/dev/testkit/harness/approvalInbox');
+                const { DocumentShareSheet } = await import('@/components/sharing/documents/DocumentShareSheet');
+                await vi.waitFor(() => expect(harness.artifacts(serverId).list()).toHaveLength(1));
+                const approvalId = harness.artifacts(serverId).list()[0]!.id;
+                const request = ApprovalRequestV2Schema.parse(JSON.parse(harness.artifacts(serverId).readPlainBody(approvalId)!));
+                expect(request).toMatchObject({ actionId: 'widgets.definition.saveFromSession', actionArgs: {
+                    account: { serverId, accountId: ACCOUNT_ID }, session: { serverId, sessionId: 'source' }, itemId: 'html',
+                } });
+                const decision = await decideApprovalAsInbox(serverId, approvalId, 'approve');
+                expect(decision, JSON.stringify({ approval: harness.artifacts(serverId).readPlainBody(approvalId),
+                    requests: harness.requests.map(request => request.path) }))
+                    .toMatchObject({ ok: true, result: { status: 'executed' } });
+                // Sharing the newly saved definition is the existing explicit share-sheet entry,
+                // after approval custody completes; the pending copy panel does not auto-share.
+                const saved = harness.artifacts(serverId).list().find(row => row.id !== approvalId)!;
+                const { createDefaultActionExecutor } = await import('@/sync/ops/actions/defaultActionExecutor');
+                const { getActionSpec } = await import('@happier-dev/protocol/actions/actionSpecs');
+                const read = await createDefaultActionExecutor().execute('widgets.definition.get', {
+                    account: { serverId, accountId: ACCOUNT_ID }, artifactId: saved.id,
+                }, { serverId, surface: 'ui', authority: 'present_user' });
+                expect(read).toMatchObject({ ok: true });
+                if (!read.ok) throw new Error('The saved builtin definition must remain readable');
+                expect(getActionSpec('widgets.definition.get').outputSchema.parse(read.result)).toMatchObject({
+                    definition: { body: { kind: 'builtin', id: 'usage_period_summary' } },
+                });
+                await screen.unmount();
+                screen = await renderScreen(React.createElement(DocumentShareSheet, { artifactId: saved.id,
+                    kind: 'widget-definition.v1', scope: { serverId, accountId: ACCOUNT_ID }, testID: 'copyHandoff.share' }));
+            }
             await vi.waitFor(() => expect(screen.findByTestId('copyHandoff.share:document-share-public-link'),
                 `${screen.getTextContent()} ${JSON.stringify(harness.requests.map(request => request.path))}`).not.toBeNull());
-            const artifactId = harness.artifacts(serverId).list()[0]!.id;
+            const artifactId = harness.artifacts(serverId).list().at(-1)!.id;
             harness.answer(serverId, `GET /v1/public-shares?subjectKind=artifact&subjectId=${artifactId}`, { body: { publicShares: [] } });
             await screen.pressByTestIdAsync('copyHandoff.share:document-share-public-link');
             await vi.waitFor(() => expect(screen.findByTestId('session-public-link-create')).not.toBeNull());
             await screen.pressByTestIdAsync('session-public-link-create');
             await screen.pressByTestIdAsync('session-public-link-options-cancel');
             expect(harness.requestsFor('/v1/public-shares').filter(request => request.input)).toHaveLength(0);
-            expect(harness.requestsFor('/v1/artifacts').filter(request => request.input)).toHaveLength(1);
-            expect(harness.artifacts(serverId).list()).toHaveLength(1);
+            const createdArtifacts = kind === 'builtin' ? 2 : 1;
+            expect(harness.requestsFor('/v1/artifacts').filter(request => request.input)).toHaveLength(createdArtifacts);
+            expect(harness.artifacts(serverId).list()).toHaveLength(createdArtifacts);
             const foreignHome = await harness.addHome({ name: 'Foreign Home', serverUrl: 'https://foreign-home.example', accountId: 'account-b' });
             storage.setState({ profileScope: { serverId: foreignHome, accountId: 'account-b' }, settingsScope: { serverId: foreignHome, accountId: 'account-b' } });
             await vi.waitFor(() => expect(screen.findByTestId('session-public-link-create')).not.toBeNull());
@@ -811,11 +883,11 @@ describe('widget definition flows', () => {
             await vi.waitFor(() => expect(screen.findByTestId('session-public-link-mutation-error')).not.toBeNull());
             await screen.pressByTestIdAsync('session-public-link-options-create');
             await vi.waitFor(() => expect(harness.requestsFor('/v1/public-shares').filter(request => request.input)).toHaveLength(2));
-            expect(harness.requestsFor('/v1/artifacts').filter(request => request.input)).toHaveLength(1);
+            expect(harness.requestsFor('/v1/artifacts').filter(request => request.input)).toHaveLength(createdArtifacts);
             expect(harness.requestsFor('/v1/public-shares').every(request => request.serverId === serverId)).toBe(true);
-            expect(harness.artifacts(serverId).list()).toHaveLength(1);
+            expect(harness.artifacts(serverId).list()).toHaveLength(createdArtifacts);
             expect(harness.artifacts(foreignHome).list()).toHaveLength(0);
-        } finally { await screen.unmount(); }
+        } finally { await screen.unmount(); await disconnect?.(); }
     });
 
     it('lets a reader explicitly save an inline HTML visual as an independent HTML Artifact before sharing', async () => {
