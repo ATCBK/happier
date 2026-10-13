@@ -449,31 +449,22 @@ export function BaseModal({
                         ]}
                     >
                         <ModalBoundaryProvider>
-                            {scrollHost === 'overlay' ? (
-                                <ScrollView
-                                    style={styles.scrollContainer}
-                                    contentContainerStyle={[styles.scrollContent, placement === 'bottom' ? styles.scrollContentBottom : null]}
-                                    showsVerticalScrollIndicator={false}
-                                    keyboardShouldPersistTaps="handled"
-                                    centerContent={placement !== 'bottom'}
+                            {/* Keep the body's native parent when chrome transfers scroll ownership. */}
+                            <ScrollView
+                                style={styles.scrollContainer}
+                                contentContainerStyle={[styles.scrollContent, placement === 'bottom' ? styles.scrollContentBottom : null]}
+                                scrollEnabled={scrollHost === 'overlay'}
+                                showsVerticalScrollIndicator={false}
+                                keyboardShouldPersistTaps="handled"
+                                centerContent={placement !== 'bottom'}
+                            >
+                                <View
+                                    pointerEvents={interactivePointerEvents.nativePointerEvents}
+                                    style={[styles.scrollContentInner, interactivePointerEvents.webStyle]}
                                 >
-                                    <View
-                                        pointerEvents={interactivePointerEvents.nativePointerEvents}
-                                        style={[styles.scrollContentInner, interactivePointerEvents.webStyle]}
-                                    >
-                                        {sheetChildren}
-                                    </View>
-                                </ScrollView>
-                            ) : (
-                                <View style={[styles.scrollContainer, styles.scrollContent, placement === 'bottom' ? styles.scrollContentBottom : null]}>
-                                    <View
-                                        pointerEvents={interactivePointerEvents.nativePointerEvents}
-                                        style={[styles.scrollContentInner, interactivePointerEvents.webStyle]}
-                                    >
-                                        {sheetChildren}
-                                    </View>
+                                    {sheetChildren}
                                 </View>
-                            )}
+                            </ScrollView>
                         </ModalBoundaryProvider>
                     </OverlayMotionFrame>
                     <OverlayPortalHost />

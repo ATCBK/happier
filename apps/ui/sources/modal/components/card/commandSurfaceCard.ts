@@ -21,6 +21,23 @@ export const COMMAND_SURFACE_DETAIL_CARD_DIMENSIONS: ModalCardDimensionOptions =
     width: 960,
 });
 
+/**
+ * The add-from-a-catalog dialog (add a skill, an MCP server, an agent): one fixed frame for every catalog, whatever
+ * the mode, the search or the list ⇄ details split, so the dialog never resizes under the person's hand. Set by the
+ * side-by-side with the capabilities lab (sa-A1/A2) and the widget add surface; height follows the window.
+ */
+export const CATALOG_SURFACE_CARD_DIMENSIONS: ModalCardDimensionOptions = Object.freeze({
+    width: 1080,
+    maxHeightRatio: 0.88,
+    size: 'lg',
+});
+
+/**
+ * The catalog list beside an open item's details: the Collection's split minima and list share inside
+ * `CATALOG_SURFACE_CARD_DIMENSIONS` (the list keeps a readable name, description and facts line; the details take the rest).
+ */
+export const CATALOG_SURFACE_LIST_ROLE = Object.freeze({ minListWidthPx: 320, minDetailWidthPx: 440, preferredListRatio: 0.34 });
+
 /** Which frame a command surface shows: the compact palette, or the list with a detail column. */
 export type CommandSurfaceLayout = 'compact' | 'detail';
 

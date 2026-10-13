@@ -19,6 +19,8 @@ import { motionTokens } from '@/components/ui/motion/motionTokens';
 
 type ModalCardFrameProps = Readonly<{
     children: React.ReactNode;
+    /** Raw custom-modal bodies retain this same ancestry when they publish card chrome. */
+    framed?: boolean;
     material?: 'glass' | 'solid';
     /** `none`: no title band; the content is the top of the card. The title remains the accessible name. */
     header?: 'band' | 'none';
@@ -97,15 +99,21 @@ const stylesheet = StyleSheet.create((theme) => ({
         flexGrow: 1,
         minHeight: 0,
     },
+    bodyUnscrolled: {
+        flexGrow: 0,
+        flexShrink: 0,
+        overflow: 'visible',
+    },
 }));
 
 export function ModalCardFrame(props: ModalCardFrameProps) {
     const { theme } = useUnistyles();
     const styles = stylesheet;
-    const scrollHost = props.scrollHost ?? 'overlay';
-    const sheet = props.presentation === 'sheet';
-    const fullscreen = props.presentation === 'fullscreen';
-    const bodyScroll = props.bodyScroll ?? 'none';
+    const framed = props.framed !== false;
+    const scrollHost = framed ? props.scrollHost ?? 'overlay' : 'overlay';
+    const sheet = framed && props.presentation === 'sheet';
+    const fullscreen = framed && props.presentation === 'fullscreen';
+    const bodyScroll = framed ? props.bodyScroll ?? 'none' : 'none';
     const reducedMotion = useReducedMotionPreference();
     const dimensions = useModalCardDimensions({
         ...props.dimensions,
@@ -118,7 +126,7 @@ export function ModalCardFrame(props: ModalCardFrameProps) {
     const dismiss = sheet ? sheetDismiss : null;
     const drag = useSheetDrag(dismiss);
 
-    const hasHeader = props.header !== 'none' && (props.leading != null
+    const hasHeader = framed && props.header !== 'none' && (props.leading != null
         || props.title != null
         || props.subtitle != null
         || props.actions != null
@@ -127,16 +135,16 @@ export function ModalCardFrame(props: ModalCardFrameProps) {
     return (
         <Animated.View
             testID={props.testID}
-            {...(Platform.OS === 'web'
+            {...(framed && Platform.OS === 'web'
                 ? ({ dataSet: { happyModalCardBoundary: 'true' } } as unknown as Record<string, unknown>)
                 : null)}
             {...(dismiss ? { onLayout: drag.onLayout } : {})}
             style={[
                 dismiss ? { transform: [{ translateY: drag.offset }] } : null,
-                fullscreen ? styles.fullscreenFrame : styles.shadowFrame,
+                framed ? (fullscreen ? styles.fullscreenFrame : styles.shadowFrame) : null,
                 sheet
                     ? [styles.sheetFrame, { width: '100%', maxWidth: '100%' }]
-                    : {
+                    : framed ? {
                         width: dimensions.width,
                         maxWidth: dimensions.width,
                         // A card whose owner changes its width (a command surface widening for a detail
@@ -146,8 +154,8 @@ export function ModalCardFrame(props: ModalCardFrameProps) {
                             transitionDuration: `${reducedMotion ? 0 : motionTokens.durationMs.base}ms`,
                             transitionTimingFunction: motionTokens.easingCss.standard,
                         } as unknown as ViewStyle : null),
-                    },
-                scrollHost === 'body' || fullscreen
+                    } : null,
+                framed && (scrollHost === 'body' || fullscreen)
                     ? {
                         height: dimensions.maxHeight,
                     }
@@ -155,9 +163,10 @@ export function ModalCardFrame(props: ModalCardFrameProps) {
                 props.style,
             ]}
         >
-            <GlassSurface surfaceGroup="floating" dialog enabled={!fullscreen && props.material !== 'solid'}
-                solidColor={fullscreen ? theme.colors.surface.base : undefined} style={[
-                fullscreen ? styles.fullscreenSurface : styles.clipSurface,
+            <GlassSurface surfaceGroup="floating" dialog enabled={framed && !fullscreen && props.material !== 'solid'}
+                finishRole={framed ? undefined : null}
+                solidColor={!framed ? 'transparent' : fullscreen ? theme.colors.surface.base : undefined} style={[
+                framed ? (fullscreen ? styles.fullscreenSurface : styles.clipSurface) : null,
                 scrollHost === 'body' || fullscreen ? { flex: 1 } : null,
                 fullscreen ? {
                     paddingTop: props.safeAreaInsets?.top ?? 0,
@@ -183,32 +192,28 @@ export function ModalCardFrame(props: ModalCardFrameProps) {
                 ) : null}
 
                 {/* A card (not fullscreen) is a contained scope: page lists inside take its width (R-APP-7). */}
-                <ContainedPageScopeProvider contained={!fullscreen}>
-                {bodyScroll === 'auto' ? (
+                <ContainedPageScopeProvider contained={framed && !fullscreen}>
+                    {/* One body parent: chrome and scroll changes must not retire pending input custody. */}
                     <ScrollView
-                        testID="modal-card-body-scroll"
-                        style={styles.bodyScrollView}
-                        contentContainerStyle={styles.bodyScrollContent}
+                        testID={bodyScroll === 'auto' ? 'modal-card-body-scroll' : undefined}
+                        style={bodyScroll === 'auto' ? styles.bodyScrollView : styles.bodyUnscrolled}
+                        contentContainerStyle={bodyScroll === 'auto' ? styles.bodyScrollContent : undefined}
+                        scrollEnabled={bodyScroll === 'auto'}
                         keyboardShouldPersistTaps="handled"
-                        nestedScrollEnabled={true}
+                        nestedScrollEnabled={bodyScroll === 'auto'}
                     >
-                        <ModalCardBody fill={false} style={props.bodyStyle}>
+                        <ModalCardBody fill={framed && bodyScroll !== 'auto'} style={props.bodyStyle}>
                             {props.children}
                         </ModalCardBody>
                     </ScrollView>
-                ) : (
-                    <ModalCardBody style={props.bodyStyle}>
-                        {props.children}
-                    </ModalCardBody>
-                )}
                 </ContainedPageScopeProvider>
 
-                {props.footer != null ? (
+                {framed && props.footer != null ? (
                     <View testID="modal-card-footer" style={[styles.footer, props.footerStyle]}>
                         <RoundButtonSizeScope size="small">{props.footer}</RoundButtonSizeScope>
                     </View>
                 ) : null}
-                {!fullscreen ? <SurfaceRim role="floating" radius={theme.borderRadius.modalCard} border="modal" /> : null}
+                {framed && !fullscreen ? <SurfaceRim role="floating" radius={theme.borderRadius.modalCard} border="modal" /> : null}
             </GlassSurface>
         </Animated.View>
     );

@@ -4,6 +4,8 @@ import { KeyboardAvoidingView } from 'react-native-keyboard-controller';
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 
 import { renderScreen } from '@/dev/testkit';
+import { act } from 'react-test-renderer';
+import type { CustomModalInjectedProps } from '../types';
 
 const reactActEnvironment = globalThis as typeof globalThis & {
     IS_REACT_ACT_ENVIRONMENT?: boolean;
@@ -87,6 +89,33 @@ vi.mock('react-native-unistyles', async () => {
 
 describe('BaseModal (native)', () => {
     beforeEach(() => { nativePlatform.os = 'android'; });
+    it.each(['android', 'ios'] as const)('retains input custody while its own chrome changes scroll owner on %s', async (platform) => {
+        nativePlatform.os = platform;
+        const { CustomModal } = await import('./CustomModal');
+        const { useModalCardChrome } = await import('./card/useModalCardChrome');
+        const retired = vi.fn();
+        function InputBody(props: CustomModalInjectedProps) {
+            const [draft, setDraft] = React.useState('saved');
+            const [card, setCard] = React.useState(true);
+            React.useEffect(() => retired, []);
+            useModalCardChrome(props.setChrome, React.useMemo(() => card ? {
+                kind: 'card' as const, title: 'Inputs', scrollHost: 'body' as const, bodyScroll: 'auto' as const,
+            } : null, [card]));
+            return React.createElement('InputBody', { value: draft, onChangeText: setDraft, onChromeChange: setCard });
+        }
+        const screen = await renderScreen(<CustomModal config={{ id: 'input-modal', type: 'custom', component: InputBody }}
+            visible onClose={() => {}} />);
+        expect(retired).not.toHaveBeenCalled();
+        act(() => screen.findByType('InputBody').props.onChangeText('entered'));
+        act(() => screen.findByType('InputBody').props.onChromeChange(false));
+        expect(screen.findByType('InputBody').props.value).toBe('entered');
+        expect(retired).not.toHaveBeenCalled();
+        act(() => screen.findByType('InputBody').props.onChromeChange(true));
+        expect(screen.findByType('InputBody').props.value).toBe('entered');
+        expect(retired).not.toHaveBeenCalled();
+        await screen.unmount();
+        expect(retired).toHaveBeenCalledOnce();
+    });
     it('exposes a named modal-isolated dialog surface', async () => {
         const { BaseModal } = await import('./BaseModal');
 
@@ -151,9 +180,10 @@ describe('BaseModal (native)', () => {
     it('bottom-aligns a bounded sheet while leaving its body as the sole scroll owner', async () => {
         const { BaseModal } = await import('./BaseModal');
         const screen = await renderScreen(<BaseModal visible placement="bottom" scrollHost="body"><View /></BaseModal>);
-        expect(screen.findAll((node) => node.props.keyboardShouldPersistTaps === 'handled')).toHaveLength(0);
-        expect(screen.findAll((node) => flattenStyleProp(node.props.style).flexGrow === 1)
-            .some((node) => flattenStyleProp(node.props.style).justifyContent === 'flex-end')).toBe(true);
+        expect(screen.findAll((node) => node.props.keyboardShouldPersistTaps === 'handled')
+            .every(node => node.props.scrollEnabled === false)).toBe(true);
+        const scroll = screen.findAll((node) => node.props.keyboardShouldPersistTaps === 'handled' && 'contentContainerStyle' in node.props)[0];
+        expect(flattenStyleProp(scroll.props.contentContainerStyle)).toMatchObject({ flexGrow: 1, justifyContent: 'flex-end' });
     });
 
     it('provides a modal-local overlay portal for popovers opened inside the native modal', async () => {
@@ -195,7 +225,7 @@ describe('BaseModal (native)', () => {
         expect(onClose).toHaveBeenCalledTimes(1);
     });
 
-    it('does not add an outer ScrollView when the bounded modal body owns scrolling', async () => {
+    it('leaves the bounded modal body as the only enabled scroll owner', async () => {
         const { BaseModal } = await import('./BaseModal');
 
         const screen = await renderScreen(
@@ -206,6 +236,6 @@ describe('BaseModal (native)', () => {
             }),
         );
 
-        expect(screen.findAllByType('ScrollView' as any)).toHaveLength(0);
+        expect(screen.findAllByType('ScrollView').every(node => node.props.scrollEnabled === false)).toBe(true);
     });
 });

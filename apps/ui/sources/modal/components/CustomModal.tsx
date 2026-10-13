@@ -233,32 +233,29 @@ export function CustomModal({ config, onClose, showBackdrop = true, visible, zIn
             placement={phoneFullscreen ? 'fullscreen' : phoneSheet ? 'bottom' : 'center'}
             scrollHost={chrome?.scrollHost ?? 'overlay'}
         >
-            {chrome ? (
-                <ModalCardFrame
-                    material={chrome.material}
-                    header={chrome.header}
-                    leading={chrome.leading}
-                    title={chrome.title}
-                    subtitle={chrome.subtitle}
-                    actions={chrome.actions}
-                    footer={chrome.footer}
-                    testID={chrome.testID}
-                    titleTestID={chrome.titleTestID}
-                    subtitleTestID={chrome.subtitleTestID}
-                    closeButtonTestID={chrome.closeButtonTestID}
-                    scrollHost={chrome.scrollHost}
-                    bodyScroll={chrome.bodyScroll ?? 'none'}
-                    dimensions={chrome.dimensions}
-                    presentation={phoneFullscreen ? 'fullscreen' : phoneSheet ? 'sheet' : 'card'}
-                    safeAreaInsets={phoneFullscreen ? insets : undefined}
-                    sheetBottomInset={phoneSheet ? insets.bottom : undefined}
-                    onClose={dismissible ? handleSharedDismiss : undefined}
-                >
-                    {content}
-                </ModalCardFrame>
-            ) : (
-                content
-            )}
+            <ModalCardFrame
+                framed={chrome !== null}
+                material={chrome?.material}
+                header={chrome?.header}
+                leading={chrome?.leading}
+                title={chrome?.title}
+                subtitle={chrome?.subtitle}
+                actions={chrome?.actions}
+                footer={chrome?.footer}
+                testID={chrome?.testID}
+                titleTestID={chrome?.titleTestID}
+                subtitleTestID={chrome?.subtitleTestID}
+                closeButtonTestID={chrome?.closeButtonTestID}
+                scrollHost={chrome?.scrollHost}
+                bodyScroll={chrome?.bodyScroll ?? 'none'}
+                dimensions={chrome?.dimensions}
+                presentation={phoneFullscreen ? 'fullscreen' : phoneSheet ? 'sheet' : 'card'}
+                safeAreaInsets={phoneFullscreen ? insets : undefined}
+                sheetBottomInset={phoneSheet ? insets.bottom : undefined}
+                onClose={chrome && dismissible ? handleSharedDismiss : undefined}
+            >
+                {content}
+            </ModalCardFrame>
         </BaseModal>
     );
 }

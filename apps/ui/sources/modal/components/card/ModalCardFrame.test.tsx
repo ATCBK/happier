@@ -54,6 +54,36 @@ installModalComponentCommonModuleMocks({
 afterEach(() => standardCleanup());
 
 describe('ModalCardFrame', () => {
+    it.each(['web', 'android'] as const)('retains the edited body and its pending custody when scrolling changes on %s', async (platform) => {
+        const { Platform } = await import('react-native');
+        const previousOS = Platform.OS;
+        Platform.OS = platform;
+        const retired = vi.fn();
+        function RetainedInput() {
+            const [draft, setDraft] = React.useState('saved');
+            React.useEffect(() => retired, []);
+            return React.createElement('RetainedInput', { value: draft, onChangeText: setDraft });
+        }
+        try {
+            const { renderScreen } = await import('@/dev/testkit');
+            const { ModalCardFrame } = await import('./ModalCardFrame');
+            const content = <RetainedInput />;
+            const screen = await renderScreen(<ModalCardFrame framed={false} title="Input" bodyScroll="none">{content}</ModalCardFrame>);
+            const { ModalCardHeader } = await import('./ModalCardHeader');
+            expect(screen.findAllByType(ModalCardHeader)).toHaveLength(0);
+            expect(screen.findAllByType('ScrollView').every(node => node.props.scrollEnabled === false)).toBe(true);
+            act(() => screen.findByType('RetainedInput').props.onChangeText('entered'));
+            await screen.update(<ModalCardFrame title="Updated" bodyScroll="auto">{content}</ModalCardFrame>);
+            expect(screen.findByType('RetainedInput').props.value).toBe('entered');
+            expect(retired).not.toHaveBeenCalled();
+            await screen.update(<ModalCardFrame framed={false} header="none" bodyScroll="none">{content}</ModalCardFrame>);
+            expect(screen.findByType('RetainedInput').props.value).toBe('entered');
+            expect(retired).not.toHaveBeenCalled();
+            await screen.unmount();
+            expect(retired).toHaveBeenCalledOnce();
+        } finally { Platform.OS = previousOS; }
+    });
+
     it('fills the viewport for full-page chrome and keeps content mounted across presentation changes', async () => {
         windowState.width = 390;
         windowState.height = 844;
@@ -415,7 +445,7 @@ describe('ModalCardFrame', () => {
                 }),
             ]),
         );
-        expect(screen.findAllByType('ScrollView')).toHaveLength(0);
+        expect(screen.findAllByType('ScrollView').every(node => node.props.scrollEnabled === false)).toBe(true);
     });
 
     it('marks the card container as a modal card boundary on web (so backdrop clicks can dismiss without swallowing inner clicks)', async () => {

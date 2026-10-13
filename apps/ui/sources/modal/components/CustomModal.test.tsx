@@ -5,6 +5,8 @@ import { createDeferred, renderScreen } from '@/dev/testkit';
 import { installModalComponentCommonModuleMocks } from './modalComponentTestHelpers';
 import { ModalCardFrame } from './card/ModalCardFrame';
 import { useModalCardChrome } from './card/useModalCardChrome';
+import { BaseModal } from './BaseModal';
+import { ModalCardHeader } from './card/ModalCardHeader';
 import type { CustomModalInjectedProps, CustomModalConfig } from '../types';
 
 const reactActEnvironment = globalThis as typeof globalThis & {
@@ -26,9 +28,12 @@ installModalComponentCommonModuleMocks({
     },
 });
 
-vi.mock('./BaseModal', () => ({
-    BaseModal: ({ children, ...props }: any) => React.createElement('BaseModal', props, children),
-}));
+vi.mock('@/utils/web/radixCjs', async () => {
+    const boundary = (await import('@/dev/testkit/mocks/radixCjs')).createRadixCjsModuleMock();
+    const layers = boundary.requireRadixDismissableLayer();
+    const focus = boundary.requireRadixFocusScope();
+    return { ...boundary, requireRadixDismissableLayer: () => layers, requireRadixFocusScope: () => focus };
+});
 
 function RawModal(props: CustomModalInjectedProps & Readonly<{ label: string }>) {
     return React.createElement('RawModal', props);
@@ -42,7 +47,8 @@ function ChromeModal(
     return React.createElement('ChromeModal', props);
 }
 
-function SelfChromeModal(props: CustomModalInjectedProps & Readonly<{ label: string }>) {
+function SelfChromeModal(props: CustomModalInjectedProps & Readonly<{ label: string; onRetire?: () => void }>) {
+    React.useEffect(() => props.onRetire, [props.onRetire]);
     React.useEffect(() => {
         props.setChrome?.({
             kind: 'card',
@@ -106,7 +112,8 @@ describe('CustomModal', () => {
             props: { label: 'raw' },
         });
 
-        expect(screen.findAllByType(ModalCardFrame as any)).toHaveLength(0);
+        expect(screen.findByType(ModalCardFrame).props.framed).toBe(false);
+        expect(screen.findAllByType(ModalCardHeader)).toHaveLength(0);
         expect(screen.findByType('RawModal' as any).props.label).toBe('raw');
         expect(typeof screen.findByType('RawModal' as any).props.onClose).toBe('function');
     });
@@ -155,10 +162,10 @@ describe('CustomModal', () => {
         expect(modalCardFrame.props.scrollHost).toBe('body');
         expect(modalCardFrame.props.bodyScroll).toBe('auto');
         expect(screen.findByType(ChromeModal).props.label).toBe('browse');
-        expect(screen.findByType('BaseModal' as any).props.accessibilityLabel).toBe('Browse provider sessions');
-        expect(screen.findByType('BaseModal' as any).props.focusReturnRef).toBe(focusReturnRef);
-        expect(screen.findByType('BaseModal' as any).props.webPlacement).toBe('top');
-        expect(screen.findByType('BaseModal' as any).props.scrollHost).toBe('body');
+        expect(screen.findByType(BaseModal).props.accessibilityLabel).toBe('Browse provider sessions');
+        expect(screen.findByType(BaseModal).props.focusReturnRef).toBe(focusReturnRef);
+        expect(screen.findByType(BaseModal).props.webPlacement).toBe('top');
+        expect(screen.findByType(BaseModal).props.scrollHost).toBe('body');
 
         act(() => {
             modalCardFrame.props.onClose();
@@ -211,7 +218,7 @@ describe('CustomModal', () => {
 
         act(() => {
             screen.findByType(ModalCardFrame).props.onClose();
-            screen.findByType('BaseModal').props.onClose();
+            screen.findByType(BaseModal).props.onClose();
         });
 
         expect(onDismissRequest).toHaveBeenCalledTimes(2);
@@ -237,7 +244,7 @@ describe('CustomModal', () => {
         }, onClose);
 
         act(() => {
-            screen.findByType('BaseModal').props.onClose();
+            screen.findByType(BaseModal).props.onClose();
             screen.findByType(ModalCardFrame).props.onClose();
         });
 
@@ -263,7 +270,7 @@ describe('CustomModal', () => {
         }, onClose);
 
         act(() => {
-            screen.findByType('BaseModal').props.onClose();
+            screen.findByType(BaseModal).props.onClose();
         });
 
         await act(async () => {
@@ -311,7 +318,7 @@ describe('CustomModal', () => {
         expect(screen.findByType(ModalCardFrame).props.onClose).toBeUndefined();
 
         act(() => {
-            screen.findByType('BaseModal' as any).props.onClose();
+            screen.findByType(BaseModal).props.onClose();
         });
         expect(onRequestClose).not.toHaveBeenCalled();
         expect(onClose).not.toHaveBeenCalled();
@@ -323,17 +330,21 @@ describe('CustomModal', () => {
         expect(onClose).toHaveBeenCalledTimes(1);
     });
 
-    it('allows custom modals to opt into card chrome dynamically', async () => {
+    it('allows custom modals to opt into card chrome dynamically without retiring their input custody', async () => {
+        const onRetire = vi.fn();
         const screen = await renderCustomModal({
             type: 'custom',
             component: SelfChromeModal,
-            props: { label: 'self' },
+            props: { label: 'self', onRetire },
         });
 
         const modalCardFrame = screen.findByType(ModalCardFrame);
         expect(modalCardFrame.props.title).toBe('Self chrome');
         expect(modalCardFrame.props.scrollHost).toBeUndefined();
         expect(screen.findByType(SelfChromeModal).props.label).toBe('self');
+        expect(onRetire).not.toHaveBeenCalled();
+        await screen.unmount();
+        expect(onRetire).toHaveBeenCalledOnce();
     });
 
     it('merges card chrome updates with existing chrome by default', async () => {
@@ -451,7 +462,7 @@ describe('CustomModal', () => {
         }, onClose);
 
         act(() => {
-            screen.findByType('BaseModal' as any).props.onClose();
+            screen.findByType(BaseModal).props.onClose();
         });
 
         expect(onRequestClose).toHaveBeenCalledTimes(1);
