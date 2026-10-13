@@ -1,8 +1,17 @@
 import { describe, expect, it, vi } from 'vitest';
+import { spawn } from 'node:child_process';
+import { randomUUID } from 'node:crypto';
+import { once } from 'node:events';
+import { mkdtemp, mkdir, rm, writeFile } from 'node:fs/promises';
+import { tmpdir } from 'node:os';
+import { join } from 'node:path';
+import { createInterface } from 'node:readline';
 
 import { configuration } from '@/configuration';
 import {
   AGENT_RUNTIME_DAEMON_SERVICES_PATH,
+  AgentRuntimeDaemonServiceRequestV1Schema,
+  AgentRuntimeDaemonServiceResponseV1Schema,
 } from '@/agent/runtime/session/process/agentRuntimeDaemonServiceProtocol';
 import {
   createAgentSessionRunnerFactoryBinding,
@@ -17,6 +26,11 @@ import {
 import type { TrackedSession } from './types';
 import { clearTrackedRunnerAgentDaemonServiceAdmission } from './agentRuntime/clearTrackedRunnerAgentDaemonServiceAdmission';
 import { createDaemonAdmissionDrain } from './lifecycle/admissionDrain';
+import { buildCgroupSelfMigratingHappyCliLaunchSpec } from './platform/linux/buildCgroupSelfMigratingHappyCliLaunchSpec';
+import { sessionScopeExitEvidencePath } from './platform/linux/systemdUserResourceGovernor';
+import { adoptTrackedSessionRunnerIdentity } from './sessions/sessionReportCorrelation';
+import { readProcessIdentityByPid } from './processIdentity';
+import { hashProcessCommand } from './sessionRegistry';
 
 type RecordAdmission = NonNullable<
   Parameters<typeof createDaemonControlApp>[0][
@@ -51,6 +65,116 @@ function createRetainedAgent() {
 }
 
 describe('daemon control server: runner-scoped Agent runtime services', () => {
+  it.skipIf(process.platform !== 'linux')('authorizes the witnessed child of a real launch even when optional cgroup migration fails', async () => {
+    const root = await mkdtemp(join(tmpdir(), 'happier-runner-auth-'));
+    const procfsRootDir = join(root, 'proc');
+    const cgroupRootDir = join(root, 'cgroup');
+    await mkdir(join(procfsRootDir, '111'), { recursive: true });
+    await mkdir(cgroupRootDir);
+    await writeFile(join(procfsRootDir, '111', 'cgroup'), '0::/user.slice/user-1000.slice/session-1.scope\n');
+    // A non-delegated cgroup filesystem cannot create the sibling scope.
+    await writeFile(join(cgroupRootDir, 'user.slice'), 'not delegated');
+    const unit = `happier-session-${randomUUID().replaceAll('-', '')}.scope`;
+    const spec = await buildCgroupSelfMigratingHappyCliLaunchSpec({
+      daemonPid: 111, procfsRootDir, cgroupRootDir,
+      unit,
+      // systemd availability is an OS boundary; launch composition stays real.
+      systemdUserResourceGovernorExecFile: async () => { throw new Error('No user manager'); },
+      launchSpec: { runtime: 'node', filePath: process.execPath,
+        args: ['-e', 'console.log(process.pid); setInterval(() => {}, 1000)'] },
+    });
+    if (!spec) throw new Error('Expected cgroup launch context');
+    const child = spawn(spec.filePath, spec.args, { env: { ...process.env, ...spec.env }, stdio: ['ignore', 'pipe', 'pipe'] });
+    const closed = once(child, 'close');
+    const lines = createInterface({ input: child.stdout });
+    let stderr = '';
+    child.stderr.on('data', (chunk: Buffer) => { stderr += chunk.toString(); });
+    let app: ReturnType<typeof createDaemonControlApp> | undefined;
+    let authority: Awaited<ReturnType<typeof publishAgentRuntimeDaemonServiceAuthority>> | undefined;
+    let authorityPath: string | undefined;
+    let runnerPid: number | undefined;
+    try {
+      const [line] = await Promise.race([once(lines, 'line'), closed.then(() => {
+        throw new Error('Launch exited before reporting its runner');
+      })]);
+      runnerPid = Number(line);
+      expect(runnerPid).not.toBe(child.pid);
+      expect(stderr).toContain('cgroup.procs');
+      const wrapperFact = await readProcessIdentityByPid(child.pid!);
+      const runnerFact = await readProcessIdentityByPid(runnerPid);
+      if (typeof wrapperFact?.processStartTimeMs !== 'number' || typeof runnerFact?.processStartTimeMs !== 'number') {
+        throw new Error('Expected live launch and runner process witnesses');
+      }
+      const wrapperIdentity = { pid: wrapperFact.pid, processStartTimeMs: wrapperFact.processStartTimeMs,
+        processCommandHash: hashProcessCommand(wrapperFact.command) };
+      const runnerIdentity = { pid: runnerFact.pid, processStartTimeMs: runnerFact.processStartTimeMs,
+        processCommandHash: hashProcessCommand(runnerFact.command) };
+      const sessionId = 'session-failed-cgroup-migration';
+      const retainedAgent = createRetainedAgent();
+      const tracked: TrackedSession = {
+        startedBy: 'daemon', pid: wrapperIdentity.pid, happySessionId: sessionId,
+        processStartTimeMs: wrapperIdentity.processStartTimeMs,
+        processCommandHash: wrapperIdentity.processCommandHash,
+        runnerAgentSourceCustodyV1: retainedAgent.sourceCustody,
+        runnerAgentInvocationContext: Object.freeze({ cwd: root, environment: Object.freeze({}), providerBindingActive: false }),
+      };
+      adoptTrackedSessionRunnerIdentity(tracked, runnerIdentity);
+      authorityPath = await createAgentRuntimeDaemonServiceAuthorityPath({
+        happyHomeDir: configuration.happyHomeDir, publicReleaseRing: configuration.publicReleaseRing,
+      });
+      authority = await publishAgentRuntimeDaemonServiceAuthority({
+        happyHomeDir: configuration.happyHomeDir, publicReleaseRing: configuration.publicReleaseRing,
+        path: authorityPath, sessionId, runner: { pid: runnerIdentity.pid,
+          processStartTimeMs: runnerIdentity.processStartTimeMs,
+          processCommandHash: runnerIdentity.processCommandHash, snapshotIdentity: 'snapshot:failed-cgroup' },
+        retainedAgent, httpPort: 46_006, capability: capabilityA, readPluginHardRevocationRevision: async () => 0,
+      });
+      tracked.agentRuntimeDaemonServiceAuthorityFilePath = authorityPath;
+      tracked.agentRuntimeDaemonServiceCapabilityHash = authority.capabilityDigest;
+      app = createDaemonControlApp({ getChildren: () => [tracked], machineId: 'machine-1',
+        stopSession: async () => ({ status: 'not_found' as const }),
+        spawnSession: async () => ({ type: 'success' as const, sessionId: 'unused' }),
+        requestShutdown: () => {}, onHappySessionWebhook: () => {}, controlToken: 'control-token' });
+      const request = AgentRuntimeDaemonServiceRequestV1Schema.parse({ v: 1,
+        context: { token: capabilityA, sessionId },
+        operation: { kind: 'turn_contributions.resolve', requestId: 'runner-auth-request', request: { kind: 'prompt' } },
+      });
+      const send = () => app!.inject({ method: 'POST', url: AGENT_RUNTIME_DAEMON_SERVICES_PATH,
+        headers: { 'x-happier-daemon-token': capabilityA }, payload: request });
+      // Reaching the unavailable service proves real ingress admission without
+      // substituting an internal dispatcher or bypassing marker verification.
+      const admitted = await send();
+      expect(admitted.statusCode).toBe(501);
+      expect(AgentRuntimeDaemonServiceResponseV1Schema.parse(admitted.json())).toMatchObject({
+        ok: false, error: { code: 'agent_runtime_daemon_service_unavailable' },
+      });
+      const witnessedRunner = tracked.runnerProcessIdentity;
+      // Missing adoption and a witness wired to the launcher must both stay forbidden.
+      for (const misbound of [undefined, wrapperIdentity]) {
+        tracked.runnerProcessIdentity = misbound;
+        const refused = await send();
+        expect(refused.statusCode).toBe(403);
+        expect(AgentRuntimeDaemonServiceResponseV1Schema.parse(refused.json())).toMatchObject({
+          ok: false, error: { code: 'agent_runtime_daemon_service_forbidden' },
+        });
+      }
+      tracked.runnerProcessIdentity = witnessedRunner;
+      expect((await send()).statusCode).toBe(501);
+    } finally {
+      lines.close();
+      if (runnerPid && child.exitCode === null) process.kill(runnerPid, 'SIGTERM');
+      else child.kill('SIGTERM');
+      await closed;
+      await app?.close();
+      if (authority && authorityPath) await removeAgentRuntimeDaemonServiceAuthorityIfOwned({
+        happyHomeDir: configuration.happyHomeDir, publicReleaseRing: configuration.publicReleaseRing,
+        path: authorityPath, capabilityDigest: authority.capabilityDigest,
+      });
+      await rm(root, { recursive: true, force: true });
+      await rm(sessionScopeExitEvidencePath(configuration.activeServerDir, unit), { force: true });
+    }
+  });
+
   it('parks fresh turn and managed-process authorization at retained-runner ingress while keeping accepted service reads open', async () => {
     const sessionId = 'session-drain-admission';
     const retainedAgent = createRetainedAgent();

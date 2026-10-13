@@ -76,6 +76,9 @@ import {
 } from '@/persistence';
 
 import { reattachTrackedSessionsFromMarkers } from './sessions/reattachFromMarkers';
+import { createSkillStore } from '@/prompts/skills/store/skillStore';
+import { createSkillUsageRecorder } from '@/prompts/skills/store/skillUsage';
+import { readSkillLibraryDigests } from '@/prompts/skills/library/readSkillLibraryContent';
 import { listSessionMarkers } from './sessionRegistry';
 import { equalProcessStart, processOwnerKey } from './processes/ownership/types';
 import { resolveProcessOwnerRequester } from './processes/ownership/resolveProcessOwnerRequester';
@@ -239,6 +242,9 @@ import { pluginReloadController } from '@/plugins/runtime/reload/singleton';
 import { acquireAuthoritativePluginRuntimeRegistryLease } from '@/plugins/runtime/reload/runtimeLease';
 import type { DaemonPluginChangeOwner } from '@/plugins/daemon/changeService';
 import { createDaemonPluginRuntimeOwner } from '@/plugins/daemon/runtimeOwner';
+import { createCliRegistryHostV1 } from '@/registries/createCliRegistryHost';
+import { startBackgroundRegistryUpdateCheck } from '@/registries/updates/startBackgroundRegistryUpdateCheck';
+import { createCliRegistryUpdateCheck } from '@/registries/updates/createCliRegistryUpdateCheck';
 import { createClientActionMachineRpcExecutor } from '@/plugins/runtime/invocation/actions/clientActionMachineRpc';
 import { DEFAULT_PLUGIN_DAEMON_DATABASE_LIMITS_POLICY } from '@/plugins/runtime/context/daemonDatabaseLimitsPolicy';
 import { createDaemonPluginAvailabilityReporter } from '@/plugins/availability/daemonReporter';
@@ -1093,6 +1099,9 @@ export async function startDaemon(
       });
       return (await terminalHostAdapterInventoryPromise).adapters;
     };
+    const skillStore = createSkillStore({ happyHomeDir: configuration.happyHomeDir,
+      readLibraryDigests: () => readSkillLibraryDigests(credentials) });
+    const skillUsageRecorder = createSkillUsageRecorder({ credentials, signal: homeTransportCancellation.signal });
     const startupProcessMarkers = await listSessionMarkers();
     // Retain known lifecycle facts, not process membership or native handles. All membership is re-read.
     const endedProcessRoots = new Map<string, HappierProcessRootSource>();
@@ -1113,6 +1122,11 @@ export async function startDaemon(
     }
     disconnectedTerminalHostCandidates = startupReattachResult.disconnectedTerminalHostCandidates ?? [];
     unresolvedTerminalHostSessionIds = startupReattachResult.unresolvedTerminalHostSessionIds ?? [];
+    await skillStore.reconcileSkillSessionDirs({
+      liveSessionIds: startupReattachResult.inventoryReliable === true
+        ? [...pidToTrackedSession.values()].map(tracked => tracked.happySessionId).filter((id): id is string => Boolean(id))
+        : null,
+    }).catch(error => logger.warn('[DAEMON RUN] Skill store startup reconciliation unavailable', { error }));
     const pendingSessionMachineAccessBindingIds = new Set(startupReattachResult.recoveredLiveSessionIds ?? []);
     let sessionMachineAccessBindingReconcileInFlight: Promise<void> | null = null;
     const reconcileSessionMachineAccessBindings = async (): Promise<void> => {
@@ -1492,6 +1506,10 @@ export async function startDaemon(
       credentials,
       logger,
     });
+    const registryUpdateCheck = createCliRegistryUpdateCheck({ credentials, signal: homeTransportCancellation.signal });
+    const checkRegistryUpdates = () => startBackgroundRegistryUpdateCheck(registryUpdateCheck);
+    void checkRegistryUpdates()
+      .catch(error => { if (!homeTransportCancellation.signal.aborted) logger.warn('[DAEMON RUN] Registry update check failed', error); });
     releaseAcpCatalogHydrationObserver = installDaemonAcpCatalogHydrationObserver({ credentials,
       onReady: async input => {
         try {
@@ -1537,9 +1555,12 @@ export async function startDaemon(
     const browserRuntimeActionExecute = api.createBrowserRuntimeActionExecutor();
     confidentialSecretFill = api.createConfidentialSecretFillExecutor({
       machineId: () => machineId, readHostIdentity: resolveCurrentMachineExecutionOriginContext });
+    const pluginRegistrySourceHome = resolveServerHttpBaseUrl();
+    const pluginRegistrySourceHost = createCliRegistryHostV1({ credentials });
     const pluginRuntimeOwner = createDaemonPluginRuntimeOwner({
       readSpawnFailureLimits: () => machineVitals?.latest()?.limits,
       happyHomeDir: configuration.happyHomeDir,
+      readRegistrySources: () => runWithServerHttpBaseUrl(pluginRegistrySourceHome, () => pluginRegistrySourceHost.readSources()),
       ...(managedResourcePreflight ? { managedResourcePreflight } : {}),
       daemonDatabaseLimits: DEFAULT_PLUGIN_DAEMON_DATABASE_LIMITS_POLICY,
       resolveCurrentMachineId: () => machineId,
@@ -2098,6 +2119,11 @@ export async function startDaemon(
       },
       readSpawnFailureLimits: () => machineVitals?.latest()?.limits,
       readMachineResourcesPolicy: () => machineResourcesPolicy?.read() ?? { status: 'unavailable' },
+      readDoctorResourceVitals: () => ({ sample: machineVitals?.latest() ?? null,
+        attention: machineResourceSummary?.getSummary()?.attention ?? null, self: eventLoopStallMonitor.snapshot() }),
+      checkRegistryUpdates,
+      skillStore,
+      skillUsageRecorder,
       endedProcessRoots: () => [...endedProcessRoots.values()],
       retainEndedProcessRoots: roots => {
         for (const root of roots) endedProcessRoots.set(`${processOwnerKey(root.owner)}:${root.pid}`, { ...root, live: false });
@@ -2322,6 +2348,7 @@ export async function startDaemon(
       processOwnershipRuntime, leftBehind: sessionControlLeftBehindPass, machineVitals,
       platform: process.platform === 'win32' ? 'win32' : process.platform === 'darwin' ? 'darwin' : 'linux',
       allProcessesVisible, requesterForOwner: requesterForProcessOwner, roleCatalog: readProcessRoleCatalog(),
+      readCeiling: root => sessionCeiling?.readObservation(root),
       ...(localServiceInventoryRoutes ? { localServiceRoutes: localServiceInventoryRoutes } : {}),
       readRequesterIdentities: async () => {
         const target = machineResourceTarget();
@@ -2834,6 +2861,7 @@ export async function startDaemon(
               const live = resolveLiveRunnerSnapshotFingerprints(pidToTrackedSession.values());
               return { reliable: live.reliable, paths: new Set([...live.fingerprints].map(fingerprint => join(home, '.runner-snapshots', fingerprint))) };
             },
+            readLiveSkillCachePaths: skillStore.readLiveSkillCachePaths,
             readInUsePaths: async () => {
               const [owners, residentModels] = await Promise.all([
                 processOwnershipRuntime.readOwners({ freshness: 'shared' }),
@@ -3040,7 +3068,7 @@ export async function startDaemon(
       directPeerServerLifecycle,
       transferLiveWorkProducer,
       directTransferPromptAssetAdapterRegistry,
-      directTransferPromptRegistryRegistry,
+      directTransferRegistryHost,
       transferRuntimeStatePublisher,
       stopDirectPeerServer,
       stopTailscaleTransferServeLifecycle,
@@ -3826,7 +3854,7 @@ export async function startDaemon(
           return await runtime.acquireWorkspaceSyncMachineIngress(input);
         },
         directTransferPromptAssetAdapterRegistry,
-        directTransferPromptRegistryRegistry,
+        directTransferRegistryHost,
         daemonServerWorkScheduler,
         cancelConnectedServiceRuntimeAuthRecovery,
         retryTemporaryThrottleNow,

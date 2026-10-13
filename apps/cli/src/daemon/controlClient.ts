@@ -83,6 +83,12 @@ import {
   CONNECTED_SERVICE_RUN_RELEASE_PATH,
   CONNECTED_SERVICE_RUN_REJECTED_START_PATH,
   CONNECTED_SERVICE_RUN_REFRESH_RUNTIME_AUTH_PATH,
+  CONNECTED_SERVICE_RUN_RECOVER_RUNTIME_FAILURE_PATH,
+  CONNECTED_SERVICE_RUN_RUNTIME_TURN_COMPLETED_PATH,
+  ConnectedServiceRunRuntimeTurnCompletedResultSchema,
+  ConnectedServiceRunRuntimeFailureRecoveryResultSchema,
+  type ConnectedServiceRunRuntimeFailureRecoveryRequest,
+  type ConnectedServiceRunRuntimeFailureRecoveryResult,
   ConnectedServiceRunRuntimeAuthRefreshRequestSchema,
   type ConnectedServiceRunRuntimeAuthRefreshRequest,
   type ConnectedServiceRunRejectedStartRequest,
@@ -101,7 +107,6 @@ import type {
 import { daemonPost, type DaemonControlRequestOptions } from './controlHttp';
 import { EXECUTION_RUN_ADMISSION_PATH, ExecutionRunDaemonAdmissionResponseSchema } from './lifecycle/admissionDrain';
 export type { DaemonControlRequestOptions } from './controlHttp';
-export { startDaemonAgentInstallJob, readDaemonAgentInstallJob, cancelDaemonAgentInstallJob, listDaemonAgentInstallJobs } from './agentInstallJobClient';
 import { inspectDaemonPublicationPresence, type DaemonPublicationPresenceInspection } from './controlLiveness';
 import {
   type PluginChangeDecision,
@@ -137,8 +142,31 @@ import {
 import type { PluginCatalogEntry } from '@/plugins/projection/catalog/installed';
 import type { ProjectedPluginToolCatalogEntry } from '@/plugins/runtime/toolCatalog';
 import { resolveAbsolutePathFromWorkingDirectory } from '@/utils/path/expandHomeDirPath';
+import { SKILL_SESSION_DIR_PATH, SKILL_USAGE_PATH, SkillSessionStartupIdentitySchema, RecordSkillUseInputSchema,
+  RecordSkillUseResultSchema } from '@/prompts/skills/store/controlRoutes';
+import { EnsureSkillSessionDirResultSchema, type EnsureSkillSessionDirInput, type EnsureSkillSessionDirResult } from '@/prompts/skills/store/skillStore';
+import type { RecordSkillUseInput } from '@/prompts/skills/store/skillUsage';
 
 const DEFAULT_DAEMON_PING_TIMEOUT_MS = 3_000;
+
+export async function recordDaemonSkillUse(input: RecordSkillUseInput, options: DaemonControlRequestOptions = {}): Promise<void> {
+  const response = RecordSkillUseResultSchema.safeParse(await daemonPost(SKILL_USAGE_PATH, RecordSkillUseInputSchema.parse(input), {
+    ...options, mutation: true,
+  }));
+  if (!response.success) throw Object.assign(new Error('Skill usage recording is unavailable'), { code: 'skills_unavailable' });
+}
+
+export async function ensureSkillSessionDirHttp(input: EnsureSkillSessionDirInput,
+  options: DaemonControlRequestOptions = {}, startupIdentity?: Readonly<{ pid: number; metadata: unknown }>): Promise<EnsureSkillSessionDirResult> {
+  // The store queue belongs to this request's lifetime; the caller may still supply its own deadline.
+  const response = EnsureSkillSessionDirResultSchema.safeParse(await daemonPost(SKILL_SESSION_DIR_PATH, {
+    ...input, ...(startupIdentity ? { startupIdentity: SkillSessionStartupIdentitySchema.parse(startupIdentity) } : {}),
+  }, {
+    timeoutMs: null, ...options, mutation: true,
+  }));
+  if (!response.success) throw Object.assign(new Error('Skill delivery is unavailable'), { code: 'skills_unavailable' });
+  return response.data;
+}
 
 /** Ask the daemon's current admission owner; no state is copied into the Session host. */
 export async function admitDaemonExecutionRunStart(options: DaemonControlRequestOptions = {}): Promise<void> {
@@ -1210,6 +1238,25 @@ export async function recoverExecutionRunConnectedServicesRejectedStart(
     authScope: 'connected-service-run-materialize',
     timeoutMs: resolveExecutionRunConnectedServiceMaterializeTimeoutMs(),
   });
+}
+
+export async function completeExecutionRunConnectedServiceRuntimeTurn(request: ConnectedServiceRunReleaseRequest): Promise<void> {
+  const response = await daemonPost(CONNECTED_SERVICE_RUN_RUNTIME_TURN_COMPLETED_PATH, request, {
+    authScope: 'connected-service-run-materialize',
+  });
+  const parsed = ConnectedServiceRunRuntimeTurnCompletedResultSchema.safeParse(response);
+  if (!parsed.success || !parsed.data.accepted) throw new Error('connected_service_run_completion_unavailable');
+}
+
+export async function recoverExecutionRunConnectedServiceRuntimeFailure(
+  request: ConnectedServiceRunRuntimeFailureRecoveryRequest,
+  options: Readonly<{ signal: AbortSignal }>,
+): Promise<ConnectedServiceRunRuntimeFailureRecoveryResult> {
+  const response = await daemonPost(CONNECTED_SERVICE_RUN_RECOVER_RUNTIME_FAILURE_PATH, request, {
+    authScope: 'connected-service-run-materialize', timeoutMs: null, signal: options.signal,
+  });
+  const parsed = ConnectedServiceRunRuntimeFailureRecoveryResultSchema.safeParse(response);
+  return parsed.success ? parsed.data : { status: 'failed', reason: 'runtime_recovery_unavailable' };
 }
 
 export async function requestExecutionRunConnectedServiceRuntimeAuthRefresh(

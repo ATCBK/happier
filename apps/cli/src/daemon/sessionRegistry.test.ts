@@ -635,8 +635,12 @@ describe('sessionRegistry', () => {
 
   it.skipIf(process.platform !== 'linux')('adopts a real systemd-scoped child after an empty initial cmdline observation', async (context) => {
     const { spawn, spawnSync } = await import('node:child_process');
-    if (spawnSync('systemd-run', ['--user', '--scope', '--quiet', '--', 'true']).status !== 0) {
-      context.skip();
+    const { isSystemdUserResourceGovernorReady } = await import('./platform/linux/systemdUserResourceGovernor');
+    // A working user bus alone does not admit the jobs-slice policy required
+    // by the launch owner. Keep this test specific to its systemd path.
+    if (!await isSystemdUserResourceGovernorReady()
+      || spawnSync('systemd-run', ['--user', '--scope', '--quiet', '--', 'true']).status !== 0) {
+      context.skip('Systemd user Session resource-governor policy is unavailable');
       return;
     }
     const { readFile, readdir, readlink } = await import('node:fs/promises');

@@ -1,8 +1,121 @@
 import { describe, expect, it, vi } from 'vitest';
 
 import { createDaemonControlApp } from './controlServer';
+import { join, resolve } from 'node:path';
+import { readFile } from 'node:fs/promises';
+import { AcpBackend } from '@/agent/acp/AcpBackend';
+import { createAcpSubprocessEnvScope, createAcpTestTransportHandler } from '@/agent/acp/testkit/subprocessHarness';
+import { withTempDir } from '@/testkit/fs/tempDir';
+import { createTestMetadata } from '@/testkit/backends/sessionMetadata';
+import { createRuntimeOverrideSynchronizers } from '@/agent/runtime/createRuntimeOverrideSynchronizers';
+import { MessageQueue2 } from '@/agent/runtime/modeMessageQueue';
+import { requestDaemonSessionRunnerRestart } from './controlClient';
+import { restartSessionRunnerOnCurrentRuntime } from './plannedRunnerRestart/restartSessionRunnerOnCurrentRuntime';
+import type { TrackedSession } from './types';
+import { readSessionCapabilitySelectionFromMetadataV1, resolveSelectionRestartMarkersForStartupV1, writeSessionCapabilitySelectionToMetadataV1 } from '@happier-dev/protocol/reach/sessionCapabilityMetadataV1';
+import { resolveSessionCapabilitiesV1 } from '@happier-dev/protocol/reach/resolveSessionCapabilitiesV1';
+import { McpServersSettingsV1Schema } from '@happier-dev/protocol/mcp/servers/settingsV1';
+import { RestartSessionRunnerResultV1Schema } from '@happier-dev/protocol/sessions/control/sessionRunnerRestartV1';
 
 describe('daemon control server: session runner restarts', () => {
+  it('resumes an ACP fixture after a mid-turn capability edit with the new MCP set and delivers input queued during restart to the same vendor session', async () => {
+    await withTempDir('happier-impl-p2c-u6-acp-', async directory => {
+      const env = createAcpSubprocessEnvScope();
+      env.patch({ HAPPIER_ACP_CAPTURE_IO: '1', HAPPIER_STACK_TOOL_TRACE_FILE: join(directory, 'trace.jsonl') });
+      let metadata = createTestMetadata({ path: directory });
+      const catalog = McpServersSettingsV1Schema.parse({ v: 1, strictMode: false,
+        servers: [{ id: 'linear', name: 'linear', transport: 'stdio', stdio: { command: 'linear-mcp', args: ['serve'] }, env: {}, createdAt: 1, updatedAt: 1 }],
+        bindings: [{ id: 'everywhere', serverId: 'linear', target: { t: 'allMachines' }, enabled: true, createdAt: 1, updatedAt: 1 }] });
+      const readMcpServers = () => Object.fromEntries(resolveSessionCapabilitiesV1({
+        context: { machineId: 'machine', machinePlatform: 'posix', directory, projectKey: null, agentId: 'claude' },
+        mcp: catalog, skills: null, selection: readSessionCapabilitySelectionFromMetadataV1(metadata), agentAcceptsUserMcp: true,
+      }).mcp.items.filter(item => item.selected).map(item => [item.name, { command: item.effectiveConfig.stdio!.command,
+        args: item.effectiveConfig.stdio!.args ?? [], env: {} }]));
+      const openBackend = () => new AcpBackend({ agentName: 'capability-fixture', cwd: directory,
+        command: process.execPath, args: [resolve(__dirname, '../../../../packages/tests/fixtures/acp-stub-provider/acp-stub-provider.mjs')],
+        mcpServers: readMcpServers(), transportHandler: createAcpTestTransportHandler() });
+      let backend = openBackend();
+      const output: string[] = [];
+      const observeOutput = () => backend.onMessage(message => {
+        if (message.type === 'model-output') output.push(message.textDelta ?? message.fullText ?? '');
+      });
+      observeOutput();
+      let vendorId = '';
+      const tracked: TrackedSession = { startedBy: 'daemon', pid: process.pid, happySessionId: 'session',
+        processCommandHash: 'fixture-command', processStartTimeMs: 1,
+        processCommand: 'node /tmp/cli/versions/0.3.0/package-dist/index.mjs claude --happy-starting-mode remote --started-by daemon',
+        vendorResumeId: vendorId, spawnOptions: { directory, backendTarget: { kind: 'backend', backendId: 'claude', sourceKind: 'built_in' }, resume: vendorId } };
+      let settled = false;
+      let releaseRestart!: () => void;
+      const restartHeld = new Promise<void>(resolve => { releaseRestart = resolve; });
+      let restartEntered = false;
+      const queue = new MessageQueue2<string, string>(value => value);
+      const app = createDaemonControlApp({ getChildren: () => [tracked], machineId: 'machine',
+        stopSession: async () => ({ status: 'stopped' }), spawnSession: async () => ({ type: 'success', sessionId: 'session' }),
+        requestShutdown: () => {}, onHappySessionWebhook: () => {}, controlToken: 'capability-token',
+        handleSessionRunnerRestart: request => restartSessionRunnerOnCurrentRuntime({ request, tracked,
+          currentIdentity: { status: 'known', source: 'launch_spec', comparableId: 'version:0.3.0', entrypointVersion: '0.3.0' },
+          requestRestart: async input => {
+            restartEntered = true;
+            await restartHeld;
+            expect(await input.canSignal?.()).toBe(true);
+            await backend.dispose();
+            backend = openBackend(); observeOutput();
+            const resumed = await backend.loadSession(tracked.vendorResumeId!);
+            expect(resumed.sessionId).toBe(vendorId);
+            metadata = resolveSelectionRestartMarkersForStartupV1({ current: metadata,
+              applied: readSessionCapabilitySelectionFromMetadataV1(metadata) });
+            return { signaled: true, completion: { ok: true } };
+          } }),
+      });
+      let restart: Promise<void> | null = null;
+      try {
+        const started = await backend.startSession();
+        vendorId = started.sessionId;
+        tracked.vendorResumeId = vendorId;
+        tracked.spawnOptions = { ...tracked.spawnOptions!, resume: vendorId };
+        await app.listen({ host: '127.0.0.1', port: 0 });
+        const address = app.server.address();
+        if (!address || typeof address === 'string') throw new Error('Missing test HTTP listener');
+        const session = { sessionId: 'session', getMetadataSnapshot: () => metadata,
+          updateMetadataAsCurrentPublisher: async (update: (current: typeof metadata) => typeof metadata) => { metadata = update(metadata); } };
+        const sync = createRuntimeOverrideSynchronizers({ agentTargetKey: 'backend:claude', session,
+          runtime: { setSessionMode: async () => {}, setSessionConfigOption: async () => {}, setSessionModelSelection: async () => {} },
+          isStarted: () => true, capabilitySelection: { session, isStarted: () => true, isSettled: () => settled,
+            agent: { vendorResume: 'supported', skillsLiveReload: 'unsupported' },
+            requestRestart: async request => RestartSessionRunnerResultV1Schema.parse(await requestDaemonSessionRunnerRestart(request,
+              { target: { pid: process.pid, httpPort: address.port, controlToken: 'capability-token' } })),
+          } });
+        await backend.sendPrompt(vendorId, 'ACP_STUB_PRIMARY=before-change');
+        await expect.poll(() => output.join('')).toContain('ACP_STUB_RUNNING');
+        metadata = writeSessionCapabilitySelectionToMetadataV1(metadata,
+          { mcp: { v: 1, managedServersEnabled: true, forceIncludeServerIds: [], forceExcludeServerIds: ['linear'] } }, { sessionActive: true });
+        sync.syncFromMetadata(); await sync.flushAfterSettledTurn?.();
+        expect(restartEntered).toBe(false);
+        await backend.sendSteerPrompt(vendorId, 'ACP_STUB_STEER=settle');
+        await backend.waitForResponseComplete();
+        settled = true;
+        restart = sync.flushAfterSettledTurn!();
+        await expect.poll(() => restartEntered).toBe(true);
+        queue.push('ACP_STUB_USAGE_UPDATE=queued-during-restart', 'default');
+        expect(queue.size()).toBe(1);
+        releaseRestart(); await restart;
+        const pending = await queue.waitForMessagesAndGetAsString();
+        expect(pending?.message).toBe('ACP_STUB_USAGE_UPDATE=queued-during-restart');
+        await backend.sendPrompt(vendorId, pending!.message); await backend.waitForResponseComplete();
+        await expect.poll(() => output.join('')).toContain('ACP_STUB_USAGE_UPDATE_DONE queued-during-restart');
+        const calls = (await readFile(join(directory, 'acp.stdin.raw'), 'utf8')).split('\n').filter(Boolean)
+          .map(line => JSON.parse(line) as { method?: string; params?: { sessionId?: string; mcpServers?: unknown[] } });
+        expect(calls.filter(call => call.method === 'session/new')).toHaveLength(1);
+        expect(calls.find(call => call.method === 'session/new')?.params?.mcpServers).toMatchObject([{ name: 'linear' }]);
+        expect(calls.find(call => call.method === 'session/load')?.params).toMatchObject({ sessionId: vendorId, mcpServers: [] });
+        expect(metadata.mcpSelectionRestartRequiredV1).toBeUndefined();
+      } finally {
+        releaseRestart(); await restart?.catch(() => {});
+        queue.close(); await backend.dispose(); await app.close(); env.restore();
+      }
+    });
+  });
   it('preserves a typed incomplete physical stop outcome at the local control boundary', async () => {
     const stopSession = vi.fn(async () => ({
       status: 'incomplete' as const,

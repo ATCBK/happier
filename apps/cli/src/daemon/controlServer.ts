@@ -8,6 +8,7 @@ import { isDeepStrictEqual } from 'node:util';
 import { z } from 'zod';
 import { serializerCompiler, validatorCompiler, ZodTypeProvider } from 'fastify-type-provider-zod';
 import { configuration } from '@/configuration';
+import { DoctorSnapshotResourceVitalsSchema, type DoctorSnapshotResourceVitals } from '@happier-dev/protocol/diagnostics/doctorSnapshot';
 import { createDaemonAdmissionDrain, EXECUTION_RUN_ADMISSION_PATH, ExecutionRunDaemonAdmissionResponseSchema, type DaemonAdmissionDrain } from './lifecycle/admissionDrain';
 import { AUTHORITY_CEILING_HEADER_V1, resolveInvocationAuthority } from '@happier-dev/protocol/actions/invocationAuthority';
 import { waitForTerminalPresentUserPolicyRefresh, type TerminalPresentUserPolicyScope } from '@/settings/accountSettings/resolveEffectiveTerminalPresentUserPolicy';
@@ -16,6 +17,11 @@ import { getActionSpec } from '@happier-dev/protocol/actions/actionSpecs';
 import { resolveRuntimeActionExecutionFamily } from '@happier-dev/protocol/actions/executor/dispatch';
 import { classifyActionTransportFailure } from '@/api/client/classifyServerEndpointError';
 import { createDaemonControlAuthGuard } from './controlAuth';
+import { resolveTrackedSessionRunnerIdentity } from './sessions/sessionReportCorrelation';
+import { registerSkillControlRoutes } from '@/prompts/skills/store/controlRoutes';
+import { SessionStartedSuccessReportSchema } from './sessions/sessionStartedReportSchema';
+import type { SkillStore } from '@/prompts/skills/store/skillStore';
+import type { SkillUsageRecorder } from '@/prompts/skills/store/skillUsage';
 import { createDaemonControlRequestLifetime } from './controlRequestLifetime';
 import { isCanonicalSpawnSessionId as isCanonicalSessionId } from './sessions/resolveSpawnWebhookResult';
 import type { RecoveredSpawnNonceAdmissionResult } from './spawn/recoveredSpawnNonceAdmission';
@@ -40,6 +46,14 @@ import {
   CONNECTED_SERVICE_RUN_RELEASE_PATH,
   CONNECTED_SERVICE_RUN_REJECTED_START_PATH,
   CONNECTED_SERVICE_RUN_REFRESH_RUNTIME_AUTH_PATH,
+  CONNECTED_SERVICE_RUN_RECOVER_RUNTIME_FAILURE_PATH,
+  CONNECTED_SERVICE_RUN_RUNTIME_TURN_COMPLETED_PATH,
+  ConnectedServiceRunRuntimeTurnCompletedRequestSchema,
+  ConnectedServiceRunRuntimeTurnCompletedResultSchema,
+  type ConnectedServiceRunRuntimeTurnCompletedHandler,
+  ConnectedServiceRunRuntimeFailureRecoveryRequestSchema,
+  ConnectedServiceRunRuntimeFailureRecoveryResultSchema,
+  type ConnectedServiceRunRuntimeFailureRecoveryHandler,
   ConnectedServiceRunRuntimeAuthRefreshRequestSchema,
   type ConnectedServiceRunRuntimeAuthRefreshHandler,
   ConnectedServiceRunRejectedStartRequestSchema,
@@ -88,7 +102,6 @@ import { SessionRunnerStatusGetRequestV1Schema, SessionRunnerRuntimeStateV1Schem
 import { SessionRunnerRuntimeStatusV2Schema } from '@happier-dev/protocol/sessions/control/sessionRunnerRuntimeV2';
 import { SessionCreationTerminalSpawnErrorDetailSchema, SpawnSessionErrorCodeSchema } from '@happier-dev/protocol/spawnSession';
 import { SessionUsageLimitRecoveryResumePromptModeV1Schema } from '@happier-dev/protocol/sessions/state/valueSchemas/usageLimitRecovery';
-import { SessionMetadataPublisherPreconditionV1Schema } from '@happier-dev/protocol/sessions/metadata/sessionMetadataEnvelopesV1';
 import { SshTunnelEnsureRequestSchema, SshTunnelProbeRequestSchema, SshTunnelReleaseRequestSchema, SshTunnelStopRequestSchema } from '@happier-dev/protocol/ssh/tunnels';
 import { StrictJsonValueSchema } from '@happier-dev/protocol/json/strictJsonValue';
 import { createUnavailableRuntimeActionExecutor } from '@happier-dev/protocol/actions/executor/dispatch';
@@ -368,9 +381,9 @@ export async function resolveTrackedAgentRuntimeDaemonServiceAuthority(
     typeof tracked.agentRuntimeDaemonServiceCapabilityHash === 'string'
       ? tracked.agentRuntimeDaemonServiceCapabilityHash
       : '';
-  const runnerPid = tracked.sessionRunnerPid ?? tracked.pid;
-  const processStartTimeMs = tracked.processStartTimeMs;
-  const processCommandHash = tracked.processCommandHash;
+  const runnerIdentity = resolveTrackedSessionRunnerIdentity(tracked);
+  if (!runnerIdentity) return null;
+  const { pid: runnerPid, processStartTimeMs, processCommandHash } = runnerIdentity;
   const invocationContext = tracked.runnerAgentInvocationContext;
   if (
     tracked.agentRuntimeRunnerRestartDisposition
@@ -607,19 +620,6 @@ type SpawnNonceAdmissionResult =
 // Success remains shape-compatible with released runners; failure is a strict
 // terminal counterpart on the same authenticated callback and carries no
 // Session/metadata truth because no Session was created or rejoined.
-const SessionStartedSuccessReportSchema = z.object({
-  sessionId: z.string(),
-  metadata: z.any(), // Metadata type from API
-  sessionCreationOutcome: SessionCreationOutcomeSchema.optional(),
-  persistedTakeoverAdmission: z.object({
-    mode: z.enum(['persisted', 'external_linked']),
-    operationId: z.string().trim().min(1).max(256),
-    attemptId: z.string().trim().min(1).max(256),
-    phase: z.enum(['admit', 'runtime_bound']).optional(),
-    publisherPrecondition: SessionMetadataPublisherPreconditionV1Schema,
-  }).strict().optional(),
-}).strict();
-
 const SessionStartedFailureReportSchema = z.object({
   result: z.literal('failure'),
   spawnNonce: z.string().trim().min(1),
@@ -639,9 +639,13 @@ export type ConnectedAccountRequestAuthControlRoutes = Readonly<{
 >;
 
 export function createDaemonControlApp({
+  skillStore,
+  skillUsageRecorder,
+  pidToTrackedSession,
   getChildren,
   machineId,
   runtimeId = '',
+  readDoctorResourceVitals,
   prepareStopSession,
   stopSession,
   spawnSession,
@@ -660,6 +664,8 @@ export function createDaemonControlApp({
   readAppliedSessionConnectedServices,
   materializeConnectedServicesForExecutionRun,
   recoverConnectedServicesRejectedStartForExecutionRun,
+  recoverConnectedServiceRuntimeFailureForExecutionRun,
+  completeConnectedServiceRuntimeTurnForExecutionRun,
   refreshConnectedServiceRuntimeAuthForExecutionRun,
   checkConnectedServicesGenerationForExecutionRun,
   releaseConnectedServicesForExecutionRun,
@@ -697,9 +703,13 @@ export function createDaemonControlApp({
   readPluginHardRevocationRevision,
   readPluginCatalogProjection,
 }: {
+  skillStore?: SkillStore;
+  skillUsageRecorder?: SkillUsageRecorder;
+  pidToTrackedSession?: Map<number, TrackedSession>;
   getChildren: () => TrackedSession[];
   machineId: string;
   runtimeId?: string;
+  readDoctorResourceVitals?: () => DoctorSnapshotResourceVitals;
   readPluginCatalogProjection?: () => import('@/plugins/daemon/catalogProjection').DaemonPluginCatalogProjection;
   prepareStopSession?: (trackedSession: TrackedSession) => Promise<void> | void;
   stopSession: (sessionId: string) => Promise<StopSessionResult>;
@@ -753,6 +763,8 @@ export function createDaemonControlApp({
    */
   materializeConnectedServicesForExecutionRun?: ConnectedServiceRunMaterializationHandler;
   recoverConnectedServicesRejectedStartForExecutionRun?: ConnectedServiceRunRejectedStartHandler;
+  recoverConnectedServiceRuntimeFailureForExecutionRun?: ConnectedServiceRunRuntimeFailureRecoveryHandler;
+  completeConnectedServiceRuntimeTurnForExecutionRun?: ConnectedServiceRunRuntimeTurnCompletedHandler;
   refreshConnectedServiceRuntimeAuthForExecutionRun?: ConnectedServiceRunRuntimeAuthRefreshHandler;
   checkConnectedServicesGenerationForExecutionRun?: ConnectedServiceRunGenerationCurrentHandler;
   /**
@@ -1145,6 +1157,10 @@ export function createDaemonControlApp({
   });
 
   const requireAuth = createDaemonControlAuthGuard(normalizedControlToken);
+  typed.post('/doctor/vitals', {
+    onRequest: requireAuth,
+    schema: { body: z.object({}).strict(), response: { 200: DoctorSnapshotResourceVitalsSchema.nullable() } },
+  }, async () => readDoctorResourceVitals?.() ?? null);
   typed.post('/agents/install/start', {
     onRequest: requireAuth,
     schema: { body: DaemonAgentInstallStartRequestSchema, response: { 200: DaemonAgentInstallStartResponseSchema } },
@@ -1317,6 +1333,8 @@ export function createDaemonControlApp({
       lifetime.dispose();
     }
   });
+
+  registerSkillControlRoutes(app, { skillStore, skillUsageRecorder, getChildren, pidToTrackedSession, requireAuth, isShuttingDown: isDaemonQuiescing });
 
 
   // Least-privilege gate for the execution-run connected-services bridge. Accepts only the scoped
@@ -2041,12 +2059,6 @@ export function createDaemonControlApp({
         errorCode: 'connected_service_runtime_auth_invalid_classification' as const,
       };
     }
-    const resolvedResumePromptMode = await (resolveConnectedServiceRuntimeAuthResumePromptMode?.({
-      sessionId,
-      classification,
-      ...(request.body.resumePromptMode ? { explicit: request.body.resumePromptMode } : {}),
-    }) ?? Promise.resolve(request.body.resumePromptMode ?? 'standard')).catch(() => 'standard' as const);
-    let resumePromptMode = resolvedResumePromptMode;
     if (admissionDrain.isPublicationQuiescing()) {
       return {
         ok: true as const,
@@ -2073,6 +2085,12 @@ export function createDaemonControlApp({
         errorCode: 'connected_service_runtime_auth_recovery_intake_failed' as const,
       };
     }
+    classification = applyAuthorizedRuntimeAuthFailureSourceBinding(classification, sourceAuthorization);
+    let resumePromptMode = await (resolveConnectedServiceRuntimeAuthResumePromptMode?.({
+      sessionId,
+      classification,
+      ...(request.body.resumePromptMode ? { explicit: request.body.resumePromptMode } : {}),
+    }) ?? Promise.resolve(request.body.resumePromptMode ?? 'standard')).catch(() => 'standard' as const);
     if (sourceAuthorization && sourceAuthorization.status !== 'authorized') {
       const result = await handleConnectedServiceRuntimeAuthFailure({
         sessionId,
@@ -2088,7 +2106,6 @@ export function createDaemonControlApp({
         ...(resolveConnectedServiceRuntimeAuthResumePromptMode ? { resumePromptMode } : {}),
       };
     }
-    classification = applyAuthorizedRuntimeAuthFailureSourceBinding(classification, sourceAuthorization);
     const recoveryKey = {
       sessionId,
       serviceId: classification.serviceId,
@@ -2595,6 +2612,29 @@ export function createDaemonControlApp({
       return { ok: false as const, errorCode: CONNECTED_SERVICE_RUN_MATERIALIZATION_ERROR_CODES.unavailable };
     }
     return await recoverConnectedServicesRejectedStartForExecutionRun(request.body);
+  });
+
+  typed.post(CONNECTED_SERVICE_RUN_RECOVER_RUNTIME_FAILURE_PATH, {
+    schema: { body: ConnectedServiceRunRuntimeFailureRecoveryRequestSchema,
+      response: { 200: ConnectedServiceRunRuntimeFailureRecoveryResultSchema, 401: authSchema401 } },
+    preHandler: requireRunMaterializeAuth,
+  }, async (request, reply) => {
+    if (admissionDrain.isPublicationQuiescing() || !recoverConnectedServiceRuntimeFailureForExecutionRun) {
+      return { status: 'failed' as const, reason: 'runtime_recovery_unavailable' };
+    }
+    const lifetime = createDaemonControlRequestLifetime(request, reply);
+    try { return await recoverConnectedServiceRuntimeFailureForExecutionRun(request.body, lifetime.signal); }
+    finally { lifetime.dispose(); }
+  });
+
+  typed.post(CONNECTED_SERVICE_RUN_RUNTIME_TURN_COMPLETED_PATH, {
+    schema: { body: ConnectedServiceRunRuntimeTurnCompletedRequestSchema,
+      response: { 200: ConnectedServiceRunRuntimeTurnCompletedResultSchema, 401: authSchema401 } },
+    preHandler: requireRunMaterializeAuth,
+  }, async (request) => {
+    return admissionDrain.isPublicationQuiescing() || !completeConnectedServiceRuntimeTurnForExecutionRun
+      ? { ok: true as const, accepted: false }
+      : await completeConnectedServiceRuntimeTurnForExecutionRun(request.body);
   });
 
   typed.post(CONNECTED_SERVICE_RUN_GENERATION_CURRENT_PATH, {
@@ -3684,7 +3724,8 @@ export function createDaemonControlApp({
     pruneSpawnNonceCorrelation();
     const timeoutMs = request.body.timeoutMs;
     const deadlineMs = Date.now() + (timeoutMs ?? 0);
-    const needsRecovery = !spawnNonceCorrelationByNonce.has(normalizedNonce);
+    const cached = spawnNonceCorrelationByNonce.get(normalizedNonce);
+    const needsRecovery = !cached || cached.status === 'pending';
     if (needsRecovery && getChildren().some(child => child.spawnOptions?.spawnNonce?.trim() === normalizedNonce)) {
       // Recover observation before I/O, without claiming an unknown nonce.
       markSpawnNoncePending(normalizedNonce);
@@ -4026,9 +4067,13 @@ export function createDaemonControlApp({
 }
 
 export function startDaemonControlServer({
+  skillStore,
+  skillUsageRecorder,
+  pidToTrackedSession,
   getChildren,
   machineId,
   runtimeId = '',
+  readDoctorResourceVitals,
   prepareStopSession,
   stopSession,
   spawnSession,
@@ -4073,6 +4118,8 @@ export function startDaemonControlServer({
   readAppliedSessionConnectedServices,
   materializeConnectedServicesForExecutionRun,
   recoverConnectedServicesRejectedStartForExecutionRun,
+  recoverConnectedServiceRuntimeFailureForExecutionRun,
+  completeConnectedServiceRuntimeTurnForExecutionRun,
   refreshConnectedServiceRuntimeAuthForExecutionRun,
   checkConnectedServicesGenerationForExecutionRun,
   releaseConnectedServicesForExecutionRun,
@@ -4083,9 +4130,13 @@ export function startDaemonControlServer({
   runtimeActionExecute,
   readPluginCatalogProjection,
 }: {
+  skillStore?: SkillStore;
+  skillUsageRecorder?: SkillUsageRecorder;
+  pidToTrackedSession?: Map<number, TrackedSession>;
   getChildren: () => TrackedSession[];
   machineId: string;
   runtimeId?: string;
+  readDoctorResourceVitals?: () => DoctorSnapshotResourceVitals;
   readPluginCatalogProjection?: () => import('@/plugins/daemon/catalogProjection').DaemonPluginCatalogProjection;
   prepareStopSession?: (trackedSession: TrackedSession) => Promise<void> | void;
   stopSession: (sessionId: string) => Promise<StopSessionResult>;
@@ -4125,6 +4176,8 @@ export function startDaemonControlServer({
   /** Execution-run connected-services materialization handler (see createDaemonControlApp). */
   materializeConnectedServicesForExecutionRun?: ConnectedServiceRunMaterializationHandler;
   recoverConnectedServicesRejectedStartForExecutionRun?: ConnectedServiceRunRejectedStartHandler;
+  recoverConnectedServiceRuntimeFailureForExecutionRun?: ConnectedServiceRunRuntimeFailureRecoveryHandler;
+  completeConnectedServiceRuntimeTurnForExecutionRun?: ConnectedServiceRunRuntimeTurnCompletedHandler;
   refreshConnectedServiceRuntimeAuthForExecutionRun?: ConnectedServiceRunRuntimeAuthRefreshHandler;
   /** Exact run-key current-generation admission check before provider Send/Steer. */
   checkConnectedServicesGenerationForExecutionRun?: ConnectedServiceRunGenerationCurrentHandler;
@@ -4213,9 +4266,13 @@ export function startDaemonControlServer({
 }): Promise<{ port: number; stop: () => Promise<void> }> {
   return new Promise((resolve) => {
     const app = createDaemonControlApp({
+      skillStore,
+      skillUsageRecorder,
+      pidToTrackedSession,
       getChildren,
       machineId,
       runtimeId,
+      readDoctorResourceVitals,
       prepareStopSession,
       stopSession,
       spawnSession,
@@ -4234,6 +4291,8 @@ export function startDaemonControlServer({
       readAppliedSessionConnectedServices,
       materializeConnectedServicesForExecutionRun,
       recoverConnectedServicesRejectedStartForExecutionRun,
+      recoverConnectedServiceRuntimeFailureForExecutionRun,
+      completeConnectedServiceRuntimeTurnForExecutionRun,
       refreshConnectedServiceRuntimeAuthForExecutionRun,
       checkConnectedServicesGenerationForExecutionRun,
       releaseConnectedServicesForExecutionRun,
