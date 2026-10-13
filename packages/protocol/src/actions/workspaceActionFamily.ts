@@ -6,6 +6,7 @@ import { WorkspaceAnchorV1Schema } from '../workspace/anchors/v1.js';
 
 export const WORKSPACE_ACTION_IDS = [
   'workspace.tabs.list', 'workspace.tabs.open', 'workspace.tabs.activate', 'workspace.tabs.close',
+  'workspace.tabs.close_others', 'workspace.tabs.close_left', 'workspace.tabs.close_right', 'workspace.tabs.close_all',
   'workspace.tabs.closed.list', 'workspace.tabs.reopen',
   'workspace.tabs.pin', 'workspace.tabs.move', 'workspace.tabs.reorder', 'workspace.groups.focus', 'workspace.groups.maximize',
   'workspace.groups.restore', 'workspace.split', 'workspace.resize',
@@ -42,6 +43,10 @@ export const WORKSPACE_ACTION_INPUT_SCHEMAS = {
   }),
   'workspace.tabs.activate': z.object({ tabId: id }).strict(),
   'workspace.tabs.close': z.object({ tabId: id }).strict(),
+  'workspace.tabs.close_others': z.object({ tabId: id }).strict(),
+  'workspace.tabs.close_left': z.object({ tabId: id }).strict(),
+  'workspace.tabs.close_right': z.object({ tabId: id }).strict(),
+  'workspace.tabs.close_all': z.object({ groupId: id.optional() }).strict(),
   'workspace.tabs.closed.list': z.object({}).strict(),
   'workspace.tabs.reopen': z.object({ tabId: id.optional() }).strict(),
   'workspace.tabs.pin': z.object({ tabId: id, pinned: z.boolean() }).strict(),
@@ -81,6 +86,10 @@ export const WORKSPACE_ACTION_OUTPUT_SCHEMAS = {
   'workspace.tabs.open': MutationOutputSchema,
   'workspace.tabs.activate': MutationOutputSchema,
   'workspace.tabs.close': MutationOutputSchema,
+  'workspace.tabs.close_others': MutationOutputSchema,
+  'workspace.tabs.close_left': MutationOutputSchema,
+  'workspace.tabs.close_right': MutationOutputSchema,
+  'workspace.tabs.close_all': MutationOutputSchema,
   'workspace.tabs.closed.list': WorkspaceClosedTabsListOutputSchema,
   'workspace.tabs.reopen': MutationOutputSchema,
   'workspace.tabs.pin': MutationOutputSchema,
@@ -114,6 +123,10 @@ const inputFields = {
   ],
   'workspace.tabs.activate': [tabIdHint],
   'workspace.tabs.close': [tabIdHint],
+  'workspace.tabs.close_others': [tabIdHint],
+  'workspace.tabs.close_left': [tabIdHint],
+  'workspace.tabs.close_right': [tabIdHint],
+  'workspace.tabs.close_all': [{ ...groupIdHint, required: false }],
   'workspace.tabs.closed.list': [],
   'workspace.tabs.reopen': [{ ...tabIdHint, required: false }],
   'workspace.tabs.pin': [tabIdHint, { path: 'pinned', title: 'Keep pinned', widget: 'boolean', required: true }],
@@ -137,6 +150,10 @@ const voiceExamples = {
   'workspace.tabs.open': '{"href":"/session/{{sessionId}}","groupId":"pane-main","beforeTabId":"tab-next","mode":"newTab"}',
   'workspace.tabs.activate': '{"tabId":"tab-main"}',
   'workspace.tabs.close': '{"tabId":"tab-main"}',
+  'workspace.tabs.close_others': '{"tabId":"tab-main"}',
+  'workspace.tabs.close_left': '{"tabId":"tab-main"}',
+  'workspace.tabs.close_right': '{"tabId":"tab-main"}',
+  'workspace.tabs.close_all': '{"groupId":"pane-main"}',
   'workspace.tabs.closed.list': '{}',
   'workspace.tabs.reopen': '{"tabId":"tab-closed"}',
   'workspace.tabs.pin': '{"tabId":"tab-main","pinned":true}',
@@ -149,10 +166,11 @@ const voiceExamples = {
   'workspace.resize': '{"splitId":"split-main","ratio":0.5}',
 } satisfies Record<WorkspaceActionId, string>;
 
-function row<const TId extends WorkspaceActionId>(actionId: TId, title: string) {
+function row<const TId extends WorkspaceActionId>(actionId: TId, title: string,
+  description = 'Operate on the mounted client workspace in its current Home, Account and window. A headless host without that workspace returns unsupported_action.') {
   return {
     id: actionId, approval: { result: 'required' }, title,
-    description: 'Operate on the mounted client workspace in its current Home, Account and window. A headless host without that workspace returns unsupported_action.',
+    description,
     safety: 'safe', sideEffectClass: actionId === 'workspace.tabs.list' || actionId === 'workspace.tabs.closed.list' ? 'read' : 'external',
     executionPlacement: 'client', placements: [],
     surfaces: { ui: true, voice: true, agent: true, mcp: true, cli: false, rpc: false },
@@ -166,6 +184,10 @@ function row<const TId extends WorkspaceActionId>(actionId: TId, title: string) 
 export const WORKSPACE_ACTION_SPECS = [
   row('workspace.tabs.list', 'List workspace tabs'), row('workspace.tabs.open', 'Open workspace tab'),
   row('workspace.tabs.activate', 'Activate workspace tab'), row('workspace.tabs.close', 'Close workspace tab'),
+  row('workspace.tabs.close_others', 'Close other workspace tabs', 'Close unpinned tabs in the named tab\'s pane, keeping that tab and respecting unsaved-draft guards.'),
+  row('workspace.tabs.close_left', 'Close workspace tabs to the left', 'Close unpinned tabs before the named tab in its pane, respecting unsaved-draft guards.'),
+  row('workspace.tabs.close_right', 'Close workspace tabs to the right', 'Close unpinned tabs after the named tab in its pane, respecting unsaved-draft guards.'),
+  row('workspace.tabs.close_all', 'Close all workspace tabs in a pane', 'Close unpinned tabs in the specified pane, or the focused pane when omitted, respecting unsaved-draft guards.'),
   row('workspace.tabs.closed.list', 'List recently closed workspace tabs'), row('workspace.tabs.reopen', 'Reopen workspace tab'),
   row('workspace.tabs.pin', 'Pin or unpin workspace tab'), row('workspace.tabs.move', 'Move workspace tab'),
   row('workspace.tabs.reorder', 'Reorder workspace tab'),

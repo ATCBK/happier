@@ -1,12 +1,19 @@
 import { describe, expect, it } from 'vitest';
 
 import { getActionInputFieldVoiceNotes, getActionVoiceWorkflowNotes } from './actionInputVoiceGuidance.js';
+import { ActionInputFieldHintSchema, getActionSpec } from './actionSpecs.js';
+
+function declaredField(actionId: Parameters<typeof getActionSpec>[0], path: string) {
+  const field = getActionSpec(actionId).inputHints?.fields.find((field) => field.path === path);
+  if (!field) throw new Error(`Missing declared input field: ${actionId}.${path}`);
+  return field;
+}
 
 describe('actionInputVoiceGuidance', () => {
   it('uses backendTargetKeys in backend-selection guidance', () => {
     const fieldNotes = getActionInputFieldVoiceNotes(
       { id: 'subagents.plan.start' },
-      { path: 'backendTargetKeys', optionsSourceId: 'execution.backends.enabled' } as any,
+      declaredField('subagents.plan.start', 'backendTargetKeys'),
     ).join(' ');
     const workflowNotes = getActionVoiceWorkflowNotes('subagents.plan.start').join(' ');
 
@@ -22,11 +29,11 @@ describe('actionInputVoiceGuidance', () => {
   it('describes canonical backend targets and runtime carrier guidance for agents.models.list', () => {
     const backendTargetKeyNotes = getActionInputFieldVoiceNotes(
       { id: 'agents.models.list' },
-      { path: 'backendTargetKey' } as any,
+      declaredField('agents.models.list', 'backendTargetKey'),
     ).join(' ');
     const agentIdNotes = getActionInputFieldVoiceNotes(
       { id: 'agents.models.list' },
-      { path: 'agentId' } as any,
+      declaredField('agents.models.list', 'agentId'),
     ).join(' ');
 
     expect(backendTargetKeyNotes).toContain('backend:');
@@ -37,19 +44,19 @@ describe('actionInputVoiceGuidance', () => {
   it('guides canonical Session creation fields without reviving flat spawn vocabulary', () => {
     const targetNotes = getActionInputFieldVoiceNotes(
       { id: 'session.spawn_new' },
-      { path: 'executionTarget.machineId' } as any,
+      declaredField('session.spawn_new', 'executionTarget.machineId'),
     ).join(' ');
     const directoryNotes = getActionInputFieldVoiceNotes(
       { id: 'session.spawn_new' },
-      { path: 'directory' } as any,
+      declaredField('session.spawn_new', 'directory'),
     ).join(' ');
     const agentNotes = getActionInputFieldVoiceNotes(
       { id: 'session.spawn_new' },
-      { path: 'agentTarget' } as any,
+      declaredField('session.spawn_new', 'agentTarget'),
     ).join(' ');
     const legacyPathNotes = getActionInputFieldVoiceNotes(
       { id: 'session.spawn_new' },
-      { path: 'path' } as any,
+      ActionInputFieldHintSchema.parse({ path: 'path', title: 'Retired path', widget: 'text' }),
     ).join(' ');
 
     expect(targetNotes).toContain('listMachines');
@@ -63,7 +70,7 @@ describe('actionInputVoiceGuidance', () => {
     const recentNotes = getActionVoiceWorkflowNotes('session.messages.recent.get').join(' ');
     const transcriptNotes = getActionInputFieldVoiceNotes(
       { id: 'session.transcript.get' },
-      { path: 'sessionId' } as any,
+      declaredField('session.transcript.get', 'sessionId'),
     ).join(' ');
 
     expect(activityNotes).toContain('getSessionTranscript');

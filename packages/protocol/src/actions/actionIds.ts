@@ -35,6 +35,7 @@ import { MANAGED_GITHUB_APP_ACTION_IDS_V1 } from '../identity/githubApps.js';
 import { MANAGED_IDENTITY_PROVIDER_ACTION_IDS_V1 } from '../identity/providers.js';
 import { EPHEMERAL_RUNNER_ACTION_IDS_V1 } from '../ephemeralRunner/actionIdsV1.js';
 import { SHARED_SAVED_SECRET_ACTION_IDS_V1 } from '../account/settings/savedSecretResourceActionIdsV1.js';
+import { PERSONAL_SAVED_SECRET_ACTION_IDS_V1 } from '../account/settings/personalSavedSecretActionsV1.js';
 import { ARTIFACT_ACCESS_ACTION_IDS_V1 } from '../artifacts/artifactAccessV1.js';
 import { ARTIFACT_ACTION_IDS_V1 } from '../artifacts/artifactActionIdsV1.js';
 import { WORKSPACE_ACTION_IDS } from './workspaceActionFamily.js';
@@ -58,6 +59,7 @@ import { FILESYSTEM_ACTION_IDS } from './filesystemActionFamily.js';
 import { PROFILE_ACTION_IDS_V1 } from '../profiles/profileActionIdsV1.js';
 import { MCP_SERVER_ACTION_IDS_V1 } from '../mcp/servers/serverActionIdsV1.js';
 import { CAPABILITY_RULES_ACTION_IDS_V1 } from './capabilityRulesActionIdsV1.js';
+import { SESSION_CAPABILITIES_ACTION_IDS_V1 } from './sessionCapabilitiesActionIdsV1.js';
 import { SKILL_ACTION_IDS_V1 } from '../prompts/library/skills/skillActionIdsV1.js';
 import { PROVIDER_ACTION_IDS_V1 } from '../providers/providerActionIdsV1.js';
 import { REMOTE_HOST_ACTION_IDS_V1 } from '../remoteHosts/remoteHostActionIdsV1.js';
@@ -113,6 +115,8 @@ export function isPluginDevLoopActionIdV1(value: string): value is PluginDevLoop
 // Action ids remain protocol-owned and closed in this wave.
 // Plugin/runtime unification must not imply plugin-defined action-id authoring parity yet.
 export const ACTION_ID_FAMILIES_V1 = Object.freeze({
+  registries: REGISTRY_ACTION_IDS_V1,
+  personal_saved_secrets: PERSONAL_SAVED_SECRET_ACTION_IDS_V1,
   plugin_execution_origin: PLUGIN_EXECUTION_ORIGIN_ACTION_IDS,
   usage: [...USAGE_ACTION_IDS, ...USAGE_COACH_ACTION_IDS],
   project_sources: PROJECT_SOURCE_ACTION_IDS_V1,
@@ -142,6 +146,7 @@ export const ACTION_ID_FAMILIES_V1 = Object.freeze({
   launch_profiles: ['launch_profiles.publish', ...PROFILE_ACTION_IDS_V1],
   mcp_servers: MCP_SERVER_ACTION_IDS_V1,
   capability_rules: CAPABILITY_RULES_ACTION_IDS_V1,
+  session_capabilities: SESSION_CAPABILITIES_ACTION_IDS_V1,
   skills: SKILL_ACTION_IDS_V1,
   providers: PROVIDER_ACTION_IDS_V1,
   model_preferences: ['models.favorite.set'],
@@ -265,7 +270,6 @@ export const ACTION_ID_FAMILIES_V1 = Object.freeze({
     'session.model.set',
     'session.model.unarm',
     'session.config_option.set',
-    'session.mcp_selection.set',
     'session.connected_services_auth.set',
     'session.permission_mode.set',
     'session.archive',
@@ -450,6 +454,7 @@ export const ACTION_ID_FAMILIES_V1 = Object.freeze({
     'agents.acp.backends.get',
     'agents.acp.backends.upsert',
     'agents.acp.backends.delete',
+    'agents.acp.backends.installFromRegistry',
   ],
   prompt_library: [
     'prompts.invocation.create',
@@ -459,17 +464,13 @@ export const ACTION_ID_FAMILIES_V1 = Object.freeze({
     'prompt_doc.favorite.set',
     'prompts.library.list',
     'prompt_doc.update',
-    'prompt_bundle.create',
     'prompt_bundle.update',
     'prompt_asset.export',
     'prompt_registry.install',
   ],
   bug_report_submission: BUG_REPORT_SUBMISSION_ACTION_IDS,
   daemon_admin: [
-    'daemon.promptAssets.discover',
     'daemon.promptAssets.delete',
-    'daemon.promptRegistry.scanSource',
-    'daemon.promptRegistry.install',
     'daemon.filesystem.listRoots',
     'daemon.filesystem.browseDirectory',
     'bugreport.collectDiagnostics',
@@ -827,3 +828,4 @@ export type SessionAccessActionId = typeof ACTION_ID_FAMILIES_V1.session_access[
 export function isSessionAccessActionId(value: string): value is SessionAccessActionId {
   return (ACTION_ID_FAMILIES_V1.session_access as readonly string[]).includes(value);
 }
+import { REGISTRY_ACTION_IDS_V1 } from '../registries/registryActionsV1.js';

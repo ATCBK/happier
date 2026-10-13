@@ -348,6 +348,11 @@ export const ActionOperationGetV1RequestSchema = lazyZodSchema(() => z.object({
   path: ['includeSetupReview'], message: 'Setup review observation requires the existing wait owner.',
 }));
 export type ActionOperationGetV1Request = z.infer<typeof ActionOperationGetV1RequestSchema>;
+export const ActionOperationGetV2RequestSchema = lazyZodSchema(() => ActionOperationGetV1RequestSchema.safeExtend({
+  /** Remeasure a held effect before a human decision without waiting for command exit. */
+  refreshSetupReview: z.literal(true).optional(),
+}).strict());
+export type ActionOperationGetV2Request = z.infer<typeof ActionOperationGetV2RequestSchema>;
 
 const ActionOperationNotFoundV1Schema = lazyZodSchema(() => z.object({ kind: z.literal('not_found') }).strict());
 

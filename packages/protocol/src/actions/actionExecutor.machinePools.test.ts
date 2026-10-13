@@ -53,6 +53,18 @@ describe('createActionExecutor (Machine Pools family)', () => {
     });
   });
 
+  it('admits a workspace at the captured portable Home without admitting another Home', async () => {
+    const executor = createActionExecutor({ machinePoolAction: async () => poolView,
+      isActionApprovalRequired: () => false } as unknown as ActionExecutorDeps);
+    const context = { surface: 'cli', serverId: 'local-profile', serverIdentityId: 'srv_same_home' } as const;
+    const input = { poolId, requestKey: 'home-alias', purpose: 'finite',
+      workspace: { serverId: 'srv_same_home', refId: 'checkout' } } as const;
+    expect(await executor.execute('machines.pools.resolve', input, context))
+      .toMatchObject({ ok: true, result: { kind: 'unavailable', reason: 'empty' } });
+    expect(await executor.execute('machines.pools.resolve', { ...input, workspace: { ...input.workspace, serverId: 'foreign' } }, context))
+      .toMatchObject({ ok: false, errorCode: 'server_target_mismatch' });
+  });
+
   it('resolves finite and service starts from exact status reads before applying the shared pool ranking', async () => {
     // These dependencies are the authenticated Home and Machine network boundaries.
     const requests: unknown[] = [];

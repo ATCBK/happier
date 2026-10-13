@@ -4,6 +4,18 @@ import {
 } from '../../profiles/profileActionsV1.js';
 import type { PreNormalizedActionSpec } from '../actionSpecs.js';
 import { readRecord } from '../../inputs/inputRecords.js';
+import { z } from 'zod';
+import { lazyZodSchema } from '../../lazyZodSchema.js';
+
+const ProfileSaveCliInput = lazyZodSchema(() => z.object({
+  id: inputs['launch_profiles.save'].shape.id,
+  expectedRevision: inputs['launch_profiles.save'].shape.expectedRevision,
+  profile: inputs['launch_profiles.save'].shape.profile,
+  secretBindings: inputs['launch_profiles.save'].shape.secretBindings,
+  legacyCloneSource: inputs['launch_profiles.save'].shape.legacyCloneSource,
+  expectedArtifactRevision: inputs['launch_profiles.save'].shape.expectedArtifactRevision,
+  skill: z.array(z.string().min(1)).optional(),
+}).strict());
 
 /** Shared observations expose outcome/identity, never private definitions or credential mappings. */
 function projectProfileObservation(input: unknown): unknown {
@@ -43,7 +55,13 @@ function profileSpec<TId extends ProfileActionIdV1>(id: TId, title: string, summ
     // while shared observers continue receiving only the identity/outcome projection above.
     approvalPresentation: { summary: () => null, projectInput: input => input },
     inputHints: { description: summary, fields: [] },
-    ...(!client ? { cli: { acceptsServerId: true, commands: [{ path: id.split('.'), visibility: 'canonical' as const }] } } : {}),
+    ...(!client ? { cli: { acceptsServerId: true, commands: [{ path: id.split('.'), visibility: 'canonical' as const }],
+      ...(id === 'launch_profiles.save' ? { inputSchema: ProfileSaveCliInput,
+        bindInput: (raw: unknown) => {
+          const { skill, ...input } = readRecord(raw);
+          return { ...input, ...(Array.isArray(skill) ? { skillSeeds: skill } : {}) };
+        } } : {}),
+    } } : {}),
   } satisfies ProfileActionSpec<TId>;
 }
 

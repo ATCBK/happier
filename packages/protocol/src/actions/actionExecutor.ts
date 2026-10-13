@@ -9,7 +9,8 @@ import { MemoryWindowRequestV1Schema } from '../memory/memoryWindow.js';
 import { isWorkflowAuthoringActionId } from './workflowAuthoringActionIds.js';
 import { BackendTargetKeyV2InputSchema } from '../backends/targets/backendTargetRefV2.js';
 import { PromptDocRevisionV1Schema, PromptDocCreateActionInputV1Schema } from '../prompts/library/promptDocV2.js';
-import { PromptBundleCreateActionInputV1Schema, PromptBundleUpdateActionInputV1Schema } from '../prompts/library/promptBundleSchemas.js';
+import { PromptBundleUpdateActionInputV1Schema } from '../prompts/library/promptBundleSchemas.js';
+import { SKILL_ACTION_INPUT_SCHEMAS_V1, SKILL_MACHINE_ACTION_INPUT_SCHEMAS_V1 } from '../prompts/library/skills/skillActionSchemasV1.js';
 import { SkillReadInputV1Schema } from '../prompts/library/skills/skillReadV1.js';
 import { ARTIFACT_FOLDER_ACTION_INPUT_SCHEMAS_V1, ArtifactFolderMutationResultV1Schema } from '../prompts/library/promptFolderActionSchemasV1.js';
 import { updatePromptLibraryStackV1 } from '../prompts/library/promptLibraryCatalogV1.js';
@@ -18,11 +19,17 @@ import { PromptInvocationCreateInputSchema } from './promptInvocationCreateActio
 import { PromptLibraryStackUpdateInputV1Schema } from '../prompts/library/promptStacksV1.js';
 import { mutateSkillRulesV1 } from '../prompts/library/skillRulesActionsV1.js';
 import { SkillsRulesSetInputV1Schema } from './specs/capabilityRules.js';
+import { SessionCapabilitiesGetInputV1Schema, SessionCapabilitiesGetOutputV1Schema, SessionCapabilitiesSetInputV1Schema,
+  SessionCapabilitiesSetOutputV1Schema, SpawnCapabilitiesPreviewInputV1Schema, SpawnCapabilitiesPreviewOutputV1Schema } from './specs/sessionCapabilities.js';
+import { setSessionCapabilityV1 } from './executor/sessionCapabilities.js';
+import { REGISTRY_ACTION_IDS_V1, type RegistryActionIdV1 } from '../registries/registryActionsV1.js';
+import { RegistryFetchErrorV1, RegistrySourceStatusV1Schema } from '../registries/registryListV1.js';
+import { PERSONAL_SAVED_SECRET_ACTION_IDS_V1, type PersonalSavedSecretActionIdV1 } from '../account/settings/personalSavedSecretActionsV1.js';
 import { ProjectContextUpdateInputV1Schema } from '../projects/projectContextV1.js';
 import { SessionPendingWithdrawInputV1Schema } from '../sessions/control/pendingWithdrawV1.js';
 import { SetSessionPinRequestSchema, SetSessionPinResponseSchema } from '../sessions/organization/mutations.js';
 import { isMemoryWriteActionV1, MEMORY_DOCUMENT_ACTION_IDS_V1, MemoryDocReadInputV1Schema, MemoryListInputV1Schema } from '../prompts/library/memoryActionsV1.js';
-import { readMemoryDocInLibrary, listMemoryDocsInLibrary, MemoryDocFailureV1 } from '../prompts/library/promptLibraryActionOperations.js';
+import { readMemoryDocInLibrary, listMemoryDocsInLibrary, MemoryDocFailureV1, projectLegacySkillRegistryInstallActionResultV1 } from '../prompts/library/promptLibraryActionOperations.js';
 import { isArtifactFolderActionIdV1 } from '../prompts/library/artifactFolderActionIdsV1.js';
 import { executeArtifactFolderActionV1, ArtifactOrganizationMutationFailureV1, ArtifactOrganizationMutationFailureDetailsV1Schema } from '../prompts/library/promptFolderActionsV1.js';
 import { redactBugReportSensitiveText } from '../bugs/reports/redaction.js';
@@ -30,6 +37,7 @@ import { assertMemoryHomeV1, readMemoryWriteAdmissionV1, bindMemoryWriteApproval
 
 import { InputOptionsConsumerV1Schema, inputOptionsConsumerActionId } from '../inputs/inputOptionsConsumer.js';
 import { readRecord, readNonEmptyString, isRecord, hasOwn } from '../inputs/inputRecords.js';
+import { areServerProfileIdentifiersEquivalent } from '../features/payload/capabilities/serverIdentityCapabilities.js';
 import { ModelFavoriteMutationV1Schema } from '../providers/modelFavoritesV1.js';
 import {
   ProjectSourcesListInputV1Schema, ProjectSourcesReadInputV1Schema, ProjectSourcesCreateInputV1Schema,
@@ -40,6 +48,7 @@ import { isProjectDefinitionActionId } from './projectDefinitionActionFamily.js'
 import { isAccountSettingActionSurfaceAllowedV1 } from './accountSettingDeclarations.js';
 import { AccountHomeContinuationInputV1Schema } from './accountHomeContinuationV1.js';
 import { bytesToHex, randomBytes } from '@noble/hashes/utils';
+import { resolveProjectActionMachineV1 } from './executor/projectActionPlacement.js';
 import type { PublicActionInputById } from './actionSpecs.js';
 import { WaitActionInputV1Schema } from './specs/wait.js';
 import { ActionOperationActionIdV1Schema, ActionOperationActionInputSchemasV1 } from './specs/actionOperations.js';
@@ -74,7 +83,10 @@ import { SESSION_PERMISSION_MODES } from '../sessions/metadata/sessionPermission
 import { SessionPermissionRespondActionDecisionV1Schema, SessionPermissionRespondRpcParamsV1Schema } from '../sessions/permissions/respondRpcParamsV1.js';
 import { StructuredQuestionAnswersV1Schema } from '../tools/structuredQuestionAnswersV1.js';
 import { SessionWorkerPublishInputV1Schema, SessionWorkerPublishOutputV1Schema } from '../sessions/relations/workerUpdateV1.js';
-import { MachinesAgentsListInputSchema } from '../capabilities/machineAgentInventory.js';
+import { MachinesAgentsListInputSchema, MachinesAgentsListOutputSchema, MachineAcpInventoryDefinitionSchema } from '../capabilities/machineAgentInventory.js';
+import { resolveAcpPlatformFitV1 } from '../acp/catalog/registry/acpPlatformFitV1.js';
+import { installAcpRegistryAgentV1 } from '../acp/catalog/registry/installAcpRegistryAgentV1.js';
+import { AgentsAcpBackendsInstallFromRegistryInputV1Schema } from '../acp/catalog/registry/registryInstallActionV1.js';
 import { WorkflowEventsListInputV1Schema } from './specs/workflowEvents.js';
 import { WorkspaceFilesSearchActionInputSchema } from './actionSpecs.js';
 import { HomeConnectInputSchema, MachineAddCommandInputSchema, MachinePairingCreateInputSchema, MACHINE_ADD_SSH_ACTION_IDS, MACHINE_ADD_SSH_INPUT_SCHEMAS, MACHINE_PAGE_ACTION_IDS, MACHINE_PAGE_ACTION_INPUT_SCHEMAS, type MachineAddSshActionId, type MachinePageActionId } from './specs/machineConnection.js';
@@ -259,7 +271,6 @@ import {
   readApprovalExecutionFailure,
 } from '../approvals/approvalExecutionFailure.js';
 import { resolveApprovalRequestExecutionInput, settleApprovalRequestActionArgs, settleApprovalRequestDecision } from '../approvals/approvalRequestTransition.js';
-import type { PromptRegistryConfiguredSourceV1 } from '../prompts/library/promptRegistriesV1.js';
 import { ProviderConnectionIdSchema } from '../providers/ids.js';
 import {
   BackendTargetKeySchema,
@@ -439,7 +450,7 @@ import {
   SessionAgentSpawnPolicyV1StrictSchema,
 } from '../account/settings/accountSettings.js';
 import {
-  admitActionAgentStartV1, isAgentStartActionV1, isAgentStartActionInvocationV1, isActionCallerOwnSessionV1, requiresActionAgentStartDepthV1, resolveActionAgentStartRequestsV1,
+  admitActionAgentStartV1, isAgentStartActionV1, isAgentStartActionInvocationV1, isActionCallerOwnSessionV1, requiresActionAgentStartDepthV1, resolveActionAgentStartRequestsV1, resolveProfileSkillSeedsAtAdmissionV1,
   resolveActionAgentStartContextV1, resolveRunStartModelAndConfig, stampAgentStartSelectionV1,
 } from './executor/agentStartAdmission.js';
 import { AgentStartSessionCallerV1Schema } from '../account/settings/admitAgentStartV1.js';
@@ -1523,7 +1534,8 @@ export function buildApprovalExecutionOriginV1(params: Readonly<{
     ? settingsTarget.kind === 'daemon' ? settingsTarget.machineId : ''
     : normalizeId(params.context.executionRunTargetMachineId)
     || externalAuthorization?.binding.machineId
-    || (getActionSpec(params.actionId).executionPlacement === 'machine' ? normalizeId(inputRecord.machineId) : '')
+    || (resolveActionExecutionPlacementForInput(getActionSpec(params.actionId), params.input) === 'machine'
+      ? normalizeId(inputRecord.machineId) : '')
     || readLocalServiceControlActionRequest(params.actionId, params.input)?.target.machineId
     || normalizeId(params.context.defaultSessionMachineId)
     || normalizeId(inputExecutionTarget.machineId)
@@ -2056,6 +2068,12 @@ function projectApprovalRequestPluginCaller(
 const RPC_ERROR_CODE_SET: ReadonlySet<string> = new Set(Object.values(RPC_ERROR_CODES));
 
 function normalizeActionExecutorThrownError(error: unknown): Readonly<{ errorCode: string; error: string; details?: unknown }> {
+  if (error instanceof RegistryFetchErrorV1) {
+    const status = RegistrySourceStatusV1Schema.safeParse(error.status);
+    if (status.success && status.data.state !== 'ok') {
+      return { errorCode: status.data.state, error: status.data.state, details: { registryStatus: status.data } };
+    }
+  }
   if (error instanceof MemoryDocFailureV1) {
     return { errorCode: error.code, error: error.message,
       ...(error.details === undefined ? {} : { details: error.details }) };
@@ -2313,6 +2331,10 @@ export function createActionExecutor(deps: ActionExecutorDeps): Readonly<{
     callerAuthority?: ActionRequiredAuthority;
   }>) => Promise<ActionExecuteResult>;
 }> {
+  const isSameHome = (targetServerId: unknown, currentServerId: string | null | undefined, ctx: ActionExecutorContext): boolean =>
+    typeof targetServerId === 'string' && areServerProfileIdentifiersEquivalent(targetServerId, currentServerId, identifier =>
+      identifier === ctx.serverId && ctx.serverIdentityId ? ctx.serverIdentityId
+        : identifier === ctx.serverIdentityId ? ctx.serverIdentityId : deps.resolveServerProfileScopeId?.(identifier));
   const policyAllowsAction = deps.isActionEnabled ?? ((_id: ActionId, _ctx: ActionExecutorContext) => true);
   const isActionEnabledByPolicy = (spec: ActionSpec, ctx: ActionExecutorContext) => policyAllowsAction(spec.id, ctx);
   const isActionEnabledBySurface = (spec: ActionSpec, ctx: ActionExecutorContext) => isActionSpecSurfacedOn(spec, ctx.surface);
@@ -2863,16 +2885,26 @@ export function createActionExecutor(deps: ActionExecutorDeps): Readonly<{
       && normalizeId(args.ctx.serverId)
       ? args.ctx.serverId
       : origin?.success ? origin.data.serverId : undefined;
-    // App-owned Account replay is a new human invocation of the validated
+    // App-owned Account/client replay is a new human invocation of the validated
     // proposal, not an upgrade of its Session/PAT/terminal carrier. Custody is
     // decided by the approval owner; original provenance stays on the Artifact.
-    const appAccountReplay = actionId !== null && origin?.success && originIsCurrent
+    const replayPlacement = actionId !== null
+      ? resolveActionExecutionPlacementForInput(getActionSpec(actionId), replayInput) : null;
+    const appOwnedReplay = actionId !== null && origin?.success && originIsCurrent
       && !requiresExactDaemonApprovalReplay(request)
-      && resolveActionExecutionPlacementForInput(getActionSpec(actionId), replayInput) === 'account'
+      && (replayPlacement === 'account' || replayPlacement === 'client')
       && args.ctx.surface === 'ui' && resolveHostStampedAuthority(args.ctx) === 'present_user'
       && (!args.ctx.actionCaller || args.ctx.actionCaller.kind === 'host')
       && !args.ctx.externalActionCredential && !args.ctx.externalActionExecutionAuthorization
       && !args.ctx.rpcSessionAuthorization;
+    // A Machine target authored with the creator's device-local profile follows
+    // this already-verified Account replay Home. Never rewrite the stored/signed
+    // proposal, a different target, or exact-daemon/external replay custody.
+    const executionInput = appOwnedReplay && actionId?.startsWith('machines.')
+      && origin?.success && replayServerId
+      && readRecord(replayInput).serverId === origin.data.serverId
+      ? { ...readRecord(replayInput), serverId: replayServerId }
+      : replayInput;
     let executionContext: ActionExecutorContext = {
       ...(args.ctx.signal ? { signal: args.ctx.signal } : {}),
       ...(retainsHostOperation ? {
@@ -2881,7 +2913,7 @@ export function createActionExecutor(deps: ActionExecutorDeps): Readonly<{
         ...(args.ctx.operationOwnerUpdate ? { operationOwnerUpdate: args.ctx.operationOwnerUpdate } : {}),
         ...(args.ctx.operationCancellation ? { operationCancellation: args.ctx.operationCancellation } : {}),
       } : {}),
-      ...(appAccountReplay && origin?.success ? {
+      ...(appOwnedReplay && origin?.success ? {
         authority: 'present_user' as const, surface: 'ui' as const,
         serverId: replayServerId,
         ...(origin.data.serverIdentityId ? { serverIdentityId: origin.data.serverIdentityId } : {}),
@@ -2928,7 +2960,7 @@ export function createActionExecutor(deps: ActionExecutorDeps): Readonly<{
           ? { workspaceWrites: origin.data.externalActionExecutionAuthorization.binding.sessionActionOrigin.workspaceWrites }
           : {}),
       } : {}),
-      actionCaller: appAccountReplay ? { kind: 'host' } : replayCaller,
+      actionCaller: appOwnedReplay ? { kind: 'host' } : replayCaller,
       ...(args.retainedPluginSettingsIntent
         ? { isPluginSettingsIntentCurrent: args.retainedPluginSettingsIntent } : {}),
       ...(actionId !== null && requiresPresentUserExecutionAuthorityForActionInputV1(getActionSpec(actionId), replayInput)
@@ -2937,7 +2969,7 @@ export function createActionExecutor(deps: ActionExecutorDeps): Readonly<{
             ...(request.v === 2 && request.status === 'executing' && request.decision?.kind === 'approve'
               && origin?.success && originIsCurrent ? { presentUserApproval: {
                 artifactId: args.artifactId, actionId, requestId: origin.data.requestId,
-                inputDigest: computeActionInputApprovalDigestV1(actionId, replayInput),
+                inputDigest: computeActionInputApprovalDigestV1(actionId, executionInput),
               } } : {}),
           } : {}),
       placement: null,
@@ -3014,7 +3046,7 @@ export function createActionExecutor(deps: ActionExecutorDeps): Readonly<{
           return { ok: false, errorCode: 'approval_stale', error: 'approval_stale' };
         }
         if (prepared) executionContext = { ...executionContext, externalActionExecutionAuthorization: prepared.authorization };
-        return await executeCoreTerminal(actionId, replayInput, executionContext, true, undefined, undefined, true);
+        return await executeCoreTerminal(actionId, executionInput, executionContext, true, undefined, undefined, true);
       } finally {
         await prepared?.dispose?.();
       }
@@ -3403,7 +3435,7 @@ export function createActionExecutor(deps: ActionExecutorDeps): Readonly<{
       }
     }
     if (isActionFamilyId(actionId, ActionOperationActionIdV1Schema) && ctx.serverId
-      && ctx.serverId !== readNonEmptyString(readRecord(admittedInput).serverId)) {
+      && !isSameHome(readRecord(admittedInput).serverId, ctx.serverId, ctx)) {
       return { ok: false, errorCode: 'server_scope_mismatch', error: 'server_scope_mismatch' };
     }
     const credentialFailure = await admitCredentialScope(actionId, ctx, admittedInput);
@@ -3585,7 +3617,7 @@ export function createActionExecutor(deps: ActionExecutorDeps): Readonly<{
     }
     const data = readRecord(admittedInput);
     const folderCreateInput = (actionId === 'prompt_doc.create' || actionId === 'prompt_doc.update'
-      || actionId === 'prompt_bundle.create' || actionId === 'prompt_bundle.update') && data.createFolder !== undefined
+      || actionId === 'prompt_bundle.update') && data.createFolder !== undefined
       ? ARTIFACT_FOLDER_ACTION_INPUT_SCHEMAS_V1['artifact.folders.create'].parse(data.createFolder) : null;
     if (folderCreateInput) {
       const childSpec = getActionSpec('artifact.folders.create');
@@ -3867,6 +3899,18 @@ export function createActionExecutor(deps: ActionExecutorDeps): Readonly<{
             errorCode: 'approvals_not_supported',
             error: 'approvals_not_supported',
           });
+        }
+        // Supported unsigned proposals capture the delivery owner's target
+        // before durable approval takes custody. Unsupported approval stops
+        // before attempting Account-private SOURCE placement reads.
+        if (!ctx.externalActionExecutionAuthorization
+          && (actionId === 'projects.prepare' || actionId === 'projects.script.run' || actionId === 'projects.compute.exec')) {
+          const target = await resolveProjectActionMachineV1({ actionId, input: admittedInput, context: ctx,
+            executeCanonicalAction: (id, input) => executeInvocation(id, input, ctx),
+            createRequestKey: () => bytesToHex(randomBytes(16)),
+            ...(ctx.serverIdentityId ? { homeId: ctx.serverIdentityId } : {}) });
+          if (!target.ok) return target;
+          ctx = { ...ctx, executionRunTargetMachineId: target.machineId };
         }
         const approvalPluginCaller = projectApprovalRequestPluginCaller(ctx.actionCaller);
         if (ctx.actionCaller?.kind === 'plugin' && !approvalPluginCaller) {
@@ -5106,7 +5150,7 @@ export function createActionExecutor(deps: ActionExecutorDeps): Readonly<{
       if (actionId === 'machines.work.summary.get') {
         if (!deps.machineWorkSummaryGet) return { ok: false, errorCode: 'unsupported_action', error: `unsupported_action:${actionId}` };
         const target = MachineWorkSummaryGetInputV1Schema.parse(parsed.data);
-        if (ctx.serverId && target.serverId !== ctx.serverId) return { ok: false, errorCode: 'server_target_mismatch', error: 'server_target_mismatch' };
+        if (ctx.serverId && !isSameHome(target.serverId, ctx.serverId, ctx)) return { ok: false, errorCode: 'server_target_mismatch', error: 'server_target_mismatch' };
         const result = await deps.machineWorkSummaryGet({ input: target, context: ctx, ...(ctx.signal ? { signal: ctx.signal } : {}) });
         return readActionFailureEnvelope(result) ?? { ok: true, result };
       }
@@ -5115,7 +5159,7 @@ export function createActionExecutor(deps: ActionExecutorDeps): Readonly<{
       const machineProcessesActionId = isActionFamilyId(actionId, MachineProcessesActionIdSchema) ? actionId : null;
       if (machineProcessesActionId !== null) {
         const input = MACHINE_PROCESSES_ACTION_INPUT_SCHEMAS[machineProcessesActionId].parse(parsed.data);
-        if (ctx.serverId && input.serverId && input.serverId !== ctx.serverId) return { ok: false, errorCode: 'server_target_mismatch', error: 'server_target_mismatch' };
+        if (ctx.serverId && input.serverId && !isSameHome(input.serverId, ctx.serverId, ctx)) return { ok: false, errorCode: 'server_target_mismatch', error: 'server_target_mismatch' };
         if (!deps.machineProcessesAction) return { ok: false, errorCode: 'unsupported_action', error: `unsupported_action:${actionId}` };
         const result = await deps.machineProcessesAction({ actionId: machineProcessesActionId, input, context: ctx,
           ...(ctx.signal ? { signal: ctx.signal } : {}) });
@@ -5123,7 +5167,7 @@ export function createActionExecutor(deps: ActionExecutorDeps): Readonly<{
       }
       if (machineStorageActionId !== null) {
         const input = MACHINE_STORAGE_ACTION_INPUT_SCHEMAS[machineStorageActionId].parse(parsed.data);
-        if (ctx.serverId && input.serverId && input.serverId !== ctx.serverId) return { ok: false, errorCode: 'server_target_mismatch', error: 'server_target_mismatch' };
+        if (ctx.serverId && input.serverId && !isSameHome(input.serverId, ctx.serverId, ctx)) return { ok: false, errorCode: 'server_target_mismatch', error: 'server_target_mismatch' };
         if (!deps.machineStorageAction) return { ok: false, errorCode: 'unsupported_action', error: `unsupported_action:${actionId}` };
         const result = await deps.machineStorageAction({ actionId: machineStorageActionId, input, context: ctx, ...(ctx.signal ? { signal: ctx.signal } : {}) });
         return readActionFailureEnvelope(result) ?? { ok: true, result };
@@ -5132,13 +5176,13 @@ export function createActionExecutor(deps: ActionExecutorDeps): Readonly<{
       const machineGuardActionId = isActionFamilyId(actionId, MachineGuardActionIdSchema) ? actionId : null;
       if (machineGuardActionId !== null) {
         const input = MACHINE_GUARD_ACTION_INPUT_SCHEMAS[machineGuardActionId].parse(parsed.data);
-        if (ctx.serverId && input.serverId && input.serverId !== ctx.serverId) return { ok: false, errorCode: 'server_target_mismatch', error: 'server_target_mismatch' };
+        if (ctx.serverId && input.serverId && !isSameHome(input.serverId, ctx.serverId, ctx)) return { ok: false, errorCode: 'server_target_mismatch', error: 'server_target_mismatch' };
         if (!deps.machineGuardAction) return { ok: false, errorCode: 'unsupported_action', error: `unsupported_action:${actionId}` };
         const result = await deps.machineGuardAction({ actionId: machineGuardActionId, input, context: ctx, ...(ctx.signal ? { signal: ctx.signal } : {}),
           ...(machineGuardActionId === 'machines.guard.activity.undo' ? {
             executeCanonicalAction: (nestedActionId: ActionId, nestedInput: unknown) => {
               const request = readRecord(nestedInput);
-              if (request.serverId !== undefined && request.serverId !== (input.serverId ?? ctx.serverId)) {
+              if (request.serverId !== undefined && !isSameHome(request.serverId, input.serverId ?? ctx.serverId, ctx)) {
                 return Promise.resolve({ ok: false as const, errorCode: 'server_target_mismatch', error: 'server_target_mismatch' });
               }
               if (request.machineId !== undefined && request.machineId !== input.machineId) {
@@ -5154,14 +5198,14 @@ export function createActionExecutor(deps: ActionExecutorDeps): Readonly<{
       }
       if (machineResourcesActionId !== null) {
         const input = MACHINE_RESOURCES_ACTION_INPUT_SCHEMAS[machineResourcesActionId].parse(parsed.data);
-        if (ctx.serverId && input.serverId && input.serverId !== ctx.serverId) return { ok: false, errorCode: 'server_target_mismatch', error: 'server_target_mismatch' };
+        if (ctx.serverId && input.serverId && !isSameHome(input.serverId, ctx.serverId, ctx)) return { ok: false, errorCode: 'server_target_mismatch', error: 'server_target_mismatch' };
         if (!deps.machineResourcesPolicyAction) return { ok: false, errorCode: 'unsupported_action', error: `unsupported_action:${actionId}` };
         const result = await deps.machineResourcesPolicyAction({ actionId: machineResourcesActionId, input, context: ctx, ...(ctx.signal ? { signal: ctx.signal } : {}) });
         return readActionFailureEnvelope(result) ?? { ok: true, result };
       }
       if (machineVitalsActionId !== null) {
         const input = MACHINE_VITALS_ACTION_INPUT_SCHEMAS[machineVitalsActionId].parse(parsed.data);
-        if (ctx.serverId && input.serverId && input.serverId !== ctx.serverId) {
+        if (ctx.serverId && input.serverId && !isSameHome(input.serverId, ctx.serverId, ctx)) {
           return { ok: false, errorCode: 'server_target_mismatch', error: 'server_target_mismatch' };
         }
         if (!deps.machineVitalsAction) return { ok: false, errorCode: 'unsupported_action', error: `unsupported_action:${actionId}` };
@@ -5173,7 +5217,7 @@ export function createActionExecutor(deps: ActionExecutorDeps): Readonly<{
       if (machineAccessActionId !== null) {
         if (!deps.machineAccessAction) return { ok: false, errorCode: 'unsupported_action', error: `unsupported_action:${actionId}` };
         const machineTarget = readRecord(parsed.data);
-        if (ctx.serverId && machineTarget.serverId !== ctx.serverId) {
+        if (ctx.serverId && !isSameHome(machineTarget.serverId, ctx.serverId, ctx)) {
           return { ok: false, errorCode: 'server_target_mismatch', error: 'server_target_mismatch' };
         }
         const result = await deps.machineAccessAction({ actionId: machineAccessActionId, input: parsed.data, context: ctx,
@@ -5205,7 +5249,7 @@ export function createActionExecutor(deps: ActionExecutorDeps): Readonly<{
         if (machinePoolActionId === 'machines.pools.resolve') {
           const request = MachinePoolResolveInputV1Schema.parse(parsed.data);
           if (request.purpose === 'finite' || request.purpose === 'service-start') {
-            if (ctx.serverId && request.workspace.serverId !== ctx.serverId) {
+            if (ctx.serverId && !isSameHome(request.workspace.serverId, ctx.serverId, ctx)) {
               return { ok: false, errorCode: 'server_target_mismatch', error: 'server_target_mismatch' };
             }
             const workerContext = { ...ctx, serverId: request.workspace.serverId };
@@ -5420,7 +5464,7 @@ export function createActionExecutor(deps: ActionExecutorDeps): Readonly<{
       if ((MACHINE_PAGE_ACTION_IDS as readonly string[]).includes(actionId)) {
         const id = actionId as MachinePageActionId;
         const input = MACHINE_PAGE_ACTION_INPUT_SCHEMAS[id].parse(parsed.data);
-        if (ctx.serverId && input.serverId && input.serverId !== ctx.serverId) {
+        if (ctx.serverId && input.serverId && !isSameHome(input.serverId, ctx.serverId, ctx)) {
           return { ok: false, errorCode: 'server_target_mismatch', error: 'server_target_mismatch' };
         }
         if (!deps.machinePageAction) return { ok: false, errorCode: 'unsupported_action', error: `unsupported_action:${actionId}` };
@@ -5428,7 +5472,7 @@ export function createActionExecutor(deps: ActionExecutorDeps): Readonly<{
       }
       if (isMachineTerminalActionId(actionId)) {
         const request = MACHINE_TERMINAL_ACTION_INPUT_SCHEMAS[actionId].parse(parsed.data);
-        if (ctx.serverId && request.serverId !== ctx.serverId) return { ok: false, errorCode: 'server_target_mismatch', error: 'server_target_mismatch' };
+        if (ctx.serverId && !isSameHome(request.serverId, ctx.serverId, ctx)) return { ok: false, errorCode: 'server_target_mismatch', error: 'server_target_mismatch' };
         if (!deps.machineTerminalAction) return { ok: false, errorCode: 'unsupported_action', error: `unsupported_action:${actionId}` };
         return completeActionResult(await deps.machineTerminalAction({ actionId, input: request, context: ctx,
           ...(ctx.signal ? { signal: ctx.signal } : {}),
@@ -6144,6 +6188,7 @@ export function createActionExecutor(deps: ActionExecutorDeps): Readonly<{
 
         if (actionId === 'action.options.resolve') {
           let actionIdRaw = normalizeId(data.actionId);
+          let optionsConsumer: ReturnType<typeof InputOptionsConsumerV1Schema.parse> | undefined;
           const fieldPath = normalizeId(data.fieldPath);
           const directOptionsSourceId = normalizeId(data.optionsSourceId);
           let optionsSourceId = directOptionsSourceId;
@@ -6160,6 +6205,7 @@ export function createActionExecutor(deps: ActionExecutorDeps): Readonly<{
             }
             const resolved = await resolveTypedInputFieldOptions({ field, deps, ctx,
               actionId: ownerId as ActionId, input: { ...readRecord(data.draftInput), ...data },
+              consumer: optionsConsumer,
               readFailure: readActionFailureEnvelope, resolveSessionId: resolveSessionIdFromInput, reviewScope: reviewScopeForInput });
             return resolved.ok ? { ok: true, result: { actionId: ownerId, fieldPath,
               optionsSourceId: resolved.optionsSourceId === null ? null : readInputFieldOptionsSourceId(field) ?? null,
@@ -6193,6 +6239,7 @@ export function createActionExecutor(deps: ActionExecutorDeps): Readonly<{
             const field = await resolveInputOptionsConsumerField({ consumer, fieldPath, deps, context: ctx });
             if (!field) return { ok: false, errorCode: 'input_type_consumer_unavailable', error: 'input_type_consumer_unavailable' };
             if ('ok' in field) return field;
+            optionsConsumer = consumer;
             if (field.connectedAccountOptions && consumer.kind === 'widget') {
               const options = await deps.widgetConnectedAccountOptions?.({ consumer, fieldPath, context: ctx });
               if (!options) return { ok: false, errorCode: 'widget_connected_account_options_unavailable', error: 'widget_connected_account_options_unavailable' };
@@ -6332,6 +6379,7 @@ export function createActionExecutor(deps: ActionExecutorDeps): Readonly<{
             actionId: actionIdRaw ? actionIdRaw as ActionId : null,
             optionsSourceId,
             input: dependencyInput,
+            consumer: optionsConsumer,
             includeSpawnModelCatalog: actionIdRaw === 'session.spawn_new' && fieldPath === 'modelSelection',
           });
           if (!dynamic.ok) return dynamic;
@@ -7192,7 +7240,7 @@ export function createActionExecutor(deps: ActionExecutorDeps): Readonly<{
         if (actionId === 'session.organization.pin.set') {
           if (!deps.sessionOrganizationPinSet) return { ok: false, errorCode: 'unsupported_action', error: `unsupported_action:${actionId}` };
           const input = parsed.data as PublicActionInputById['session.organization.pin.set'];
-          if (input.serverId && ctx.serverId && input.serverId !== ctx.serverId) {
+          if (input.serverId && ctx.serverId && !isSameHome(input.serverId, ctx.serverId, ctx)) {
             return { ok: false, errorCode: 'server_target_mismatch', error: 'server_target_mismatch' };
           }
           const serverId = input.serverId ?? resolveServerIdForSession(deps, ctx, input.sessionId);
@@ -7253,13 +7301,14 @@ export function createActionExecutor(deps: ActionExecutorDeps): Readonly<{
             sessionId,
             serverId,
             ...(data.intent === 'resume' ? { intent: 'resume' as const } : {}),
+            ...(data.resumeRequest ? { resumeRequest: (parsed.data as PublicActionInputById['session.open']).resumeRequest } : {}),
             ...(destination ? { destination } : {}),
             ...(typeof data.tabId === 'string' ? { tabId: data.tabId } : {}),
             ...(typeof data.approvedNewDirectoryCreation === 'boolean'
               ? { approvedNewDirectoryCreation: data.approvedNewDirectoryCreation } : {}),
             ...(ctx.actionRequestId ? { actionRequestId: ctx.actionRequestId } : {}),
             ...(ctx.signal ? { signal: ctx.signal } : {}),
-          });
+          }, ctx);
           return completeActionResult(res);
         }
 
@@ -7532,7 +7581,9 @@ export function createActionExecutor(deps: ActionExecutorDeps): Readonly<{
         }
 
         if (actionId === 'session.spawn_new') {
-          const spawnInput = data;
+          const profileAdmission = await resolveProfileSkillSeedsAtAdmissionV1(data, deps, ctx);
+          if (!profileAdmission.ok) return profileAdmission;
+          const spawnInput = profileAdmission.input;
           const permissionResolution = assertAgentPermission(ctx, spawnInput.permissionMode);
           if (!permissionResolution.ok) {
             return permissionResolution.error;
@@ -7713,7 +7764,7 @@ export function createActionExecutor(deps: ActionExecutorDeps): Readonly<{
         if (actionId === 'machines.list') {
           const requestedServerId = normalizeId(data.serverId);
           const currentServerId = normalizeId(ctx.serverId);
-          if (requestedServerId && currentServerId && requestedServerId !== currentServerId) {
+          if (requestedServerId && currentServerId && !isSameHome(requestedServerId, currentServerId, ctx)) {
             return { ok: false, errorCode: 'server_target_mismatch', error: 'server_target_mismatch' };
           }
           const res = await deps.machinesList({
@@ -7921,6 +7972,25 @@ export function createActionExecutor(deps: ActionExecutorDeps): Readonly<{
           return completeActionResult(res);
         }
 
+        if (actionId === 'sessions.spawn.capabilities.preview') {
+          if (!deps.spawnCapabilitiesPreview) return completeActionResult({ ok: false, reason: 'machine_unreachable' });
+          const admitted = await resolveProfileSkillSeedsAtAdmissionV1(data, deps, ctx);
+          if (!admitted.ok) return completeActionResult({ ok: false, reason: 'invalid_input' });
+          ctx.signal?.throwIfAborted();
+          return completeActionResult(SpawnCapabilitiesPreviewOutputV1Schema.parse(await deps.spawnCapabilitiesPreview(
+            SpawnCapabilitiesPreviewInputV1Schema.parse(admitted.input), ctx)));
+        }
+        if (actionId === 'session.capabilities.get') {
+          if (!deps.sessionCapabilitiesGet) return completeActionResult({ ok: false, code: 'session_unavailable' });
+          return completeActionResult(SessionCapabilitiesGetOutputV1Schema.parse(await deps.sessionCapabilitiesGet(
+            SessionCapabilitiesGetInputV1Schema.parse(parsed.data), ctx)));
+        }
+        if (actionId === 'session.capabilities.set') {
+          if (!deps.sessionCapabilities) return completeActionResult({ ok: false, code: 'session_unavailable' });
+          return completeActionResult(SessionCapabilitiesSetOutputV1Schema.parse(await setSessionCapabilityV1({
+            port: deps.sessionCapabilities, request: SessionCapabilitiesSetInputV1Schema.parse(parsed.data), context: ctx,
+          })));
+        }
         if (actionId === 'sessions.spawn.mcp_servers.preview') {
           if (!deps.spawnMcpServersPreview) {
             return { ok: false, errorCode: 'unsupported_action', error: 'unsupported_action:sessions.spawn.mcp_servers.preview' };
@@ -8686,21 +8756,6 @@ export function createActionExecutor(deps: ActionExecutorDeps): Readonly<{
           return completeActionResult(res);
         }
 
-        if (actionId === 'session.mcp_selection.set') {
-          const sessionId = resolveSessionIdFromInput(parsed.data, ctx);
-          if (!sessionId) return { ok: false, errorCode: 'session_not_selected', error: 'session_not_selected' };
-          if (!deps.sessionMcpSelectionSet) {
-            return { ok: false, errorCode: 'unsupported_action', error: 'unsupported_action:session.mcp_selection.set' };
-          }
-          const res = await deps.sessionMcpSelectionSet({
-            sessionId,
-            selection: data.selection,
-            sessionActive: data.sessionActive === true,
-            ...(ctx.serverId ? { serverId: ctx.serverId } : {}),
-          });
-          return completeActionResult(res);
-        }
-
         if (actionId === 'session.connected_services_auth.set') {
           if (!deps.sessionConnectedServicesAuthSet) {
             return { ok: false, errorCode: 'unsupported_action', error: 'unsupported_action:session.connected_services_auth.set' };
@@ -9008,16 +9063,6 @@ export function createActionExecutor(deps: ActionExecutorDeps): Readonly<{
           return { ok: true, result: { ok: true, sessionId } };
         }
 
-        if (actionId === 'daemon.promptAssets.discover') {
-          if (!deps.daemonPromptAssetsDiscover) {
-            return { ok: false, errorCode: 'unsupported_action', error: 'unsupported_action:daemon.promptAssets.discover' };
-          }
-          return completeActionResult(await deps.daemonPromptAssetsDiscover({
-            request: parsed.data as Parameters<NonNullable<ActionExecutorDeps['daemonPromptAssetsDiscover']>>[0]['request'],
-            ...(ctx.signal ? { signal: ctx.signal } : {}),
-          }));
-        }
-
         if (actionId === 'daemon.promptAssets.delete') {
           if (!deps.daemonPromptAssetsDelete) {
             return { ok: false, errorCode: 'unsupported_action', error: 'unsupported_action:daemon.promptAssets.delete' };
@@ -9028,24 +9073,13 @@ export function createActionExecutor(deps: ActionExecutorDeps): Readonly<{
           }));
         }
 
-        if (actionId === 'daemon.promptRegistry.scanSource') {
-          if (!deps.daemonPromptRegistryScanSource) {
-            return { ok: false, errorCode: 'unsupported_action', error: 'unsupported_action:daemon.promptRegistry.scanSource' };
-          }
-          return completeActionResult(await deps.daemonPromptRegistryScanSource({
-            request: parsed.data as Parameters<NonNullable<ActionExecutorDeps['daemonPromptRegistryScanSource']>>[0]['request'],
-            ...(ctx.signal ? { signal: ctx.signal } : {}),
-          }));
+        if ((REGISTRY_ACTION_IDS_V1 as readonly string[]).includes(actionId)) {
+          if (!deps.registryActionExecute) return {ok:false,errorCode:'unsupported_action',error:`unsupported_action:${actionId}`};
+          return completeActionResult(await deps.registryActionExecute({actionId:actionId as RegistryActionIdV1,input:parsed.data,context:ctx}));
         }
-
-        if (actionId === 'daemon.promptRegistry.install') {
-          if (!deps.daemonPromptRegistryInstall) {
-            return { ok: false, errorCode: 'unsupported_action', error: 'unsupported_action:daemon.promptRegistry.install' };
-          }
-          return completeActionResult(await deps.daemonPromptRegistryInstall({
-            request: parsed.data as Parameters<NonNullable<ActionExecutorDeps['daemonPromptRegistryInstall']>>[0]['request'],
-            ...(ctx.signal ? { signal: ctx.signal } : {}),
-          }));
+        if ((PERSONAL_SAVED_SECRET_ACTION_IDS_V1 as readonly string[]).includes(actionId)) {
+          if (!deps.personalSavedSecretActionExecute) return { ok: false, errorCode: 'unsupported_action', error: `unsupported_action:${actionId}` };
+          return completeActionResult(await deps.personalSavedSecretActionExecute({ actionId: actionId as PersonalSavedSecretActionIdV1, input: parsed.data, context: ctx }));
         }
 
         if (actionId === 'agents.acp.backends.get') {
@@ -9058,13 +9092,65 @@ export function createActionExecutor(deps: ActionExecutorDeps): Readonly<{
           return { ok: true, result: AgentsAcpBackendsGetOutputV1Schema.parse({ backend, revision: catalog.revision }) };
         }
 
+        if (actionId === 'agents.acp.backends.installFromRegistry') {
+          return await installAcpRegistryAgentV1(AgentsAcpBackendsInstallFromRegistryInputV1Schema.parse(data), ctx, deps);
+        }
+
+        const projectAcpUpsertRefusal = (outcome: Extract<ReturnType<typeof applyAcpBackendUpsertV1>, { ok: false }>): ActionExecuteFailure => ({
+          ok: false, errorCode: outcome.code, error: outcome.message,
+          ...(outcome.code === 'registry_change_requires_install'
+            ? { details: { use: 'agents.acp.backends.installFromRegistry' } } : {}),
+        });
+        if (actionId === 'agents.acp.backends.upsert' && data.dryRun === true) {
+          if (!deps.readAccountAcpCatalog) return { ok: false, errorCode: 'unsupported_action', error: `unsupported_action:${actionId}` };
+          const request = AgentsAcpBackendsUpsertInputV1Schema.parse(data);
+          const catalog = await deps.readAccountAcpCatalog({ ...(ctx.signal ? { signal: ctx.signal } : {}) });
+          if (catalog.status !== 'ready') return { ok: false, errorCode: 'acp_catalog_unavailable', error: 'acp_catalog_unavailable' };
+          const outcome = applyAcpBackendUpsertV1({ settings: { v: 2, backends: catalog.record.definitions },
+            backend: request.backend, nowMs: Date.now() });
+          if (!outcome.ok) return projectAcpUpsertRefusal(outcome);
+          const inventory = await deps.machinesList({ purpose: 'input', ...(ctx.serverId ? { serverId: ctx.serverId } : {}) });
+          const failure = readActionFailureEnvelope(inventory);
+          if (failure) return failure;
+          const rawMachines = readRecord(inventory).items;
+          if (!Array.isArray(rawMachines)) return { ok: false, errorCode: 'machine_inventory_unavailable', error: 'machine_inventory_unavailable' };
+          const machines = await Promise.all(rawMachines.map(async raw => {
+            const machine = readRecord(raw);
+            const machineId = readNonEmptyString(machine.machineId);
+            if (!machineId) throw new Error('Machine inventory requires an identity');
+            const fit = resolveAcpPlatformFitV1(outcome.backend.launch, {
+              platform: readNonEmptyString(machine.platform) ?? null, arch: readNonEmptyString(machine.arch) ?? null,
+            });
+            let commandFound: boolean | null = null;
+            if (outcome.backend.launch.kind === 'command' && machine.presence === 'online' && deps.machinesAgentsList) {
+              ctx.signal?.throwIfAborted();
+              const draft = MachineAcpInventoryDefinitionSchema.parse({ definitionId: outcome.backend.id,
+                title: outcome.backend.title, launch: outcome.backend.launch });
+              try {
+                const result = MachinesAgentsListOutputSchema.safeParse(await deps.machinesAgentsList({ machineId,
+                  agentId: 'custom-acp', definitionId: draft.definitionId, draftDefinitions: [draft], refresh: true,
+                  ...(ctx.serverId ? { serverId: ctx.serverId } : {}),
+                }, ctx));
+                const facts = result.success ? result.data.items.find(item => item.agentId === 'custom-acp'
+                  && item.definitionId === draft.definitionId) : undefined;
+                if (facts) commandFound = facts.installed;
+              } catch {
+                ctx.signal?.throwIfAborted();
+                // Unreachable probes supply no existence fact; offline fit remains useful.
+              }
+            }
+            return { machineId, fit, commandFound };
+          }));
+          return { ok: true, result: AgentsAcpBackendsUpsertOutputV1Schema.parse({ dryRun: true, backend: outcome.backend, machines }) };
+        }
+
         if (actionId === 'agents.acp.backends.upsert' || actionId === 'agents.acp.backends.delete') {
           if (!deps.updateAccountAcpCatalogSettings) {
             return { ok: false, errorCode: 'unsupported_action', error: `unsupported_action:${actionId}` };
           }
           // The catalog owner decides; the host only persists what it returns, so this and the
           // Settings editor store identical results.
-          const settlement: { refusal?: Readonly<{ code: string; message: string }>;
+          const settlement: { refusal?: ActionExecuteFailure;
             result?: Pick<ReturnType<typeof AgentsAcpBackendsUpsertOutputV1Schema.parse>, 'backend'>
               | Pick<ReturnType<typeof AgentsAcpBackendsDeleteOutputV1Schema.parse>, 'backendId' | 'deleted'> } = {};
           const projectPersistenceFailure = (failure: Extract<Awaited<ReturnType<NonNullable<ActionExecutorDeps['updateAccountAcpCatalogSettings']>>>, { ok: false }>): ActionExecuteFailure => ({
@@ -9079,7 +9165,7 @@ export function createActionExecutor(deps: ActionExecutorDeps): Readonly<{
               mutate: (current) => {
                 const outcome = applyAcpBackendUpsertV1({ settings: current, backend: parsed.data.backend, nowMs });
                 if (!outcome.ok) {
-                  settlement.refusal = { code: outcome.code, message: outcome.message };
+                  settlement.refusal = projectAcpUpsertRefusal(outcome);
                   return current;
                 }
                 settlement.result = { backend: outcome.backend };
@@ -9089,7 +9175,7 @@ export function createActionExecutor(deps: ActionExecutorDeps): Readonly<{
               ...(parsed.data.expectedRevision !== undefined ? { expectedRevision: parsed.data.expectedRevision } : {}),
               ...(parsed.data.sourceSettingsVersion !== undefined ? { sourceSettingsVersion: parsed.data.sourceSettingsVersion } : {}),
             });
-            if (settlement.refusal) return { ok: false, errorCode: settlement.refusal.code, error: settlement.refusal.message };
+            if (settlement.refusal) return settlement.refusal;
             if (!persisted.ok) return projectPersistenceFailure(persisted);
             return { ok: true, result: AgentsAcpBackendsUpsertOutputV1Schema.parse({
               ...settlement.result,
@@ -9103,7 +9189,7 @@ export function createActionExecutor(deps: ActionExecutorDeps): Readonly<{
             mutate: (current) => {
               const outcome = applyAcpBackendDeleteV1({ settings: current, backendId: parsed.data.backendId });
               if (!outcome.ok) {
-                settlement.refusal = { code: outcome.code, message: outcome.code };
+                settlement.refusal = { ok: false, errorCode: outcome.code, error: outcome.code };
                 return current;
               }
               settlement.result = { backendId: parsed.data.backendId, deleted: true };
@@ -9113,7 +9199,7 @@ export function createActionExecutor(deps: ActionExecutorDeps): Readonly<{
             ...(parsed.data.expectedRevision !== undefined ? { expectedRevision: parsed.data.expectedRevision } : {}),
             ...(parsed.data.sourceSettingsVersion !== undefined ? { sourceSettingsVersion: parsed.data.sourceSettingsVersion } : {}),
           });
-          if (settlement.refusal) return { ok: false, errorCode: settlement.refusal.code, error: settlement.refusal.message };
+          if (settlement.refusal) return settlement.refusal;
           if (!persisted.ok) return projectPersistenceFailure(persisted);
           return { ok: true, result: AgentsAcpBackendsDeleteOutputV1Schema.parse({
             ...settlement.result, ...(persisted.cleanup ? { cleanup: persisted.cleanup } : {}),
@@ -9175,7 +9261,7 @@ export function createActionExecutor(deps: ActionExecutorDeps): Readonly<{
         if (actionId === 'prompts.library.list') {
           if (!deps.promptsLibraryList) return { ok: false, errorCode: 'unsupported_action', error: 'unsupported_action:prompts.library.list' };
           return completeActionResult(await deps.promptsLibraryList({ ...(typeof data.query === 'string' ? { query: data.query } : {}),
-            ...(data.includeBundles === false ? { includeBundles: false } : {}), ...(ctx.signal ? { signal: ctx.signal } : {}) }));
+            ...(ctx.signal ? { signal: ctx.signal } : {}) }));
         }
 
         if (actionId === 'skills.read') {
@@ -9209,12 +9295,20 @@ export function createActionExecutor(deps: ActionExecutorDeps): Readonly<{
           return completeActionResult(res);
         }
 
-        if (actionId === 'prompt_bundle.create') {
-          if (!deps.promptBundleCreate) return { ok: false, errorCode: 'unsupported_action', error: 'unsupported_action:prompt_bundle.create' };
-          const childFailure = await createReviewedPromptFolder();
-          if (childFailure) return childFailure;
-          return completeActionResult(await deps.promptBundleCreate({ ...PromptBundleCreateActionInputV1Schema.parse(data),
-            ...(ctx.signal ? { signal: ctx.signal } : {}) }));
+        if (Object.hasOwn(SKILL_MACHINE_ACTION_INPUT_SCHEMAS_V1, actionId)) {
+          if (!deps.skillMachineActionExecute) return { ok: false, errorCode: 'unsupported_action', error: `unsupported_action:${actionId}` };
+          return completeActionResult(await deps.skillMachineActionExecute({
+            actionId: actionId as keyof typeof SKILL_MACHINE_ACTION_INPUT_SCHEMAS_V1, input: data, context: ctx,
+          }));
+        }
+
+        if (Object.hasOwn(SKILL_ACTION_INPUT_SCHEMAS_V1, actionId)) {
+          if (!deps.skillActionExecute) return { ok: false, errorCode: 'unsupported_action', error: `unsupported_action:${actionId}` };
+          const result = await deps.skillActionExecute({ actionId: actionId as keyof typeof SKILL_ACTION_INPUT_SCHEMAS_V1, input: data, context: ctx });
+          const returned = readRecord(result);
+          if (returned.ok === false && typeof returned.code === 'string') return { ok: false, errorCode: returned.code, error: returned.code,
+            ...(returned.current ? { details: { current: returned.current } } : {}) };
+          return completeActionResult(result);
         }
 
         if (actionId === 'prompt_bundle.update') {
@@ -9297,15 +9391,14 @@ export function createActionExecutor(deps: ActionExecutorDeps): Readonly<{
                   ...(installMode ? { installMode } : {}),
                 } satisfies NonNullable<Parameters<NonNullable<ActionExecutorDeps['promptRegistryInstall']>>[0]['installTarget']>
               : undefined;
-          const res = await deps.promptRegistryInstall({
+          const res = projectLegacySkillRegistryInstallActionResultV1(await deps.promptRegistryInstall({
             machineId,
             sourceId,
             itemId,
-            configuredSources: Array.isArray(data.configuredSources) ? data.configuredSources : [],
             ...(normalizeId(ctx.serverId) ? { serverId: normalizeId(ctx.serverId) } : {}),
             ...(installTarget ? { installTarget } : {}),
             ...(ctx.signal ? { signal: ctx.signal } : {}),
-          });
+          }, ctx));
           const failure = readActionFailureEnvelope(res);
           if (failure) return failure;
           return completeActionResult(res);

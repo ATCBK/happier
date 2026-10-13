@@ -20,6 +20,28 @@ import type { RoleEngineV1 } from '../../prompts/roles/roleArtifactV1.js';
 import { parseQualifiedPluginContributionKey } from '../../plugins/contributionIdentity.js';
 import { sameStrictJsonValue } from '../../json/strictJsonValue.js';
 import { ManagedAcquireAgentStartV1Schema } from '../../machines/managed/agentStartV1.js';
+import { PROFILE_ACTION_OUTPUT_SCHEMAS_V1, parseProfileActionRequestV1 } from '../../profiles/profileActionsV1.js';
+import { SessionCapabilitySelectionAuthoringV1Schema, SessionSkillSelectionAuthoringV1Schema } from '../../reach/sessionCapabilitySelectionV1.js';
+
+/** Only fresh Session creation admits a Profile; resume keeps its stored session selection. */
+export async function resolveProfileSkillSeedsAtAdmissionV1(input: Readonly<Record<string, unknown>>,
+    deps: Pick<ActionExecutorDeps, 'profileActionExecute'>, context: ActionExecutorContext,
+): Promise<Readonly<{ ok: true; input: Readonly<Record<string, unknown>> }> | ActionExecuteFailure> {
+    if (typeof input.profileId !== 'string') return { ok: true, input };
+    if (!deps.profileActionExecute) return { ok: false, errorCode: 'target_unavailable', error: 'target_unavailable' };
+    const response = await deps.profileActionExecute(parseProfileActionRequestV1('launch_profiles.read', { id: input.profileId }), context);
+    if (!response.ok) return response;
+    const read = PROFILE_ACTION_OUTPUT_SCHEMAS_V1['launch_profiles.read'].safeParse(response.result);
+    if (!read.success || read.data.status !== 'present') return { ok: false, errorCode: 'target_unavailable', error: 'target_unavailable' };
+    const seeds = read.data.profile.skillSeeds ?? [];
+    if (seeds.length === 0) return { ok: true, input };
+    const selection = SessionCapabilitySelectionAuthoringV1Schema.parse(input.capabilitySelection ?? {});
+    const skills = SessionSkillSelectionAuthoringV1Schema.parse(selection.skills ?? {});
+    const excluded = new Set(skills.forceExcludeSkillIds);
+    return { ok: true, input: { ...input, capabilitySelection: { ...selection, skills: { ...skills,
+        forceIncludeSkillIds: [...new Set([...skills.forceIncludeSkillIds, ...seeds.filter(id => !excluded.has(id))])],
+    } } } };
+}
 /** Authenticated Session identity itself proves its own-target relation. */
 export function isActionCallerOwnSessionV1(context: ActionExecutorContext | undefined, sessionId: unknown): boolean {
     return context?.actionCaller?.kind === 'session' && context.actionCaller.sessionId === sessionId;

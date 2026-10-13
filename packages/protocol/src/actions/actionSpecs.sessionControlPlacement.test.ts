@@ -10,13 +10,14 @@ try {
 }
 
 describe('Session control catalog initialization', () => {
-  it('resolves the existing MCP and connected-account Session transports without widening their surfaces', async () => {
+  it('places desired capability edits at Account metadata and preserves connected-account Session control', async () => {
     expect(initializationError).toBeUndefined();
     if (!catalog) throw new Error('The Action catalog did not initialize');
-    for (const id of ['session.mcp_selection.set', 'session.connected_services_auth.set'] as const) {
-      const spec = catalog.getActionSpec(id);
-      expect(spec.executionPlacement).toBe('session');
-      expect(spec.surfaces).toMatchObject({ ui: true, voice: false, agent: false, mcp: false, cli: false, rpc: false });
-    }
+    const capabilities = catalog.getActionSpec('session.capabilities.set');
+    expect(capabilities.executionPlacement).toBe('account');
+    expect(capabilities.surfaces).toMatchObject({ ui: true, voice: false, agent: true, mcp: true, cli: true, rpc: true });
+    const connected = catalog.getActionSpec('session.connected_services_auth.set');
+    expect(connected.executionPlacement).toBe('session');
+    expect(connected.surfaces).toMatchObject({ ui: true, voice: false, agent: false, mcp: false, cli: false, rpc: false });
   });
 });

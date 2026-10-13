@@ -9,6 +9,7 @@ export { ActionPromptingSchema, type ActionPrompting } from './metadata.js';
 import { MACHINE_PRESET_INPUT_FIELDS, MACHINE_POOL_INPUT_FIELDS } from './specs/machineInputHints.js';
 import { AccountHomeContinuationInputV1Schema, AccountHomeContinuationResultV1Schema } from './accountHomeContinuationV1.js';
 import { SessionForkRpcParamsSchema } from '../sessions/fork.js';
+import { SessionResumeRequestV1Schema } from '../sessions/control/sessionResumeRequestV1.js';
 import { PromptDocRevisionV1Schema, PromptDocCreateActionInputV1Schema } from '../prompts/library/promptDocV2.js';
 import { PromptBundleCreateActionInputV1Schema, PromptBundleUpdateActionInputV1Schema } from '../prompts/library/promptBundleSchemas.js';
 import { PromptLibrarySaveOrganizationFieldsV1, isPromptLibrarySaveFolderAssignmentV1 } from '../prompts/library/promptFolderActionSchemasV1.js';
@@ -26,8 +27,13 @@ import {
   describeWriteFileApprovalSummary, projectWriteFileApprovalInput,
 } from './specs/filesystemApprovalPresentation.js';
 import { MCP_SERVER_ACTION_SPECS_V1 } from './specs/mcpServers.js';
+import { REGISTRY_ACTION_SPECS_V1, readRegistryAgentCliLocatorV1 } from './specs/registries.js';
+export { readRegistryAgentCliLocatorV1 } from './specs/registries.js';
+import { PERSONAL_SAVED_SECRET_ACTION_SPECS_V1 } from './specs/personalSavedSecrets.js';
+import { AgentsAcpBackendsInstallFromRegistryInputV1Schema, AgentsAcpBackendsInstallFromRegistryOutputV1Schema } from '../acp/catalog/registry/registryInstallActionV1.js';
 import { CAPABILITY_RULES_ACTION_SPECS_V1 } from './specs/capabilityRules.js';
-import { SKILL_READ_ACTION_SPECS_V1 } from './specs/skillRead.js';
+import { SESSION_CAPABILITIES_ACTION_SPECS_V1 } from './specs/sessionCapabilities.js';
+import { SKILL_ACTION_SPECS_V1 } from './specs/skills.js';
 import { MCP_SERVER_ACTION_INPUT_SCHEMAS_V1, MCP_SERVER_ACTION_OUTPUT_SCHEMAS_V1, type McpServerActionIdV1 } from '../mcp/servers/serverActionsV1.js';
 import { PROVIDER_ACTION_SPECS_V1 } from './specs/providers.js';
 import { PROVIDER_ACTION_INPUT_SCHEMAS_V1, PROVIDER_ACTION_OUTPUT_SCHEMAS_V1, type ProviderActionIdV1 } from '../providers/providerActionsV1.js';
@@ -225,6 +231,7 @@ import {
   ActionCliProjectionSchema,
   readActionSchemaTopLevelFieldNames,
   type ActionCliCommandBinding,
+  type ActionCliBindContext,
 } from './actionCliProjection.js';
 import { AgentsBackendsListOutputSchema } from './agentBackendInventory.js';
 import {
@@ -413,13 +420,7 @@ import {
   ApprovalRequestV2StatusSchema,
 } from '../approvals/approvalRequestV1.js';
 import {
-  PromptRegistryConfiguredSourceV1Schema,
-  PromptRegistryInstallRequestV1Schema,
-  PromptRegistryScanSourceRequestV1Schema,
-} from '../prompts/library/promptRegistriesV1.js';
-import {
   PromptAssetDeleteRequestSchema,
-  PromptAssetDiscoverRequestSchema,
   PromptAssetInstallModeV1Schema,
   PromptAssetScopeV1Schema,
 } from '../prompts/library/promptAssetsV1.js';
@@ -1965,6 +1966,7 @@ const SessionOpenInputSchema = lazyZodSchema(() => z.object({
   serverId: z.string().trim().min(1).optional(),
   approvedNewDirectoryCreation: z.boolean().optional(),
   intent: z.literal('resume').optional(),
+  resumeRequest: SessionResumeRequestV1Schema.optional(),
   destination: z.object({
     kind: z.literal('scmReview'),
     comparison: ScmComparisonSourceSchema,
@@ -1973,6 +1975,10 @@ const SessionOpenInputSchema = lazyZodSchema(() => z.object({
     comparisonId: z.string().regex(/^[a-f0-9]{64}$/).optional(),
   }).strict().optional(),
 }).strict().superRefine((value, ctx) => {
+  if (value.resumeRequest && (value.intent !== 'resume' || value.tabId || value.destination
+    || value.resumeRequest.sessionId !== value.sessionId)) ctx.addIssue({
+      code: 'custom', path: ['resumeRequest'], message: 'Resume request requires its exact headless Session address',
+    });
   if (!(typeof value.sessionId === 'string' && value.sessionId.trim().length > 0) && !(typeof value.sessionTitle === 'string' && value.sessionTitle.trim().length > 0)) {
     ctx.addIssue({
       code: z.ZodIssueCode.custom,
@@ -2056,7 +2062,7 @@ const SessionSpawnNewInputHints = {
     { path: 'configuration', title: 'Configuration', widget: 'json', optionsSourceId: 'agents.config_options.available' },
     { path: 'profileId', title: 'Profile id', widget: 'text', optionsSourceId: 'sessions.spawn.profiles.available' },
     { path: 'connectedServices', title: 'Connected services', widget: 'json', optionsSourceId: 'sessions.spawn.connected_services.available' },
-    { path: 'capabilitySelection', title: 'Capability selection', widget: 'json', optionsSourceId: 'sessions.spawn.mcp_servers.preview' },
+    { path: 'capabilitySelection', title: 'Capability selection', widget: 'json', optionsSourceId: 'sessions.spawn.capabilities.preview' },
     { path: 'transcriptStorage', title: 'Transcript storage', widget: 'text' },
     { path: 'terminal', title: 'Terminal', widget: 'json' },
     { path: 'checkoutCreationDraft', title: 'Checkout creation', widget: 'json' },
@@ -2213,6 +2219,13 @@ const MachinesListInputSchema = lazyZodSchema(() => z.object({
   serverId: z.string().trim().min(1).optional(),
   limit: z.number().int().min(1).max(200).optional(),
   refresh: z.boolean().optional(),
+}).strict());
+
+const MachineAgentInstallCliInputSchema = lazyZodSchema(() => z.object({
+  machineId: z.string().min(1).optional(), agentId: z.string().min(1), definitionId: z.string().min(1).optional(),
+  intent: z.enum(['install', 'update']).optional(), consent: DaemonAgentInstallStartRequestSchema.shape.consent.optional(),
+  force: z.boolean().optional(), yes: z.boolean().optional(), allowVendorRecipe: z.boolean().optional(), dryRun: z.boolean().optional(),
+  version: z.string().min(1).optional(),
 }).strict());
 
 /**
@@ -2671,12 +2684,6 @@ const SessionConfigOptionSetInputSchema = lazyZodSchema(() => z.object({
   valueId: z.string(),
 }).strict());
 
-const SessionMcpSelectionSetInputSchema = lazyZodSchema(() => z.object({
-  sessionId: z.string().min(1).optional(),
-  selection: SessionMcpSelectionV1Schema,
-  sessionActive: z.boolean(),
-}).strict());
-
 const SessionConnectedServicesAuthSetInputSchema = lazyZodSchema(() => SessionConnectedServiceAuthSwitchRpcParamsSchema.extend({
   machineId: z.string().trim().min(1),
   serverId: z.string().trim().min(1).nullable().optional(),
@@ -3042,19 +3049,24 @@ const PromptAssetExportInputSchema = lazyZodSchema(() => z.object({
   }
 }));
 
-const PromptRegistryInstallInputSchema = lazyZodSchema(() => z.object({
+const PromptRegistryInstallCanonicalInputSchema = lazyZodSchema(() => z.object({
   machineId: z.string().min(1),
   sourceId: z.string().min(1),
   itemId: z.string().min(1),
-  configuredSources: z.array(PromptRegistryConfiguredSourceV1Schema).default([]),
   installTarget: z.object({
     assetTypeId: z.string().min(1),
     scope: PromptAssetScopeV1Schema,
     directory: z.string().min(1).optional(),
     targetName: z.string().min(1),
     installMode: PromptAssetInstallModeV1Schema.optional(),
-  }).optional(),
-}).passthrough());
+  }).strict().optional(),
+}).strict());
+
+export const PromptRegistryInstallInputSchema = lazyZodSchema(() => z.preprocess((raw: z.input<typeof PromptRegistryInstallCanonicalInputSchema>) => {
+  // Released 0.2 stored inputs carried source declarations; current authority is the Account row.
+  const { configuredSources: _legacyDeclarations, ...input } = readRecord(raw);
+  return input;
+}, PromptRegistryInstallCanonicalInputSchema));
 
 const ExternalSessionTakeoverActionInputSchema = ExternalSessionTakeoverInputV1Schema;
 
@@ -3429,15 +3441,45 @@ const PluginScaffoldActionInputSchema = lazyZodSchema(() => z.object({
   template: PluginScaffoldTemplateSchema.optional(),
 }).strict());
 
-const PluginInstallActionInputSchema = lazyZodSchema(() => z.object({
+const PluginLocalInstallActionInputSchema = lazyZodSchema(() => z.object({
   path: z.string().trim().min(1),
+  machineId: z.string().trim().min(1).optional(),
+  kind: z.enum(['path', 'archive', 'npm']).optional(),
+  selector: z.string().trim().min(1).optional(),
+  integrity: z.string().trim().min(1).optional(),
+  sdkRegistryOrigin: z.string().trim().min(1).optional(),
   dev: z.boolean().optional(),
   dryRun: z.boolean().optional(),
   force: z.boolean().optional(),
 }).strict());
 
+const PluginMarketplaceInstallActionInputSchema = lazyZodSchema(() => z.object({
+  source: z.object({
+    kind: z.literal('marketplace'),
+    sourceId: z.string().trim().min(1),
+    pluginId: z.string().trim().min(1),
+    version: z.string().trim().min(1),
+    packageName: z.string().trim().min(1).optional(),
+  }).strict(),
+  machineId: z.string().trim().min(1),
+}).strict());
+
+const PluginInstallActionInputSchema = lazyZodSchema(() => z.union([
+  PluginLocalInstallActionInputSchema,
+  PluginMarketplaceInstallActionInputSchema,
+]));
+
+const PluginInstallCliInputSchema = lazyZodSchema(() => PluginLocalInstallActionInputSchema.partial().extend({
+  sourceId: z.string().trim().min(1).optional(),
+  pluginId: z.string().trim().min(1).optional(),
+  version: z.string().trim().min(1).optional(),
+  packageName: z.string().trim().min(1).optional(),
+  machineId: z.string().trim().min(1).optional(),
+}).strict());
+
 const PluginUninstallActionInputSchema = lazyZodSchema(() => z.object({
   pluginId: z.string().trim().min(1),
+  deleteData: z.boolean().optional(),
 }).strict());
 
 const PluginReloadActionInputSchema = lazyZodSchema(() => z.object({
@@ -3517,8 +3559,9 @@ const PluginDevLoopReviewRequiredActionOutputSchema = lazyZodSchema(() => z.obje
   ok: z.literal(false),
   kind: z.enum(['plugins_install', 'plugins_dev_submit', 'plugins_reload']),
   outcome: z.literal('reviewRequired'),
-  // A pending daemon candidate is one nested value. An Action may report it,
-  // but never decides it or supplies authenticated user interaction evidence.
+  // Public/headless callers receive the daemon candidate as one nested value.
+  // A human UI host may retain the invocation through its existing private
+  // review boundary; neither public input nor this envelope supplies consent.
   pendingReview: PluginDevLoopPendingReviewSchema,
   pendingChangeId: z.never().optional(),
   review: z.never().optional(),
@@ -3568,7 +3611,7 @@ const PLUGIN_DEV_LOOP_ACTION_TITLES: Readonly<Record<PluginDevLoopActionIdV1, st
 
 const PLUGIN_DEV_LOOP_ACTION_DESCRIPTIONS: Readonly<Record<PluginDevLoopActionIdV1, string>> = Object.freeze({
   'plugins.scaffold': 'Create a local plugin scaffold from the first-party template.',
-  'plugins.install': 'Install a local plugin source and optionally enable the dev reload loop.',
+  'plugins.install': 'Install an exact marketplace or local plugin through daemon-owned review; headless callers receive the pending review.',
   'plugins.uninstall': 'Remove a plugin installed from a local folder on a machine.',
   'plugins.dev.submit': 'Register a local plugin source with the daemon-owned development cycle, which watches and applies source changes.',
   'plugins.dev.unregister': 'Unregister an exact explicit source root from the daemon-owned development cycle.',
@@ -3586,6 +3629,7 @@ const PLUGIN_DEV_LOOP_ACTION_DESCRIPTIONS: Readonly<Record<PluginDevLoopActionId
 function createPluginDevLoopActionSpec(actionId: PluginDevLoopActionIdV1): PreNormalizedActionSpec {
   const isRead = actionId === 'plugins.list' || actionId === 'plugins.change.status';
   const isInspectorUiAction = actionId === 'plugins.list'
+    || actionId === 'plugins.install'
     || actionId === 'plugins.reload'
     || actionId === 'plugins.change.status'
     || actionId === 'plugins.dev.submit'
@@ -3612,6 +3656,55 @@ function createPluginDevLoopActionSpec(actionId: PluginDevLoopActionIdV1): PreNo
       rpc: false,
     },
     sideEffectClass: actionId === 'plugins.uninstall' ? 'danger' : isRead ? 'read' : 'write',
+    ...(actionId === 'plugins.uninstall' ? { approvalPolicy: { uiConfirmation: 'policy' as const } } : {}),
+    ...(actionId === 'plugins.install' ? {
+      cli: {
+        acceptsServerId: true as const,
+        commands: [
+          { path: ['plugins', 'install'], positionals: ['path'], visibility: 'canonical' as const },
+          { path: ['plugins', 'marketplace', 'install'], positionals: ['sourceId', 'pluginId'], visibility: 'alias' as const },
+        ],
+        inputSchema: PluginInstallCliInputSchema,
+        flagAliases: [{ path: 'sdkRegistryOrigin', aliases: ['--sdk-registry'] }, { path: 'packageName', aliases: ['--package'] }, { path: 'machineId', aliases: ['--machine'] }],
+        bindInput: (value: unknown, context: ActionCliBindContext) => {
+          const input = PluginInstallCliInputSchema.parse(value);
+          if (context.commandPath?.includes('marketplace')) {
+            if (input.path !== undefined || input.kind !== undefined || input.dev !== undefined
+              || input.dryRun !== undefined || input.force !== undefined || input.selector !== undefined
+              || input.integrity !== undefined || input.sdkRegistryOrigin !== undefined) {
+              throw new Error('Marketplace installs accept an exact source, plugin, version and Machine selection.');
+            }
+            return { machineId: input.machineId, source: {
+              kind: 'marketplace', sourceId: input.sourceId, pluginId: input.pluginId, version: input.version,
+              ...(input.packageName ? { packageName: input.packageName } : {}),
+            } };
+          }
+          if (input.sourceId !== undefined || input.pluginId !== undefined || input.version !== undefined || input.packageName !== undefined) {
+            throw new Error('Marketplace listing fields require plugins marketplace install.');
+          }
+          const { sourceId: _sourceId, pluginId: _pluginId, version: _version, packageName: _packageName, ...local } = input;
+          if (!local.kind && local.path) {
+            let archivePath = local.path;
+            try { archivePath = new URL(local.path).pathname; } catch { /* Local paths have no URL pathname. */ }
+            if (/\.(?:tar\.gz|tgz|tar\.xz|zip)$/iu.test(archivePath)) return { ...local, kind: 'archive' };
+          }
+          return local;
+        },
+      },
+    } : actionId === 'plugins.uninstall' ? {
+      cli: {
+        acceptsServerId: true as const,
+        commands: [{ path: ['plugins', 'uninstall'], positionals: ['pluginId'], visibility: 'canonical' as const }],
+        inputSchema: PluginUninstallActionInputSchema.extend({ yes: z.boolean().optional() }).strict(),
+        flagAliases: [{ path: 'yes', aliases: ['-y'] }],
+        bindInput: (value: unknown) => {
+          const input = PluginUninstallActionInputSchema.extend({ yes: z.boolean().optional() }).strict().parse(value);
+          if (input.deleteData && !input.yes) throw new Error('Destructive plugin data removal requires --yes confirmation.');
+          const { yes: _yes, ...canonical } = input;
+          return canonical;
+        },
+      },
+    } : {}),
     outputSchema: PluginDevLoopActionOutputSchema,
     inputSchema,
     inputHints: { fields: [] },
@@ -4765,8 +4858,11 @@ const ACTION_SPECS_WITHOUT_APPROVAL_FAMILIES: readonly (
   | (typeof USAGE_SOURCE_ACTION_SPECS)[number]
   | (typeof PROFILE_ACTION_SPECS_V1)[number]
   | (typeof MCP_SERVER_ACTION_SPECS_V1)[number]
+  | (typeof REGISTRY_ACTION_SPECS_V1)[number]
+  | (typeof PERSONAL_SAVED_SECRET_ACTION_SPECS_V1)[number]
   | (typeof CAPABILITY_RULES_ACTION_SPECS_V1)[number]
-  | (typeof SKILL_READ_ACTION_SPECS_V1)[number]
+  | (typeof SESSION_CAPABILITIES_ACTION_SPECS_V1)[number]
+  | (typeof SKILL_ACTION_SPECS_V1)[number]
   | (typeof PROVIDER_ACTION_SPECS_V1)[number]
   | (typeof REMOTE_HOST_ACTION_SPECS_V1)[number]
   | (typeof HOME_RUNTIME_ACTION_SPECS_V1)[number]
@@ -4800,8 +4896,11 @@ const ACTION_SPECS_WITHOUT_APPROVAL_FAMILIES: readonly (
   ...USAGE_SOURCE_ACTION_SPECS,
   ...PROFILE_ACTION_SPECS_V1,
   ...MCP_SERVER_ACTION_SPECS_V1,
+  ...REGISTRY_ACTION_SPECS_V1,
+  ...PERSONAL_SAVED_SECRET_ACTION_SPECS_V1,
   ...CAPABILITY_RULES_ACTION_SPECS_V1,
-  ...SKILL_READ_ACTION_SPECS_V1,
+  ...SESSION_CAPABILITIES_ACTION_SPECS_V1,
+  ...SKILL_ACTION_SPECS_V1,
   ...PROVIDER_ACTION_SPECS_V1,
   ...REMOTE_HOST_ACTION_SPECS_V1,
   ...HOME_RUNTIME_ACTION_SPECS_V1,
@@ -7273,7 +7372,7 @@ const ACTION_SPECS_WITHOUT_APPROVAL_PREFIX = Object.freeze(defineActionSpecs([
     outputSchema: SessionAuthoringOpenResultV1Schema,
   },
   {
-    id: 'session.spawn_new', originalExecution: { accountRoot: 'separate', terminalRoot: 'host' }, approval: {result: 'optional',flow: 'deferred'},
+    id: 'session.spawn_new', originalExecution: { accountRoot: 'allowed', terminalRoot: 'host' }, approval: {result: 'optional',flow: 'deferred'},
     operation: {
       version: 1,
       visibility: 'activity',
@@ -7648,6 +7747,7 @@ const ACTION_SPECS_WITHOUT_APPROVAL_PREFIX = Object.freeze(defineActionSpecs([
     },
     outputSchema: AgentsBackendsListOutputSchema,
     inputSchema: AgentsBackendsListInputSchema,
+    cli: { acceptsServerId: true, commands: [{ path: ['agents', 'backends', 'list'], visibility: 'canonical' }] },
   },
   {
     id: 'machines.agents.list', approval: {result: 'required'},
@@ -7658,6 +7758,7 @@ const ACTION_SPECS_WITHOUT_APPROVAL_PREFIX = Object.freeze(defineActionSpecs([
     placements: [],
     bindings: { mcpToolName: 'machines_agents_list' },
     surfaces: { ui: true, voice: false, agent: true, mcp: true, cli: true, rpc: false },
+    cli: { acceptsServerId: true, commands: [{ path: ['machines', 'agents', 'list'], visibility: 'canonical' }] },
     inputHints: {
       title: 'List agents on a machine',
       fields: [
@@ -7750,12 +7851,24 @@ const ACTION_SPECS_WITHOUT_APPROVAL_PREFIX = Object.freeze(defineActionSpecs([
     placements: [],
     bindings: { mcpToolName: 'machines_agents_install', sdkMethod: 'machines.agents.install.start' },
     surfaces: { ui: true, voice: false, agent: true, mcp: true, cli: true, rpc: false },
-    inputSchema: lazyZodSchema(() => DaemonAgentInstallStartRequestSchema.extend({
+    inputSchema: lazyZodSchema(() => DaemonAgentInstallStartRequestSchema.omit({ expectedDefinitionVersion: true }).extend({
       machineId: z.string().min(1),
       intent: z.enum(['install', 'update']),
       consent: DaemonAgentInstallStartRequestSchema.shape.consent.optional(),
     })),
     outputSchema: DaemonAgentInstallStartResponseSchema,
+    cli: { acceptsServerId: true, inputSchema: MachineAgentInstallCliInputSchema,
+      flagAliases: [{ path: 'machineId', aliases: ['--machine'] }],
+      bindInput: (raw, context) => {
+        const { yes, allowVendorRecipe, dryRun: _dryRun, version: _version, ...input } = readRecord(raw);
+        return { ...input, intent: context.commandPath?.[1] === 'update' ? 'update' : input.intent ?? 'install',
+          ...(yes || allowVendorRecipe ? { consent: { vendorRecipe: true } } : {}) };
+      },
+      commands: [
+        { path: ['agents', 'install'], positionals: ['agentId'], visibility: 'canonical' },
+        { path: ['agents', 'update'], positionals: ['agentId'], visibility: 'alias' },
+        { path: ['install', 'provider'], positionals: ['agentId'], visibility: 'alias' },
+      ] },
     inputHints: {
       title: 'Install or update an agent',
       fields: [
@@ -7778,6 +7891,10 @@ const ACTION_SPECS_WITHOUT_APPROVAL_PREFIX = Object.freeze(defineActionSpecs([
     inputSchema: lazyZodSchema(() => z.object({ machineId: z.string().min(1), agentId: z.string().min(1),
       definitionId: z.string().min(1).optional() }).strict()),
     outputSchema: DaemonAgentInstallStartResponseSchema,
+    cli: { acceptsServerId: true, inputSchema: lazyZodSchema(() => z.object({ machineId: z.string().min(1).optional(),
+      agentId: z.string().min(1), definitionId: z.string().min(1).optional() }).strict()),
+      flagAliases: [{ path: 'machineId', aliases: ['--machine'] }],
+      commands: [{ path: ['agents', 'remove'], positionals: ['agentId'], visibility: 'canonical' }] },
     inputHints: { title: 'Remove an agent from a machine', fields: [
       { path: 'machineId', title: 'Machine id', widget: 'text', required: true },
       { path: 'agentId', title: 'Agent id', widget: 'text', required: true },
@@ -7797,6 +7914,10 @@ const ACTION_SPECS_WITHOUT_APPROVAL_PREFIX = Object.freeze(defineActionSpecs([
       machineId: z.string().min(1), cursor: DaemonAgentInstallReadRequestSchema.shape.cursor.optional(),
     })),
     outputSchema: DaemonAgentInstallReadResponseSchema,
+    cli: { acceptsServerId: true, inputSchema: lazyZodSchema(() => z.object({ machineId: z.string().min(1).optional(),
+      jobId: z.string().min(1), cursor: z.number().int().nonnegative().optional() }).strict()),
+      flagAliases: [{ path: 'machineId', aliases: ['--machine'] }],
+      commands: [{ path: ['agents', 'install', 'status'], positionals: ['jobId'], visibility: 'canonical' }] },
     inputHints: { title: 'Read an agent install job', fields: [
       { path: 'machineId', title: 'Machine id', widget: 'text' },
       { path: 'jobId', title: 'Job id', widget: 'text' },
@@ -7813,6 +7934,9 @@ const ACTION_SPECS_WITHOUT_APPROVAL_PREFIX = Object.freeze(defineActionSpecs([
     surfaces: { ui: true, voice: false, agent: true, mcp: true, cli: true, rpc: false },
     inputSchema: lazyZodSchema(() => DaemonAgentInstallCancelRequestSchema.extend({ machineId: z.string().min(1) })),
     outputSchema: DaemonAgentInstallCancelResponseSchema,
+    cli: { acceptsServerId: true, inputSchema: lazyZodSchema(() => z.object({ machineId: z.string().min(1).optional(),
+      jobId: z.string().min(1) }).strict()), flagAliases: [{ path: 'machineId', aliases: ['--machine'] }],
+      commands: [{ path: ['agents', 'install', 'cancel'], positionals: ['jobId'], visibility: 'canonical' }] },
     inputHints: { description: 'Stop installing an agent on a machine.', title: 'Cancel agent install', fields: [
       { path: 'machineId', title: 'Machine id', widget: 'text' },
       { path: 'jobId', title: 'Job id', widget: 'text' },
@@ -10176,25 +10300,6 @@ const ACTION_SPECS_WITHOUT_APPROVAL_SESSION_SUFFIX = Object.freeze(defineActionS
     inputSchema: SessionConfigOptionSetInputSchema,
   },
   {
-    id: 'session.mcp_selection.set', approval: {result: 'optional',flow: 'deferred'},
-    title: 'Set session MCP selection',
-    sideEffectClass: 'write',
-    description: 'Set the MCP server selection applied to future turns in the current session.',
-    safety: 'safe',
-    placements: [],
-    surfaces: { ui: true, voice: false, agent: false, mcp: false, cli: false, rpc: false },
-    inputHints: {
-      title: 'Set session MCP selection',
-      fields: [
-        { path: 'sessionId', title: 'Session id', widget: 'text' },
-        { path: 'selection', title: 'MCP selection', widget: 'json', required: true },
-        { path: 'sessionActive', title: 'Session is active', widget: 'json', required: true },
-      ],
-    },
-    outputSchema: StrictJsonValueSchema,
-    inputSchema: SessionMcpSelectionSetInputSchema,
-  },
-  {
     id: 'session.connected_services_auth.set', approval: {result: 'optional',flow: 'deferred'},
     title: 'Set session connected-account routing',
     sideEffectClass: 'write',
@@ -10725,6 +10830,46 @@ const ACTION_SPECS_WITHOUT_APPROVAL_SUFFIX = Object.freeze(defineActionSpecs([
     inputSchema: MemoryEnsureUpToDateInputSchema,
   },
   {
+    id: 'agents.acp.backends.installFromRegistry',
+    approval: { result: 'required' }, approvalPolicy: { uiConfirmation: 'policy' },
+    title: 'Install registry ACP agent',
+    description: 'Add or update a pinned registry agent and optionally install it on the selected machines.',
+    safety: 'danger', sideEffectClass: 'write', executionPlacement: 'account', requiredAuthority: 'account_automation',
+    placements: [], bindings: { mcpToolName: 'agents_acp_backends_install_from_registry' },
+    surfaces: { ui: true, voice: false, agent: true, mcp: true, cli: true, rpc: false },
+    inputSchema: AgentsAcpBackendsInstallFromRegistryInputV1Schema,
+    outputSchema: AgentsAcpBackendsInstallFromRegistryOutputV1Schema,
+    inputHints: { title: 'Install registry ACP agent', fields: [
+      { path: 'fromRegistry.sourceId', title: 'Registry source', widget: 'text', required: true },
+      { path: 'fromRegistry.itemId', title: 'Agent id', widget: 'text', required: true },
+      { path: 'fromRegistry.version', title: 'Version', widget: 'text', required: true },
+      { path: 'installOn', title: 'Install on machines', widget: 'text_list', listSeparator: 'comma' },
+    ] },
+    cli: { acceptsServerId: true,
+      inputSchema: lazyZodSchema(() => z.object({ registryItem: z.string().min(1).optional(), version: z.string().min(1).optional(),
+        install: z.enum(['now', 'first-use']).optional(), machine: z.array(z.string().min(1)).optional(),
+        fromRegistry: AgentsAcpBackendsInstallFromRegistryInputV1Schema.shape.fromRegistry.optional(),
+        installOn: AgentsAcpBackendsInstallFromRegistryInputV1Schema.shape.installOn,
+        command: z.string().min(1).optional(), name: z.string().min(1).optional(), title: z.string().min(1).optional(),
+        args: z.array(z.string()).optional(), dryRun: z.boolean().optional() }).strict()),
+      bindInput: raw => {
+        const input = readRecord(raw);
+        const locator = typeof input.registryItem === 'string' ? input.registryItem : '';
+        return { fromRegistry: input.fromRegistry ?? { ...readRegistryAgentCliLocatorV1(locator), version: input.version },
+          ...(input.install === 'first-use' ? {} : input.installOn || input.machine ? { installOn: input.installOn ?? input.machine } : {}) };
+      },
+      commands: [{ path: ['agents', 'acp', 'backends', 'install-from-registry'], visibility: 'canonical' },
+        { path: ['agents', 'add'], positionals: ['registryItem'], visibility: 'alias' }] },
+    projectObservationInput: input => {
+      const parsed = AgentsAcpBackendsInstallFromRegistryInputV1Schema.safeParse(input);
+      return parsed.success ? { fromRegistry: parsed.data.fromRegistry, installOn: parsed.data.installOn } : undefined;
+    },
+    projectObservationOutput: output => {
+      const parsed = AgentsAcpBackendsInstallFromRegistryOutputV1Schema.safeParse(output);
+      return parsed.success ? { definitionId: parsed.data.definition.id, jobs: parsed.data.jobs } : undefined;
+    },
+  },
+  {
     id: 'agents.acp.backends.get', approval: {result: 'required'},
     title: 'Read custom ACP agent',
     description: 'Read one full Account-private configured ACP agent definition and its catalog revision.',
@@ -10735,6 +10880,7 @@ const ACTION_SPECS_WITHOUT_APPROVAL_SUFFIX = Object.freeze(defineActionSpecs([
     surfaces: { ui: true, voice: false, agent: true, mcp: true, cli: true, rpc: false },
     inputSchema: AgentsAcpBackendsGetInputV1Schema,
     outputSchema: AgentsAcpBackendsGetOutputV1Schema,
+    cli: { acceptsServerId: true, commands: [{ path: ['agents', 'acp', 'backends', 'get'], positionals: ['backendId'], visibility: 'canonical' }] },
     projectObservationOutput: output => {
       const parsed = AgentsAcpBackendsGetOutputV1Schema.safeParse(output);
       return parsed.success ? { backendId: parsed.data.backend.id, revision: parsed.data.revision } : undefined;
@@ -10760,6 +10906,7 @@ const ACTION_SPECS_WITHOUT_APPROVAL_SUFFIX = Object.freeze(defineActionSpecs([
     },
     outputSchema: AgentsAcpBackendsUpsertOutputV1Schema,
     inputSchema: AgentsAcpBackendsUpsertInputV1Schema,
+    cli: { acceptsServerId: true, commands: [{ path: ['agents', 'acp', 'backends', 'upsert'], visibility: 'canonical' }] },
     inputHints: {
       title: 'Save custom ACP agent',
       fields: [
@@ -10788,6 +10935,8 @@ const ACTION_SPECS_WITHOUT_APPROVAL_SUFFIX = Object.freeze(defineActionSpecs([
     },
     outputSchema: AgentsAcpBackendsDeleteOutputV1Schema,
     inputSchema: AgentsAcpBackendsDeleteInputV1Schema,
+    cli: { acceptsServerId: true, commands: [{ path: ['agents', 'delete'], positionals: ['backendId'], visibility: 'canonical' },
+      { path: ['agents', 'acp', 'backends', 'delete'], positionals: ['backendId'], visibility: 'alias' }] },
     inputHints: {
       title: 'Delete custom ACP agent',
       fields: [
@@ -10884,7 +11033,7 @@ const ACTION_SPECS_WITHOUT_APPROVAL_SUFFIX = Object.freeze(defineActionSpecs([
     placements: [],
     bindings: { mcpToolName: 'prompts_library_list', voiceClientToolName: 'listPromptLibrary' },
     surfaces: { ui: true, voice: true, agent: true, mcp: true, cli: true, rpc: false },
-    inputSchema: lazyZodSchema(() => z.object({ query: z.string().optional(), includeBundles: z.literal(false).optional() }).strict()),
+    inputSchema: lazyZodSchema(() => z.object({ query: z.string().optional() }).strict()),
     outputSchema: lazyZodSchema(() => z.object({ coverage: z.enum(['complete', 'partial', 'unavailable']), items: z.array(z.object({
       artifactId: z.string().min(1), title: z.string(), folderId: z.string().nullable(), tags: z.array(z.string()),
       favorite: z.boolean(), updatedAtMs: z.number(),
@@ -10936,24 +11085,6 @@ const ACTION_SPECS_WITHOUT_APPROVAL_SUFFIX = Object.freeze(defineActionSpecs([
         { path: 'tags', title: 'Tags', widget: 'text_list', listSeparator: 'comma' },
       ],
     },
-  },
-  {
-    id: 'prompt_bundle.create', approval: {result: 'none'},
-    title: 'Create prompt bundle',
-    description: 'Create a prompt bundle with its reviewed files in the Happier prompt library.',
-    safety: 'danger', sideEffectClass: 'write', placements: [],
-    bindings: { mcpToolName: 'prompt_bundle_create', voiceClientToolName: 'createPromptBundle' },
-    surfaces: { ui: true, voice: true, agent: true, mcp: true, cli: true, rpc: false },
-    inputSchema: PromptBundleCreateActionInputV1Schema,
-    outputSchema: lazyZodSchema(() => z.object({ ok: z.literal(true), artifactId: z.string().min(1) }).strict()),
-    inputHints: { title: 'Create prompt bundle', fields: [
-      { path: 'title', title: 'Title', widget: 'text', required: true },
-      { path: 'bundleSchemaId', title: 'Bundle schema', widget: 'text', required: true },
-      { path: 'createFolder', title: 'New folder', widget: 'json' },
-      { path: 'entries', title: 'Files', widget: 'json', required: true },
-      { path: 'folderId', title: 'Folder id', widget: 'text' },
-      { path: 'tags', title: 'Tags', widget: 'text_list', listSeparator: 'comma' },
-    ] },
   },
   {
     id: 'prompt_bundle.update', approval: {result: 'none'},
@@ -11038,6 +11169,7 @@ const ACTION_SPECS_WITHOUT_APPROVAL_SUFFIX = Object.freeze(defineActionSpecs([
   },
   {
     id: 'prompt_registry.install', approval: {result: 'none'},
+    sideEffectClass: 'external',
     title: 'Install prompt registry skill',
     description: 'Import a skill bundle from a registry and optionally export it to an external skills location.',
     safety: 'danger',
@@ -11058,7 +11190,6 @@ const ACTION_SPECS_WITHOUT_APPROVAL_SUFFIX = Object.freeze(defineActionSpecs([
         { path: 'machineId', title: 'Machine id', widget: 'text', required: true },
         { path: 'sourceId', title: 'Source id', widget: 'text', required: true },
         { path: 'itemId', title: 'Item id', widget: 'text', required: true },
-        { path: 'configuredSources', title: 'Configured sources (json)', widget: 'textarea' },
         { path: 'installTarget.assetTypeId', title: 'Target asset type', widget: 'text' },
         {
           path: 'installTarget.scope',
@@ -11084,19 +11215,6 @@ const ACTION_SPECS_WITHOUT_APPROVAL_SUFFIX = Object.freeze(defineActionSpecs([
     },
   },
   {
-    id: 'daemon.promptAssets.discover', approval: {result: 'required'},
-    title: 'Discover prompt assets',
-    description: 'Discover provider-native prompt assets through the daemon prompt asset adapter registry.',
-    safety: 'safe',
-    placements: [],
-    bindings: { rpcMethod: 'daemon.promptAssets.discover' },
-    surfaces: DAEMON_ADMIN_RPC_SURFACES,
-    sideEffectClass: 'read',
-    outputSchema: StrictJsonValueSchema,
-    inputSchema: PromptAssetDiscoverRequestSchema,
-    inputHints: DAEMON_ADMIN_INPUT_HINTS,
-  },
-  {
     id: 'daemon.promptAssets.delete', approval: {result: 'optional',flow: 'deferred'},
     title: 'Delete prompt asset',
     description: 'Delete a provider-native prompt asset through the daemon prompt asset adapter registry.',
@@ -11107,32 +11225,6 @@ const ACTION_SPECS_WITHOUT_APPROVAL_SUFFIX = Object.freeze(defineActionSpecs([
     sideEffectClass: 'danger',
     outputSchema: StrictJsonValueSchema,
     inputSchema: PromptAssetDeleteRequestSchema,
-    inputHints: DAEMON_ADMIN_INPUT_HINTS,
-  },
-  {
-    id: 'daemon.promptRegistry.scanSource', approval: {result: 'required'},
-    title: 'Scan prompt registry source',
-    description: 'Scan a configured prompt registry source through the daemon prompt registry adapter registry.',
-    safety: 'safe',
-    placements: [],
-    bindings: { rpcMethod: 'daemon.promptRegistry.scanSource' },
-    surfaces: DAEMON_ADMIN_RPC_SURFACES,
-    sideEffectClass: 'read',
-    outputSchema: StrictJsonValueSchema,
-    inputSchema: PromptRegistryScanSourceRequestV1Schema,
-    inputHints: DAEMON_ADMIN_INPUT_HINTS,
-  },
-  {
-    id: 'daemon.promptRegistry.install', approval: {result: 'optional',flow: 'deferred'},
-    title: 'Install prompt registry asset',
-    description: 'Install a prompt registry item through bundle-capable prompt asset adapters.',
-    safety: 'danger',
-    placements: [],
-    bindings: { rpcMethod: 'daemon.promptRegistry.install' },
-    surfaces: DAEMON_ADMIN_RPC_SURFACES,
-    sideEffectClass: 'danger',
-    outputSchema: StrictJsonValueSchema,
-    inputSchema: PromptRegistryInstallRequestV1Schema,
     inputHints: DAEMON_ADMIN_INPUT_HINTS,
   },
   {
@@ -12397,7 +12489,6 @@ const ACTION_EXECUTION_PLACEMENT_BY_ID: ReadonlyMap<ActionId, ActionExecutionPla
     'prompts.invocations.list',
     'prompts.invocation.resolve',
     'prompt_doc.update',
-    'prompt_bundle.create',
     'prompt_bundle.update',
     // The custom ACP catalog is an Account setting: no machine has to be reachable to edit it.
     ...ACTION_ID_FAMILIES_V1.agent_acp_catalog,
@@ -12406,7 +12497,7 @@ const ACTION_EXECUTION_PLACEMENT_BY_ID: ReadonlyMap<ActionId, ActionExecutionPla
     ...PROFILE_ACTION_SPECS_V1.filter(spec => spec.executionPlacement === 'account').map(spec => spec.id),
     ...MCP_SERVER_ACTION_SPECS_V1.filter(spec => spec.executionPlacement === 'account').map(spec => spec.id),
     ...CAPABILITY_RULES_ACTION_SPECS_V1.map(spec => spec.id),
-    ...SKILL_READ_ACTION_SPECS_V1.map(spec => spec.id),
+    ...SKILL_ACTION_SPECS_V1.map(spec => spec.id),
     ...PROVIDER_ACTION_SPECS_V1.filter(spec => spec.executionPlacement === 'account').map(spec => spec.id),
     ...REMOTE_HOST_ACTION_SPECS_V1.filter(spec => spec.executionPlacement === 'account').map(spec => spec.id),
     ...ACTION_ID_FAMILIES_V1.approvals,
@@ -13051,7 +13142,8 @@ type AccountSecurityActionSpecDefinition =
 
 export type CanonicalActionSpecDefinition =
   | (typeof CAPABILITY_RULES_ACTION_SPECS_V1)[number]
-  | (typeof SKILL_READ_ACTION_SPECS_V1)[number]
+  | (typeof SESSION_CAPABILITIES_ACTION_SPECS_V1)[number]
+  | (typeof SKILL_ACTION_SPECS_V1)[number]
   | (typeof ACCOUNT_LIFECYCLE_ACTION_SPECS)[number]
   | (typeof MEMORY_DOCUMENT_ACTION_SPECS_V1)[number]
   | { [Id in PluginExecutionOriginActionId]: CanonicalActionSchemaDefinition<Id,
@@ -13610,6 +13702,7 @@ const ACTION_PLUGIN_CALLER_POLICY_BY_ID: Readonly<
   'agents.acp.backends.upsert': HOST_DOMAIN_PLUGIN_CALLER_POLICY,
   'agents.acp.backends.get': HOST_DOMAIN_PLUGIN_CALLER_POLICY,
   'agents.acp.backends.delete': HOST_DOMAIN_PLUGIN_CALLER_POLICY,
+  'agents.acp.backends.installFromRegistry': HOST_DOMAIN_PLUGIN_CALLER_POLICY,
   'prompt_doc.update': HOST_DOMAIN_PLUGIN_CALLER_POLICY,
   'prompt_doc.get': HOST_DOMAIN_PLUGIN_CALLER_POLICY,
   'prompt_doc.create': HOST_DOMAIN_PLUGIN_CALLER_POLICY,
@@ -13621,12 +13714,10 @@ const ACTION_PLUGIN_CALLER_POLICY_BY_ID: Readonly<
   'prompts.invocations.list': HOST_DOMAIN_PLUGIN_CALLER_POLICY,
   'prompts.invocation.resolve': HOST_DOMAIN_PLUGIN_CALLER_POLICY,
   'prompts.invocation.create': HOST_DOMAIN_PLUGIN_CALLER_POLICY,
-  'prompt_bundle.create': HOST_DOMAIN_PLUGIN_CALLER_POLICY,
   'prompt_bundle.update': HOST_DOMAIN_PLUGIN_CALLER_POLICY,
   'prompt_asset.export': HOST_DOMAIN_PLUGIN_CALLER_POLICY,
   'prompt_registry.install': HOST_DOMAIN_PLUGIN_CALLER_POLICY,
   'daemon.promptAssets.delete': HOST_DOMAIN_PLUGIN_CALLER_POLICY,
-  'daemon.promptRegistry.install': HOST_DOMAIN_PLUGIN_CALLER_POLICY,
   'transcript.import': HOST_DOMAIN_PLUGIN_CALLER_POLICY,
   'sessions.external.backgroundFollow.set': HOST_DOMAIN_PLUGIN_CALLER_POLICY,
   'scm.pullRequest.openOrReuse': HOST_DOMAIN_PLUGIN_CALLER_POLICY,
@@ -13765,7 +13856,6 @@ const CURRENT_SESSION_CONTEXT_ACTION_IDS = new Set<ActionId>([
   'session.user_action.answer',
   'session.mode.set',
   'session.config_option.set',
-  'session.mcp_selection.set',
   'session.connected_services_auth.set',
   'session.target.primary.set',
   'session.activity.get',
@@ -13818,7 +13908,6 @@ const ACTION_VOICE_ARGS_EXAMPLES: Readonly<Partial<Record<ActionId, string>>> = 
   'machines.resources.policy.get': '{"machineId":"{{machineId}}"}',
   'machines.storage.summary.get': '{"machineId":"{{machineId}}"}',
   'machines.storage.category.list': '{"machineId":"{{machineId}}","categoryId":"logs"}',
-  'prompt_bundle.create': '{"title":"Example skill","bundleSchemaId":"skills.skill_md_v1","entries":[{"path":"SKILL.md","contentBase64":"IyBFeGFtcGxl","contentKind":"utf8"}]}',
   'prompt_bundle.update': '{"artifactId":"bundle-1","title":"Example skill","skillMarkdown":"# Example"}',
   'daemon.filesystem.readFile': '{"rootPath":"/workspace","path":"src/index.ts"}',
   'daemon.filesystem.writeFile': '{"rootPath":"/workspace","path":"notes.txt","content":"SGVsbG8="}',

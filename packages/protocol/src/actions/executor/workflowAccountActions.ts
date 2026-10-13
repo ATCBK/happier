@@ -5,8 +5,21 @@ import type { WorkflowActionIdV1, WorkflowIngressContextV1 } from '../../workflo
 import type { WorkflowTriggerActions } from './workflowTriggerActions.js';
 import { WorkflowActionFailureV1Schema, type WorkflowActionFailureV1 } from '../../workflows/workflowProgressV1.js';
 
+export type WorkflowActionFailureDiagnosticV1 = Readonly<{
+  event: 'workflow_action_failure';
+  errorCode: 'storage_unavailable';
+  originalCode: string | null;
+  httpStatus: number | null;
+  operation: string;
+  durationMs: number;
+}>;
+
 /** One closed failure projection for both the family and host preparation. */
-export function normalizeWorkflowActionThrownError(error: unknown): WorkflowActionFailureV1 {
+export function normalizeWorkflowActionThrownError(error: unknown, diagnostic?: Readonly<{
+  operation: string;
+  durationMs: number;
+  emit: (diagnostic: WorkflowActionFailureDiagnosticV1) => void;
+}>): WorkflowActionFailureV1 {
   const rawCode = error !== null && typeof error === 'object' && 'code' in error && typeof error.code === 'string'
     ? error.code : 'storage_unavailable';
   // The template codec's reasons also drive locked-row listing inside the
@@ -25,7 +38,36 @@ export function normalizeWorkflowActionThrownError(error: unknown): WorkflowActi
     ...(details !== undefined ? { details } : code === 'target_unavailable'
       ? { details: { code: 'target_unavailable', reason: 'selection_unavailable' } } : {}),
   });
-  return failure.success ? failure.data : { ok: false, errorCode: 'storage_unavailable', error: 'storage_unavailable' };
+  const result: WorkflowActionFailureV1 = failure.success ? failure.data
+    : { ok: false, errorCode: 'storage_unavailable', error: 'storage_unavailable' };
+  if (result.errorCode === 'storage_unavailable' && diagnostic) {
+    let originalCode: string | null = null;
+    let httpStatus: number | null = null;
+    let operation = diagnostic.operation;
+    let durationMs = diagnostic.durationMs;
+    const seen = new Set<object>();
+    for (let cause = error; cause && typeof cause === 'object' && !seen.has(cause);) {
+      seen.add(cause);
+      if ('code' in cause && typeof cause.code === 'string' && /^[A-Za-z0-9_.:-]+$/.test(cause.code)) originalCode = cause.code;
+      if ('response' in cause && cause.response && typeof cause.response === 'object'
+        && 'status' in cause.response && typeof cause.response.status === 'number'
+        && Number.isInteger(cause.response.status) && cause.response.status >= 100 && cause.response.status <= 599) {
+        httpStatus = cause.response.status;
+      }
+      if ('workflowStorageOperation' in cause && cause.workflowStorageOperation && typeof cause.workflowStorageOperation === 'object') {
+        const storage = cause.workflowStorageOperation;
+        if ('operation' in storage && typeof storage.operation === 'string' && /^[a-z._-]+$/.test(storage.operation)
+          && 'durationMs' in storage && typeof storage.durationMs === 'number' && Number.isFinite(storage.durationMs) && storage.durationMs >= 0) {
+          operation = storage.operation;
+          durationMs = storage.durationMs;
+        }
+      }
+      cause = 'cause' in cause ? cause.cause : undefined;
+    }
+    diagnostic.emit({ event: 'workflow_action_failure', errorCode: 'storage_unavailable', originalCode,
+      httpStatus, operation, durationMs });
+  }
+  return result;
 }
 
 /** Request validation is not a failure to read private persisted content. */
@@ -76,6 +118,7 @@ type WorkflowTargetValidation = Readonly<{
  * definition persistence remains in the Account Artifact owner.
  */
 export function createWorkflowActionExecutor(deps: Readonly<{
+  onFailureDiagnostic?: (diagnostic: WorkflowActionFailureDiagnosticV1) => void;
   isWorkflowFeatureEnabled: () => Promise<boolean> | boolean;
   definitions: DefinitionActions;
   triggers?: WorkflowTriggerActions;
@@ -210,10 +253,13 @@ export function createWorkflowActionExecutor(deps: Readonly<{
     }
   };
   return async (args) => {
+    const startedAtMs = Date.now();
     try {
       return await execute(args);
     } catch (error) {
-      return normalizeWorkflowActionThrownError(error);
+      return normalizeWorkflowActionThrownError(error, deps.onFailureDiagnostic ? {
+        operation: args.actionId, durationMs: Date.now() - startedAtMs, emit: deps.onFailureDiagnostic,
+      } : undefined);
     }
   };
 }

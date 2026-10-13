@@ -7,6 +7,19 @@ import { normalizeActionsSettingsV1, setActionApprovalOverride } from './actionS
 import { executeActionOperationActionV1 } from './executor/actionOperationActions.js';
 
 describe('operation and retained output Actions', () => {
+  it.each(['action.operations.get', 'action.operations.cancel'] as const)('admits %s through the existing portable Home scope owner', async actionId => {
+    const transport = vi.fn(async () => actionId === 'action.operations.cancel' ? { kind: 'requested' } : { kind: 'not_found' });
+    const executor = createActionExecutor({
+      actionOperationAction: args => executeActionOperationActionV1({ ...args, transport }),
+    } as ActionExecutorDeps);
+    const context = { surface: 'ui' as const, authority: 'present_user' as const, serverId: 'local-profile',
+      serverIdentityId: 'portable-home', bypassApprovals: true };
+    expect(await executor.execute(actionId, { serverId: 'portable-home', machineId: 'machine', operationId: 'operation' }, context))
+      .toMatchObject({ ok: true });
+    expect(await executor.execute(actionId, { serverId: 'unrelated-home', machineId: 'machine', operationId: 'operation' }, context))
+      .toMatchObject({ ok: false, errorCode: 'server_scope_mismatch' });
+  });
+
   it('refuses a conflicting observation Home before dispatch or approval', async () => {
     const transport = vi.fn();
     const executor = createActionExecutor({

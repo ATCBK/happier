@@ -3,8 +3,16 @@ import { ActionIdSchema } from './actionIds.js';
 import { getActionSpec } from './actionSpecs.js';
 import { bindHomeDomainActionHttpRequestV1, HomeDomainActionIdV1Schema } from './homeDomainActionFamily.js';
 import { createActionExecutor, type ActionExecutorDeps } from './actionExecutor.js';
+import { resolveActionApprovalRouting } from './actionApprovalPolicy.js';
 
 describe('self Account profile Actions', () => {
+  it.each(['account.name.set', 'account.username.set'] as const)('returns durable approval custody for the Agent self-write %s', actionId => {
+    const spec = getActionSpec(actionId);
+    expect(resolveActionApprovalRouting({ actionId, spec, context: {
+      surface: 'agent', authority: 'account_automation',
+      actionCaller: { kind: 'session', sessionId: 'requester', starterDepth: 0, turnDepth: 0 },
+    } })).toMatchObject({ required: true, flow: 'deferred', result: 'required' });
+  });
   it('reads only the caller’s safe profile through the existing route and drops unrelated profile material', async () => {
     const actionId = ActionIdSchema.parse('account.profile.get');
     const spec = getActionSpec(actionId);

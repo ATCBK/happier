@@ -45,6 +45,33 @@ export const MCP_SERVER_ACTION_SPECS_V1 = [
     'See the MCP servers saved in your account.', { read: true }),
   mcpSpec('mcp.servers.read', 'Read MCP server',
     'See one MCP server: how it starts and where it is used.', { read: true }),
+  { ...mcpSpec('mcp.servers.tools.list', 'List MCP server tools',
+    'See the tools checked for a server, their settings and approximate cost.', { read: true }),
+    cli: { acceptsServerId: true, inputSchema: z.object({ itemId: z.string().min(1) }).strict(),
+      bindInput: (value: unknown) => ({ serverId: readRecord(value).itemId }),
+      commands: [{ path: ['mcp', 'servers', 'tools'], positionals: ['itemId'], visibility: 'canonical' as const },
+        { path: ['mcp', 'servers', 'tools', 'list'], positionals: ['itemId'], visibility: 'alias' as const }] } },
+  { ...mcpSpec('mcp.servers.tools.set', 'Set MCP server tool settings',
+    'Change a server default or individual tool settings. The previous settings can be restored.', { danger: true }),
+    cli: { acceptsServerId: true, inputSchema: z.object({ itemId: z.string().min(1),
+      operation: z.enum(['set', 'default']), toolName: z.string().min(1),
+      setting: z.enum(['off', 'ask', 'allow', 'inherit']).optional() }).strict().superRefine((input, context) => {
+      if (input.operation === 'set' && input.setting === undefined) {
+        context.addIssue({ code: 'custom', path: ['setting'], message: 'Supply a tool setting.' });
+      }
+      if (input.operation === 'default' && (!['ask', 'read-only', 'all'].includes(input.toolName) || input.setting !== undefined)) {
+        context.addIssue({ code: 'custom', path: ['toolName'], message: 'Supply one default: ask, read-only or all.' });
+      }
+    }),
+      bindInput: (value: unknown) => {
+        const input = readRecord(value);
+        return input.operation === 'set' && typeof input.toolName === 'string'
+          ? { serverId: input.itemId, tools: { [input.toolName]: input.setting } }
+          : { serverId: input.itemId, default: input.toolName === 'read-only' ? 'allow_read_only'
+            : input.toolName === 'all' ? 'allow_all' : input.toolName };
+      },
+      commands: [{ path: ['mcp', 'servers', 'tools', 'set'], positionals: ['itemId', 'operation', 'toolName', 'setting'],
+        visibility: 'canonical' as const }] } },
   mcpSpec('mcp.servers.create', 'Add MCP server',
     'Add an MCP server, which gives agents extra tools.', { danger: true }),
   mcpSpec('mcp.servers.update', 'Update MCP server',
@@ -53,8 +80,18 @@ export const MCP_SERVER_ACTION_SPECS_V1 = [
     'Make a copy of an MCP server to adjust.', { danger: true }),
   mcpSpec('mcp.servers.delete', 'Delete MCP server',
     'Remove an MCP server. Agents lose its tools everywhere it was used.', { danger: true, confirm: true }),
-  mcpSpec('mcp.servers.test', 'Test MCP server connection',
+  { ...mcpSpec('mcp.servers.test', 'Test MCP server connection',
     'Start an MCP server on a machine and check that it answers with its tools.', { danger: true, machine: true }),
-  mcpSpec('mcp.servers.probe', 'Detect MCP servers on a machine',
+    cli: { acceptsServerId: true,
+      inputSchema: z.object({ itemId: z.string().min(1), directory: z.string().min(1).optional(),
+        machineId: z.string().min(1).optional() }).strict(),
+      bindInput: (value: unknown) => { const input = readRecord(value); return { t: 'byId', serverId: input.itemId,
+        directory: input.directory, machineId: input.machineId }; },
+      commands: [{ path: ['mcp', 'servers', 'test'], positionals: ['itemId'], visibility: 'canonical' as const }] } },
+  { ...mcpSpec('mcp.servers.import', 'Import MCP servers',
+    'Review a config or install link and choose every named value before adding its servers.', { danger: true }), approvalInputCustody: 'live_only' as const },
+  { ...mcpSpec('mcp.found.adopt', 'Add a found MCP server',
+    'Add a machine configuration after choosing its environment and header values.', { danger: true }), approvalInputCustody: 'live_only' as const },
+  mcpSpec('mcp.found.list', 'Detect MCP servers on a machine',
     'Look for MCP servers already set up for the agents on a machine.', { read: true, machine: true }),
 ] as const satisfies readonly PreNormalizedActionSpec[];

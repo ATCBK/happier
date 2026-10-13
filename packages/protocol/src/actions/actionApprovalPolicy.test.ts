@@ -7,6 +7,7 @@ import { normalizeActionsSettingsV1, type ActionsSettingsV1 } from './actionSett
 import { getActionSpec } from './actionSpecs.js';
 import { FILESYSTEM_ACTION_IDS } from './filesystemActionFamily.js';
 import { NOTIFICATION_CONFIGURATION_ACTION_IDS } from './notificationConfigurationActionIds.js';
+import { MCP_SERVER_ACTION_SPECS_V1 } from './specs/mcpServers.js';
 import {
   AGENT_INITIATED_APPROVAL_REQUIRED_ACTION_IDS,
   isAgentInitiatedApprovalRequiredByDefault,
@@ -33,6 +34,50 @@ async function loadRoutingResolver() {
 }
 
 describe('isApprovalRequiredByActionsSettings', () => {
+  it('keeps registry creation direct in the UI, removal confirmed, and automated writes approved',()=>{
+    for(const [id,surface,required]of [
+      ['registries.sources.create','ui',false],['registries.sources.delete','ui',true],
+      ['registries.sources.create','agent',true],['registries.sources.delete','cli',true],
+    ] as const){
+      const spec=getActionSpec(id);const context={surface,authority:'present_user',actionCaller:{kind:'host'}} as const;
+      expect(resolveActionApprovalRouting({actionId:id,spec,settings:EMPTY_SETTINGS,context}).required).toBe(required);
+      expect(resolveActionApprovalRouting({actionId:id,spec,settings:normalizeActionsSettingsV1({v:1,approvalWaivedSurfaces:{[id]:[surface]}}),context}).required).toBe(false);
+    }
+  });
+  it('uses skill spec declarations for direct edits, confirmed deletion and caller approval waivers', () => {
+    for (const [id, surface, expected] of [['skills.update', 'ui', false], ['skills.delete', 'ui', true], ['skills.install', 'agent', true], ['skills.create', 'cli', true]] as const) {
+      const spec = getActionSpec(id), context = { surface, authority: 'present_user', actionCaller: { kind: 'host' } } as const;
+      expect(resolveActionApprovalRouting({ actionId: id, spec, settings: EMPTY_SETTINGS, context }).required).toBe(expected);
+      expect(resolveActionApprovalRouting({ actionId: id, spec, settings: normalizeActionsSettingsV1({ v: 1, approvalWaivedSurfaces: { [id]: [surface] } }), context }).required).toBe(false);
+    }
+  });
+  it('keeps MCP reversible taps direct, delete confirmed and automated tool writes approved by default', () => {
+    const toolSet = getActionSpec('mcp.servers.tools.set');
+    for (const surface of ['ui', 'cli', 'agent', 'mcp'] as const) {
+      const context = { surface, authority: 'present_user', actionCaller: { kind: 'host' } } as const;
+      expect(resolveActionApprovalRouting({ actionId: toolSet.id, spec: toolSet, settings: EMPTY_SETTINGS, context }).required)
+        .toBe(surface !== 'ui');
+    }
+    const context = { surface: 'ui', authority: 'present_user', actionCaller: { kind: 'host' } } as const;
+    for (const declaration of MCP_SERVER_ACTION_SPECS_V1) {
+      if (declaration.sideEffectClass === 'read') continue;
+      const spec = getActionSpec(declaration.id);
+      expect(resolveActionApprovalRouting({ actionId: spec.id, spec, settings: EMPTY_SETTINGS, context }).required,
+        spec.id).toBe(spec.id === 'mcp.servers.delete');
+    }
+    for (const id of ['mcp.servers.create', 'mcp.servers.update', 'mcp.servers.import', 'mcp.found.adopt'] as const) {
+      const spec = getActionSpec(id);
+      for (const surface of ['agent', 'cli', 'mcp'] as const) expect(resolveActionApprovalRouting({ actionId: id, spec,
+        settings: EMPTY_SETTINGS, context: { surface, authority: 'present_user', actionCaller: { kind: 'host' } } }).required).toBe(true);
+    }
+    for (const id of ['mcp.servers.import', 'mcp.found.adopt'] as const) {
+      const spec = getActionSpec(id);
+      expect(spec.approvalInputCustody).toBe('live_only');
+      expect(JSON.stringify(spec.projectObservationInput?.({ source: { kind: 'paste', text: 'private-value' }, values: { API_KEY: { t: 'literal', v: 'private-value' } } })))
+        .not.toContain('private-value');
+    }
+  });
+
   it('keeps Fork B Project, service, worker, shell and child-machine approval defaults user-changeable', () => {
     const actions = ACTION_IDS.filter(id => id.startsWith('localServices.') || id.startsWith('projects.worker.')
       || id.startsWith('projects.service.') || id.startsWith('projects.execution.output.') || id.startsWith('machines.worker.')
@@ -373,6 +418,11 @@ describe('isApprovalRequiredByActionsSettings', () => {
       { actionId: 'widgets.definition.update', input: {} },
       { actionId: 'widgets.definition.delete', input: {} },
       { actionId: 'widgets.snapshot.post', input: {} },
+      { actionId: 'widgets.item.remove', input: { ref: { surface: personal, instanceId: 'group' } } },
+      { actionId: 'widgets.item.remove', input: { ref: { surface: { ...personal,
+          owner: { kind: 'corePage', pageId: 'usage', area: 'main' } }, instanceId: 'group' } } },
+      { actionId: 'home.hub.layout.update', input: { intent: { kind: 'remove', instanceId: 'group' } } },
+      { actionId: 'home.hub.layout.update', input: { intent: { kind: 'widget_remove', instanceId: 'copy' } } },
       { actionId: 'widgets.item.frame.set', input: { ref: { surface: shared, instanceId: 'copy' } } },
       { actionId: 'widgets.item.move', input: { ref: { surface: personal, instanceId: 'copy' }, to: { surface: shared, index: 0 } } },
     ] as const;
@@ -388,6 +438,11 @@ describe('isApprovalRequiredByActionsSettings', () => {
         settings: normalizeActionsSettingsV1({ v: 1 }),
       }).required).toBe(false);
     }
+    expect(resolveActionApprovalRouting({ actionId: 'home.hub.layout.update', spec: getActionSpec('home.hub.layout.update'),
+      input: { intent: { kind: 'widget_remove', instanceId: 'copy', expectedInstance: {
+        v: 1, id: 'copy', definition: { kind: 'builtin', id: 'changes' }, bindings: {},
+      } } }, context, settings: normalizeActionsSettingsV1({ v: 1 }),
+    }).required).toBe(false);
   });
 
   it('resolves contributed manifest defaults, waivers, and Ask-first through the same settings owner', () => {

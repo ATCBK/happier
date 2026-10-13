@@ -4,6 +4,7 @@ import type { ActionExecutorDeps } from './executor/types.js';
 import { getActionSpec } from './actionSpecs.js';
 import { ActionsSettingsV1Schema } from './actionSettings.js';
 import { encodeV2SessionListCursorV2 } from '../sessions/listing/cursor.js';
+import { SessionReportsToSetResultV1Schema } from '../sessions/relations/sessionReportsToV1.js';
 import type {
   SessionReportsToSetActionInputV1,
   SessionReportsToSetResultV1,
@@ -58,6 +59,20 @@ describe('session.worker.publish', () => {
 });
 
 describe('session.reports_to.set', () => {
+  it('keeps a committed relation successful while source-key preparation waits', async () => {
+    const committed = { ok: true, sessionId: 'worker', leadSessionId: 'lead', attachedAt: 1,
+      sourceKeyPreparation: { kind: 'waiting', reason: 'source_key_unavailable' } } as const;
+    const executor = createTransportExecutor({ sessionReportsToSet: async () => committed });
+    const result = await executor.execute('session.reports_to.set', input, context);
+    expect(result).toEqual({ ok: true, result: committed });
+    if (!result.ok) throw new Error('Committed relation was reported failed');
+    expect(SessionReportsToSetResultV1Schema.parse(result.result)).toEqual(committed);
+    expect(getActionSpec('session.reports_to.set').outputSchema!.parse(result.result)).toEqual(committed);
+    expect(SessionReportsToSetResultV1Schema.safeParse({ ...committed,
+      sourceKeyPreparation: { ...committed.sourceKeyPreparation, secret: 'invalid' },
+    }).success).toBe(false);
+  });
+
   it.each(['summary', 'awareness'] as const)('edits a child proved by %s but does not submit an unapproved outside-subtree mutation', async (view) => {
     const submittedAttachments: SessionReportsToSetActionInputV1[] = [];
     const sessionReportsToSet = async (request: SessionReportsToSetActionInputV1): Promise<SessionReportsToSetResultV1> => {

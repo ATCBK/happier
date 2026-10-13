@@ -14,9 +14,16 @@ import type { ApprovalRequest } from '../approvals/approvalRequestV1.js';
 import { resolvePromptStackSystemAppendBlocksV1 } from '../prompts/library/resolvePromptStackSystemAppendBlocksV1.js';
 import { PromptBundleArtifactHeaderV1Schema, PromptBundleBodyV1Schema } from '../prompts/library/promptBundleSchemas.js';
 import { PromptAssetWriteDocRequestSchema } from '../prompts/library/promptAssetsV1.js';
-import { PromptRegistryFetchItemResponseV1Schema, PromptRegistryInstallRequestV1Schema } from '../prompts/library/promptRegistriesV1.js';
+import { RegistryItemV1Schema } from '../registries/registryItemsV1.js';
+import { createSkillActionExecuteV1 } from '../prompts/library/skills/skillActionOperations.js';
+import type { SkillRuleV1 } from '../reach/reachRuleV1.js';
+import { readSkillLibraryCatalog } from '../prompts/library/skills/readSkillLibraryCatalog.js';
 import { decodeBase64 } from '../crypto/base64.js';
 import { computePromptBundleDigestV1 } from '../prompts/library/promptLibraryDigests.js';
+import { LegacySkillRegistryInstallEffectsV1Schema } from '../prompts/library/promptLibraryActionOperations.js';
+import { ApprovalRequestV2Schema } from '../approvals/approvalRequestV1.js';
+import { resolveApprovalRequestApproveAdmission } from './actionApprovalPresentation.js';
+import { skillFileFromBytesV1 } from '../prompts/library/skills/skillZipV1.js';
 
 function createExecutor(overrides: Partial<ActionExecutorDeps> = {}) {
   const unavailable = async (): Promise<never> => { throw new Error('Unexpected Action dependency'); };
@@ -58,7 +65,6 @@ function createExecutor(overrides: Partial<ActionExecutorDeps> = {}) {
 
 const routingApprovalSettings = ActionsSettingsV1Schema.parse({ v: 1, actions: {}, approvalWaivedSurfaces: {
   'prompt_doc.create': ['ui', 'agent', 'mcp', 'cli'], 'prompt_doc.update': ['ui'],
-  'prompt_bundle.create': ['ui', 'agent', 'mcp', 'cli', 'voice'],
   'prompt_bundle.update': ['ui', 'agent', 'mcp', 'cli', 'voice'],
   'prompt_asset.export': ['ui'], 'prompt_registry.install': ['ui'],
 } });
@@ -110,14 +116,78 @@ function storedPromptDoc(): PromptLibraryStoredArtifact {
 }
 
 function fetchedRegistrySkill() {
-  return PromptRegistryFetchItemResponseV1Schema.parse({ ok: true, item: {
-    sourceId: 'skills_sh:featured', itemId: 'skills_sh:featured:item-1', title: 'Frontend design',
-    bundleSchemaId: 'skills.skill_md_v1', bundleBody: { v: 1, createdAtMs: 1, updatedAtMs: 1,
-      entries: [{ path: 'SKILL.md', contentBase64: 'IyBTa2lsbA==', contentKind: 'utf8' }] },
-  } });
+  const markdown = '---\nname: frontend-design\ndescription: Design a page\n---\nInstructions';
+  const files = [{ path: 'SKILL.md', contentBase64: Buffer.from(markdown).toString('base64'), contentKind: 'utf8' as const, unixMode: 0o644 }];
+  const item = RegistryItemV1Schema.parse({ summary: { sourceId: 'repo', kind: 'skill', itemId: 'frontend-design', title: 'Frontend design', version: 'abc' },
+    payload: { kind: 'skill', skill: { ref: { kind: 'gitTree', repo: 'https://github.com/a/b', path: 'frontend-design', commit: 'abc', treeSha: 'tree' }, skillMarkdown: markdown,
+      files: [{ path: 'SKILL.md', size: Buffer.byteLength(markdown), unixMode: 0o644, blobSha: 'blob' }] } }, fetchedAt: 1 });
+  return { item, files };
 }
 
 describe('createActionExecutor (prompt library actions)', () => {
+  it('reviews and replays a CLI-created skill through the spec-owned approval and real skill writer', async () => {
+    const { store, artifacts } = createStoredLibrary();
+    let approval: ApprovalRequest | null = null;
+    let rules: SkillRuleV1[] = [];
+    let revision = 1;
+    const markdown = '---\nname: release-check\ndescription: Review the release\n---\nCheck the deployed version.\n';
+    const files = [skillFileFromBytesV1('SKILL.md', new TextEncoder().encode(markdown), 0o644),
+      skillFileFromBytesV1('scripts/check.sh', new TextEncoder().encode('#!/bin/sh\nprintf "checked"\n'), 0o755),
+      skillFileFromBytesV1('asset.bin', new Uint8Array([0, 255, 1]), 0o644),
+      skillFileFromBytesV1('empty.txt', new Uint8Array(), 0o644)];
+    const skills = createSkillActionExecuteV1({ store, randomId: () => 'rule', nowMs: () => 4,
+      skillRules: { serverId: 'home', assertCurrent: () => {}, ruleWriteContext: () => ({ nowMs: 4, newId: () => 'rule' }),
+        listSkills: signal => readSkillLibraryCatalog({ list: async () => ({ coverage: 'complete', items: [...artifacts.values()].map(artifact => ({
+          artifactId: artifact.id, header: artifact.header, body: artifact.body,
+        })) }) }, signal),
+        readCatalog: async () => ({ catalog: { status: 'ready', rows: [{ record: { key: 'skill-rules', value: { v: 1, rules } }, revision }], diagnostics: [], tombstones: [] } }),
+        writeRecord: async input => { if (input.record.key === 'skill-rules') rules = input.record.value.rules; return { status: 'updated', revision: ++revision, cursor: revision }; },
+      }, includeInSession: async () => ({ ok: true }),
+    });
+    // Only Artifact/approval persistence and cross-process replay are boundaries.
+    const approvalPorts: Partial<ActionExecutorDeps> = {
+      isApprovalExecutionOriginCurrent: async ({ origin }) => origin.serverId === 'home',
+      approvalsCreate: async ({ request }) => { approval = ApprovalRequestV2Schema.parse(request); return { artifactId: 'skill-proposal' }; },
+      approvalsGet: async () => approval,
+      approvalsUpdate: async ({ request }) => { approval = ApprovalRequestV2Schema.parse(request); return { ok: true }; },
+    };
+    const origin = createExecutor({ ...approvalPorts,
+      skillActionExecute: ({ actionId, input, context }) => skills(actionId, input, { surface: context.surface ?? null }),
+    });
+    const ui = createExecutor({ ...approvalPorts,
+      approvalRequestApprovedReplay: ({ artifactId }) => origin.replayApprovedApprovalRequest({ artifactId }),
+    });
+    const actionArgs = getActionSpec('skills.create').inputSchema.parse({ name: 'release-check', files });
+    const proposed = await origin.execute('skills.create', actionArgs, { surface: 'cli', authority: 'account_automation',
+      actionCaller: { kind: 'host' }, serverId: 'home', defaultSessionMachineId: 'machine-1', actionRequestId: 'create-skill' });
+    expect(proposed).toMatchObject({ ok: true, result: { kind: 'approval_request_created' } });
+    expect(artifacts.size).toBe(0);
+    const request = ApprovalRequestV2Schema.parse(approval);
+    expect(request).toMatchObject({ actionId: 'skills.create', status: 'open', actionArgs });
+    const admission = resolveApprovalRequestApproveAdmission(request);
+    expect(admission).toMatchObject({ status: 'available' });
+    expect(admission.presentation.rows).toContainEqual(expect.objectContaining({ path: 'name', value: 'release-check' }));
+    const reviewed = admission.presentation.rows.find(row => row.path === 'files');
+    expect(reviewed).toMatchObject({ kind: 'value' });
+    if (!reviewed || reviewed.kind !== 'value') throw new Error('Missing file review');
+    const review = JSON.parse(reviewed.value);
+    expect(review).toContainEqual(expect.objectContaining({ path: 'SKILL.md', content: markdown }));
+    expect(review).toContainEqual(expect.objectContaining({ path: 'scripts/check.sh', unixMode: 0o755, content: '#!/bin/sh\nprintf "checked"\n' }));
+    expect(review).toContainEqual(expect.objectContaining({ path: 'asset.bin', contentKind: 'binary', sizeBytes: 3 }));
+    expect(review).toContainEqual(expect.objectContaining({ path: 'empty.txt', content: '', sizeBytes: 0 }));
+    expect(JSON.stringify(request.preview)).not.toContain(files[0]!.contentBase64);
+    expect(resolveApprovalRequestApproveAdmission({ ...request, actionArgs: { name: 'release-check' } }))
+      .toMatchObject({ status: 'unavailable', reason: 'context_unavailable' });
+    const decided = await ui.execute('approval.request.decide', { artifactId: 'skill-proposal', decision: 'approve' },
+      { surface: 'ui', authority: 'present_user', actionCaller: { kind: 'host' }, serverId: 'home' });
+    expect(decided).toMatchObject({ ok: true, result: { status: 'executed', execution: { ok: true } } });
+    expect(artifacts.size).toBe(1);
+    const storedFiles = PromptBundleBodyV1Schema.parse(JSON.parse(artifacts.get('artifact-1')!.body!)).entries;
+    expect(storedFiles.filter(file => file.path !== 'SKILL.md')).toEqual(files.filter(file => file.path !== 'SKILL.md'));
+    expect(new TextDecoder().decode(decodeBase64(storedFiles.find(file => file.path === 'SKILL.md')!.contentBase64)))
+      .toContain('Check the deployed version.');
+    expect(rules).toMatchObject([{ skillId: 'artifact-1', target: { t: 'allMachines' }, enabled: true }]);
+  });
   it('preserves admitted empty organization strings for domain normalization', async () => {
     const saved: string[] = [];
     const store = { read: async () => null, update: async () => {},
@@ -189,7 +259,7 @@ describe('createActionExecutor (prompt library actions)', () => {
     expect(artifacts.get('saved')?.body).toContain('Reviewed text');
   });
 
-  it('creates and edits complete bundle entries with reviewed revisions on every prompt mutation surface', async () => {
+  it('retains generic bundle update semantics and reviewed revisions on every released mutation surface', async () => {
     let stored: PromptLibraryStoredArtifact | null = null;
     const readStored = () => stored;
     const store = { read: async () => stored,
@@ -200,21 +270,21 @@ describe('createActionExecutor (prompt library actions)', () => {
         stored = { id: 'bundle', header: input.header, body: input.body, revision: { headerVersion: 2, bodyVersion: 2 } };
         return { revision: stored.revision };
       } };
-    const ports = { promptBundleCreate: async (request: Parameters<typeof createPromptBundleInLibrary>[0]['request']) => createPromptBundleInLibrary({ store, request }),
-      promptBundleUpdate: async (request: Parameters<typeof updatePromptBundleInLibrary>[0]['request']) => updatePromptBundleInLibrary({ store, request }) };
+    const ports = { promptBundleUpdate: async (request: Parameters<typeof updatePromptBundleInLibrary>[0]['request']) => updatePromptBundleInLibrary({ store, request }) };
     const executor = createExecutor(ports);
-    const entries = [{ path: 'SKILL.md', contentBase64: 'U2tpbGw=', contentKind: 'utf8' },
-      { path: 'support.bin', contentBase64: 'AAE=', contentKind: 'binary', unixMode: 0o600 }];
+    const entries = [{ path: 'README.md', contentBase64: 'U2tpbGw=', contentKind: 'utf8' as const },
+      { path: 'support.bin', contentBase64: 'AAE=', contentKind: 'binary' as const, unixMode: 0o600 }];
     for (const surface of ['ui', 'agent', 'mcp', 'cli', 'voice'] as const) {
       const context = { surface, actionsSettings: routingApprovalSettings };
-      expect(await executor.execute('prompt_bundle.create', { title: 'Skill', bundleSchemaId: 'skills.skill_md_v1', entries }, context))
-        .toMatchObject({ ok: true, result: { artifactId: 'bundle' } });
+      await createPromptBundleInLibrary({ store, request: { title: 'Bundle', bundleSchemaId: 'bundle.generic_v1', entries } });
       expect(readStored()?.header).toMatchObject({ origin: 'user' });
-      const changed = [...entries, { path: 'extra.txt', contentBase64: 'RXh0cmE=', contentKind: 'utf8' }];
+      const changed = [...entries, { path: 'extra.txt', contentBase64: 'RXh0cmE=', contentKind: 'utf8' as const },
+        ...['a:b', 'CON.md', 'file '].map(path => ({ path, contentBase64: 'eA==', contentKind: 'utf8' as const }))];
       expect(await executor.execute('prompt_bundle.update', { artifactId: 'bundle', title: 'Edited', entries: changed,
         expectedRevision: { headerVersion: 1, bodyVersion: 1 } }, context))
         .toMatchObject({ ok: true, result: { revision: { headerVersion: 2, bodyVersion: 2 } } });
       expect(JSON.parse(readStored()!.body!).entries).toEqual(changed);
+      expect(readStored()?.header?.bundleSchemaId).toBe('bundle.generic_v1');
       expect(await executor.execute('prompt_bundle.update', { artifactId: 'bundle', title: 'Stale', entries,
         expectedRevision: { headerVersion: 1, bodyVersion: 1 } }, context)).toMatchObject({ ok: false, errorCode: 'version_mismatch' });
       expect(JSON.parse(readStored()!.body!).entries).toEqual(changed);
@@ -222,10 +292,10 @@ describe('createActionExecutor (prompt library actions)', () => {
   });
 
   it('rejects forged provenance, mixed bundle edits and folder operands targeting a different assignment', () => {
-    const create = getActionSpec('prompt_bundle.create').inputSchema;
+    const create = getActionSpec('skills.create').inputSchema;
     const entries = [{ path: 'SKILL.md', contentBase64: 'U2tpbGw=', contentKind: 'utf8' }];
-    expect(create.safeParse({ title: 'Skill', bundleSchemaId: 'skills.skill_md_v1', entries, origin: 'imported' }).success).toBe(false);
-    expect(create.safeParse({ title: 'Skill', bundleSchemaId: 'skills.skill_md_v1', entries: [{ ...entries[0], authority: 'host' }] }).success).toBe(false);
+    expect(create.safeParse({ name: 'skill', files: entries, origin: 'imported' }).success).toBe(false);
+    expect(create.safeParse({ name: 'skill', files: [{ ...entries[0], authority: 'host' }] }).success).toBe(false);
     expect(getActionSpec('prompt_bundle.update').inputSchema.safeParse({ artifactId: 'bundle', title: 'Skill', skillMarkdown: 'Skill', entries }).success).toBe(false);
     expect(getActionSpec('prompt_doc.create').inputSchema.safeParse({ title: 'Doc', markdown: 'Text', folderId: 'other',
       createFolder: { id: 'new', name: 'New', expectedRevision: 3 } }).success).toBe(false);
@@ -893,67 +963,64 @@ describe('createActionExecutor (prompt library actions)', () => {
       expect(await executor.execute('prompts.library.list', {}, context)).toMatchObject({ ok: true, result: { coverage: 'complete', items: [{ artifactId: 'saved', favorite: true }] } });
     }
   });
-  it('routes daemon prompt adapter actions through canonical deps with caller cancellation', async () => {
+  it('routes machine installation through its transport and validates its strict result without losing partial effects', async () => {
     const signal = new AbortController().signal;
-    const daemonPromptAssetsDiscover = vi.fn(async () => ({ ok: true, items: [] }));
-    const daemonPromptAssetsDelete = vi.fn(async () => ({ ok: true }));
-    const daemonPromptRegistryScanSource = vi.fn(async () => ({ ok: true, items: [] }));
-    const daemonPromptRegistryInstall = vi.fn(async () => ({ ok: true, installed: true }));
-    const executor = createExecutor({
-      daemonPromptAssetsDiscover,
-      daemonPromptAssetsDelete,
-      daemonPromptRegistryScanSource,
-      daemonPromptRegistryInstall,
-    });
+    const receipt = { root: '/skills', path: '/skills/review', digest: 'sha256:' + 'a'.repeat(64) };
+    const requests: Readonly<{ actionId: string; input: unknown; signal?: AbortSignal }>[] = [];
+    const machineResponses = new Map<string, unknown>([
+      ['skills.machine.install', { receipts: [receipt] }],
+      ['skills.machine.uninstall', { removed: [receipt.path] }],
+    ]);
+    // Machine process transport boundary; real filesystem/receipt composition is CLI-owned.
+    const executor = createExecutor({ skillMachineActionExecute: async ({ actionId, input, context }) => {
+      requests.push({ actionId, input, signal: context.signal });
+      return machineResponses.get(actionId);
+    } });
+    const context = { surface: 'ui', signal, bypassApprovals: true } as const;
+    expect(await executor.execute('skills.machine.install', { skillId: 'skill', machineId: 'machine', agents: ['codex'] }, context))
+      .toEqual({ ok: true, result: { receipts: [receipt] } });
+    expect(await executor.execute('skills.machine.uninstall', { skillId: 'skill', machineId: 'machine' }, context))
+      .toEqual({ ok: true, result: { removed: [receipt.path] } });
+    expect(requests).toEqual([
+      { actionId: 'skills.machine.install', input: { skillId: 'skill', machineId: 'machine', agents: ['codex'] }, signal },
+      { actionId: 'skills.machine.uninstall', input: { skillId: 'skill', machineId: 'machine' }, signal },
+    ]);
+    machineResponses.set('skills.machine.install', { receipts: [receipt], privateField: true });
+    expect(await executor.execute('skills.machine.install', { skillId: 'skill', machineId: 'machine' }, context))
+      .toMatchObject({ ok: false, errorCode: 'invalid_action_output' });
+    const partial = { ok: false, errorCode: 'native_conflict', error: 'native_conflict', details: { receipts: [receipt] } };
+    machineResponses.set('skills.machine.install', partial);
+    expect(await executor.execute('skills.machine.install', { skillId: 'skill', machineId: 'machine' }, context)).toEqual(partial);
+    expect(await createExecutor().execute('skills.machine.install', { skillId: 'skill', machineId: 'machine' }, context))
+      .toMatchObject({ ok: false, errorCode: 'unsupported_action' });
+  });
 
-    await expect(executor.execute('daemon.promptAssets.discover', {
-      assetTypeId: 'agents.skill',
-      scope: 'user',
-    }, { surface: 'rpc', signal })).resolves.toEqual({ ok: true, result: { ok: true, items: [] } });
+  it('routes Found and remaining daemon asset operations through their canonical deps with caller cancellation', async () => {
+    const signal = new AbortController().signal;
+    const found = { scannedAt: 1, roots: [], items: [] };
+    const skillMachineActionExecute = vi.fn(async () => found);
+    const daemonPromptAssetsDelete = vi.fn(async () => ({ ok: true }));
+    const executor = createExecutor({
+      skillMachineActionExecute,
+      daemonPromptAssetsDelete,
+    });
+    await expect(executor.execute('skills.found.list', {
+      machineId: 'machine',
+    }, { surface: 'rpc', signal })).resolves.toEqual({ ok: true, result: found });
     await expect(executor.execute('daemon.promptAssets.delete', {
       assetTypeId: 'agents.skill',
       scope: 'user',
       externalRef: { path: 'skills/review' },
     }, { surface: 'rpc', signal })).resolves.toEqual({ ok: true, result: { ok: true } });
-    await expect(executor.execute('daemon.promptRegistry.scanSource', {
-      sourceId: 'skills_sh:featured',
-    }, { surface: 'rpc', signal })).resolves.toEqual({ ok: true, result: { ok: true, items: [] } });
-    await expect(executor.execute('daemon.promptRegistry.install', {
-      sourceId: 'skills_sh:featured',
-      itemId: 'review',
-      installTarget: {
-        assetTypeId: 'agents.skill',
-        scope: 'user',
-        targetName: 'review',
-      },
-    }, { surface: 'rpc', signal })).resolves.toEqual({ ok: true, result: { ok: true, installed: true } });
 
-    expect(daemonPromptAssetsDiscover).toHaveBeenCalledWith({
-      request: { assetTypeId: 'agents.skill', scope: 'user' },
-      signal,
-    });
+    expect(skillMachineActionExecute).toHaveBeenCalledWith(expect.objectContaining({
+      actionId: 'skills.found.list', input: { machineId: 'machine' }, context: expect.objectContaining({ signal }),
+    }));
     expect(daemonPromptAssetsDelete).toHaveBeenCalledWith({
       request: {
         assetTypeId: 'agents.skill',
         scope: 'user',
         externalRef: { path: 'skills/review' },
-      },
-      signal,
-    });
-    expect(daemonPromptRegistryScanSource).toHaveBeenCalledWith({
-      request: { sourceId: 'skills_sh:featured', configuredSources: [] },
-      signal,
-    });
-    expect(daemonPromptRegistryInstall).toHaveBeenCalledWith({
-      request: {
-        sourceId: 'skills_sh:featured',
-        itemId: 'review',
-        configuredSources: [],
-        installTarget: {
-          assetTypeId: 'agents.skill',
-          scope: 'user',
-          targetName: 'review',
-        },
       },
       signal,
     });
@@ -1093,97 +1160,72 @@ describe('createActionExecutor (prompt library actions)', () => {
     expect(artifacts.get('doc-1')).toBe(original);
   });
 
-  it('installs fetched skill content and retains its Artifact and external link through the real operation', async () => {
-    const { store, artifacts } = createStoredLibrary();
-    const fetched = fetchedRegistrySkill();
-    if (!fetched.ok) throw new Error('Expected fetched skill');
-    const installed = new Map<string, string>();
-    const installTarget = { assetTypeId: 'agents.skill', scope: 'project' as const, directory: '/tmp/project',
-      targetName: 'frontend-design', installMode: 'symlink' as const };
-    const response = { ok: true as const, externalRef: { name: 'frontend-design' }, digest: 'external-digest' };
-    const executor = createExecutor({ promptRegistryInstall: ({ signal, ...request }) => installPromptRegistryItemInLibrary({
-      store, machineTarget: { serverIdentityId: 'srv_home', machineId: 'machine-1' }, libraryServerIdentityId: 'srv_home',
-      request: { ...request, promptExternalLinks: null }, signal, randomId: () => 'link-1', nowMs: () => 4,
-      fetchItem: async input => {
-        expect(input).toEqual({ machineId: 'machine-1', sourceId: 'skills_sh:featured', itemId: 'skills_sh:featured:item-1', configuredSources: [] });
-        return fetched;
+  it('retains legacy registry native ACK ordering, pinned library provenance and partial effects', async () => {
+    const { store, artifacts } = createStoredLibrary(), fetched = fetchedRegistrySkill();
+    let rules: SkillRuleV1[] = [], revision = 1, nativeRejects = true, readBackUnavailable = false;
+    let persistence: unknown;
+    const nativeFiles = new Map<string, string>();
+    const skills = createSkillActionExecuteV1({ store: { ...store, read: async (id, options) => readBackUnavailable && artifacts.has(id) ? null : store.read(id, options) }, randomId: () => 'rule', nowMs: () => 4,
+      skillRules: { serverId: 'home', assertCurrent: () => {}, ruleWriteContext: () => ({ nowMs: 4, newId: () => 'rule' }),
+        listSkills: signal => readSkillLibraryCatalog({ list: async () => ({ coverage: 'complete', items: [...artifacts.values()].map(artifact => ({
+          artifactId: artifact.id, header: artifact.header, body: artifact.body,
+        })) }) }, signal),
+        readCatalog: async () => ({ catalog: { status: 'ready', rows: [{ record: { key: 'skill-rules', value: { v: 1, rules } }, revision }], diagnostics: [], tombstones: [] } }),
+        writeRecord: async input => { if (input.record.key === 'skill-rules') rules = input.record.value.rules; return { status: 'updated', revision: ++revision, cursor: revision }; },
       },
+      includeInSession: async () => ({ ok: true }),
+      readRegistryItem: async () => fetched.item,
+      readRegistrySource: async () => ({ id: 'repo', title: 'Repo', url: 'https://github.com/a/b', format: 'git', kinds: ['skill'], enabled: true, addedAt: 1, origin: { kind: 'user' }, removable: true }),
+      fetchRegistrySkillFiles: async () => fetched.files.map(file => ({ path: file.path, unixMode: 0o644, bytes: decodeBase64(file.contentBase64) })),
+    });
+    const installTarget = { assetTypeId: 'agents.skill', scope: 'project' as const, directory: '/tmp/project', targetName: 'frontend-design', installMode: 'copy' as const };
+    const response = { ok: true as const, externalRef: { name: 'frontend-design' }, digest: 'external-digest' };
+    const executor = createExecutor({ promptRegistryInstall: async ({ signal, ...request }, context) => {
+      const receipt = await installPromptRegistryItemInLibrary({
+      machineTarget: { serverIdentityId: 'srv_home', machineId: 'machine-1' }, libraryServerIdentityId: 'srv_home',
+      request: { ...request, promptExternalLinks: null }, signal, randomId: () => 'link-1', nowMs: () => 4,
+      fetchItem: async () => fetched,
       install: async input => {
-        expect(input).toEqual({ machineId: 'machine-1', request: { sourceId: 'skills_sh:featured',
-          itemId: 'skills_sh:featured:item-1', configuredSources: [], installTarget, previewOnly: false } });
-        const admitted = PromptRegistryInstallRequestV1Schema.parse(input.request);
-        installed.set(admitted.installTarget.targetName, admitted.itemId);
+        if (nativeRejects) return { ok: false, errorCode: 'conflict', error: 'conflict' };
+        if (!('bundleBody' in input.request)) throw new Error('Expected native bundle write');
+        nativeFiles.set(installTarget.targetName, JSON.stringify(input.request.bundleBody));
         return response;
       },
-    }) });
-    const res = await executor.execute('prompt_registry.install', {
-      machineId: 'machine-1',
-      sourceId: 'skills_sh:featured',
-      itemId: 'skills_sh:featured:item-1',
-      configuredSources: [],
-      installTarget,
-    }, { surface: 'ui', actionsSettings: routingApprovalSettings });
-
-    expect(res).toEqual({ ok: true, result: { ok: true, artifactId: 'artifact-1', routeKind: 'bundle', exported: true, response,
-      nextPromptExternalLinks: { v: 1, links: [{ id: 'link-1', artifactId: 'artifact-1', assetTypeId: 'agents.skill',
-        machineId: 'machine-1', serverIdentityId: 'srv_home', scope: 'project', workspacePath: '/tmp/project',
-        externalRef: response.externalRef, syncMode: 'manual', baseDigest: response.digest,
-        lastLibraryDigest: computePromptBundleDigestV1(fetched.item.bundleBody), lastExternalDigest: response.digest, lastSyncAtMs: 4 }] } } });
-    expect(installed.get('frontend-design')).toBe('skills_sh:featured:item-1');
-    const artifact = artifacts.get('artifact-1')!;
-    expect(PromptBundleArtifactHeaderV1Schema.parse(artifact.header)).toEqual({ v: 1, kind: 'prompt_bundle.v2',
-      title: 'Frontend design', bundleSchemaId: 'skills.skill_md_v1', origin: 'imported', locked: false });
-    expect(PromptBundleBodyV1Schema.parse(JSON.parse(artifact.body!))).toEqual(fetched.item.bundleBody);
-  });
-
-  it('fetches from the exact supplied Home and retains the skill without an external install target', async () => {
-    const { store, artifacts } = createStoredLibrary();
-    const executor = createExecutor({ promptRegistryInstall: ({ signal, ...request }) => installPromptRegistryItemInLibrary({
-      store, machineTarget: { serverIdentityId: 'srv_machine', machineId: 'machine-1' }, libraryServerIdentityId: 'srv_home',
-      request: { ...request, promptExternalLinks: null }, signal, randomId: () => 'link-1',
-      fetchItem: async input => {
-        expect(input).toEqual({ machineId: 'machine-1', serverId: 'server-1', sourceId: 'skills_sh:featured',
-          itemId: 'skills_sh:featured:item-1', configuredSources: [] });
-        return fetchedRegistrySkill();
-      },
-      install: async () => { throw new Error('An Artifact-only import must not install external files'); },
-    }) });
-    const res = await executor.execute('prompt_registry.install', {
-      machineId: 'machine-1',
-      sourceId: 'skills_sh:featured',
-      itemId: 'skills_sh:featured:item-1',
-      configuredSources: [],
-    }, {
-      surface: 'ui',
-      serverId: 'server-1',
-      actionsSettings: routingApprovalSettings,
-    });
-
-    expect(res).toEqual({ ok: true, result: { ok: true, artifactId: 'artifact-1', routeKind: 'bundle', exported: false } });
-    expect(artifacts.get('artifact-1')?.header).toEqual({ v: 1, kind: 'prompt_bundle.v2', title: 'Frontend design',
-      bundleSchemaId: 'skills.skill_md_v1', origin: 'imported', locked: false });
-  });
-
-  it('propagates prompt_registry.install fetch failures without mutating the library', async () => {
-    const { store, artifacts } = createStoredLibrary();
-    const promptRegistryInstall: NonNullable<ActionExecutorDeps['promptRegistryInstall']> = ({ signal, ...request }) =>
-      installPromptRegistryItemInLibrary({ store,
-        machineTarget: { serverIdentityId: 'srv_home', machineId: 'machine-1' }, libraryServerIdentityId: 'srv_home',
-        request: { ...request, promptExternalLinks: null }, signal, randomId: () => 'link-1',
-        fetchItem: async () => PromptRegistryFetchItemResponseV1Schema.parse({ ok: false,
-          errorCode: 'invalid_request', error: 'invalid_parameters' }),
-        install: async () => { throw new Error('Failed fetch must not install external files'); },
+      installLibrary: pointer => skills('skills.install', { source: { kind: 'registry', ...pointer } }, { surface: context.surface ?? null }),
       });
-    const executor = createExecutor({ promptRegistryInstall });
-
-    const res = await executor.execute('prompt_registry.install', {
-      machineId: 'machine-1',
-      sourceId: 'skills_sh:featured',
-      itemId: 'skills_sh:featured:item-1',
-      configuredSources: [],
-    }, { surface: 'ui', actionsSettings: routingApprovalSettings });
-
-    expect(res).toEqual({ ok: false, errorCode: 'invalid_request', error: 'invalid_parameters' });
+      return persistence ? { ...receipt, externalLinkPersistence: persistence } : receipt;
+    } });
+    const input = { machineId: 'machine-1', sourceId: 'repo', itemId: 'frontend-design', installTarget,
+      configuredSources: [{ arbitraryOldAccountDeclarations: true }] };
+    const context = { surface: 'ui' as const, actionsSettings: routingApprovalSettings };
+    expect(await executor.execute('prompt_registry.install', input, context)).toMatchObject({ ok: false, errorCode: 'conflict' });
     expect(artifacts.size).toBe(0);
+    nativeRejects = false;
+    const result = await executor.execute('prompt_registry.install', input, context);
+    expect(result).toMatchObject({ ok: true, result: { ok: true, artifactId: 'artifact-1', exported: true, skillIds: ['artifact-1'] } });
+    expect(nativeFiles.get('frontend-design')).toContain(fetched.files[0]!.contentBase64);
+    expect(artifacts.get('artifact-1')?.header).toMatchObject({ skillLock: { provenance: { kind: 'registry', registry: { ref: { commit: 'abc' } } } } });
+    expect(rules).toMatchObject([{ skillId: 'artifact-1', enabled: true }]);
+    if (!result.ok) throw new Error('Expected legacy success');
+    expect(result.result).toMatchObject({ nextPromptExternalLinks: { links: [{ artifactId: 'artifact-1', serverIdentityId: 'srv_home', lastExternalDigest: 'external-digest' }] } });
+    for (const [settlement, code] of [
+      [{ status: 'conflict', currentVersion: 99 }, 'conflict'],
+      [{ status: 'unavailable', retryable: false }, 'content_unavailable'],
+      [{ ok: false, errorCode: 'prompt_library_row_http_503', error: 'prompt_library_row_http_503' }, 'prompt_library_row_http_503'],
+    ] as const) {
+      persistence = settlement;
+      const failed = await executor.execute('prompt_registry.install', input, context);
+      expect(failed).toMatchObject({ ok: false, errorCode: code,
+        details: { artifactId: expect.any(String), exported: true, response, skillIds: [expect.any(String)] } });
+    }
+    persistence = undefined;
+    readBackUnavailable = true;
+    const partial = await executor.execute('prompt_registry.install', input, context);
+    expect(partial).toMatchObject({ ok: false,
+      errorCode: 'created_skill_unreadable', details: { exported: true, response,
+        skillIds: ['artifact-5'], incomplete: [{ skillId: 'artifact-5', step: 'rules' }] } });
+    if (partial.ok) throw new Error('Expected retained partial failure');
+    expect(LegacySkillRegistryInstallEffectsV1Schema.parse(partial.details)).toMatchObject({ exported: true, skillIds: ['artifact-5'] });
+    expect(artifacts.has('artifact-5')).toBe(true);
   });
 });

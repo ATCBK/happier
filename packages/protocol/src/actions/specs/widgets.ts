@@ -257,7 +257,7 @@ export const WIDGET_INSTANCE_ACTION_SPECS_V1: readonly (PreNormalizedActionSpec 
       ...(id.startsWith('widgets.item.') && !read && !refresh ? { uiConfirmationForInput: (input: unknown) => {
         const surface = readWidgetActionSurfaceV1(input);
         const destination = id === 'widgets.item.move' ? readWidgetActionDestinationV1(input) : null;
-        return !surface || surface.owner.kind === 'sessionBoard' || destination?.owner.kind === 'sessionBoard';
+        return id === 'widgets.item.remove' || !surface || surface.owner.kind === 'sessionBoard' || destination?.owner.kind === 'sessionBoard';
       } } : { uiConfirmation: 'policy' }),
     }, approval: { result: 'required' }, title: WIDGET_INSTANCE_ACTION_COPY[id][0], description: id === 'widgets.area.layout.reset'
       ? 'Restore the host-declared area preset immediately and return a guarded Undo for the acknowledged change.'

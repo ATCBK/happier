@@ -453,7 +453,7 @@ function translateStorageError(error: unknown): never {
   // A received HTTP response must stay distinguishable from a lost write
   // response; review/recovery use that fact to decide whether to rejoin.
   throw Object.assign(workflowError(typedCode.success ? typedCode.data : 'storage_unavailable'),
-    response === undefined ? {} : { response });
+    { cause: error }, response === undefined ? {} : { response });
 }
 
 export type WorkflowAccountRunActionDeps = Readonly<{

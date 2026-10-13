@@ -31,6 +31,8 @@ export const ActionCliCommandBindingSchema = lazyZodSchema(() => z.object({
    * declares one, otherwise the canonical Action input.
    */
   positionals: z.array(ActionInputPathSchema).optional(),
+  /** Caller fields inserted immediately before the last literal command segment. */
+  positionalsBeforeLastSegment: z.array(ActionInputPathSchema).optional(),
   /**
    * One final caller field that receives every remaining positional word.
    * This preserves established commands such as `actions search query words`

@@ -16,7 +16,7 @@ export const ACCOUNT_PROFILE_ACTION_SPECS_V1 = Object.freeze([
     outputSchema: AccountSelfProfileV1Schema,
   }),
   homeDomainActionRow({
-    id: 'account.name.set', approval: {result: 'required'}, title: 'Set your name',
+    id: 'account.name.set', approval: { result: 'required', flow: 'deferred' }, title: 'Set your name',
     description: 'Set what people should call you on this Home. Empty clears the name.',
     safety: 'danger', sideEffectClass: 'write', cliPath: ['account', 'name', 'set'],
     path: '/v1/account/profile', inputSchema: AccountNameUpdateRequestV1Schema,
@@ -24,7 +24,7 @@ export const ACCOUNT_PROFILE_ACTION_SPECS_V1 = Object.freeze([
     inputHints: { fields: [homeDomainApprovalField('name', 'Name', { required: true })] },
   }),
   homeDomainActionRow({
-    id: 'account.username.set', approval: {result: 'required'}, title: 'Set your username',
+    id: 'account.username.set', approval: { result: 'required', flow: 'deferred' }, title: 'Set your username',
     description: 'Set your own username when this Home’s Friends policy permits it.',
     safety: 'danger', sideEffectClass: 'write', cliPath: ['account', 'username', 'set'],
     path: '/v1/account/username', inputSchema: AccountUsernameUpdateRequestV1Schema,

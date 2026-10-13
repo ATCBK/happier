@@ -64,7 +64,7 @@ const agentContext = {
 } as const;
 
 describe('session.list execution', () => {
-  it('offers native widget Session options from the same awareness owner without requiring a plugin catalog', async () => {
+  it.each(['changes', 'local_services'] as const)('offers %s Session options from the same awareness owner without requiring a plugin catalog', async (id) => {
     const sessionList = vi.fn(async () => buildSessionAwarenessListResultV1({ sessions: [{
       v: 1, sessionId: 'B', title: 'Bound B', lifecycle: 'active', runtime: 'idle', freshness: 'live',
       operational: { primary: 'none', reasons: [] }, encryption: 'plain', availability: 'complete',
@@ -72,7 +72,7 @@ describe('session.list execution', () => {
     const executor = createExecutor({ sessionList, widgetAccountScope: () => ({ serverId: 'home-current', accountId: 'viewer' }) });
     const result = await executor.execute('action.options.resolve', {
       consumer: { kind: 'widget', surface: { serverId: 'home-current', accountId: 'viewer', owner: { kind: 'home' } },
-        definition: { kind: 'builtin', id: 'changes' } }, fieldPath: 'session',
+        definition: { kind: 'builtin', id } }, fieldPath: 'session',
     }, { surface: 'ui', authority: 'present_user', serverId: 'home-current' });
     expect(result).toEqual({ ok: true, result: expect.objectContaining({ options: [expect.objectContaining({ value: { serverId: 'home-current', sessionId: 'B' }, label: 'Bound B' })] }) });
   });
@@ -106,7 +106,7 @@ describe('session.list execution', () => {
         requests.push(request);
         return buildSessionAwarenessListResultV1({
           sessions: request.query?.cursor
-            ? [awareness('working', 'working', 'working'), awareness('needs', 'offline', 'permission_required')]
+            ? [awareness('working', 'working', 'working'), awareness('needs', 'waiting', 'permission_required')]
             : [awareness('recent', 'waiting', 'pending_input'), { ...awareness('locked', 'idle', 'none'), title: undefined, encryption: 'locked', availability: 'locked' }],
           nextCursor: request.query?.cursor ? null : cursor,
           hasNext: !request.query?.cursor, attentionNextCursor: null, attentionHasNext: false,
@@ -139,6 +139,39 @@ describe('session.list execution', () => {
     await expect(executor.execute('action.options.resolve', { optionsSourceId: 'sessions' }, {
       surface: 'ui', authority: 'present_user', serverId: 'home-current',
     })).resolves.toMatchObject({ ok: false, errorCode: 'permission_denied' });
+  });
+
+  it('prioritizes Project membership across pages without dropping other Home options or readable-state admission', async () => {
+    const awareness = (sessionId: string, primary: SessionAwarenessProjectionV1['operational']['primary']): SessionAwarenessProjectionV1 => ({
+      v: 1, sessionId, title: `Title ${sessionId}`, lifecycle: 'active', runtime: primary === 'working' ? 'working' : 'idle', freshness: 'live',
+      operational: { primary, reasons: [] }, encryption: 'plain', availability: 'complete',
+    });
+    const cursor = encodeV2SessionListCursorV1('next');
+    const executor = createExecutor({ widgetAccountScope: () => ({ serverId: 'home-current', accountId: 'viewer' }),
+      // The layout port is the Artifact boundary; membership and options logic stay real.
+      widgetSurfaceActions: { project: {
+        read: async surface => ({ surface, instances: [], canEdit: true }),
+        apply: async () => { throw new Error('Option discovery must not write'); },
+      } }, sessionList: async ({ project, query }) => buildSessionAwarenessListResultV1({
+        ...(project ? { project } : {}),
+        sessions: project
+          ? query?.cursor ? [awareness('project-needs', 'permission_required')] : [awareness('project-recent', 'none')]
+          : query?.cursor ? [awareness('project-needs', 'permission_required'), { ...awareness('locked', 'none'), title: undefined, encryption: 'locked', availability: 'locked' }]
+            : [awareness('other-needs', 'permission_required'), awareness('other-working', 'working'), awareness('project-recent', 'none')],
+        nextCursor: query?.cursor ? null : cursor, hasNext: !query?.cursor,
+        attentionNextCursor: null, attentionHasNext: false,
+      }) });
+    const result = await executor.execute('action.options.resolve', {
+      consumer: { kind: 'widget', surface: { serverId: 'home-current', accountId: 'viewer', owner: { kind: 'project', projectId: 'anchor' } },
+        definition: { kind: 'builtin', id: 'local_services' } }, fieldPath: 'session',
+    }, { surface: 'ui', authority: 'present_user', serverId: 'home-current' });
+    expect(result).toMatchObject({ ok: true, result: { options: [
+      { value: { serverId: 'home-current', sessionId: 'project-needs' }, description: 'Needs you' },
+      { value: { serverId: 'home-current', sessionId: 'project-recent' }, description: 'Recent' },
+      { value: { serverId: 'home-current', sessionId: 'other-needs' }, description: 'Needs you' },
+      { value: { serverId: 'home-current', sessionId: 'other-working' }, description: 'Working' },
+      { value: { serverId: 'home-current', sessionId: 'locked' }, label: 'locked', disabled: true },
+    ] } });
   });
 
   it('refuses Session discovery before reading when the autonomous caller has no admitted Session corpus', async () => {

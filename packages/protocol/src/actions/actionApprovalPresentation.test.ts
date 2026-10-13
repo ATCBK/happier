@@ -2,14 +2,36 @@ import { describe, expect, it } from 'vitest';
 
 import { describeApprovalActionFields, resolveApprovalRequestApproveAdmission, resolveApprovalVisualPreview } from './actionApprovalPresentation.js';
 import { ApprovalRequestV2Schema, type ApprovalRequestV2 } from '../approvals/approvalRequestV1.js';
-import { getActionSpec } from './actionSpecs.js';
+import { ActionSpecSchema, getActionSpec } from './actionSpecs.js';
 import { readActionSchemaTopLevelFieldNames } from './actionCliProjection.js';
 import { MACHINE_PRESET_ACTION_IDS_V1 } from '../machines/managed/machinePresetActionIdsV1.js';
 import { MANAGED_MACHINE_ACTION_IDS_V1 } from '../machines/managed/actionIdsV1.js';
 import { MACHINE_POOL_ACTION_IDS_V1 } from '../machines/pools/actionsV1.js';
 import { readBuiltInSettingDeclarationV1 } from './settings/settingsDeclarations.js';
+import { skillFileFromBytesV1 } from '../prompts/library/skills/skillZipV1.js';
 
 describe('approval field presentation', () => {
+  it('reviews skill write operands independently of their deliberately narrow observation previews', () => {
+    const file = skillFileFromBytesV1('SKILL.md', new TextEncoder().encode('---\nname: review\n---\nReview exactly this.'), 0o644);
+    const cases = [
+      ['skills.create', { name: 'review', files: [file], where: { kind: 'replace', rules: [] } }],
+      ['skills.update', { skillId: 'skill', expectedRevision: '1:1', files: [{ kind: 'upsert', file }, { kind: 'remove', path: 'old.md' }] }],
+      ['skills.install', { source: { kind: 'upload', files: [file] }, where: { kind: 'replace', rules: [] } }],
+    ] as const;
+    for (const [actionId, raw] of cases) {
+      const spec = getActionSpec(actionId);
+      const actionArgs = spec.inputSchema.parse(raw);
+      // The same authored contract and summary call used by the live preview reader.
+      ActionSpecSchema.parse(spec);
+      expect(spec.approvalPresentation?.summary(actionArgs)).toBeNull();
+      const presentation = describeApprovalActionFields({ actionId, actionArgs,
+        preview: { actionId, actionArgs: spec.projectObservationInput?.(actionArgs) } });
+      expect(presentation.unrepresentable, actionId).toBeNull();
+      expect(JSON.stringify(presentation.rows), actionId).toContain('Review exactly this.');
+      if (actionId === 'skills.update') expect(JSON.stringify(presentation.rows)).toContain('old.md');
+      else expect(presentation.rows).toContainEqual(expect.objectContaining({ path: 'where', value: JSON.stringify(raw.where) }));
+    }
+  });
   it('names a declared setting while preserving the exact proposed value and anchor', () => {
     const anchor = 'delegation.workDepthLimit';
     const declaration = readBuiltInSettingDeclarationV1(anchor)!;

@@ -1,4 +1,6 @@
 import type { SessionFollowActionIdV1 } from '../../sessions/follow/actions.js';
+import type { SessionCapabilitiesActionPortV1 } from './sessionCapabilities.js';
+import type { SessionCapabilitiesGetInputV1, SpawnCapabilitiesPreviewInputV1 } from '../specs/sessionCapabilities.js';
 import type { TeamMembershipHistoryActionIdV1, TeamMembershipHistoryInputV1 } from '../../teams/membershipHistoryPreparationV1.js';
 import type { SessionConnectedServiceAuthSwitchRpcParams } from '../../connect/sessionConnectedServiceAuthSwitch.js';
 import type { MemoryWindowRequestV1 } from '../../memory/memoryWindow.js';
@@ -82,7 +84,7 @@ import type { WorkflowWebhookInputV1Schema, WorkflowWebhookOutputV1Schema,
 import type { ApiTokenGrantV1, CallerInputConstraintsV1 } from '../../auth/apiTokenGrant.js';
 import type { SessionPermissionRespondActionDecisionV1, SessionPermissionRespondRpcParamsV1 } from '../../sessions/permissions/respondRpcParamsV1.js';
 import type { AgentsBackendsListOutput } from '../agentBackendInventory.js';
-import type { MachinesAgentsListInput, MachinesAgentsListOutput } from '../../capabilities/machineAgentInventory.js';
+import type { MachineAcpInventoryDefinition, MachinesAgentsListInput, MachinesAgentsListOutput } from '../../capabilities/machineAgentInventory.js';
 import type { WorkflowEventsListInputV1, WorkflowEventsListOutputV1 } from '../specs/workflowEvents.js';
 import type { DaemonWorkspaceFileSearchResponse } from '../../machines/workspaceFiles.js';
 import type {
@@ -130,13 +132,7 @@ import type {
 } from '../../approvals/approvalRequestV1.js';
 import type { PluginSourceCustodyV1 } from '../../plugins/runtime/sourceCustody.js';
 import type {
-  PromptRegistryConfiguredSourceV1,
-  PromptRegistryInstallRequestV1,
-  PromptRegistryScanSourceRequestV1,
-} from '../../prompts/library/promptRegistriesV1.js';
-import type {
   PromptAssetDeleteRequest,
-  PromptAssetDiscoverRequest,
 } from '../../prompts/library/promptAssetsV1.js';
 import type { ProviderConnectionId } from '../../providers/ids.js';
 import type { SessionBoardActionIdV1 } from '../../sessions/board/actionIds.js';
@@ -1014,6 +1010,8 @@ export type PluginSettingsAdministrationActionRequest = Readonly<{
 }>;
 
 export type ActionExecutorDeps = Readonly<{
+  /** Existing host profile bindings; unresolved identifiers never authorize another Home. */
+  resolveServerProfileScopeId?: import('../../features/payload/capabilities/serverIdentityCapabilities.js').ServerProfileScopeResolver;
   /** Authenticated source ownership, independent of the Machine executing a persisted read. */
   resolveApiTokenGrantSessionMachineId?: (args: Readonly<{
     actionId: ActionId;
@@ -1026,6 +1024,14 @@ export type ActionExecutorDeps = Readonly<{
   artifactFolders?: import('../../prompts/library/promptFolderActionsV1.js').ArtifactFolderActionPortV1;
   promptStacks?: import('../../prompts/library/promptLibraryCatalogV1.js').PromptLibraryStackActionPortV1;
   skillRules?: import('../../prompts/library/skillRulesActionsV1.js').SkillRulesActionPortV1;
+  skillActionExecute?: (args: Readonly<{ actionId: import('../../prompts/library/skills/skillActionSchemasV1.js').SkillLibraryActionIdV1;
+    input: unknown; context: ActionExecutorContext }>) => Promise<unknown>;
+  skillMachineActionExecute?: (args: Readonly<{ actionId: import('../../prompts/library/skills/skillActionSchemasV1.js').SkillMachineActionIdV1;
+    input: unknown; context: ActionExecutorContext }>) => Promise<unknown>;
+  registryActionExecute?: (args: Readonly<{actionId:import('../../registries/registryActionsV1.js').RegistryActionIdV1;
+    input:unknown;context:ActionExecutorContext}>) => Promise<unknown>;
+  personalSavedSecretActionExecute?: (args: Readonly<{ actionId: import('../../account/settings/personalSavedSecretActionsV1.js').PersonalSavedSecretActionIdV1;
+    input: unknown; context: ActionExecutorContext }>) => Promise<unknown>;
   /** A client relays admitted contributed-type Resource discovery to the daemon's same options owner. */
   readAdmittedInputTypeOptions?: (request: Readonly<{ input: Readonly<Record<string, unknown>>;
     context: ActionExecutorContext }>) => Promise<unknown>;
@@ -1302,8 +1308,9 @@ export type ActionExecutorDeps = Readonly<{
     actionRequestId?: string | null;
     approvedNewDirectoryCreation?: boolean;
     intent?: PublicActionInputById['session.open']['intent'];
+    resumeRequest?: PublicActionInputById['session.open']['resumeRequest'];
     signal?: AbortSignal;
-  }>) => Promise<unknown>;
+  }>, context?: ActionExecutorContext) => Promise<unknown>;
   sessionFork: (args: Readonly<
     Omit<SessionForkRpcParams, 'v' | 'parentSessionId'> & {
       sessionId: string;
@@ -1546,10 +1553,10 @@ export type ActionExecutorDeps = Readonly<{
   machineAgentSignInStatus?: (args: MachinesAgentsSignInStatusInput & { serverId?: string; signal?: AbortSignal }) => Promise<AgentSignInStatusResponse>;
   machineAgentSignInCancel?: (args: MachinesAgentsSignInCancelInput & { serverId?: string; signal?: AbortSignal }) => Promise<MachinesAgentsSignInCancelOutput>;
   machineAgentSignInRestart?: (args: MachinesAgentsSignInCancelInput & { serverId?: string; signal?: AbortSignal }) => Promise<MachinesAgentsSignInStartOutput>;
-  machinesAgentsList?: (args: MachinesAgentsListInput, context: ActionExecutorContext) => Promise<MachinesAgentsListOutput | ActionExecuteFailure>;
+  machinesAgentsList?: (args: MachinesAgentsListInput & Readonly<{ draftDefinitions?: readonly MachineAcpInventoryDefinition[] }>, context: ActionExecutorContext) => Promise<MachinesAgentsListOutput | ActionExecuteFailure>;
   workflowEventsList?: (args: WorkflowEventsListInputV1, context: ActionExecutorContext) => Promise<WorkflowEventsListOutputV1 | ActionExecuteFailure>;
   workspaceFilesSearch?: (args: PublicActionInputById['workspace.files.search'], context: ActionExecutorContext) => Promise<DaemonWorkspaceFileSearchResponse | ActionExecuteFailure>;
-  machineAgentInstallStart?: (args: DaemonAgentInstallStartRequest & { machineId: string; serverId?: string; signal?: AbortSignal }) => Promise<DaemonAgentInstallStartResponse>;
+  machineAgentInstallStart?: (args: DaemonAgentInstallStartRequest & { machineId: string; serverId?: string; signal?: AbortSignal }) => Promise<DaemonAgentInstallStartResponse | ActionExecuteFailure>;
   machineAgentInstallRead?: (args: DaemonAgentInstallReadRequest & { machineId: string; serverId?: string; signal?: AbortSignal }) => Promise<DaemonAgentInstallReadResponse>;
   machineAgentInstallCancel?: (args: DaemonAgentInstallCancelRequest & { machineId: string; serverId?: string; signal?: AbortSignal }) => Promise<DaemonAgentInstallCancelResponse>;
   agentsModelsList: (args: Readonly<{
@@ -1575,6 +1582,9 @@ export type ActionExecutorDeps = Readonly<{
     selection?: unknown;
     limit?: number;
   }>) => Promise<unknown>;
+  spawnCapabilitiesPreview?: (args: SpawnCapabilitiesPreviewInputV1, context: ActionExecutorContext) => Promise<unknown>;
+  sessionCapabilitiesGet?: (args: SessionCapabilitiesGetInputV1, context: ActionExecutorContext) => Promise<unknown>;
+  sessionCapabilities?: SessionCapabilitiesActionPortV1;
 
   // Session messaging (socket message event, server-scoped)
   sessionSendMessage: (args: Readonly<{
@@ -1839,7 +1849,6 @@ export type ActionExecutorDeps = Readonly<{
   }>) => Promise<unknown>;
   sessionModeSet: (args: Readonly<{ sessionId: string; modeId: string }>) => Promise<unknown>;
   sessionConfigOptionSet?: (args: Readonly<{ sessionId: string; configId: string; valueId: string }>) => Promise<unknown>;
-  sessionMcpSelectionSet?: (args: Readonly<{ sessionId: string; selection: unknown; sessionActive: boolean; serverId?: string | null }>) => Promise<unknown>;
   sessionConnectedServicesAuthSet?: (args: SessionConnectedServiceAuthSwitchRpcParams & Readonly<{ machineId: string; serverId?: string | null }>) => Promise<unknown>;
   sessionModesList: (args: Readonly<{ sessionId: string }>) => Promise<unknown>;
 
@@ -2040,7 +2049,7 @@ export type ActionExecutorDeps = Readonly<{
   promptDocFavoriteSet?: (args: Readonly<{ artifactId: string; favorite: boolean; signal?: AbortSignal }>) => Promise<unknown>;
   modelFavoriteSet?: (input: import('../../providers/modelFavoritesV1.js').ModelFavoriteMutationV1, context: ActionExecutorContext) => Promise<Pick<import('../../account/settings/accountSettingMutationV1.js').AccountSettingsMutationResult, 'status'>>;
   sessionModelUnarm?: (args: Readonly<{ sessionId: string; serverId?: string | null; context: ActionExecutorContext }>) => Promise<unknown>;
-  promptsLibraryList?: (args: Readonly<{ query?: string; includeBundles?: false; signal?: AbortSignal }>) => Promise<unknown>;
+  promptsLibraryList?: (args: Readonly<{ query?: string; signal?: AbortSignal }>) => Promise<unknown>;
   promptDocUpdate?: (args: Readonly<{
     artifactId: string;
     title: string;
@@ -2050,7 +2059,6 @@ export type ActionExecutorDeps = Readonly<{
     tags?: readonly string[];
     signal?: AbortSignal;
   }>) => Promise<unknown>;
-  promptBundleCreate?: (args: PromptBundleCreateActionInputV1 & Readonly<{ signal?: AbortSignal }>) => Promise<unknown>;
   promptBundleUpdate?: (args: PromptBundleUpdateActionInputV1 & Readonly<{ signal?: AbortSignal }>) => Promise<unknown>;
   promptAssetExport?: (args: Readonly<{
     artifactId: string;
@@ -2068,7 +2076,6 @@ export type ActionExecutorDeps = Readonly<{
     machineId: string;
     sourceId: string;
     itemId: string;
-    configuredSources: readonly PromptRegistryConfiguredSourceV1[];
     serverId?: string | null;
     installTarget?: Readonly<{
       assetTypeId: string;
@@ -2078,21 +2085,9 @@ export type ActionExecutorDeps = Readonly<{
       installMode?: 'copy' | 'symlink';
     }>;
     signal?: AbortSignal;
-  }>) => Promise<unknown>;
-  daemonPromptAssetsDiscover?: (args: Readonly<{
-    request: PromptAssetDiscoverRequest;
-    signal?: AbortSignal;
-  }>) => Promise<unknown>;
+  }>, context: ActionExecutorContext) => Promise<unknown>;
   daemonPromptAssetsDelete?: (args: Readonly<{
     request: PromptAssetDeleteRequest;
-    signal?: AbortSignal;
-  }>) => Promise<unknown>;
-  daemonPromptRegistryScanSource?: (args: Readonly<{
-    request: PromptRegistryScanSourceRequestV1;
-    signal?: AbortSignal;
-  }>) => Promise<unknown>;
-  daemonPromptRegistryInstall?: (args: Readonly<{
-    request: PromptRegistryInstallRequestV1;
     signal?: AbortSignal;
   }>) => Promise<unknown>;
 

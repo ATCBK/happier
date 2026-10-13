@@ -1,9 +1,12 @@
 import { describe, expect, it } from 'vitest';
 import { ActionIdSchema } from './actionIds.js';
+import { getActionSpec } from './actionSpecs.js';
+import { createActionExecutor } from './actionExecutor.js';
+import { projectExecutionRunChildChoiceV1 } from '../execution/runs/responseSchemas.js';
+import { setModelFavoriteV1 } from '../providers/modelFavoritesV1.js';
 
 describe('model favorite Action', () => {
   it('rejects caller-authored Account defaults before a Run can be started', async () => {
-    const { getActionSpec } = await import('./actionSpecs.js');
     const request = { sessionId: 'session', intent: 'delegate', backendTarget: { kind: 'builtInAgent', agentId: 'codex' },
       instructions: 'Task', permissionMode: 'default', runClass: 'bounded', ioMode: 'request_response', retentionPolicy: 'ephemeral',
       childSelection: 'agentDefault' };
@@ -14,8 +17,6 @@ describe('model favorite Action', () => {
     } }).success).toBe(false);
   });
   it('preserves the child choice refusal through Action start error normalization', async () => {
-    const { createActionExecutor } = await import('./actionExecutor.js');
-    const { projectExecutionRunChildChoiceV1 } = await import('../execution/runs/responseSchemas.js');
     const childChoice = projectExecutionRunChildChoiceV1({ agentTargetKey: 'agent:codex' });
     // Session RPC is the system boundary. The Action parser, launch policy and failure classifier stay real.
     const executor = createActionExecutor({ executionRunStart: async () => {
@@ -28,23 +29,8 @@ describe('model favorite Action', () => {
       permissionMode: 'default', runClass: 'bounded', ioMode: 'request_response', retentionPolicy: 'ephemeral' }, { surface: 'rpc' }))
       .toMatchObject({ ok: false, errorCode: 'execution_run_child_choice_required', details: { childChoice } });
   });
-  it('runs the exact favorite owner through the Action executor', async () => {
-    const { createActionExecutor } = await import('./actionExecutor.js');
-    const { setModelFavoriteV1 } = await import('../providers/modelFavoritesV1.js');
-    let raw: Record<string, unknown> = { favoriteModelSelectionsV1: [] };
-    const executor = createActionExecutor({ modelFavoriteSet: async input => {
-      raw = setModelFavoriteV1(raw, input);
-      return { status: 'applied' };
-    } });
-    const selection = { selection: { v: 1 as const, updatedAt: 5,
-      ref: { agentTargetKey: 'agent:codex', providerConnectionId: null, modelId: 'favorite' } } };
-    expect(await executor.execute('models.favorite.set', { selection, favorite: true }, { surface: 'agent', authority: 'account_automation' }))
-      .toMatchObject({ ok: true, result: { status: 'updated' } });
-    expect(raw.favoriteModelSelectionsV1).toEqual([selection]);
-  });
   it('exposes one exact-tuple intent and preserves unrelated and opaque Account favorites', async () => {
     expect(ActionIdSchema.parse('models.favorite.set')).toBe('models.favorite.set');
-    const { setModelFavoriteV1 } = await import('../providers/modelFavoritesV1.js');
     const favorite = { selection: { v: 1 as const, updatedAt: 5,
       ref: { agentTargetKey: 'agent:codex', providerConnectionId: 'pc_one', modelId: 'same-model' } }, modelLabel: 'Model' };
     const other = { ...favorite, selection: { ...favorite.selection, ref: { ...favorite.selection.ref, providerConnectionId: 'pc_two' } } };

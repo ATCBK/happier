@@ -21,6 +21,49 @@ const cases = [
 ] as const;
 
 describe('Machine access Action front door', () => {
+  it('uses the host-established Home identity for every qualified access operation and refuses unknown Homes', async () => {
+    const resolveServerProfileScopeId = (id: string) => ['creator', 'decider', 'srv_same_home'].includes(id) ? 'srv_same_home' : null;
+    for (const [id, input, output] of cases) {
+      let dispatches = 0;
+      const executor = createActionExecutor({
+        resolveServerProfileScopeId,
+        machineAccessAction: async () => { dispatches++; return output; },
+        isActionApprovalRequired: () => false,
+      } as unknown as ActionExecutorDeps);
+      const context = { surface: 'ui', authority: 'present_user', serverId: 'decider', serverIdentityId: 'srv_same_home' } as const;
+      expect(await executor.execute(id, { ...input, serverId: 'creator' }, context)).toEqual({ ok: true, result: output });
+      expect(await executor.execute(id, { ...input, serverId: 'unknown' }, context))
+        .toMatchObject({ ok: false, errorCode: 'server_target_mismatch' });
+      expect(dispatches).toBe(1);
+    }
+  });
+  it('applies the same Home admission to neighboring qualified Machine families', async () => {
+    const unavailable = async () => ({ ok: false as const, errorCode: 'machine_unavailable', error: 'machine_unavailable' });
+    const executor = createActionExecutor({
+      machineWorkSummaryGet: unavailable, machineProcessesAction: unavailable, machineStorageAction: unavailable,
+      machineGuardAction: unavailable, machineResourcesPolicyAction: unavailable, machineVitalsAction: unavailable,
+      machineTerminalAction: unavailable, machinePageAction: unavailable, machinesList: unavailable,
+      isActionApprovalRequired: () => false,
+    } as unknown as ActionExecutorDeps);
+    const neighbors = [
+      ['machines.work.summary.get', {}], ['machines.processes.list', {}], ['machines.storage.summary.get', {}],
+      ['machines.guard.idleStop.keepRunning', { sessionId: 'session' }], ['machines.resources.policy.get', {}],
+      ['machines.vitals.get', { view: 'summary' }], ['machines.terminal.list', {}],
+      ['machines.metadata.update', { patch: { displayName: 'alias' } }],
+    ] as const;
+    for (const [id, input] of neighbors) {
+      const context = { surface: 'cli', serverId: 'local-profile', serverIdentityId: 'srv_same_home' } as const;
+      const target = { ...input, serverId: 'srv_same_home', machineId: 'machine' };
+      expect(await executor.execute(id, target, context)).toMatchObject({ ok: false, errorCode: 'machine_unavailable' });
+      expect(await executor.execute(id, { ...target, serverId: 'foreign' }, context))
+        .toMatchObject({ ok: false, errorCode: 'server_target_mismatch' });
+    }
+    const context = { surface: 'cli', serverId: 'local-profile', serverIdentityId: 'srv_same_home' } as const;
+    expect(await executor.execute('machines.list', { serverId: 'srv_same_home' }, context))
+      .toMatchObject({ ok: false, errorCode: 'machine_unavailable' });
+    expect(await executor.execute('machines.list', { serverId: 'foreign' }, context))
+      .toMatchObject({ ok: false, errorCode: 'server_target_mismatch' });
+  });
   it('refuses a qualified inventory target different from its captured Home', async () => {
     let reachedInventory = false;
     const executor = createActionExecutor({ machinesList: async () => { reachedInventory = true; return { items: [] }; },

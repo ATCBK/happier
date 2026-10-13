@@ -13,6 +13,7 @@ import {
   ActionOperationCancelV1RequestSchema,
   ActionOperationCancelV1ResponseSchema,
   ActionOperationGetV1RequestSchema,
+  ActionOperationGetV2RequestSchema,
   ActionOperationGetV1ResponseSchema,
   ActionOperationListV1RequestSchema,
   ActionOperationListV1ResponseSchema,
@@ -218,6 +219,11 @@ describe('Action operation v1 contract', () => {
       settledAt: 120, observation }).success).toBe(false);
   });
   it('accepts terminal observation only at get, never as an implicit stop request', () => {
+    const refresh = { operationId: 'operation', refreshSetupReview: true };
+    expect(ActionOperationGetV2RequestSchema.parse(refresh)).toEqual(refresh);
+    expect(ActionOperationGetV1RequestSchema.safeParse(refresh).success).toBe(false);
+    expect(ActionOperationGetV2RequestSchema.safeParse({ ...refresh, consent: 'approved' }).success).toBe(false);
+    expect(ActionOperationGetV2RequestSchema.safeParse({ ...refresh, refreshSetupReview: false }).success).toBe(false);
     expect(ActionOperationGetV1RequestSchema.safeParse({ operationId: 'operation', waitForTerminal: true }).success).toBe(true);
     expect(ActionOperationGetV1RequestSchema.safeParse({ operationId: 'operation', waitForTerminal: true, includeSetupReview: true }).success).toBe(true);
     expect(ActionOperationGetV1RequestSchema.safeParse({ operationId: 'operation', includeSetupReview: true }).success).toBe(false);

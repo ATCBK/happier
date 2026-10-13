@@ -3,7 +3,7 @@ import { z } from 'zod';
 import { lazyZodSchema } from '../../lazyZodSchema.js';
 import { TerminalStreamReadRequestSchema, TerminalStreamReadOkResponseSchema } from '../../terminal/stream.js';
 import { ActionOperationListV1RequestSchema, ActionOperationListV1ResponseSchema,
-  ActionOperationGetV1RequestSchema, ActionOperationGetV1ResponseSchema,
+  ActionOperationGetV1RequestSchema, ActionOperationGetV2RequestSchema, ActionOperationGetV1ResponseSchema,
   ActionOperationCancelV1ResponseSchema } from '../operations/v1.js';
 import type { PreNormalizedActionSpec } from '../actionSpecs.js';
 import type { ActionInputFieldHint } from '../actionInputHintsRuntime.js';
@@ -22,7 +22,7 @@ export const ActionOperationAddressV1Schema = lazyZodSchema(() => z.object({
 export const ActionOperationListActionInputV1Schema = lazyZodSchema(() =>
   ActionOperationListV1RequestSchema.safeExtend(homeMachine).strict());
 export const ActionOperationGetActionInputV1Schema = lazyZodSchema(() =>
-  ActionOperationGetV1RequestSchema.safeExtend(homeMachine).strict());
+  ActionOperationGetV2RequestSchema.safeExtend(homeMachine).strict());
 
 // The terminal owner defines every cursor, credit and byte boundary. Only its
 // terminal address is replaced by a qualified operation address at this seam.
@@ -94,7 +94,8 @@ const inputFields = {
     { path: 'cursor', title: 'Page cursor', widget: 'text' }],
   'action.operations.get': [...operationFields,
     { path: 'waitForTerminal', title: 'Wait for completion', widget: 'boolean' },
-    { path: 'includeSetupReview', title: 'Include setup review', widget: 'boolean' }],
+    { path: 'includeSetupReview', title: 'Include setup review', widget: 'boolean' },
+    { path: 'refreshSetupReview', title: 'Refresh setup review', widget: 'boolean' }],
   'action.operations.cancel': operationFields,
   'projects.execution.output.read': outputFields,
   'projects.execution.output.open': operationFields,

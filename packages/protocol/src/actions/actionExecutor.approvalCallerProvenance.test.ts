@@ -8,7 +8,8 @@ import {
   type ApprovalRequest,
   type ApprovalRequestV1,
 } from '../approvals/approvalRequestV1.js';
-import { createActionExecutor } from './actionExecutor.js';
+import { buildApprovalExecutionOriginV1, createActionExecutor } from './actionExecutor.js';
+import { getActionSpec } from './actionSpecs.js';
 import { createWorkflowAccountRunActionOwner, type WorkflowAccountRunActionDeps } from './executor/workflowRunActions.js';
 import { WorkflowRunSummaryV1Schema } from '../workflows/workflowProgressV1.js';
 import { openWorkflowAcceptedSnapshotStoredEnvelopeV1, parseWorkflowStoredContentEnvelopeV1 } from '../workflows/workflowStoredContentV1.js';
@@ -35,6 +36,26 @@ const sessionSpawnInput = {
 } as const;
 
 describe('createActionExecutor (durable plugin approval caller provenance)', () => {
+  it.each([false, true])('captures input-dependent Provider machine placement without turning Account configuration into machine work (reviewed=%s)', reviewed => {
+    const input = {
+      action: 'createContribution' as const, connectionId: 'pc_reviewed', contributionKey: 'example.provider/source',
+      displayName: null, savedSecretId: null, enable: false,
+      // A machine hint alone does not make Account configuration machine-bound.
+      machineId: 'machine-reviewed',
+      ...(reviewed ? { authoringReview: { candidateId: 'discovery-candidate:v1:test', fingerprint: 'authoring-review:v1:test',
+        revision: 1, endpointOverrides: [] } } : {}),
+    };
+    const actionId = 'providers.connections.create_contribution';
+    const admittedInput = getActionSpec(actionId).inputSchema.parse(input);
+    // Real placement/spec/input parsing produce the origin, then its exact
+    // strict consumer accepts it. The UI seam suite covers durable execution.
+    const origin = ApprovalExecutionOriginV1Schema.parse(buildApprovalExecutionOriginV1({
+      actionId, input: admittedInput, targetSessionId: null,
+      context: { surface: 'ui', authority: 'present_user', serverId: 'home-provider', runtimeAccountId: 'account-provider',
+        actionRequestId: 'provider-create-request' },
+    }));
+    expect(origin.machineId).toBe(reviewed ? input.machineId : undefined);
+  });
   it.each([true, false])('routes unsigned Account replay through the deciding profile only after Home verification (%s)', async (homeCurrent) => {
     let stored: ApprovalRequest | null = null;
     const contexts: ActionExecutorContext[] = [];

@@ -79,12 +79,13 @@ describe('Composer state mutation Actions', () => {
       surfaces: { ui: true, voice: false, agent: false, mcp: false, cli: false, rpc: false },
     });
   });
-  it('keeps existing-session MCP selection behind the UI Action front door', () => {
-    expect(getActionSpec('session.mcp_selection.set')).toMatchObject({
+  it('uses one Session capability Action on the UI and automation surfaces', () => {
+    expect(getActionSpec('session.capabilities.set')).toMatchObject({
       sideEffectClass: 'write',
-      safety: 'safe',
+      safety: 'danger',
+      approval: { result: 'required', flow: 'deferred' },
       placements: [],
-      surfaces: { ui: true, voice: false, agent: false, mcp: false, cli: false, rpc: false },
+      surfaces: { ui: true, voice: false, agent: true, mcp: true, cli: true, rpc: true },
     });
   });
   it('defaults connected-account routing changes to approval', () => {
@@ -416,8 +417,6 @@ const RESULT_REQUIRED_BLOCKING_ACTION_IDS = [
   'memory.search',
   'memory.get_window',
   'memory.ensure_up_to_date',
-  'daemon.promptAssets.discover',
-  'daemon.promptRegistry.scanSource',
   'daemon.filesystem.readFile',
   'daemon.filesystem.listDirectory',
   'daemon.filesystem.getDirectoryTree',
@@ -614,13 +613,11 @@ const RESULT_OPTIONAL_DEFERRED_ACTION_IDS = [
   'session.user_action.answer',
   'session.mode.set',
   'session.config_option.set',
-  'session.mcp_selection.set',
   'session.connected_services_auth.set',
   'session.target.primary.set',
   'session.target.tracked.set',
   'ui.voice_agent.teleport',
   'daemon.promptAssets.delete',
-  'daemon.promptRegistry.install',
   'daemon.filesystem.writeFile',
   'bugreport.uploadArtifact',
   'transcript.import',
@@ -842,11 +839,11 @@ describe('Action Spec Registry', () => {
     }
   });
 
-  it('surfaces plugin inspect actions to UI without exposing scaffold/install', () => {
+  it('surfaces plugin inspection and install to UI while keeping scaffold and uninstall internal', () => {
     expect(getActionSpec('plugins.list').surfaces.ui).toBe(true);
     expect(getActionSpec('plugins.reload').surfaces.ui).toBe(true);
     expect(getActionSpec('plugins.scaffold').surfaces.ui).toBe(false);
-    expect(getActionSpec('plugins.install').surfaces.ui).toBe(false);
+    expect(getActionSpec('plugins.install').surfaces).toMatchObject({ ui: true, agent: true, mcp: true });
     expect(getActionSpec('plugins.uninstall').surfaces.ui).toBe(false);
   });
 
@@ -1363,10 +1360,8 @@ describe('Action Spec Registry', () => {
     expect(getActionSpec('memory.ensure_up_to_date').surfaces.plugin).toBe(true);
     expect(getActionSpec('session.permission_mode.set').surfaces.plugin).toBe(true);
     expect(PluginInvocableActionIdSchema.safeParse('session.permission_mode.set').success).toBe(true);
-    expect(getActionSpec('daemon.promptAssets.discover').surfaces.plugin).toBe(true);
+    expect(getActionSpec('skills.found.list').surfaces.plugin).toBe(true);
     expect(getActionSpec('daemon.promptAssets.delete').surfaces.plugin).toBe(true);
-    expect(getActionSpec('daemon.promptRegistry.scanSource').surfaces.plugin).toBe(true);
-    expect(getActionSpec('daemon.promptRegistry.install').surfaces.plugin).toBe(true);
     expect(getActionSpec('sessions.external.materialize.start').surfaces.plugin).toBe(true);
     // CONTRACTS.md C1: the six-method `SessionsService.external` contextual
     // service is the author capability. Candidate discovery, linking,
@@ -3302,6 +3297,7 @@ describe('Action Spec Registry', () => {
 
   it('binds approval queue RPC wire methods to ActionSpec rows', () => {
     const expectedBindings = new Map([
+      ['skills.found.list', RPC_METHODS.SKILLS_FOUND_LIST],
       ['approval.request.list', 'approval.request.list'],
       ['approval.request.get', 'approval.request.get'],
       ['approval.request.create', 'approval.request.create'],
@@ -4102,7 +4098,7 @@ describe('Action Spec Registry', () => {
       optionsSourceId: 'sessions.spawn.connected_services.available',
     });
     expect(fieldsByPath.get('capabilitySelection')).toMatchObject({
-      optionsSourceId: 'sessions.spawn.mcp_servers.preview',
+      optionsSourceId: 'sessions.spawn.capabilities.preview',
     });
     expect(fieldsByPath.has('backendTargetKey')).toBe(false);
     expect(fieldsByPath.has('modelId')).toBe(false);
@@ -4283,6 +4279,24 @@ describe('Action Spec Registry', () => {
     expect(spec.placements).toContain('session_info');
   });
 
+  it('preserves rich resume intent only for its exact headless Session address', () => {
+    const schema = getActionSpec('session.open').inputSchema;
+    const resumeRequest = { type: 'resume-session', sessionId: 'session-1', directory: '/repo',
+      backendTarget: { kind: 'backend', backendId: 'claude', sourceKind: 'built_in' }, resume: 'native-session',
+      environmentVariables: { PROJECT: 'workspace' }, permissionMode: 'read-only', permissionModeUpdatedAt: 2,
+      connectedServices: null, accountSettingsVersionHint: 4, initialTranscriptAfterSeq: 19,
+      initialGoal: { objective: 'Finish the task', tokenBudget: 100 }, spawnNonce: 'resume-attempt' };
+    const input = { sessionId: 'session-1', serverId: 'home', intent: 'resume', resumeRequest };
+    expect(schema.parse(input)).toEqual(input);
+    for (const invalid of [
+      { ...input, sessionId: 'another-session' },
+      { ...input, intent: undefined },
+      { ...input, tabId: 'tab' },
+      { ...input, resumeRequest: { ...resumeRequest, requesterSessionBootstrap: {} } },
+      { ...input, resumeRequest: { ...resumeRequest, machineAdmission: {} } },
+    ]) expect(schema.safeParse(invalid).success).toBe(false);
+  });
+
   it('keeps daemon-owned workspace endpoint identity out of the public handoff input', () => {
     const inputSchema = PUBLIC_ACTION_INPUT_SCHEMAS['session.handoff'];
     const declaredKeys = Object.keys((inputSchema as unknown as { shape: Record<string, unknown> }).shape);
@@ -4395,10 +4409,7 @@ describe('Action Spec Registry', () => {
 
   it('binds daemon administrative RPC methods to ActionSpec rows', () => {
     const expectedBindings = new Map([
-      ['daemon.promptAssets.discover', RPC_METHODS.DAEMON_PROMPT_ASSETS_DISCOVER],
       ['daemon.promptAssets.delete', RPC_METHODS.DAEMON_PROMPT_ASSETS_DELETE],
-      ['daemon.promptRegistry.scanSource', RPC_METHODS.DAEMON_PROMPT_REGISTRY_SCAN_SOURCE],
-      ['daemon.promptRegistry.install', RPC_METHODS.DAEMON_PROMPT_REGISTRY_INSTALL],
       ['daemon.filesystem.listRoots', RPC_METHODS.DAEMON_FILESYSTEM_LIST_ROOTS],
       ['daemon.filesystem.browseDirectory', RPC_METHODS.DAEMON_FILESYSTEM_LIST_DIRECTORY],
       ['bugreport.collectDiagnostics', RPC_METHODS.BUGREPORT_COLLECT_DIAGNOSTICS],

@@ -327,9 +327,6 @@ export const UI_FEATURE_REGISTRY = {
     'prompts.assets.external': {
         settingsToggle: undefined,
     },
-    'prompts.skills.registries': {
-        settingsToggle: undefined,
-    },
     'sessions.direct': {
         settingsToggle: {
             showInSettings: true,
