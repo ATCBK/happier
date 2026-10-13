@@ -1,6 +1,6 @@
 import axios from 'axios';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
-import { deriveSessionCreationTagV1, SessionSpawnNewInputV2Schema, normalizeActionsSettingsV1, type ActionExecutorContext } from '@happier-dev/protocol';
+import { deriveSessionCreationTagV1, SessionSpawnNewInputV2Schema, SessionSpawnNewResultV1Schema, normalizeActionsSettingsV1, type ActionExecutorContext } from '@happier-dev/protocol';
 import { RPC_METHODS } from '@happier-dev/protocol/rpc';
 
 import { configuration, reloadConfiguration } from '@/configuration';
@@ -16,6 +16,18 @@ import { captureStdoutJsonOutput } from '@/testkit/logger/captureOutput';
 import { SIGNED_ROOT_ACTION_EXECUTE_PATH, SignedRootActionExecuteRequestSchema } from '@/daemon/externalActions/signedRootActionControl';
 import { executeExternalAction } from '@/daemon/externalActions/executeExternalAction';
 import { createCliActionDeps, type SessionSpawnDirectTargetTransport } from '@/session/actions/createCliActionDeps';
+import { mkdtemp, rm } from 'node:fs/promises';
+import { tmpdir } from 'node:os';
+import { join } from 'node:path';
+import { createOnHappySessionWebhook } from '@/daemon/sessions/onHappySessionWebhook';
+import { createSessionStartupReadinessHandler } from '@/daemon/startup/sessionStartupReadiness';
+import { waitForSessionWebhook } from '@/daemon/spawn/waitForSessionWebhook';
+import { hashProcessCommand, promoteSessionMarkerPid, readSessionMarkerForPid, writeSessionMarker } from '@/daemon/sessionRegistry';
+import { createAgentRuntimeDaemonServiceAuthorityPath } from '@/daemon/agentRuntime/sessionBridgeAuthorization';
+import { refreshTrackedRunnerAgentRuntimeDaemonServiceAuthority } from '@/daemon/agentRuntime/refreshTrackedRunnerAgentRuntimeDaemonServiceAuthority';
+import { createAgentSessionRunnerFactoryBinding } from '@/plugins/runtime/runner/agentSessionRunnerFactoryBinding';
+import type { TrackedSession } from '@/daemon/types';
+import { buildSessionRunnerRespawnDescriptorV1FromSpawnOptions } from '@/daemon/processSupervision/sessionRunnerRespawnDescriptor';
 
 const boundary = vi.hoisted(() => ({ readCredentials: vi.fn(), readSettings: vi.fn(), readDaemonState: vi.fn(), fetchSession: vi.fn(), currentness: vi.fn() }));
 // Filesystem credential/settings reads and HTTP requests are system boundaries.
@@ -87,7 +99,7 @@ describe('daemon RPC to protected Session input admission composition', () => {
   });
   afterEach(() => { release?.(); release = undefined; vi.unstubAllGlobals(); });
 
-  function registerSpawnBoundary(mode: 'plain' | 'e2ee' = 'e2ee') {
+  function registerSpawnBoundary(mode: 'plain' | 'e2ee' = 'e2ee', launch?: SessionSpawnDirectTargetTransport['spawnedSession']['spawn']) {
     const handlers = new Map<string, RpcHandler>();
     let spawned = false;
     const rpcHandlerManager: RpcHandlerRegistrar = { registerHandler: (method, handler) => { handlers.set(method, handler); } };
@@ -105,6 +117,7 @@ describe('daemon RPC to protected Session input admission composition', () => {
                 machineId, permissionMode: 'yolo', sessionCreationCorrespondenceV1: request.sessionCreationCorrespondence,
               })) : JSON.stringify({ machineId, permissionMode: 'yolo', sessionCreationCorrespondenceV1: request.sessionCreationCorrespondence }),
             }));
+            if (launch) return await launch(request);
             return { type: 'success', sessionId, sessionCreationOutcome: { disposition: 'created', organizationPlacement: { folderId: null, tagIds: [] } } };
           },
           resolveSpawnSessionByNonce: async () => ({ status: 'not_found' }),
@@ -130,6 +143,86 @@ describe('daemon RPC to protected Session input admission composition', () => {
       connectedServices: { v: 2, bindingsByServiceId: {} }, initialInput: { text: 'first protected prompt' },
     });
   }
+
+  it('settles wrapper startup through canonical readiness, then produces strict success with admitted input', async () => {
+    const home = await mkdtemp(join(tmpdir(), 'happier-spawn-readiness-seam-'));
+    const originalHome = Object.getOwnPropertyDescriptor(configuration, 'happyHomeDir')!;
+    Object.defineProperty(configuration, 'happyHomeDir', { ...originalHome, value: home });
+    const wrapperPid = 649131;
+    const runnerPid = 649132;
+    const readIdentity = async (pid: number) => ({
+      pid, processStartTimeMs: pid === wrapperPid ? 12_345 : 23_456,
+      command: pid === wrapperPid ? '/runtime/scope-exit' : `/runtime/versions/1.2.3/bin/happier codex --existing-session ${sessionId}`,
+    });
+    try {
+      release = installDaemonMachineAdmissionTransport({ serverId: configuration.activeServerId, transport });
+      const authorityPath = await createAgentRuntimeDaemonServiceAuthorityPath({ happyHomeDir: home, publicReleaseRing: configuration.publicReleaseRing });
+      const binding = createAgentSessionRunnerFactoryBinding({
+        v: 1, pluginId: 'happier.agent.codex', pluginVersion: '1.2.3', agentId: 'codex', localAgentId: 'codex',
+        sourceCustody: { kind: 'bundled_first_party', packagedRuntime: { kind: 'cli_version_root', versionRootId: '1.2.3' } },
+        locator: { module: './agent.mjs', export: 'createRuntime', runtimeApiVersion: 1 }, normalizedModulePath: 'agent.mjs', loadMode: 'immutable-js',
+      });
+      const { spawn } = registerSpawnBoundary('e2ee', async (request) => {
+        const tracked: TrackedSession = {
+          pid: wrapperPid, startedBy: 'daemon', happySessionId: `PID-${wrapperPid}`,
+          processStartTimeMs: 12_345, processCommandHash: hashProcessCommand((await readIdentity(wrapperPid)).command),
+          agentRuntimeDaemonServiceAuthorityFilePath: authorityPath,
+          runnerAgentBootstrapIdentity: { agentId: binding.agentId, backendId: binding.agentId },
+          acceptedSpawnMarkerGate: Promise.resolve(true),
+          spawnOptions: request,
+        };
+        const respawn = buildSessionRunnerRespawnDescriptorV1FromSpawnOptions(tracked.spawnOptions!);
+        if (!respawn) throw new Error('Expected canonical fixture respawn descriptor');
+        await writeSessionMarker({
+          pid: wrapperPid, happySessionId: tracked.happySessionId!, startedBy: 'daemon', cwd: '/repo',
+          processStartTimeMs: tracked.processStartTimeMs, processCommandHash: tracked.processCommandHash, respawn,
+        });
+        const sessions = new Map([[wrapperPid, tracked]]);
+        const awaiters = new Map<number, (session: TrackedSession) => void>();
+        const completed = waitForSessionWebhook({
+          pid: wrapperPid, pidToTrackedSession: sessions, pidToAwaiter: awaiters,
+          pidToSpawnResultResolver: new Map(), pidToSpawnWebhookTimeout: new Map(), timeoutErrorMessage: 'Fixture startup did not settle',
+        });
+        const report = createSessionStartupReadinessHandler({
+          onHappySessionWebhook: createOnHappySessionWebhook({
+            pidToTrackedSession: sessions, pidToAwaiter: awaiters, getParentPidFn: () => wrapperPid,
+            readProcessIdentityByPidFn: readIdentity, readCredentialsFn: async () => null,
+            promoteSessionMarkerFn: (fromPid, toPid) => promoteSessionMarkerPid(fromPid, toPid, { readProcessIdentityByPidFn: readIdentity }),
+          }),
+          reconcileCanonicalReadiness: async (candidate) => {
+            // The catalog fixture comes from its canonical binding producer; authority,
+            // generation fences and persisted marker attachment execute their real owners.
+            await refreshTrackedRunnerAgentRuntimeDaemonServiceAuthority({
+              happyHomeDir: home, publicReleaseRing: configuration.publicReleaseRing, httpPort: 3210,
+              sessionId, tracked: candidate, resolveCurrentRetainedAgent: async () => binding, readProcessIdentityByPidFn: readIdentity,
+            });
+          },
+          reconcileFollowUp: async () => {}, onFollowUpError: error => { throw error; },
+        });
+        const reporting = report(sessionId, {
+          path: '/repo', host: 'fixture', homeDir: home, happyHomeDir: home, happyLibDir: home, happyToolsDir: home,
+          hostPid: runnerPid, startedBy: 'daemon', machineId,
+        }, undefined, { disposition: 'created', organizationPlacement: { folderId: null, tagIds: [] } });
+        // Failure still settles the real waiter; observe it before reporting the error.
+        const outcomes = await Promise.allSettled([reporting, completed]);
+        if (outcomes[0].status === 'rejected') throw outcomes[0].reason;
+        if (outcomes[1].status === 'rejected') throw outcomes[1].reason;
+        expect(await readSessionMarkerForPid(runnerPid)).toMatchObject({
+          happySessionId: sessionId, processStartTimeMs: 23_456, runnerAgentSourceCustodyV1: binding.sourceCustody,
+        });
+        expect(tracked.processStartTimeMs).toBe(12_345);
+        return outcomes[1].value;
+      });
+      // This is the production RPC producer's output parsed by the exact UI consumer.
+      const result = SessionSpawnNewResultV1Schema.parse(await spawn(spawnInput()));
+      expect(result).toMatchObject({ type: 'success', sessionId, disposition: 'created', initialInput: { status: 'accepted' } });
+      expect(admitted).toHaveLength(1);
+      expect(admitted[0].sessionId).toBe(sessionId);
+    } finally {
+      Object.defineProperty(configuration, 'happyHomeDir', originalHome);
+      await rm(home, { recursive: true, force: true });
+    }
+  }, 120_000);
 
   it('admits RPC spawn initialInput, causal follow-up and execution-run recipient through the process-owned socket', async () => {
     release = installDaemonMachineAdmissionTransport({ serverId: configuration.activeServerId, transport });
