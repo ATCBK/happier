@@ -74,6 +74,7 @@
     "projectNativeAdapters": [],
     "promptAssets": [],
     "providers": [],
+    "registrySources": [],
     "requestInterceptors": [],
     "resources": [
       {
