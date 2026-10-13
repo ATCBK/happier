@@ -45,6 +45,7 @@ type CoordinatorFailure = Readonly<{
 type CoordinatorExecutionResult = ActionExecuteResult | Readonly<{ kind: 'cancelled' }>;
 
 export type SessionHandoffCoordinatorPort = Readonly<{
+  assertExistingStateSupported: (input: SessionHandoffCoordinatorInput) => Promise<void>;
   probeSourceCapability?: (input: SessionHandoffCoordinatorInput) => Promise<unknown>;
   probeTargetCapability: (input: SessionHandoffCoordinatorInput) => Promise<unknown>;
   startSource: (request: Readonly<{
@@ -218,6 +219,7 @@ export function createSessionHandoffCoordinator(port: SessionHandoffCoordinatorP
       if (!capability.existingState || sourceCapability?.existingState !== true) {
         throw new Error('Both daemons must support existing session state handoff');
       }
+      await port.assertExistingStateSupported(input);
     }
     if (sameMachine && !capability.sameMachineHandoff) {
       throw new Error('Target daemon does not support safe same-machine session handoff');

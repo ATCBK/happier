@@ -490,6 +490,7 @@ const sessionHandoffTranslationExtensions = {
       title: "セッションデータを転送",
       subtitle: "このセッションの会話履歴を別のマシンにコピーします。すでにある場合はオフにしてください。",
       checking: "両方のマシンで対応状況を確認中…",
+      agentRequiresTransfer: "このエージェントでは、マシン間でセッションデータを転送する必要があります。",
       updateRequired: "オフにするには両方のマシンのHappierを更新してください。",
       sessionMissing: "転送先のマシンにこのセッションの会話履歴がありません。「セッションデータを転送」をオンにして再試行してください。",
       workspaceRequiresTransfer: "ワークスペースのファイルをコピーまたは同期するには「セッションデータを転送」をオンにしてください。",

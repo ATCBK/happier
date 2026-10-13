@@ -4,7 +4,7 @@ import { join } from 'node:path';
 
 import { describe, expect, it, vi } from 'vitest';
 
-import type { SessionHandoffPrepareTargetRequestV2 } from '@happier-dev/protocol';
+import { FeaturesResponseSchema, type ActionOperationSnapshotV1, type SessionHandoffPrepareTargetRequestV2 } from '@happier-dev/protocol';
 import { RPC_METHODS } from '@happier-dev/protocol/rpc';
 
 async function removeTestDirectory(path: string): Promise<void> {
@@ -150,7 +150,61 @@ describe('rpcHandlers (session handoff async prepare)', () => {
         expect(failed).toMatchObject({ status: { status: 'awaiting_recovery' } });
         expect(failed).not.toHaveProperty('prepareTargetResult');
       }, { timeout: 10_000 });
-      expect(await missingManager.invokeLocal(RPC_METHODS.DAEMON_SESSION_HANDOFF_PREPARE_TARGET_RESULT_GET_V2, { handoffId: 'existing-missing', sessionId: request.sessionId })).toMatchObject({ ok: false, errorCode: 'awaiting_recovery' });
+      const missingResult = await missingManager.invokeLocal(RPC_METHODS.DAEMON_SESSION_HANDOFF_PREPARE_TARGET_RESULT_GET_V2, { handoffId: 'existing-missing', sessionId: request.sessionId });
+      expect(missingResult).toMatchObject({ ok: false, errorCode: 'existing_session_state_unavailable' });
+      expect(await createHandlers().invokeLocal(RPC_METHODS.DAEMON_SESSION_HANDOFF_PREPARE_TARGET_RESULT_GET_V2, { handoffId: 'existing-missing', sessionId: request.sessionId })).toEqual(missingResult);
+      environmentReady = undefined;
+      expect(await missingManager.invokeLocal(RPC_METHODS.DAEMON_SESSION_HANDOFF_PREPARE_TARGET_V2, { ...request, handoffId: 'existing-missing-immediate' })).toMatchObject({ ok: false, errorCode: 'existing_session_state_unavailable' });
+      const { createSessionHandoffCoordinator } = await import('../../session/handoff/orchestration/sessionHandoffCoordinator');
+      const { resolveExistingSessionHandoffEligibilityThroughCatalog } = await import('@/backends/catalog');
+      const { createActionOperationRunner } = await import('../../daemon/actionOperations/actionOperationRunner');
+      const { createActionOperationStore } = await import('../../daemon/actionOperations/actionOperationStore');
+      const { createTrackedSessionHandoffStart } = await import('../../daemon/actionOperations/trackedSessionHandoffStart');
+      const snapshots: ActionOperationSnapshotV1[] = [];
+      const operationStore = createActionOperationStore({ onRevision: (snapshot) => snapshots.push(snapshot) });
+      const trackedStart = createTrackedSessionHandoffStart({
+        runner: createActionOperationRunner({ store: operationStore }),
+        getScope: async () => ({ accountId: 'handoff-test-account', machineId: 'source' }),
+        startUntracked: async (payload) => missingManager.invokeLocal(RPC_METHODS.DAEMON_SESSION_HANDOFF_START, payload),
+        coordinate: async (input, context, startSource) => {
+          const call = (method: string, payload: unknown) => missingManager.invokeLocal(method, payload);
+          const coordinator = createSessionHandoffCoordinator({
+            assertExistingStateSupported: async () => {
+              const eligibility = resolveExistingSessionHandoffEligibilityThroughCatalog(metadata);
+              if (!eligibility.eligible) throw new Error(eligibility.reasonCode);
+            },
+            probeSourceCapability: async () => call(RPC_METHODS.DAEMON_SESSION_HANDOFF_CAPABILITY_V2_GET, {}),
+            probeTargetCapability: async () => call(RPC_METHODS.DAEMON_SESSION_HANDOFF_CAPABILITY_V2_GET, {}),
+            startSource,
+            prepareTarget: async (payload) => call(RPC_METHODS.DAEMON_SESSION_HANDOFF_PREPARE_TARGET_V2, payload),
+            getTargetPrepareResult: async (payload) => call(RPC_METHODS.DAEMON_SESSION_HANDOFF_PREPARE_TARGET_RESULT_GET_V2, payload),
+            getTargetStatus: async (payload) => call(RPC_METHODS.DAEMON_SESSION_HANDOFF_STATUS_GET, payload),
+            resumeTarget: async (payload) => call(RPC_METHODS.DAEMON_SESSION_HANDOFF_TARGET_RESUME_V2, payload),
+            confirmTarget: async (payload) => call(RPC_METHODS.DAEMON_SESSION_HANDOFF_TARGET_CONFIRM_V2, payload),
+            commitTarget: async (payload) => call(RPC_METHODS.DAEMON_SESSION_HANDOFF_COMMIT_V2, payload),
+            cleanupSource: async (payload) => call(RPC_METHODS.DAEMON_SESSION_HANDOFF_COMMIT, payload),
+            abortTarget: async (payload) => call(RPC_METHODS.DAEMON_SESSION_HANDOFF_ABORT_V2, payload),
+            abortSource: async (payload) => call(RPC_METHODS.DAEMON_SESSION_HANDOFF_ABORT, payload),
+            bindTarget: async () => { throw new Error('A missing native session must not bind the target'); },
+            wait: async () => new Promise((resolve) => setTimeout(resolve, 0)),
+            readServerFeatures: async () => FeaturesResponseSchema.parse({ features: { sessions: { enabled: true, handoff: { enabled: true } } }, capabilities: {} }),
+            directPeerAvailable: false,
+            preferredTransportStrategies: input.preferredTransportStrategies,
+          });
+          return (await coordinator.admit(input)).execute(context);
+        },
+      });
+      const admission = await trackedStart({
+        requestId: 'existing-missing-composed', sessionId: request.sessionId,
+        sourceMachineId: request.sourceMachineId, targetMachineId: request.targetMachineId,
+        sessionStorageMode: 'persisted', stateTransfer: 'existing', preferredTransportStrategies: ['direct_peer'],
+      });
+      expect(admission).toHaveProperty('handoffId');
+      await vi.waitFor(() => expect(snapshots.at(-1)).toMatchObject({
+        state: 'failed', error: { errorCode: 'existing_session_state_unavailable', error: 'Claude existing native session is unreachable' },
+      }), { timeout: 10_000 });
+      const outputPath = process.env.HAPPIER_HANDOFF_FAILURE_TEST_OUTPUT;
+      if (outputPath) await writeFile(outputPath, JSON.stringify({ admission, terminal: snapshots.at(-1), prepareResult: missingResult }));
     } finally {
       if (previousClaudeHome === undefined) delete process.env.CLAUDE_CONFIG_DIR;
       else process.env.CLAUDE_CONFIG_DIR = previousClaudeHome;

@@ -136,6 +136,7 @@ export type AgentResumeConfig = Readonly<{
 
 export type AgentHandoffConfig = Readonly<{
     vendorStateTransfer: VendorHandoffSupportLevel;
+    existingState?: boolean;
     requiresExplicitSessionId?: boolean;
 }>;
 

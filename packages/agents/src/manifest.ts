@@ -60,7 +60,7 @@ export const AGENTS_CORE = {
             sessionRollback: { conversation: 'unsupported' },
             usageLimitRecovery: { checkNow: 'supported' },
         },
-        handoff: { vendorStateTransfer: 'supported' },
+        handoff: { vendorStateTransfer: 'supported', existingState: true },
         localControl: { supported: true, topology: 'exclusive', attachStrategy: 'tmux' },
         runtimeInput: {
             inFlightSteerSupported: true,
@@ -151,7 +151,7 @@ export const AGENTS_CORE = {
                 },
             },
         },
-        handoff: { vendorStateTransfer: 'experimental', requiresExplicitSessionId: true },
+        handoff: { vendorStateTransfer: 'experimental', requiresExplicitSessionId: true, existingState: true },
         localControl: { supported: true, topology: 'exclusive', attachStrategy: 'tmux' },
         tools: { delivery: 'native_mcp', support: 'supported' },
         media: {

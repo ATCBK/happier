@@ -483,6 +483,7 @@ const sessionHandoffTranslationExtensions = {
       title: "Przenieś dane sesji",
       subtitle: "Kopiuje historię rozmowy tej sesji na drugi komputer. Wyłącz, jeśli już tam jest.",
       checking: "Sprawdzanie obsługi na obu komputerach…",
+      agentRequiresTransfer: "Ten Agent wymaga przeniesienia danych sesji między komputerami.",
       updateRequired: "Zaktualizuj Happier na obu komputerach, aby wyłączyć tę opcję.",
       sessionMissing: "Na komputerze docelowym nie ma historii tej sesji. Włącz „Przenieś dane sesji” i spróbuj ponownie.",
       workspaceRequiresTransfer: "Włącz „Przenieś dane sesji”, aby kopiować lub synchronizować pliki obszaru roboczego.",
