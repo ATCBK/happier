@@ -5,6 +5,20 @@ async function loadHandoffModule() {
 }
 
 describe('session handoff schemas', () => {
+  it('carries explicit existing-state intent and refuses simultaneous workspace copying', async () => {
+    const mod = await loadHandoffModule();
+    expect(mod).not.toHaveProperty('error');
+    if ('error' in mod) return;
+    const start = { sessionId: 'session_1', sourceMachineId: 'source', targetMachineId: 'target', sessionStorageMode: 'persisted', preferredTransportStrategies: ['direct_peer'], stateTransfer: 'existing' };
+    expect(mod.SessionHandoffStartRequestSchema.parse(start).stateTransfer).toBe('existing');
+    const prepare = { sessionId: 'session_1', handoffId: 'handoff_1', sourceMachineId: 'source', targetMachineId: 'target', sourceSessionStorageMode: 'persisted', negotiatedTransportStrategy: 'direct_peer', targetPath: '/repo', stateTransfer: 'existing' };
+    expect(mod.SessionHandoffPrepareTargetRequestV2Schema.parse(prepare).stateTransfer).toBe('existing');
+    for (const [schema, value] of [[mod.SessionHandoffStartRequestSchema, start], [mod.SessionHandoffPrepareTargetRequestV2Schema, prepare]] as const) {
+      expect(schema.safeParse({ ...value, workspaceTransfer: { enabled: true, conflictPolicy: 'replace_existing' } }).success).toBe(false);
+      expect(schema.safeParse({ ...value, stateTransfer: 'unknown' }).success).toBe(false);
+    }
+  });
+
   it('preserves every advertised endpoint across source export and target preparation', async () => {
     const mod = await loadHandoffModule();
     expect(mod).not.toHaveProperty('error');

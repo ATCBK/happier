@@ -38,6 +38,69 @@ describe('SDKToLogConverter tool result mode metadata', () => {
     expect(toolResult).toMatchObject({ origin: { kind: 'peer' }, message: { content: toolContent } });
   });
 
+  it.each([false, true])('preserves the explicit SDK parent scope for a root task-only notification (before ACK=%s)', beforeAck => {
+    const converter = createConverter();
+    const terminal = { type: 'system' as const, subtype: 'task_notification' as const, session_id: conversionContext.sessionId, uuid: 'nested-root-terminal', task_id: 'nested-scoped-agent', status: 'completed' as const, output_file: '/tmp/child.output', summary: 'Nested scoped outcome' };
+    converter.convert({ type: 'system', subtype: 'task_started', uuid: 'optional-start', session_id: conversionContext.sessionId, task_id: 'nested-scoped-agent', description: 'Nested task' });
+    if (beforeAck) expect(converter.convert(terminal)).toBeNull();
+    const acknowledged = converter.convert({ type: 'user', uuid: 'nested-scope-ack', parent_tool_use_id: 'parent-tool',
+      tool_use_result: { status: 'async_launched', agentId: 'nested-scoped-agent' },
+      message: { role: 'user', content: [{ type: 'tool_result', tool_use_id: 'nested-scoped-tool', content: 'Async agent launched successfully.' }] } });
+    const result = beforeAck ? acknowledged : converter.convert(terminal);
+    expect(result?.type).toBe('user');
+    expect(result?.sidechainId).toBe('parent-tool');
+    expect(result?.isSidechain).toBe(true);
+    expect(result?.origin).toMatchObject({ taskId: 'nested-scoped-agent', toolUseId: 'nested-scoped-tool' });
+    const explicitOther = converter.convert({ ...terminal, uuid: 'explicit-other', tool_use_id: 'other-tool' });
+    expect(explicitOther?.sidechainId).toBeUndefined();
+    expect(explicitOther?.origin).toMatchObject({ toolUseId: 'other-tool' });
+  });
+
+  it('uses the exact native SDK task-start identity when a terminal has no launching ACK', () => {
+    const converter = createConverter();
+    // Current native frames retain these extra fields beyond the installed SDK declaration.
+    const started = { type: 'system' as const, subtype: 'task_started' as const, session_id: conversionContext.sessionId,
+      uuid: 'native-start', description: 'Nested native task', task_id: 'native-child', tool_use_id: 'native-child-tool', task_type: 'local_agent', is_backgrounded: true, spawn_depth: 2 };
+    converter.convert(started);
+    const result = converter.convert({ type: 'system', subtype: 'task_notification', session_id: conversionContext.sessionId,
+      uuid: 'native-terminal', task_id: 'native-child', status: 'completed', output_file: '/tmp/child.output', summary: 'Native child outcome' });
+    expect(result?.type).toBe('user');
+    expect(result?.origin).toMatchObject({ kind: 'task-notification', taskId: 'native-child', toolUseId: 'native-child-tool' });
+  });
+
+  it('binds a task-only terminal received before its ACK once and clears it before a resume', () => {
+    const converter = createConverter();
+    const ack = { type: 'user' as const, uuid: 'late-ack', tool_use_result: { status: 'async_launched', agentId: 'early-sdk' }, message: { role: 'user' as const, content: [{ type: 'tool_result' as const, tool_use_id: 'early-sdk-tool', content: 'Async agent launched successfully.' }] } };
+    expect(converter.convert({ type: 'system', subtype: 'task_notification', task_id: 'early-sdk', status: 'completed', summary: 'Settled early', output_file: '/tmp/early.output', uuid: 'early-sdk-terminal', session_id: conversionContext.sessionId })).toBeNull();
+    const outcome = converter.convert(ack);
+    expect(outcome?.origin).toMatchObject({ kind: 'task-notification', taskId: 'early-sdk', toolUseId: 'early-sdk-tool' });
+    expect(outcome?.uuid).toBe('early-sdk-terminal');
+    const repeat = converter.convert({ ...ack, uuid: 'repeat-ack' });
+    expect(repeat?.origin).toBeUndefined();
+    converter.convert({ ...ack, uuid: 'resume-sdk', tool_use_result: { success: true, resumedAgentId: 'early-sdk' } });
+    const next = converter.convert({ ...ack, uuid: 'next-ack' });
+    expect(next?.origin).toBeUndefined();
+    converter.convert({ ...ack, uuid: 'second-resume', tool_use_result: { success: true, resumedAgentId: 'early-sdk' } });
+    expect(converter.convert({ type: 'system', subtype: 'task_notification', task_id: 'early-sdk', status: 'completed', summary: 'Resumed outcome', output_file: '/tmp/resumed.output', uuid: 'resumed-terminal', session_id: conversionContext.sessionId })).toBeNull();
+    const rebound = converter.convert({ ...ack, uuid: 'resumed-ack', message: { role: 'user', content: [{ type: 'tool_result', tool_use_id: 'resumed-tool', content: 'Async agent launched successfully.' }] } });
+    expect(rebound?.origin).toMatchObject({ taskId: 'early-sdk', toolUseId: 'resumed-tool' });
+    expect(rebound?.uuid).toBe('resumed-terminal');
+  });
+
+  it.each(['completed', 'failed', 'stopped'] as const)('projects SDK task %s onto its launching tool', status => {
+    const converter = createConverter();
+    converter.convert({ type: 'user', uuid: 'ack-506', tool_use_result: { status: 'async_launched', agentId: 'agent_506' },
+      message: { role: 'user', content: [{ type: 'tool_result', tool_use_id: 'toolu_506', content: 'Async agent launched successfully.' }] } });
+    const result = converter.convert({ type: 'system', subtype: 'task_notification', task_id: 'agent_506', status,
+      summary: 'Findings from agent', output_file: '/tmp/agent_506.output', uuid: 'done-506', session_id: conversionContext.sessionId });
+    expect(result?.type).toBe('user');
+    if (!result || result.type !== 'user') throw new Error('Missing SDK native tool outcome');
+    expect(result.origin).toMatchObject({ kind: 'task-notification', taskId: 'agent_506', toolUseId: 'toolu_506' });
+    expect(result.isMeta).not.toBe(true);
+    expect(result.message.content).toEqual([expect.objectContaining({ type: 'tool_result', tool_use_id: 'toolu_506',
+      is_error: status !== 'completed' })]);
+  });
+
   type ClaudeResponseMap = Parameters<typeof createConverter>[0];
   type ClaudeResponseValue = ClaudeResponseMap extends Map<string, infer TValue> | undefined ? TValue : never;
   type ClaudePermissionMode = ClaudeResponseValue extends { mode?: infer TMode } ? TMode : never;

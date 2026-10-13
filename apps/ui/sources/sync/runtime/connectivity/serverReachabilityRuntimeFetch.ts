@@ -1,4 +1,5 @@
 import { runtimeFetch } from '@/utils/system/runtimeFetch';
+import { withConnectedServiceReaderSupport } from '@happier-dev/protocol';
 
 import {
     reportServerAuthFailed,
@@ -89,7 +90,8 @@ export async function runtimeFetchWithServerReachability(params: Readonly<{
     });
 
     try {
-        const response = await runtimeFetch(params.url, { ...params.init, headers });
+        const requestUrl = hasAuth ? withConnectedServiceReaderSupport(params.url) : params.url;
+        const response = await runtimeFetch(requestUrl, { ...params.init, headers });
         await observeUiClientUpgradeRequiredResponse(response);
         if (hasAuth && isAuthenticationResponseStatus(response.status)) {
             reportServerAuthFailed(params.serverUrl, response.status);

@@ -7,6 +7,7 @@ import type { InFlightSteerPromptOptions } from '@/agent/runtime/permission/bind
 import type { CatalogAgentId } from '@/backends/types';
 import {
   AcpPromptSubmissionPhaseError,
+  type AcpBackend,
   type AcpPermissionHandler,
   type AcpPromptSubmissionEvidence,
   type SessionConfigOption,
@@ -66,7 +67,8 @@ import {
 } from '@/agent/acp/configOptionChoiceNormalization';
 import { readNonBlankSessionControlIdentifier } from '@/agent/runtime/sessionControlIdentifiers';
 import { readNonBlankOpaqueIdentifier } from '@/utils/opaqueIdentifiers';
-import { readPendingLocalId } from '@happier-dev/protocol';
+import { isGenericSubAgentToolName, readPendingLocalId } from '@happier-dev/protocol';
+import { canonicalizeToolNameV2 } from '@/agent/tools/normalization';
 import type {
   ProviderPromptSubmissionCallbacks,
   ProviderPromptWithMeta,
@@ -277,6 +279,8 @@ export type AcpRuntime = Readonly<{
    * No-op when unsupported or when the session has not been started/loaded.
    */
   setSessionMode: (modeId: string) => Promise<void>;
+  /** Restore the backend's mapped permission policy when a native mode override is cleared. */
+  clearSessionModeOverride?: () => Promise<void>;
   /**
    * Request a provider-native ACP session model change when supported.
    * No-op when unsupported or when the session has not been started/loaded.
@@ -305,7 +309,8 @@ export type AcpRuntimeSteerPromptOptions = InFlightSteerPromptOptions & Readonly
   onProviderPromptAccepted?: () => void;
 }>;
 
-export type AcpRuntimeBackend = Omit<AgentBackend, 'waitForResponseComplete'> & {
+export type AcpRuntimeBackend = Omit<AgentBackend, 'waitForResponseComplete' | 'dispose'> & {
+  dispose: AcpBackend['dispose'];
   waitForResponseComplete?: (timeoutMs?: number | null) => Promise<AcpTurnOutcome | void>;
   /**
    * ACP-owned prompt evidence. Unlike sendPrompt(), first-update liveness remains
@@ -323,6 +328,7 @@ export type AcpRuntimeBackend = Omit<AgentBackend, 'waitForResponseComplete'> & 
    * Optional provider-native ACP session mode change (e.g. "plan" vs "code").
    */
   setSessionMode?: (sessionId: string, modeId: string) => Promise<void>;
+  clearSessionModeOverride?: (sessionId: string) => Promise<void>;
   /**
    * Optional provider-native ACP session model change (UNSTABLE in ACP; may be unsupported).
    */
@@ -352,6 +358,15 @@ export type AcpRuntimeBackend = Omit<AgentBackend, 'waitForResponseComplete'> & 
 function asRecord(value: unknown): Record<string, unknown> | null {
   if (!value || typeof value !== 'object' || Array.isArray(value)) return null;
   return value as Record<string, unknown>;
+}
+
+function sidechainFailureDetails(phase: 'replay' | 'fallback' | 'dispose', error: unknown) {
+  const code = asRecord(error)?.code;
+  return {
+    phase,
+    errorType: error instanceof Error ? 'Error' : typeof error,
+    ...(typeof code === 'number' && Number.isFinite(code) ? { errorCode: code } : {}),
+  };
 }
 
 function readNonEmptyString(value: unknown): string | undefined {
@@ -451,6 +466,7 @@ export function createAcpRuntime(params: {
   provider: string;
   directory: string;
   happierSessionId?: string;
+  processEnv?: NodeJS.ProcessEnv;
   session: AcpRuntimeSessionClient;
   messageBuffer: MessageBuffer;
   mcpServers: Record<string, McpServerConfig>;
@@ -503,6 +519,8 @@ export function createAcpRuntime(params: {
    * backend folders.
    */
   hooks?: {
+    classifyAssistantTurnFailure?: (params: Readonly<{ text: string; lastMessageText: string; processEnv: NodeJS.ProcessEnv }>) => Error | null;
+    onTurnFailure?: (params: Readonly<{ error: unknown; sessionId: string | null; session: AcpRuntimeSessionClient; processEnv: NodeJS.ProcessEnv }>) => Promise<void>;
     onBeginTurn?: () => void;
     onToolResult?: (params: { toolName: string; callId: string; result: unknown }) => void;
     onPermissionRequest?: (params: { permissionId: string; toolName: string; payload: unknown; reason: string }) => void;
@@ -574,6 +592,7 @@ export function createAcpRuntime(params: {
     observedAt: number;
   }> | null = null;
   const modelOutputState: ModelOutputReconciliationState = { turnText: '', segmentText: '' };
+  let lastModelOutputText = '';
   let accumulatedThinkingText = '';
   let isResponseInProgress = false;
   let taskStartedSent = false;
@@ -812,6 +831,7 @@ export function createAcpRuntime(params: {
     }
     modelOutputState.turnText = '';
     modelOutputState.segmentText = '';
+    lastModelOutputText = '';
     accumulatedThinkingText = '';
     isResponseInProgress = false;
     taskStartedSent = false;
@@ -826,6 +846,10 @@ export function createAcpRuntime(params: {
   };
 
   const rememberTurnOutcome = (outcome: AcpTurnOutcome | void): void => {
+    if (!turnAborted && (!outcome || outcome.kind === 'completed' || outcome.kind === 'refused')) {
+      const failure = params.hooks?.classifyAssistantTurnFailure?.({ text: modelOutputState.segmentText, lastMessageText: lastModelOutputText, processEnv: params.processEnv ?? process.env });
+      if (failure) throw failure;
+    }
     if (!outcome) return;
     pendingTurnOutcome = outcome;
     if (outcome.kind !== 'completed') {
@@ -1214,6 +1238,7 @@ export function createAcpRuntime(params: {
       lifecycleAvailable: !!params.session.sessionTurnLifecycle,
       compatibilityMarkerSent,
     });
+    await params.hooks?.onTurnFailure?.({ error: detailRaw, sessionId: params.happierSessionId ?? null, session: params.session, processEnv: params.processEnv ?? process.env });
     return true;
   };
 
@@ -1328,11 +1353,13 @@ export function createAcpRuntime(params: {
           : msg.toolName);
       if (isModelOutputSegmentBoundary(msg) && !thinkingToolBoundary) {
         resetModelOutputSegment(modelOutputState);
+        lastModelOutputText = '';
         void streamedTranscriptWriter.flushAll({ reason: 'tool-call-boundary' });
       }
 
       switch (msg.type) {
         case 'model-output': {
+          lastModelOutputText = msg.textDelta ?? msg.fullText ?? '';
           const change = reconcileModelOutput(modelOutputState, msg);
           const deltaRaw = change.kind === 'append' ? change.text : '';
           if (acpTraceMarkersEnabled && sessionId && deltaRaw.includes('ACP_STUB_')) {
@@ -1466,16 +1493,16 @@ export function createAcpRuntime(params: {
             }
           }
 
-          // Provider-agnostic sidechain import: if a Task tool-result includes a vendor session id,
+          // Provider-agnostic sidechain import: if a subagent result includes a vendor session id,
           // capture its replay in a separate backend and import it as a sidechain thread.
-          if (typeof originToolName === 'string' && originToolName.toLowerCase() === 'task') {
+          if (typeof originToolName === 'string' && isGenericSubAgentToolName(canonicalizeToolNameV2({ protocol: 'acp', toolName: originToolName }))) {
             const record = asRecord(msg.result);
             const metadata = record ? asRecord(record.metadata) : null;
             const metadataSessionIdRaw = metadata?.sessionId;
             const metadataSessionId = typeof metadataSessionIdRaw === 'string' ? metadataSessionIdRaw : null;
             const outputValue = record?.output;
             const outputText = typeof outputValue === 'string' ? outputValue : null;
-            const contentText = typeof (record as any)?.content === 'string' ? String((record as any).content) : null;
+            const contentText = typeof record?.content === 'string' ? record.content : null;
             const fallbackSidechainText = (() => {
               const raw = (contentText ?? outputText ?? '').trim();
               if (!raw) return '';
@@ -1495,7 +1522,7 @@ export function createAcpRuntime(params: {
                     const created = await createCatalogAcpBackend(params.provider as CatalogAgentId, {
                   cwd: params.directory,
                   mcpServers: params.mcpServers,
-                  permissionHandler: params.permissionHandler,
+                  permissionHandler: undefined,
                 });
                 return created.backend as AcpRuntimeBackend;
               });
@@ -1522,7 +1549,7 @@ export function createAcpRuntime(params: {
                     }
                   }
                 } catch (e) {
-                  logger.debug(`[${params.provider}] Failed to import Task sidechain replay (non-fatal)`, e);
+                  logger.warn(`[${params.provider}] Child replay unavailable; using launch output fallback`, sidechainFailureDetails('replay', e));
                 } finally {
                   // Fallback: if we can't replay-import, at least persist the Task output as a sidechain message.
                   if (!replayImported && fallbackSidechainText) {
@@ -1533,15 +1560,15 @@ export function createAcpRuntime(params: {
                         { localId: randomUUID(), meta: { importedFrom: 'acp-sidechain', remoteSessionId, sidechainId: callId } },
                       );
                     } catch (e) {
-                      logger.debug(`[${params.provider}] Failed to persist Task sidechain fallback message (non-fatal)`, e);
+                      logger.warn(`[${params.provider}] Child replay fallback could not be persisted`, sidechainFailureDetails('fallback', e));
                     }
                   }
                   toolNameByCallId.delete(callId);
                   if (replayBackend) {
                     try {
-                      await replayBackend.dispose();
+                      await replayBackend.dispose({ preserveProviderSession: true });
                     } catch (e) {
-                      logger.debug(`[${params.provider}] Failed to dispose replay backend (non-fatal)`, e);
+                      logger.warn(`[${params.provider}] Child replay attachment could not be disposed`, sidechainFailureDetails('dispose', e));
                     }
                   }
                 }
@@ -1592,6 +1619,7 @@ export function createAcpRuntime(params: {
             logger.debug(`[${params.provider}] Failed to run permission-request hook (non-fatal)`, e);
           }
           resetModelOutputSegment(modelOutputState);
+          lastModelOutputText = '';
           void streamedTranscriptWriter.flushAll({ reason: 'tool-call-boundary' }).finally(() => {
             forwarder.forward(msg);
           });
@@ -2372,6 +2400,12 @@ export function createAcpRuntime(params: {
 
     async setSessionMode(modeId: string): Promise<void> {
       await applySessionModeControl(modeId);
+    },
+
+    async clearSessionModeOverride(): Promise<void> {
+      if (!sessionId) return;
+      const b = await ensureBackend();
+      await b.clearSessionModeOverride?.(sessionId);
     },
 
     async setSessionModel(modelId: string): Promise<void> {

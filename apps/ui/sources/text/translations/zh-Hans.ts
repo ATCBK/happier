@@ -484,6 +484,15 @@ const promptLibraryUxRefinementTranslationExtension = {
 
 const sessionHandoffTranslationExtensions = {
   'zh-Hans': {
+    transferSessionData: {
+      title: "传输会话数据",
+      subtitle: "将此会话的对话历史复制到另一台机器。如果那里已有记录，请关闭此选项。",
+      checking: "正在检查两台机器是否支持…",
+      agentRequiresTransfer: "此智能体需要在机器之间传输会话数据。",
+      updateRequired: "请更新两台机器上的 Happier 以关闭此选项。",
+      sessionMissing: "目标机器上没有此会话的对话历史。请开启“传输会话数据”后重试。",
+      workspaceRequiresTransfer: "请开启“传输会话数据”以复制或同步工作区文件。",
+    },
     activeWarning: {
       title: '此会话仍在此设备上运行',
       message: '开始移交前，Happier 会先在这台设备上停止此会话，然后再将其转移到所选设备。',
@@ -2413,6 +2422,19 @@ export const zhHans: TranslationStructure = {
   },
 
   connectedServices: {
+    importAccounts: {
+        unknownResult: "导入结果未知。请刷新账户列表并检查此配置后再重试。",
+        title: "导入已有登录",
+        failed: "无法导入登录。请确认已在所选机器上登录，然后重试。",
+        actionDescription: "从你的某台机器复制登录",
+        description: "将登录复制到加密配置。共享的刷新令牌可能轮换，本机应用可能要求重新登录。",
+        unsupported: "无法导入。请选择其他机器或更新其CLI。",
+        credentialsUnavailable: "没有可用的登录。请在本机应用中登录后重试。",
+        profileConflict: "配置属于其他账户，或在导入期间发生了变化。请选择新名称。",
+        reauthorizationRequired: "请在本机应用中重新登录后重试。",
+        imported: "登录已导入",
+        refreshFailed: "登录已导入，但账户列表未刷新。请重新打开已连接服务。",
+    },
       subscription: {
           title: "订阅",
           currentPeriod: "当前周期",
@@ -2442,6 +2464,7 @@ export const zhHans: TranslationStructure = {
       openai: "OpenAI API 密钥",
       anthropic: "Anthropic API 密钥",
       gemini: "Google Gemini（谷歌）",
+      antigravity: 'Google Antigravity',
       github: "GitHub",
     },
     title: "已连接服务",
@@ -2586,6 +2609,21 @@ export const zhHans: TranslationStructure = {
       resets: {
         use: "使用",
         available: "可用重置",
+        remainingCount: ({ count }: { count: number }) => `已保存的重置：${count}`,
+        appliesTo: ({ limits }: { limits: string }) => `适用于：${limits}`,
+        fiveHourLimit: "5 小时限制",
+        weeklyLimit: "每周限制",
+        unavailableReasons: {
+          paused: "已暂停",
+          cooldown: "等待冷却结束",
+          ineligible: "不符合条件",
+          not_selected: "未选择",
+          provider_unavailable: "提供商不可用",
+          not_started: "尚未开始",
+          expired: "已过期",
+          consumed: "已使用",
+          unknown: "当前不可用",
+        },
         rowLabel: ({ date, countdown }: { date: string; countdown: string }) => `${date} 到期 · ${countdown}`,
         now: "现在",
         inDays: ({ days }: { days: number }) => `${days} 天后`,
@@ -2607,6 +2645,12 @@ export const zhHans: TranslationStructure = {
       pasteRedirectUrlPromptBody:
         "完成 OAuth 后，从浏览器地址栏复制最终重定向的 URL 并粘贴到这里。",
       providerOverrides: {
+        antigravity: {
+          connectWebDescription: "下一步：使用 Google 登录。Antigravity 会显示可复制的授权码。",
+          pasteRedirectUrlPromptBody: "1) 使用 Google 登录。2) 复制 antigravity.google 显示的授权码。3) 保持此登录页面打开，并粘贴到下方。",
+          pasteRedirectUrlPlaceholder: "粘贴 Antigravity 授权码",
+          pasteRedirectUrlTitle: "粘贴授权码",
+        },
         claudeSubscription: {
           connectWebDescription:
             "下一步：在打开的页面中登录。Claude 可能会显示一段代码字符串，而不是自动重定向。",
@@ -2787,6 +2831,7 @@ export const zhHans: TranslationStructure = {
       addOauthProfileDeviceTitle: "通过设备认证添加",
       addOauthProfileDeviceSubtitle: "推荐用于 Web/远程环境",
       addOauthProfilePasteTitle: "通过粘贴重定向添加",
+      signInWithGoogle: '使用 Google 登录',
       addOauthProfilePasteSubtitle: "手动复制/粘贴重定向 URL 流程",
       addOauthProfileBrowserTitle: "通过应用内浏览器添加",
       addOauthProfileBrowserSubtitle: "在支持的环境中使用内嵌浏览器",
@@ -2830,6 +2875,7 @@ export const zhHans: TranslationStructure = {
       errors: {
         credentialReferencedByGroup: "此账号仍被账号池使用。请先从池中移除，然后重试。",
         credentialNotFound: "此已连接账号已被移除。",
+        serviceUnsupportedServer: '此中继不支持此连接服务。请更新中继以连接该服务。',
         credentialRequestFailed: "已连接账号请求失败。请刷新已连接服务后重试。",
         groupRequestFailed: "账号池请求失败。请刷新已连接服务后重试。",
         generationConflict: "此账号池在操作完成前已更改。请刷新已连接服务后重试。",
@@ -4184,6 +4230,7 @@ export const zhHans: TranslationStructure = {
             agy: { title: 'Antigravity' },
             fx: { title: "FX" },
             droid: { title: "Factory Droid" },
+            codebuddy: { title: "CodeBuddy" },
             grok: {
                 title: "Grok Build"
             },
@@ -6349,7 +6396,9 @@ export const zhHans: TranslationStructure = {
     fxSessionId: "FX 会话 ID",
     fxSessionIdCopied: "FX 会话 ID 已复制到剪贴板",
     droidSessionId: "Factory Droid 会话 ID",
+    codebuddySessionId: "CodeBuddy 会话 ID",
     droidSessionIdCopied: "Factory Droid 会话 ID 已复制到剪贴板",
+    codebuddySessionIdCopied: "CodeBuddy 会话 ID 已复制到剪贴板",
     customAcpSessionId: "自定义 ACP 会话 ID",
     grokSessionId: "Grok 会话 ID",
     grokSessionIdCopied: "Grok 会话 ID 已复制到剪贴板",
@@ -6562,6 +6611,8 @@ export const zhHans: TranslationStructure = {
     permissionMode: {
       title: "权限模式",
       effectiveLabel: ({ label }: { label: string }) => `生效：${label}`,
+      nativeModeOverrides: ({ mode }: { mode: string }) => `智能体模式 ${mode} 优先于此权限设置。清除模式覆盖后即可使用权限设置。`,
+            usePermissionSetting: '使用权限设置',
       default: "默认",
       readOnly: "只读",
       acceptEdits: "接受编辑",
@@ -6592,6 +6643,7 @@ export const zhHans: TranslationStructure = {
       agy: 'Antigravity',
       fx: "FX",
       droid: "Factory Droid",
+      codebuddy: "CodeBuddy",
       customAcp: "Custom ACP",
       pi: "Pi",
       copilot: "Copilot",
@@ -10033,6 +10085,7 @@ settingsSession: {
     blockedTitle: '设置已停止',
     blockedStatusFallback: '设置未能完成。你的账户和会话没有受到影响。',
     blockedServiceConflictStatus: '需要先处理这台电脑上的另一个后台服务。它保持原样——打开“详情”可以查看是哪一个。',
+    blockedServiceManagerUnavailableStatus: 'Happier 无法在这台电脑上设置后台服务。打开“详情”查看帮助，或继续使用其他机器。',
     blockedConsentDeclinedStatus: '设置已停止。这台电脑上原有的后台服务保持原样。',
     blockedAccountKeptStatus: '设置已停止。这台电脑仍连接到它当前登录的账号。',
     blockedAccountChangedStatus: '设置期间这台电脑登录了另一个账号，因此设置在配对前已停止。请重试。',
@@ -10322,6 +10375,7 @@ settingsSession: {
     providerStateSharingDegraded: "提供商状态共享已部分应用",
     connectedServiceRuntimeAuthRecoveryRecovered: "提供商身份验证已恢复",
     connectedServiceRuntimeAuthRecoveryCancelled: "提供商身份验证恢复已取消",
+        connectedServiceRuntimeAuthRecoveryStopped: "提供商恢复已停止；不会自动重试",
     runtimeConfigOutcomeAppliesBeforeNextMessage: "将在你下一条消息前生效",
     runtimeConfigOutcomeQueuedUntilReady: "已排队，等待就绪",
     runtimeConfigOutcomeAlreadySet: "已设置",
@@ -10802,6 +10856,7 @@ settingsSession: {
       agySubtitleExperimental: "Antigravity 命令行（实验）",
       fxSubtitleExperimental: "FX 命令行（实验）",
       droidSubtitleExperimental: "Factory Droid 命令行（实验）",
+      codebuddySubtitleExperimental: "CodeBuddy Code 命令行（实验）",
       customAcpSubtitleExperimental: "自定义 ACP 命令行（实验）",
       grokSubtitleExperimental: "Grok Build 命令行（实验）",
       piSubtitleExperimental: "Pi 命令行（实验）",

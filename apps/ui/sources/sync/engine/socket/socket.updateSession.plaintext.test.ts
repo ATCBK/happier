@@ -8,6 +8,8 @@ import { clearMountedSessionRealtimeTranscriptConsumers } from '@/sync/runtime/s
 import { useVoiceTargetStore } from '@/voice/runtime/voiceTargetStore';
 import { voiceSessionBindingStore } from '@/voice/sessionBinding/voiceSessionBindingStore';
 import { syncPerformanceTelemetry } from '@/sync/runtime/syncPerformanceTelemetry';
+import { deriveSessionRuntimePresentationState } from '@/sync/domains/session/attention/deriveSessionRuntimePresentationState';
+import { fetchAndApplySessionById } from '@/sync/engine/sessions/sessionById';
 import {
     flushActivityUpdates,
     handleUpdateContainer,
@@ -85,6 +87,106 @@ describe('socket update handling: plaintext update-session', () => {
             bindingsByConversationSessionId: {},
         }));
         storage.setState(initialStorageState, true);
+    });
+
+    it.each(['absent', 'terminal'] as const)('preserves a hidden completion through a heartbeat with %s turn fields', async (turnFields) => {
+        vi.useFakeTimers();
+        vi.setSystemTime(10_000);
+        const session = {
+            ...buildSession('s_hidden_terminal_heartbeat'), updatedAt: 100, activeAt: 100,
+            thinking: true, thinkingAt: 100, latestTurnId: 'turn-1',
+            latestTurnStatus: 'in_progress' as const, latestTurnStatusObservedAt: 100,
+        };
+        storage.getState().applySessions([session]);
+        await handleUpdateContainer({ ...buildBaseParams(),
+            applySessions: (rows) => storage.getState().applySessions(rows),
+            updateData: {
+                id: 'completion', seq: 2, createdAt: 200,
+                body: { t: 'update-session', id: session.id, active: true, activeAt: 200,
+                    thinking: false, thinkingAt: 200, latestTurnId: 'turn-1',
+                    latestTurnStatus: 'completed', latestTurnStatusObservedAt: 200 },
+            },
+        });
+        await vi.advanceTimersByTimeAsync(16);
+        expect(storage.getState().sessionListRenderables[session.id].latestTurnStatus).toBe('completed');
+        const heartbeat = { type: 'activity' as const, id: session.id, active: true, activeAt: 300, thinking: false,
+            ...(turnFields === 'terminal' ? { latestTurnStatus: 'completed' as const, latestTurnStatusObservedAt: 200 } : {}) };
+        flushActivityUpdates({ updates: new Map([[session.id, heartbeat]]), applySessions: (rows) => storage.getState().applySessions(rows) });
+        await vi.advanceTimersByTimeAsync(16);
+        const renderable = storage.getState().sessionListRenderables[session.id];
+        expect(renderable.latestTurnStatus).toBe('completed');
+        expect(deriveSessionRuntimePresentationState(renderable, 10_000).working).toBe(false);
+    });
+
+    it.each(['cache-only', 'visible', 'reverse', 'metadata', 'stale-hydration'] as const)('keeps completion current through %s ingestion', async (mode) => {
+        vi.useFakeTimers();
+        vi.setSystemTime(10_000);
+        const session = {
+            ...buildSession('s_terminal_ingestion_control'), updatedAt: 100, activeAt: 100,
+            latestReadyEventSeq: 1, latestReadyEventAt: 100,
+            ...(mode === 'stale-hydration' ? { pendingPermissionRequestCount: 1, pendingRequestObservedAt: 100 } : {}),
+            thinking: true, thinkingAt: 100, latestTurnId: 'turn-1',
+            latestTurnStatus: 'in_progress' as const, latestTurnStatusObservedAt: 100,
+        };
+        if (mode === 'cache-only') storage.getState().replaceSessionListRenderables([{ ...session, archivedAt: null }]);
+        else storage.getState().applySessions([session]);
+        if (mode === 'visible') markSessionVisible(session.id);
+        const applySessions = (rows: Parameters<ReturnType<typeof storage.getState>['applySessions']>[0]) => storage.getState().applySessions(rows);
+        let releaseSnapshot: (() => void) | undefined;
+        const snapshotGate = new Promise<void>((resolve) => { releaseSnapshot = resolve; });
+        // HTTP is the genuine boundary: the response was captured before the socket completion.
+        const hydration = mode === 'stale-hydration' ? fetchAndApplySessionById({
+            sessionId: session.id,
+            credentials: { token: 'test-token', secret: 'test-secret' },
+            clientEncryptionRequirement: 'follow_account',
+            encryption: { decryptEncryptionKey: async () => null, initializeSessions: async () => {}, getSessionEncryption: () => null },
+            sessionDataKeys: new Map(),
+            includeTurnsProjection: false,
+            request: async () => {
+                await snapshotGate;
+                return new Response(JSON.stringify({ session: {
+                    ...session, dataEncryptionKey: null, share: null,
+                    metadata: JSON.stringify({ path: '/tmp/new', host: 'localhost' }), metadataVersion: 2,
+                    agentState: JSON.stringify({}),
+                } }), { status: 200 });
+            },
+            applySessions,
+            getExistingSession: (id) => storage.getState().sessions[id],
+            log: { log: () => {} },
+        }) : null;
+        const heartbeat = () => flushActivityUpdates({ updates: new Map([[session.id, {
+            type: 'activity' as const, id: session.id, active: true, activeAt: 300, thinking: false,
+        }]]), applySessions });
+        if (mode === 'reverse') { heartbeat(); await vi.advanceTimersByTimeAsync(16); }
+        await handleUpdateContainer({ ...buildBaseParams(), applySessions, updateData: {
+            id: 'completion', seq: 2, createdAt: 200,
+            body: { t: 'update-session', id: session.id, active: true, activeAt: 200,
+                thinking: false, thinkingAt: 200, latestTurnId: 'turn-1',
+                latestTurnStatus: 'completed', latestTurnStatusObservedAt: 200,
+                latestReadyEventSeq: 2, latestReadyEventAt: 200,
+                ...(mode === 'stale-hydration' ? { pendingPermissionRequestCount: 0, pendingRequestObservedAt: 200 } : {}) },
+        } });
+        await vi.advanceTimersByTimeAsync(16);
+        if (mode === 'metadata') {
+            await handleUpdateContainer({ ...buildBaseParams(), applySessions, updateData: {
+                id: 'metadata', seq: 3, createdAt: 250, body: { t: 'update-session', id: session.id,
+                    metadata: { version: 2, value: JSON.stringify({ path: '/tmp/new', host: 'localhost' }) } },
+            } });
+        } else if (mode === 'stale-hydration') {
+            releaseSnapshot?.();
+            expect((await hydration)?.ok).toBe(true);
+            expect(storage.getState().sessions[session.id].metadata?.path).toBe('/tmp/new');
+        } else if (mode !== 'reverse') heartbeat();
+        await vi.advanceTimersByTimeAsync(16);
+        const renderable = storage.getState().sessionListRenderables[session.id];
+        expect(renderable.latestTurnStatus).toBe('completed');
+        if (mode === 'stale-hydration') {
+            expect(renderable.latestReadyEventSeq).toBe(2);
+            expect(renderable.latestReadyEventAt).toBe(200);
+            expect(renderable.hasPendingPermissionRequests).toBe(false);
+            expect(renderable.pendingRequestObservedAt).toBe(200);
+        }
+        expect(deriveSessionRuntimePresentationState(renderable, 10_000).working).toBe(false);
     });
 
     it('applies working-to-online activity even when a newer durable projection advanced updatedAt', () => {

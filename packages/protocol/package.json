@@ -42,6 +42,14 @@
       "types": "./dist/testing/accountScopedCipherFixtures.d.ts",
       "default": "./dist/testing/accountScopedCipherFixtures.js"
     },
+    "./testing/releasedV0215AccountProfile": {
+      "types": "./dist/connect/fixtures/releasedV0215AccountProfile.d.ts",
+      "default": "./dist/connect/fixtures/releasedV0215AccountProfile.js"
+    },
+    "./testing/releasedV0215RuntimeIssue": {
+      "types": "./dist/connect/fixtures/releasedV0215RuntimeIssue.d.ts",
+      "default": "./dist/connect/fixtures/releasedV0215RuntimeIssue.js"
+    },
     "./capabilities": {
       "types": "./dist/capabilities.d.ts",
       "default": "./dist/capabilities.js"

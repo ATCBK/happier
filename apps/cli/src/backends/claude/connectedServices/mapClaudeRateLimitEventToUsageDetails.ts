@@ -258,25 +258,12 @@ function containsProviderCapacityEvidence(value: unknown): boolean {
 function readSyntheticProviderLimitId(records: readonly Record<string, unknown>[]): string | undefined {
   if (records.some(containsProviderCapacityEvidence)) return 'server_overloaded';
   if (records.some(containsTransientThrottleEvidence)) return 'transient';
-  for (const names of [
-    ['providerLimitId', 'provider_limit_id', 'limit', 'limitType', 'limit_type'],
-    ['code', 'error', 'type', 'kind'],
-  ] as const) {
-    for (const record of records) {
-      for (const name of names) {
-        const text = readString(record[name]);
-        if (!text) continue;
-        if (containsRateLimitEvidence(text)) return 'rate_limit';
-        if (
-          name === 'providerLimitId' ||
-          name === 'provider_limit_id' ||
-          name === 'limit' ||
-          name === 'limitType' ||
-          name === 'limit_type'
-        ) {
-          return text;
-        }
-      }
+  // An error code identifies the rejection, not the exhausted allowance. Unknown
+  // allowance identity must remain unknown so selected pool limits do not exclude it.
+  for (const record of records) {
+    for (const name of ['providerLimitId', 'provider_limit_id', 'limit', 'limitType', 'limit_type']) {
+      const text = readString(record[name]);
+      if (text) return text;
     }
   }
   return undefined;
@@ -339,8 +326,7 @@ function mapSyntheticClaudeApiErrorToUsageDetails(record: Record<string, unknown
   const timing = resolveClaudeUsageLimitResetTiming(record, Date.now());
   const resetAtMs = readSyntheticResetAtMs(records) ?? timing.resetAtMs;
   const retryAfterMs = readSyntheticRetryAfterMs(records) ?? timing.retryAfterMs;
-  const providerLimitId = readSyntheticProviderLimitId(records)
-    ?? (status === 429 ? 'rate_limit' : undefined);
+  const providerLimitId = readSyntheticProviderLimitId(records);
 
   return {
     v: 1,
@@ -393,7 +379,6 @@ export function mapClaudeStopFailureErrorToUsageDetails(
     retryAfterMs: null,
     quotaScope: 'account',
     recoverability: 'wait',
-    providerLimitId: 'rate_limit',
     planType: null,
     utilization: null,
     overage: null,

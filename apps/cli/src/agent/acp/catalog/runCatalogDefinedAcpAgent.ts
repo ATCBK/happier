@@ -31,6 +31,7 @@ export async function runCatalogDefinedAcpAgent(
   const catalogEntry = requireCatalogEntry(agentId);
   const backendOptionsResolver = await catalogEntry.getAcpRuntimeBackendOptionsResolver?.();
   const sessionModelAdapter = await catalogEntry.getAcpRuntimeSessionModelAdapter?.();
+  const turnHooks = await catalogEntry.getAcpRuntimeTurnHooks?.();
   const TerminalDisplay = (props: Readonly<{
     messageBuffer: MessageBuffer;
     logPath?: string;
@@ -82,6 +83,7 @@ export async function runCatalogDefinedAcpAgent(
         pendingQueueDrainMaxPopPerWake,
         providerInputConsumer,
         ...(sessionModelAdapter ?? {}),
+        ...(turnHooks ? { hooks: turnHooks } : {}),
         ...(backendOptions ? { backendOptions } : {}),
       });
     },

@@ -530,6 +530,15 @@ const promptLibraryUxRefinementTranslationExtension = {
 
 const sessionHandoffTranslationExtensions = {
   pt: {
+    transferSessionData: {
+      title: "Transferir dados da sessão",
+      subtitle: "Copia o histórico de conversa desta sessão para a outra máquina. Desative se já estiver lá.",
+      checking: "Verificando o suporte nas duas máquinas…",
+      agentRequiresTransfer: "Este Agente requer a transferência dos dados da sessão entre máquinas.",
+      updateRequired: "Atualize o Happier nas duas máquinas para desativar esta opção.",
+      sessionMissing: "O histórico desta sessão não está na máquina de destino. Ative “Transferir dados da sessão” e tente novamente.",
+      workspaceRequiresTransfer: "Ative “Transferir dados da sessão” para copiar ou sincronizar arquivos do espaço de trabalho.",
+    },
     activeWarning: {
       title: 'Esta sessão ainda está em execução aqui',
       message: 'A transferência vai parar esta sessão nesta máquina antes de transferi-la para a máquina selecionada.',
@@ -2604,6 +2613,19 @@ export const pt: TranslationStructure = {
   },
 
   connectedServices: {
+    importAccounts: {
+        unknownResult: "O resultado da importação é desconhecido. Atualize a lista de contas e confira este perfil antes de tentar novamente.",
+        title: "Importar login existente",
+        failed: "Não foi possível importar o login. Verifique se você está conectado na máquina selecionada e tente novamente.",
+        actionDescription: "Copiar um login de uma das suas máquinas",
+        description: "Copie o login para este perfil criptografado. Tokens de renovação compartilhados podem mudar, e o aplicativo local pode pedir um novo login.",
+        unsupported: "Importação indisponível. Escolha outra máquina ou atualize sua CLI.",
+        credentialsUnavailable: "Nenhum login utilizável. Entre no aplicativo local e tente novamente.",
+        profileConflict: "O perfil pertence a outra conta ou mudou durante a importação. Escolha um novo nome.",
+        reauthorizationRequired: "Entre novamente no aplicativo local e tente de novo.",
+        imported: "Login importado",
+        refreshFailed: "O login foi importado, mas a lista de contas não foi atualizada. Reabra os serviços conectados.",
+    },
       subscription: {
           title: "Assinatura",
           currentPeriod: "Período atual",
@@ -2633,6 +2655,7 @@ export const pt: TranslationStructure = {
       openai: "Chave de API da OpenAI",
       anthropic: "Chave de API da Anthropic",
       gemini: "Gemini do Google",
+      antigravity: 'Google Antigravity',
       github: "GitHub",
     },
     title: "Serviços conectados",
@@ -2786,6 +2809,21 @@ export const pt: TranslationStructure = {
       resets: {
         use: "Usar",
         available: "Redefinição disponível",
+        remainingCount: ({ count }: { count: number }) => `Redefinições guardadas: ${count}`,
+        appliesTo: ({ limits }: { limits: string }) => `Aplica-se a: ${limits}`,
+        fiveHourLimit: "Limite de 5 horas",
+        weeklyLimit: "Limite semanal",
+        unavailableReasons: {
+          paused: "Em pausa",
+          cooldown: "Aguardando o período de espera",
+          ineligible: "Não elegível",
+          not_selected: "Não selecionado",
+          provider_unavailable: "Provedor indisponível",
+          not_started: "Ainda não iniciado",
+          expired: "Expirado",
+          consumed: "Já usado",
+          unknown: "Indisponível agora",
+        },
         rowLabel: ({ date, countdown }: { date: string; countdown: string }) => `Expira ${date} · ${countdown}`,
         now: "agora",
         inDays: ({ days }: { days: number }) => `em ${days}d`,
@@ -2807,6 +2845,12 @@ export const pt: TranslationStructure = {
       pasteRedirectUrlPromptBody:
         "Após concluir o OAuth, copie a URL final redirecionada da barra de endereços do navegador e cole aqui.",
       providerOverrides: {
+        antigravity: {
+          connectWebDescription: "Próximo passo: entre com o Google. O Antigravity mostra um código de autorização para copiar.",
+          pasteRedirectUrlPromptBody: "1) Entre com o Google. 2) Copie o código de autorização mostrado em antigravity.google. 3) Cole-o abaixo e mantenha este login aberto.",
+          pasteRedirectUrlPlaceholder: "Cole o código de autorização do Antigravity",
+          pasteRedirectUrlTitle: "Colar código de autorização",
+        },
         claudeSubscription: {
           connectWebDescription:
             "Próximo passo: faça login na página que abrir. O Claude pode mostrar uma sequência de código em vez de redirecionar automaticamente.",
@@ -2989,6 +3033,7 @@ export const pt: TranslationStructure = {
       addOauthProfileDeviceTitle: "Adicionar via autenticação do dispositivo",
       addOauthProfileDeviceSubtitle: "Recomendado para web/ambientes remotos",
       addOauthProfilePasteTitle: "Adicionar via colar redirecionamento",
+      signInWithGoogle: 'Entrar com o Google',
       addOauthProfilePasteSubtitle: "Fluxo manual de copiar/colar URL de redirecionamento",
       addOauthProfileBrowserTitle: "Adicionar via navegador no app",
       addOauthProfileBrowserSubtitle: "Use um navegador incorporado quando suportado",
@@ -3033,6 +3078,7 @@ export const pt: TranslationStructure = {
       errors: {
         credentialReferencedByGroup: "Esta conta ainda é usada por um Pool de contas. Remova-a do Pool e tente novamente.",
         credentialNotFound: "Esta conta conectada já foi removida.",
+        serviceUnsupportedServer: 'Este relay não suporta este serviço conectado. Atualize o relay para conectá-lo.',
         credentialRequestFailed: "A solicitação da conta conectada falhou. Atualize os serviços conectados e tente novamente.",
         groupRequestFailed: "A solicitação do Pool de contas falhou. Atualize os serviços conectados e tente novamente.",
         generationConflict: "Este Pool de contas mudou antes da ação terminar. Atualize os serviços conectados e tente novamente.",
@@ -4418,6 +4464,7 @@ export const pt: TranslationStructure = {
             agy: { title: 'Antigravity' },
             fx: { title: "FX" },
             droid: { title: "Factory Droid" },
+            codebuddy: { title: "CodeBuddy" },
             grok: {
                 title: "Grok Build"
             },
@@ -6679,7 +6726,9 @@ export const pt: TranslationStructure = {
     fxSessionId: "ID da sessão FX",
     fxSessionIdCopied: "ID da sessão FX copiado para a área de transferência",
     droidSessionId: "ID da sessão Factory Droid",
+    codebuddySessionId: "ID da sessão CodeBuddy",
     droidSessionIdCopied: "ID da sessão Factory Droid copiado para a área de transferência",
+    codebuddySessionIdCopied: "ID da sessão CodeBuddy copiado para a área de transferência",
     customAcpSessionId: "ID da sessão ACP personalizada",
     grokSessionId: "ID da sessão Grok",
     grokSessionIdCopied: "ID da sessão Grok copiado para a área de transferência",
@@ -6900,6 +6949,8 @@ export const pt: TranslationStructure = {
     permissionMode: {
       title: "MODO DE PERMISSÃO",
       effectiveLabel: ({ label }: { label: string }) => `Efetivo: ${label}`,
+      nativeModeOverrides: ({ mode }: { mode: string }) => `O modo do agente ${mode} tem prioridade sobre esta permissão. Limpe a seleção de Modo para usar a permissão.`,
+            usePermissionSetting: 'Usar a configuração de permissões',
       default: "Padrão",
       readOnly: "Somente leitura",
       acceptEdits: "Aceitar edições",
@@ -6930,6 +6981,7 @@ export const pt: TranslationStructure = {
       agy: 'Antigravity',
       fx: "FX",
       droid: "Factory Droid",
+      codebuddy: "CodeBuddy",
       customAcp: "Custom ACP",
       pi: "Pi",
       copilot: "Copilot",
@@ -10511,6 +10563,7 @@ settingsSession: {
     blockedTitle: 'Configuração interrompida',
     blockedStatusFallback: 'A configuração não pôde terminar. Sua conta e suas sessões continuam intactas.',
     blockedServiceConflictStatus: 'Primeiro é preciso resolver outro serviço em segundo plano deste computador. Ele ficou como estava — abra Detalhes para ver qual.',
+    blockedServiceManagerUnavailableStatus: 'O Happier não pode configurar o serviço em segundo plano neste computador. Abra Detalhes para obter ajuda ou continue com suas outras máquinas.',
     blockedConsentDeclinedStatus: 'A configuração parou. O serviço em segundo plano que já existia ficou exatamente como estava.',
     blockedAccountKeptStatus: 'A configuração parou. Este computador continua conectado à conta em que está com sessão iniciada.',
     blockedAccountChangedStatus: 'Este computador entrou em outra conta enquanto a configuração decorria, por isso ela parou antes do emparelhamento. Tente de novo.',
@@ -10814,6 +10867,7 @@ settingsSession: {
     providerStateSharingDegraded: "Compartilhamento de estado do provedor aplicado parcialmente",
     connectedServiceRuntimeAuthRecoveryRecovered: "Autenticação do provedor recuperada",
     connectedServiceRuntimeAuthRecoveryCancelled: "Recuperação de autenticação do provedor cancelada",
+        connectedServiceRuntimeAuthRecoveryStopped: "Recuperação do provedor interrompida; não haverá nova tentativa automática",
     runtimeConfigOutcomeAppliesBeforeNextMessage: "Será aplicado antes da sua próxima mensagem",
     runtimeConfigOutcomeQueuedUntilReady: "Na fila até estar pronto",
     runtimeConfigOutcomeAlreadySet: "Já configurado",
@@ -11313,6 +11367,7 @@ settingsSession: {
       agySubtitleExperimental: "CLI do Antigravity (experimental)",
       fxSubtitleExperimental: "CLI do FX (experimental)",
       droidSubtitleExperimental: "CLI do Factory Droid (experimental)",
+      codebuddySubtitleExperimental: "CLI do CodeBuddy Code (experimental)",
       customAcpSubtitleExperimental: "CLI de ACP personalizada (experimental)",
       grokSubtitleExperimental: "CLI do Grok Build (experimental)",
       piSubtitleExperimental: "CLI do Pi (experimental)",

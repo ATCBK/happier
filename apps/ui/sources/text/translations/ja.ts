@@ -486,6 +486,15 @@ const promptLibraryUxRefinementTranslationExtension = {
 
 const sessionHandoffTranslationExtensions = {
   ja: {
+    transferSessionData: {
+      title: "セッションデータを転送",
+      subtitle: "このセッションの会話履歴を別のマシンにコピーします。すでにある場合はオフにしてください。",
+      checking: "両方のマシンで対応状況を確認中…",
+      agentRequiresTransfer: "このエージェントでは、マシン間でセッションデータを転送する必要があります。",
+      updateRequired: "オフにするには両方のマシンのHappierを更新してください。",
+      sessionMissing: "転送先のマシンにこのセッションの会話履歴がありません。「セッションデータを転送」をオンにして再試行してください。",
+      workspaceRequiresTransfer: "ワークスペースのファイルをコピーまたは同期するには「セッションデータを転送」をオンにしてください。",
+    },
     activeWarning: {
       title: 'このセッションはこのマシンでまだ実行中です',
       message: 'ハンドオフを開始すると、選択したマシンへ転送する前にこのマシン上のセッションを停止します。',
@@ -1491,6 +1500,7 @@ export const ja: TranslationStructure = {
       agySubtitleExperimental: "Antigravity CLI（実験）",
       fxSubtitleExperimental: "FX CLI（実験）",
       droidSubtitleExperimental: "Factory Droid CLI（実験）",
+      codebuddySubtitleExperimental: "CodeBuddy Code CLI（実験）",
       customAcpSubtitleExperimental: "カスタム ACP CLI（実験）",
       grokSubtitleExperimental: "Grok Build CLI（実験）",
       piSubtitleExperimental: "Pi CLI（実験）",
@@ -2785,6 +2795,19 @@ localTailscale: {
   },
 
   connectedServices: {
+    importAccounts: {
+        unknownResult: "インポート結果を確認できません。再試行する前にアカウント一覧を更新し、このプロフィールを確認してください。",
+        title: "既存のログインをインポート",
+        failed: "ログインをインポートできませんでした。選択したマシンでログイン済みか確認し、再試行してください。",
+        actionDescription: "自分のマシンからログインをコピー",
+        description: "ログインを暗号化されたプロフィールにコピーします。共有する更新トークンが変更され、元のアプリで再ログインが必要になる場合があります。",
+        unsupported: "インポートできません。別のマシンを選ぶか、そのCLIを更新してください。",
+        credentialsUnavailable: "使用可能なログインがありません。元のアプリにログインして再試行してください。",
+        profileConflict: "プロフィールは別のアカウントに属しているか、インポート中に変更されました。新しい名前を選んでください。",
+        reauthorizationRequired: "元のアプリに再ログインして再試行してください。",
+        imported: "ログインをインポートしました",
+        refreshFailed: "ログインはインポートされましたが、一覧を更新できませんでした。接続済みサービスを開き直してください。",
+    },
       subscription: {
           title: "サブスクリプション",
           currentPeriod: "現在の期間",
@@ -2814,6 +2837,7 @@ localTailscale: {
       openai: "OpenAI API キー",
       anthropic: "Anthropic API キー",
       gemini: "Google Gemini（Google）",
+      antigravity: 'Google Antigravity',
       github: "GitHub",
     },
     title: "接続済みサービス",
@@ -3061,6 +3085,21 @@ localTailscale: {
       resets: {
         use: "使用",
         available: "リセット利用可能",
+        remainingCount: ({ count }: { count: number }) => `保存済みリセット：${count}`,
+        appliesTo: ({ limits }: { limits: string }) => `対象：${limits}`,
+        fiveHourLimit: "5時間の制限",
+        weeklyLimit: "週間の制限",
+        unavailableReasons: {
+          paused: "一時停止中",
+          cooldown: "クールダウン待ち",
+          ineligible: "対象外",
+          not_selected: "未選択",
+          provider_unavailable: "プロバイダー利用不可",
+          not_started: "まだ開始されていません",
+          expired: "期限切れ",
+          consumed: "使用済み",
+          unknown: "現在利用できません",
+        },
         rowLabel: ({ date, countdown }: { date: string; countdown: string }) => `${date} に期限切れ · ${countdown}`,
         now: "今",
         inDays: ({ days }: { days: number }) => `${days}日後`,
@@ -3082,6 +3121,12 @@ localTailscale: {
       pasteRedirectUrlPromptBody:
         "OAuth を完了したら、ブラウザのアドレスバーに表示されている最終的なリダイレクト URL をコピーして、ここに貼り付けてください。",
       providerOverrides: {
+        antigravity: {
+          connectWebDescription: "次の手順：Google でログインします。Antigravity にコピー用の認証コードが表示されます。",
+          pasteRedirectUrlPromptBody: "1) Google でログインします。2) antigravity.google に表示された認証コードをコピーします。3) このログイン画面を開いたまま、下に貼り付けます。",
+          pasteRedirectUrlPlaceholder: "Antigravity の認証コードを貼り付け",
+          pasteRedirectUrlTitle: "認証コードを貼り付け",
+        },
         claudeSubscription: {
           connectWebDescription:
             "次の手順: 開いたページでサインインしてください。Claude は自動リダイレクトではなくコード文字列を表示する場合があります。",
@@ -3166,6 +3211,7 @@ localTailscale: {
       addOauthProfileDeviceTitle: "デバイス認証で追加",
       addOauthProfileDeviceSubtitle: "Web/リモート環境に推奨",
       addOauthProfilePasteTitle: "リダイレクト貼り付けで追加",
+      signInWithGoogle: 'Google でログイン',
       addOauthProfilePasteSubtitle: "URL をコピー/貼り付けする手動フロー",
       addOauthProfileBrowserTitle: "アプリ内ブラウザで追加",
       addOauthProfileBrowserSubtitle: "対応環境では組み込みブラウザを使用",
@@ -3210,6 +3256,7 @@ localTailscale: {
       errors: {
         credentialReferencedByGroup: "このアカウントはまだアカウントプールで使用されています。プールから削除してからもう一度お試しください。",
         credentialNotFound: "この接続済みアカウントはすでに削除されています。",
+        serviceUnsupportedServer: 'このリレーはこの接続サービスをサポートしていません。接続するにはリレーを更新してください。',
         credentialRequestFailed: "接続済みアカウントのリクエストに失敗しました。接続済みサービスを更新してもう一度お試しください。",
         groupRequestFailed: "アカウントプールのリクエストに失敗しました。接続済みサービスを更新してもう一度お試しください。",
         generationConflict: "操作の完了前にこのアカウントプールが変更されました。接続済みサービスを更新してもう一度お試しください。",
@@ -4587,6 +4634,7 @@ localTailscale: {
             agy: { title: 'Antigravity' },
             fx: { title: "FX" },
             droid: { title: "Factory Droid" },
+            codebuddy: { title: "CodeBuddy" },
             grok: {
                 title: "Grok Build"
             },
@@ -6823,7 +6871,9 @@ localTailscale: {
     fxSessionId: "FX セッション ID",
     fxSessionIdCopied: "FX セッション ID をクリップボードにコピーしました",
     droidSessionId: "Factory Droid セッション ID",
+    codebuddySessionId: "CodeBuddy セッション ID",
     droidSessionIdCopied: "Factory Droid セッション ID をクリップボードにコピーしました",
+    codebuddySessionIdCopied: "CodeBuddy セッション ID をクリップボードにコピーしました",
     customAcpSessionId: "カスタム ACP セッション ID",
     grokSessionId: "Grok セッション ID",
     grokSessionIdCopied: "Grok セッション ID をクリップボードにコピーしました",
@@ -7041,6 +7091,8 @@ localTailscale: {
     permissionMode: {
       title: "権限モード",
       effectiveLabel: ({ label }: { label: string }) => `適用中: ${label}`,
+      nativeModeOverrides: ({ mode }: { mode: string }) => `エージェントモード ${mode} がこの権限設定より優先されます。権限設定を使うにはモードの上書きを解除してください。`,
+            usePermissionSetting: '権限設定を使用',
       default: "デフォルト",
       readOnly: "読み取り専用",
       acceptEdits: "編集を許可",
@@ -7071,6 +7123,7 @@ localTailscale: {
       agy: 'Antigravity',
       fx: "FX",
       droid: "Factory Droid",
+      codebuddy: "CodeBuddy",
       customAcp: "カスタム ACP",
       pi: "Pi",
       copilot: "Copilot",
@@ -10625,6 +10678,7 @@ settingsSession: {
     blockedTitle: 'セットアップが停止しました',
     blockedStatusFallback: 'セットアップを完了できませんでした。アカウントとセッションはそのままです。',
     blockedServiceConflictStatus: 'このコンピュータの別のバックグラウンドサービスを先に解決する必要があります。そのサービスはそのままです。詳細を開くとどれか確認できます。',
+    blockedServiceManagerUnavailableStatus: 'このコンピュータではHappierのバックグラウンドサービスを設定できません。詳細を開いて対処方法を確認するか、他のマシンで作業を続けてください。',
     blockedConsentDeclinedStatus: 'セットアップを停止しました。すでにあったバックグラウンドサービスはそのままです。',
     blockedAccountKeptStatus: 'セットアップを停止しました。このコンピュータは、サインインしているアカウントに接続されたままです。',
     blockedAccountChangedStatus: 'セットアップ中にこのコンピュータが別のアカウントにサインインしたため、ペアリングの前にセットアップを停止しました。もう一度お試しください。',
@@ -10927,6 +10981,7 @@ settingsSession: {
     providerStateSharingDegraded: "プロバイダー状態共有が部分的に適用されました",
     connectedServiceRuntimeAuthRecoveryRecovered: "プロバイダー認証が復旧しました",
     connectedServiceRuntimeAuthRecoveryCancelled: "プロバイダー認証の復旧がキャンセルされました",
+        connectedServiceRuntimeAuthRecoveryStopped: "プロバイダーの復旧は停止しました。自動再試行は行われません",
     runtimeConfigOutcomeAppliesBeforeNextMessage: "次のメッセージの前に適用されます",
     runtimeConfigOutcomeQueuedUntilReady: "準備が整うまでキューに入っています",
     runtimeConfigOutcomeAlreadySet: "設定済み",

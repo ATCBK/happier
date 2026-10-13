@@ -210,6 +210,35 @@ describe("providerAccountUsage storage", () => {
         expect((await readProviderAccountUsageRecord({ accountId: user.id, recordId: base.recordId }))?.snapshot?.subscription).toEqual(subscription);
     });
 
+    it("stores recovery details outside the strict snapshot and keeps them tied to their quota observation", async () => {
+        const user = await db.account.create({ data: { publicKey: null, encryptionMode: "plain" }, select: { id: true } });
+        const base = createUsageSnapshot({ fetchedAt: 1000 });
+        const recoveryCreditDetails = {
+            reset_one: { remainingCount: 2, appliesToProviderLimitIds: ["weekly"], unavailableReason: "paused" as const },
+        };
+        const write = (fetchedAt: number, details?: typeof recoveryCreditDetails) => writeProviderAccountUsageRecordWithPolicy({
+            accountId: user.id, recordId: base.recordId, recordKey: base.recordKey,
+            payloadMode: "plain_json_v1", status: "ok", fetchedAt, staleAfterMs: 60000,
+            snapshot: { ...createUsageSnapshot({ fetchedAt }), ...(details ? { recoveryCreditDetails: details } : {}) },
+        });
+        await write(1000, recoveryCreditDetails);
+        const row = await db.providerAccountUsageRecord.findUniqueOrThrow({ where: { accountId_recordId: { accountId: user.id, recordId: base.recordId } } });
+        expect(row.snapshot).not.toHaveProperty("recoveryCreditDetails");
+        expect(row.metadata).toHaveProperty("recoveryCreditDetails", recoveryCreditDetails);
+        expect((await readProviderAccountUsageRecord({ accountId: user.id, recordId: base.recordId }))?.snapshot)
+            .toMatchObject({ recoveryCreditDetails });
+        await expect(write(500)).resolves.toBe("stale");
+        expect((await readProviderAccountUsageRecord({ accountId: user.id, recordId: base.recordId }))?.snapshot)
+            .toMatchObject({ recoveryCreditDetails });
+        await write(3000);
+        const refreshed = await readProviderAccountUsageRecord({ accountId: user.id, recordId: base.recordId });
+        expect(refreshed?.snapshot).toMatchObject({ fetchedAtMs: 3000 });
+        expect(refreshed?.snapshot).not.toHaveProperty("recoveryCreditDetails");
+        await expect(write(1000, recoveryCreditDetails)).resolves.toBe("stale");
+        expect((await readProviderAccountUsageRecord({ accountId: user.id, recordId: base.recordId }))?.snapshot)
+            .not.toHaveProperty("recoveryCreditDetails");
+    });
+
     it("rejects future-dated writes and lets a current observation replace a previously persisted future clock", async () => {
         const nowMs = Date.now();
         const user = await db.account.create({ data: { publicKey: null, encryptionMode: "plain" }, select: { id: true } });

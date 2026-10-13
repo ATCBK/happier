@@ -12,6 +12,9 @@ import {
 } from '@/daemon/connectedServices/runtimeAuth/reportConnectedServiceRuntimeAuthFailureToDaemon';
 import { buildProviderAccountUsageSnapshotFromConnectedServiceQuotaObservation } from '@/daemon/connectedServices/accountUsage/fromConnectedServiceQuotaObservation';
 import { canRecordProviderAccountUsageSourceLinks } from '@/daemon/connectedServices/accountUsage/record';
+import { createSessionTurnLifecycle } from '@/agent/runtime/session/turn/lifecycle';
+import type { SessionTurnMutationV1 } from '@/api/session/mutations/sessionMutationTypes';
+import type { FailTurnInput } from '@/agent/runtime/session/turn/types';
 
 import {
   recordClaudeRateLimitQuotaEvidence,
@@ -26,7 +29,7 @@ vi.mock('@/daemon/controlClient', () => ({
   notifyDaemonConnectedServiceQuotaSnapshot: mockNotifyDaemonConnectedServiceQuotaSnapshot,
 }));
 
-type ClaudeFailTurn = (params: { provider: 'claude'; issue: SessionRuntimeIssueV1 }) => Promise<void>;
+type ClaudeFailTurn = (params: FailTurnInput) => Promise<void>;
 
 function createClaudeFailTurnSpy() {
   return vi.fn<ClaudeFailTurn>(async () => undefined);
@@ -109,6 +112,27 @@ function restoreClaudeSelectionEnv(previous: string | undefined): void {
 }
 
 describe('surfaceClaudeRuntimeIssues runtime-auth projection', () => {
+  it('publishes a primary rejection after the previous turn completed', async () => {
+    const previousSelectionEnv = installClaudeSelectionEnv();
+    const mutations: SessionTurnMutationV1[] = [];
+    const lifecycle = createSessionTurnLifecycle({
+      sessionId: 'idle-primary-rejection',
+      enqueueSessionTurn: async (mutation) => { mutations.push(mutation); },
+    });
+    try {
+      await lifecycle.beginTurn({ provider: 'claude' });
+      await lifecycle.completeTurn();
+      await surfaceClaudeRateLimitRuntimeIssue({ client: {
+        sessionId: 'idle-primary-rejection', sessionTurnLifecycle: lifecycle,
+      } }, {
+        v: 1, resetAtMs: null, retryAfterMs: null, limitCategory: 'usage_limit',
+        quotaScope: 'account', recoverability: 'wait', planType: null,
+        utilization: null, overage: null, action: null, connectedService: null,
+      }, '[test]');
+      expect(mutations.at(-1)).toMatchObject({ action: 'fail', issue: { source: 'usage_limit' } });
+      expect(lifecycle.hasActiveTurn()).toBe(false);
+    } finally { restoreClaudeSelectionEnv(previousSelectionEnv); }
+  });
   afterEach(() => {
     mockNotifyDaemonConnectedServiceRuntimeAuthFailure.mockReset();
     mockNotifyDaemonConnectedServiceRuntimeAuthFailure.mockResolvedValue({});
@@ -894,6 +918,7 @@ describe('surfaceClaudeRuntimeIssues runtime-auth projection', () => {
 
       expect(failTurn).toHaveBeenCalledWith({
         provider: 'claude',
+        allocateWhenIdle: true,
         issue: expect.objectContaining({
           code: 'provider_temporary_throttle',
           source: 'provider_status_error',
@@ -940,6 +965,7 @@ describe('surfaceClaudeRuntimeIssues runtime-auth projection', () => {
 
       expect(failTurn).toHaveBeenCalledWith({
         provider: 'claude',
+        allocateWhenIdle: true,
         issue: expect.objectContaining({
           code: 'provider_status_error',
           source: 'provider_status_error',
@@ -985,6 +1011,7 @@ describe('surfaceClaudeRuntimeIssues runtime-auth projection', () => {
 
       expect(failTurn).toHaveBeenCalledWith({
         provider: 'claude',
+        allocateWhenIdle: true,
         issue: expect.objectContaining({
           code: 'usage_limit',
           usageLimit: expect.objectContaining({
@@ -1068,6 +1095,7 @@ describe('surfaceClaudeRuntimeIssues runtime-auth projection', () => {
 
       expect(failTurn).toHaveBeenCalledWith({
         provider: 'claude',
+        allocateWhenIdle: true,
         issue: expect.objectContaining({
           code: 'provider_temporary_throttle',
           source: 'provider_status_error',
