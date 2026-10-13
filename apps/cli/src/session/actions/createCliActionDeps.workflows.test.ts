@@ -242,13 +242,16 @@ describe('createCliActionDeps workflow boundary', () => {
           } } }),
         createExecutor: () => createActionExecutor(deps),
       });
+      const transportErrors: unknown[] = [];
       vi.stubGlobal('fetch', async (_url: unknown, init?: RequestInit) => {
+        try {
         const request = AgentRuntimeDaemonServiceRequestV1Schema.parse(JSON.parse(String(init?.body)));
         expect(request.context).toEqual({ token: capability, sessionId: 'session-1' });
         if (request.operation.kind !== 'action.execute') throw new Error('unexpected daemon operation');
         const outcome = await daemon(request.operation, { sessionId: request.context.sessionId, isCurrent: async () => true });
         return Response.json(AgentRuntimeDaemonServiceResponseV1Schema.parse({ ok: true,
           result: { kind: 'action.execution', requestId: request.operation.requestId, outcome } }));
+        } catch (error) { transportErrors.push(error); throw error; }
       });
       try {
         const session = createSessionAccountActionExecutor({
@@ -260,6 +263,7 @@ describe('createCliActionDeps workflow boundary', () => {
           },
         });
         const response = await session.execute('workflow.run.start', input, { surface: 'agent', actionRequestId: 'request-1' });
+        expect(transportErrors).toEqual([]);
         expect(response).toEqual({ ok: true, result: expect.objectContaining({ admission: 'existing' }) });
         if (!response.ok) return response;
         return WorkflowActionOutputSchemasV1['workflow.run.start'].parse(response.result);
