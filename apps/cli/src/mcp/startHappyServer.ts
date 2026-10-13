@@ -35,6 +35,7 @@ import { resolveAccountSettingsScopeKeyForToken } from '@/settings/accountSettin
 import type { SessionClientServerBinding } from '@/api/session/client/transport/sessionClientTransport';
 import { DaemonPluginToolCatalogUnavailableError } from './pluginToolCatalogError';
 import { createSessionMcpToolInventory } from './server/sessionMcpToolInventory';
+import { SessionCapabilityNoticeV1Schema, SESSION_CAPABILITY_NOTICE_SIDECAR_KEY } from '@happier-dev/protocol/sessions/messages/sessionCapabilityNoticeV1';
 
 const NativeAgentToolCallRequestV1Schema = z.strictObject({
     toolName: z.string().trim().min(1).max(256),
@@ -53,6 +54,8 @@ export type HappyMcpExecutionRunService = Readonly<{
 }>;
 
 export type HappyMcpSessionClient = {
+    getCurrentSessionSkillItems?: import('@/mcp/runtime/applyRunnerMcpSessionContext').RunnerMcpSessionContextAccessors['getCurrentSessionSkillItems'];
+    getPluginMcpRuntimeRegistry?: import('@/mcp/runtime/applyRunnerMcpSessionContext').RunnerMcpSessionContextAccessors['getPluginMcpRuntimeRegistry'];
     getCurrentResolvedRoles?(): import('@happier-dev/protocol').ResolvedRolesSnapshotV1;
     readRoleSources?: import('@/session/roles/roleSources').RoleSourceReader;
     getCurrentWorkspaceWrites?(): 'allow' | 'deny' | undefined;
@@ -77,6 +80,8 @@ export type HappyMcpSessionClient = {
     /** Full host admission identity for the existing authenticated daemon channel. */
     getActiveTurnAdmissionWitness?(): import('@/plugins/runtime/invocation/services/types').AgentInvocationTurnAdmissionWitness | null;
     getRuntimeLifetimeSignal?(): AbortSignal | null | undefined;
+    /** Existing host prompt/turn cancellation scope; capture before asynchronous tool admission. */
+    getHostTurnAbortSignal?(): AbortSignal | null | undefined;
     getEphemeralStreamConnectionEpoch?: import('@/api/session/sessionClient').ApiSessionClient['getEphemeralStreamConnectionEpoch'];
     subscribeDaemonPluginCatalogChanges?: import('@/api/session/sessionClient').ApiSessionClient['subscribeDaemonPluginCatalogChanges'];
     isDaemonPluginCatalogSignalReady?: import('@/api/session/sessionClient').ApiSessionClient['isDaemonPluginCatalogSignalReady'];
@@ -162,11 +167,18 @@ export function filterPluginToolsForActiveAgentComposition(
 async function readCurrentPluginToolCatalog(
     client: HappyMcpSessionClient,
     inventory: ReturnType<typeof createSessionMcpToolInventory>,
+    signal?: AbortSignal,
 ): Promise<readonly ProjectedPluginToolCatalogEntry[]> {
     return filterPluginToolsForActiveAgentComposition(
-        await inventory.readPluginToolCatalog(),
+        await inventory.readPluginToolCatalog(signal),
         client.getActiveAgentCompositionToolSelection?.() ?? null,
     );
+}
+
+function readMcpToolExecutionSignal(client: HappyMcpSessionClient, requestSignal?: AbortSignal): AbortSignal | undefined {
+    const signals = [requestSignal, client.getHostTurnAbortSignal?.(), client.getRuntimeLifetimeSignal?.()]
+        .filter((signal): signal is AbortSignal => Boolean(signal));
+    return signals.length > 1 ? AbortSignal.any(signals) : signals[0];
 }
 
 export function registerHappierSessionAgentToolRpc(
@@ -188,7 +200,9 @@ export function registerHappierSessionAgentToolRpc(
     });
     client.rpcHandlerManager.registerHandler(
         SESSION_RPC_METHODS.SESSION_AGENT_TOOL_CALL_V1,
-        async (raw) => {
+        async (raw, requestContext) => {
+            const toolExecutionSignal = readMcpToolExecutionSignal(client, requestContext?.signal);
+            if (toolExecutionSignal?.aborted) return { ok: false as const, errorCode: 'cancelled', error: 'cancelled' };
             const parsed = NativeAgentToolCallRequestV1Schema.safeParse(raw);
             if (!parsed.success) {
                 return {
@@ -199,8 +213,9 @@ export function registerHappierSessionAgentToolRpc(
             }
             let pluginToolCatalog: readonly ProjectedPluginToolCatalogEntry[];
             try {
-                pluginToolCatalog = await readCurrentPluginToolCatalog(client, readToolInventory);
+                pluginToolCatalog = await readCurrentPluginToolCatalog(client, readToolInventory, toolExecutionSignal);
             } catch (error) {
+                if (toolExecutionSignal?.aborted) return { ok: false as const, errorCode: 'cancelled', error: 'cancelled' };
                 if (!(error instanceof DaemonPluginToolCatalogUnavailableError)) throw error;
                 return { ok: false as const, errorCode: error.code, error: error.message };
             }
@@ -213,6 +228,7 @@ export function registerHappierSessionAgentToolRpc(
                 accountSettings: opts?.accountSettings ?? null,
                 getAccountSettings: opts?.getAccountSettings ?? null,
                 pluginToolCatalog,
+                ...(toolExecutionSignal ? { toolExecutionSignal } : {}),
                 toolInventory: readToolInventory(pluginToolCatalog),
                 ...(opts?.pluginRuntimeRegistryLease
                     ? { pluginRuntimeRegistryLease: opts.pluginRuntimeRegistryLease }
@@ -252,8 +268,29 @@ export async function startHappyServer(
         requiredDirectActionIds: opts?.requiredDirectActionIds,
         pluginRuntimeRegistryLease: opts?.pluginRuntimeRegistryLease,
     });
-    const initialPluginToolCatalog = await readCurrentPluginToolCatalog(client, readToolInventory)
-        .catch(error => { readToolInventory.dispose(); throw error; });
+    const startupSignal = readMcpToolExecutionSignal(client);
+    let initialPluginToolCatalog: readonly ProjectedPluginToolCatalogEntry[];
+    try {
+        initialPluginToolCatalog = await readCurrentPluginToolCatalog(client, readToolInventory, startupSignal)
+            .catch(async (error: unknown) => {
+                startupSignal?.throwIfAborted();
+                if (!(error instanceof DaemonPluginToolCatalogUnavailableError) || !client.enqueueSessionEventCommitted) throw error;
+                const notice = SessionCapabilityNoticeV1Schema.parse({ v: 1, items: [{
+                    kind: 'mcp_server', name: 'MCP plugin tools', code: error.code,
+                }] });
+                await client.enqueueSessionEventCommitted({ type: 'message',
+                    message: `MCP plugin tools couldn't start · ${error.message}`,
+                    [SESSION_CAPABILITY_NOTICE_SIDECAR_KEY]: notice });
+                // This is only the startup projection. The inventory's catalog
+                // remains unadmitted; every POST and native tool call still
+                // reads its exact current authority through the same owner.
+                return [];
+            });
+        startupSignal?.throwIfAborted();
+    } catch (error) {
+        readToolInventory.dispose();
+        throw error;
+    }
     const initialToolInventory = readToolInventory(initialPluginToolCatalog);
     const toolsSnapshot = initialToolInventory.tools;
     const toolNamesSnapshot = toolsSnapshot.map((tool) => tool.name);
@@ -265,6 +302,7 @@ export async function startHappyServer(
     //
 
     const server = createServer(async (req, res) => {
+        const toolExecutionSignal = req.method === 'POST' ? readMcpToolExecutionSignal(client) : undefined;
         // Claude Code keeps a long-lived standalone GET SSE stream open for MCP notifications.
         // Without periodic bytes on that stream, the client times out and reconnects every ~5 minutes.
         // Keepalives are only needed for the standalone GET stream (POST response streams are short-lived).
@@ -278,14 +316,15 @@ export async function startHappyServer(
             // POST requests still bind the current executable catalog.
             pluginToolCatalog = req.method === 'GET'
                 ? initialPluginToolCatalog
-                : await readCurrentPluginToolCatalog(client, readToolInventory);
+                : await readCurrentPluginToolCatalog(client, readToolInventory, toolExecutionSignal);
         } catch (error) {
             stopKeepAlive();
-            logger.debug('[happierMCP] Plugin catalog unavailable', { error: 'daemon_plugin_catalog_unavailable' });
+            const cancelled = toolExecutionSignal?.aborted === true;
+            logger.debug('[happierMCP] Plugin catalog unavailable', { error: cancelled ? 'cancelled' : 'daemon_plugin_catalog_unavailable' });
             if (!res.headersSent && !res.destroyed) {
                 const failure = new DaemonPluginToolCatalogUnavailableError();
                 res.writeHead(503, { 'content-type': 'application/json' }).end(JSON.stringify({
-                    ok: false, errorCode: failure.code, error: failure.message,
+                    ok: false, errorCode: cancelled ? 'cancelled' : failure.code, error: cancelled ? 'cancelled' : failure.message,
                 }));
             } else if (!res.destroyed) {
                 res.end();
@@ -308,6 +347,7 @@ export async function startHappyServer(
             accountSettings: opts?.accountSettings ?? null,
             getAccountSettings: opts?.getAccountSettings ?? null,
             pluginToolCatalog,
+            ...(toolExecutionSignal ? { toolExecutionSignal } : {}),
             toolInventory: req.method === 'GET' ? initialToolInventory : readToolInventory(pluginToolCatalog),
             ...(opts?.pluginRuntimeRegistryLease
                 ? { pluginRuntimeRegistryLease: opts.pluginRuntimeRegistryLease }

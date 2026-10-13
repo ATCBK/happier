@@ -48,6 +48,16 @@ describe('Account Project capability reach', () => {
     expect(result.mcp.items[0]?.selected).toBe(false);
     expect(request).not.toHaveBeenCalled();
   });
+  it('resolves skill Project reach through the same association owner', async () => {
+    rows();
+    const result = await resolveSessionCapabilitiesForDirectory({ settings: { ...settings, servers: [], bindings: [] },
+      machineId: 'linux', directory: '/srv/project', agentId: 'codex', agentAcceptsUserMcp: false,
+      skills: { items: [{ skillId: 'lint', name: 'lint' }], rules: [{ id: 'skill-project', skillId: 'lint',
+        target: { t: 'project', projectKey: 'shared-project' }, enabled: true, createdAt: 1, updatedAt: 1 }] },
+      sessionProject: { credentials, serverId, metadata: { workspaceId: 'linux-checkout', projectId: 'shared-project' } },
+    });
+    expect(result.skills.items[0]).toMatchObject({ selected: true, decidedBy: { ruleId: 'skill-project', target: 'project' } });
+  });
   it.each(['unsupported', 'managed_off', 'excluded', 'other_agent', 'orphan', 'no_project'] as const)(
     'does not read Project rows for %s items', async guard => {
       const request = rows();

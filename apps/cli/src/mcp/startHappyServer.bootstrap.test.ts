@@ -12,6 +12,7 @@ import { AccountSettingsSchema, type AccountSettings } from '@happier-dev/protoc
 import { createDeferred } from '@/testkit/async/deferred';
 import { createMutableApiSessionClientFixture } from '@/testkit/backends/sessionFixtures';
 import { createActionSettingsProvider } from '@/settings/actionsSettingsProvider';
+import { readSessionCapabilityNoticeV1 } from '@happier-dev/protocol/sessions/messages/sessionCapabilityNoticeV1';
 
 const daemonCatalogBoundary = vi.hoisted(() => ({ read: vi.fn() }));
 // IPC is outside the Session process; bootstrap, Action policy, MCP registration
@@ -278,11 +279,16 @@ it('keeps absent optional Action policy as cheap as explicit defaults through Se
     }
 }, 180_000);
 
-it('retains slow required catalog preparation and rejects its failure as a typed startup error', async () => {
+it('retains pending catalog preparation and admits built-in startup after optional extras become unavailable', async () => {
     const catalog = createDeferred<Readonly<{ kind: 'unavailable'; code: string }>>();
     const requested = createDeferred<void>();
+    const events: unknown[] = [];
+    const session = createMutableApiSessionClientFixture({ sessionId: 'optional-plugin-catalog', overrides: {
+        getServerBinding: () => ({ serverId: 'test-home', serverUrl: 'https://test-home.example.test' }),
+        enqueueSessionEventCommitted: async event => { events.push(event); return { persisted: true, delivered: true }; },
+    } });
     daemonCatalogBoundary.read.mockImplementation(() => { requested.resolve(); return catalog.promise; });
-    const pending = bootstrap();
+    const pending = bootstrap(null, session);
     void pending.catch(() => undefined);
     await requested.promise;
     let settled = false;
@@ -290,8 +296,53 @@ it('retains slow required catalog preparation and rejects its failure as a typed
     await new Promise<void>(resolve => setImmediate(resolve));
     expect(settled).toBe(false);
     catalog.resolve({ kind: 'unavailable', code: 'daemon_unavailable' });
-    await expect(pending).rejects.toMatchObject({ code: 'daemon_plugin_catalog_unavailable' });
+    daemonCatalogBoundary.read.mockResolvedValue({ kind: 'unavailable', code: 'daemon_unavailable' });
+    const runtime = await pending;
+    const client = new Client({ name: 'optional-plugin-catalog', version: '1' });
+    const notificationStream = new AbortController();
+    try {
+        expect(runtime.mcpServers.happier).toBeDefined();
+        expect(runtime.happierMcpServer).toMatchObject({ toolNames: expect.arrayContaining(['action_execute', 'action_spec_get']) });
+        expect(readSessionCapabilityNoticeV1(events[0])).toEqual({ v: 1, items: [{
+            kind: 'mcp_server', name: 'MCP plugin tools', code: 'daemon_plugin_catalog_unavailable',
+        }] });
+        const stream = await fetch(runtime.happierMcpServer.url, { headers: { Accept: 'text/event-stream' }, signal: notificationStream.signal });
+        expect(stream.status).toBe(200);
+        notificationStream.abort();
+        const unavailable = await fetch(runtime.happierMcpServer.url, { method: 'POST',
+            headers: { 'Content-Type': 'application/json', Accept: 'application/json, text/event-stream' },
+            body: JSON.stringify({ jsonrpc: '2.0', id: 'optional-catalog', method: 'tools/list' }),
+        });
+        expect(unavailable.status).toBe(503);
+        expect(await unavailable.json()).toMatchObject({ ok: false, errorCode: 'daemon_plugin_catalog_unavailable' });
+        registerHappierSessionAgentToolRpc(session);
+        expect(await session.rpcHandlerManager.invokeLocal('session.agentTool.call.v1', {
+            toolName: 'action_spec_get', args: { id: 'browser.view.open' },
+        })).toMatchObject({ ok: false, errorCode: 'daemon_plugin_catalog_unavailable' });
+        daemonCatalogBoundary.read.mockResolvedValue({ kind: 'available', plugins: [], tools: [] });
+        await client.connect(new StreamableHTTPClientTransport(new URL(runtime.happierMcpServer.url)));
+        expect((await client.listTools()).tools.map(tool => tool.name)).toEqual(expect.arrayContaining(['action_execute', 'action_spec_get']));
+    } finally {
+        notificationStream.abort(); await client.close(); runtime.happierMcpServer.stop();
+    }
 }, 180_000);
+
+it('preserves host cancellation when optional plugin catalog preparation becomes unavailable', async () => {
+    const lifetime = new AbortController();
+    const requested = createDeferred<void>();
+    const catalog = createDeferred<Readonly<{ kind: 'unavailable'; code: string }>>();
+    daemonCatalogBoundary.read.mockImplementation(() => { requested.resolve(); return catalog.promise; });
+    const session = Object.assign(createMutableApiSessionClientFixture({ sessionId: 'cancelled-plugin-bootstrap' }), {
+        getRuntimeLifetimeSignal: () => lifetime.signal,
+    });
+    const pending = bootstrap(null, session);
+    void pending.catch(() => undefined);
+    await requested.promise;
+    const reason = new Error('host_runtime_retired');
+    lifetime.abort(reason);
+    catalog.resolve({ kind: 'unavailable', code: 'daemon_unavailable' });
+    await expect(pending).rejects.toBe(reason);
+});
 
 it('reuses the admitted Action inventory across stateless MCP requests', async () => {
     daemonCatalogBoundary.read.mockResolvedValue({ kind: 'available', plugins: [], tools: [] });

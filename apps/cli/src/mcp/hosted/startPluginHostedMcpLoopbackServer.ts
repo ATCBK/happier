@@ -28,6 +28,7 @@ function closeHttpServer(server: ReturnType<typeof createServer>): Promise<void>
 export async function startPluginHostedMcpLoopbackServer(params: Readonly<{
     pluginId: string;
     spec: PluginHostedMcpServerSpec;
+    toolNameSource?: 'mcpServer';
 }>): Promise<PluginHostedMcpLoopbackServer> {
     assertHostedMcpHandlerSpec(params);
     const requestCleanups = new Set<() => Promise<void>>();
@@ -41,6 +42,7 @@ export async function startPluginHostedMcpLoopbackServer(params: Readonly<{
             server: mcp,
             pluginId: params.pluginId,
             spec: params.spec,
+            toolNameSource: params.toolNameSource,
             signal: abortController.signal,
         });
         const transport = new StreamableHTTPServerTransport({

@@ -96,8 +96,9 @@ function readTrimmedString(value: string | null | undefined): string | undefined
 export function assertHostedMcpHandlerSpec(params: Readonly<{
     pluginId: string;
     spec: PluginHostedMcpServerSpec;
+    toolNameSource?: 'mcpServer';
 }>): void {
-    assertHostedMcpServerRegistration(params.spec, { pluginId: params.pluginId });
+    assertHostedMcpServerRegistration(params.spec, { pluginId: params.pluginId, toolNameSource: params.toolNameSource });
 }
 
 function compileJsonSchema(schema: Record<string, unknown>): JsonSchemaCompilation {
@@ -235,6 +236,7 @@ export function registerHostedMcpHandlers(params: Readonly<{
     server: McpServer;
     pluginId: string;
     spec: PluginHostedMcpServerSpec;
+    toolNameSource?: 'mcpServer';
     signal: AbortSignal;
 }>): void {
     assertHostedMcpHandlerSpec(params);

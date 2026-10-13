@@ -2,7 +2,12 @@ import { spawn } from 'node:child_process';
 import { readFile } from 'node:fs/promises';
 
 import { z } from 'zod';
+import { ReadBuffer, serializeMessage } from '@modelcontextprotocol/sdk/shared/stdio.js';
+import { ErrorCode, type RequestId } from '@modelcontextprotocol/sdk/types.js';
 import { withHostProcessOwnerEnvironment } from '@/processes/ownerTag';
+import { classifySpawnFailure } from '@/processes/spawnFailure/classifySpawnFailure';
+import type { StdioMcpServerStartupFailure } from './stdioMcpServerStartupFailure';
+import { buildScopedProcessEnv } from '@/utils/processEnv/buildScopedProcessEnv';
 
 
 const StdioMcpServerLauncherConfigSchema = z.object({
@@ -46,12 +51,50 @@ export async function runStdioMcpServerLauncher(): Promise<void> {
 
   const child = spawn(config.command, config.args, {
     cwd: config.cwd,
-    env: withHostProcessOwnerEnvironment({ ...process.env, ...config.env }),
+    env: withHostProcessOwnerEnvironment(buildScopedProcessEnv({ baseEnv: process.env, explicitEnv: config.env })),
     stdio: ['pipe', 'pipe', 'pipe'],
     shell: false,
   });
 
+  let startupFailure: StdioMcpServerStartupFailure | undefined;
+  let childStarted = false;
+  let initializeId: RequestId | undefined;
+  let failureReported = false;
+  const initialization = new ReadBuffer();
+  const reportStartupFailure = () => {
+    if (!startupFailure || initializeId === undefined || failureReported) return;
+    failureReported = true;
+    process.stdout.write(serializeMessage({ jsonrpc: '2.0', id: initializeId,
+      error: { code: ErrorCode.InternalError, message: 'MCP child process could not be started', data: startupFailure } }),
+    () => process.exit(1));
+  };
+  const observeInitialization = (chunk: Buffer) => {
+    initialization.append(chunk);
+    try {
+      for (;;) {
+        const message = initialization.readMessage();
+        if (message === null) break;
+        if ('method' in message && message.method === 'initialize' && 'id' in message) {
+          initializeId = message.id;
+          process.stdin.off('data', observeInitialization);
+          initialization.clear();
+          reportStartupFailure();
+          return;
+        }
+      }
+    } catch {
+      // A failed child cannot serve malformed MCP input; stdin end/close still owns exit.
+    }
+  };
+  process.stdin.on('data', observeInitialization);
+  child.once('spawn', () => {
+    childStarted = true;
+    process.stdin.off('data', observeInitialization);
+    initialization.clear();
+  });
+
   const forwardSignal = (signal: NodeJS.Signals) => {
+    if (startupFailure) process.exit(1);
     try {
       child.kill(signal);
     } catch {
@@ -65,15 +108,24 @@ export async function runStdioMcpServerLauncher(): Promise<void> {
 
   child.on('error', (err) => {
     writeStderr(`[happier-mcp-stdio-launcher] Failed to start child: ${err instanceof Error ? err.message : String(err)}`);
+    if (childStarted) return;
+    const code = classifySpawnFailure(err, { syscall: 'spawn' }).errno;
+    const path = 'path' in err && typeof err.path === 'string' ? err.path : undefined;
+    startupFailure = { t: 'happier-mcp-stdio-spawn-failure-v1',
+      ...(code === undefined ? {} : { code }), ...(path === undefined ? {} : { path }) };
+    reportStartupFailure();
+    if (process.stdin.readableEnded && !failureReported) process.exit(1);
   });
 
   process.stdin.on('data', (chunk) => {
-    child.stdin.write(chunk);
+    if (!startupFailure) child.stdin.write(chunk);
   });
   process.stdin.on('end', () => {
+    if (startupFailure && !failureReported) process.exit(1);
     child.stdin.end();
   });
   process.stdin.on('error', () => {
+    if (startupFailure && !failureReported) process.exit(1);
     child.stdin.destroy();
   });
 
@@ -86,6 +138,7 @@ export async function runStdioMcpServerLauncher(): Promise<void> {
 
   await new Promise<never>((_resolve, _reject) => {
     child.on('close', (code, signal) => {
+      if (startupFailure) return;
       if (signal) {
         try {
           process.kill(process.pid, signal);

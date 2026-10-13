@@ -15,13 +15,15 @@ require('node:readline').createInterface({ input: process.stdin }).on('line', li
   let result;
   if (request.method === 'initialize') result = {
     protocolVersion: request.params.protocolVersion, capabilities: { tools: {} },
-    serverInfo: { name: 'probe-fixture', version: '1.0.0' }
+    serverInfo: { name: 'probe-fixture', version: '1.0.0' }, instructions: 'Use the read tool first.'
   };
   else if (request.method === 'tools/list') {
     if (process.argv[2] === 'hang') { fs.writeFileSync(process.argv[1] + '.listing', 'ready'); return; }
     result = request.params?.cursor === 'second'
-      ? { tools: [{ name: 'later_page', inputSchema: { type: 'object' } }] }
-      : { tools: [{ name: 'first_page', inputSchema: { type: 'object' } }], nextCursor: 'second' };
+      ? { tools: [{ name: 'later_page', annotations: { title: 'Older display title' }, inputSchema: { type: 'object' } }] }
+      : { tools: [{ name: 'first_page', title: 'Read records', description: 'Lists records.',
+          annotations: { readOnlyHint: true, destructiveHint: false, idempotentHint: true, openWorldHint: false },
+          inputSchema: { type: 'object' } }], nextCursor: 'second' };
   } else return;
   process.stdout.write(JSON.stringify({ jsonrpc: '2.0', id: request.id, result }) + '\n');
 });
@@ -42,9 +44,15 @@ describe('probeMcpStdioServerTools', () => {
 
   it('includes tools from every native listTools page', async () => {
     const { config } = await fixtureConfig();
-    await expect(probeMcpStdioServerTools({ config })).resolves.toEqual([
-      { name: 'first_page' }, { name: 'later_page' },
-    ]);
+    await expect(probeMcpStdioServerTools({ config })).resolves.toMatchObject({
+      serverInfo: { name: 'probe-fixture', version: '1.0.0' }, protocolVersion: expect.any(String),
+      instructions: 'Use the read tool first.', tools: [
+        { name: 'first_page', title: 'Read records', description: 'Lists records.',
+          annotations: { readOnlyHint: true, destructiveHint: false, idempotentHint: true, openWorldHint: false },
+          inputSchema: { type: 'object' } },
+        { name: 'later_page', title: 'Older display title', inputSchema: { type: 'object' } },
+      ],
+    });
   });
 
   it('does not launch a stdio server for an already aborted request', async () => {

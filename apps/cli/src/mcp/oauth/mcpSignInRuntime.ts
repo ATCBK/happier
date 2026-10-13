@@ -91,6 +91,14 @@ function metadata(issuer: string, registration: Registration): AuthorizationServ
         token_endpoint_auth_methods_supported: registration.tokenEndpointAuthMethods };
 }
 function diagnostic(code: string) { return { code, severity: 'error' as const }; }
+class McpOAuthEndpointRequiresHttpsError extends Error {}
+function requireHttpsEndpoint(input: Parameters<FetchLike>[0]): URL {
+    const endpoint = input instanceof URL ? input : new URL(input);
+    // MCP 2025-11-25 requires HTTPS for every AS endpoint. Its localhost
+    // exception applies to redirect URIs, not authorization-server requests.
+    if (endpoint.protocol !== 'https:') throw new McpOAuthEndpointRequiresHttpsError('MCP OAuth endpoints require HTTPS');
+    return endpoint;
+}
 async function secrets(context: Pick<HostConnectedAccountReadContext, 'configuration'>) {
     const value = await context.configuration.getSecret('clientSecrets');
     return value ? SecretsSchema.parse(JSON.parse(value)) : {};
@@ -128,6 +136,7 @@ export function createMcpSignInRuntime(params: Readonly<{ fetchFn?: FetchLike; n
         let revocationAuthMethods: string[] | undefined;
         const request = async (url: Parameters<FetchLike>[0], init: Parameters<FetchLike>[1], readMetadata: boolean) => {
             signal.throwIfAborted();
+            requireHttpsEndpoint(url);
             // Prevent a 307/308 from forwarding authorization codes, verifiers,
             // refresh tokens or DCR secrets to another endpoint.
             const response = await fetchFn(url, { ...init, signal, redirect: 'error' });
@@ -183,6 +192,7 @@ export function createMcpSignInRuntime(params: Readonly<{ fetchFn?: FetchLike; n
                     if (!discovered || discovered.issuer !== issuer) return { status: 'rejected', diagnostic: diagnostic('mcp_oauth_issuer_mismatch') };
                     if (!discovered.code_challenge_methods_supported?.includes('S256')) return { status: 'rejected', diagnostic: diagnostic('mcp_oauth_pkce_required') };
                     if (input.callbackUrl !== MCP_OAUTH_CALLBACK_URL_V1) return { status: 'rejected', diagnostic: diagnostic('mcp_oauth_callback_invalid') };
+                    const authorization = requireHttpsEndpoint(discovered.authorization_endpoint);
                     const clientSecrets = await secrets(context);
                     let registration = configuration.registrations[issuer];
                     const flags = network.flags();
@@ -220,16 +230,16 @@ export function createMcpSignInRuntime(params: Readonly<{ fetchFn?: FetchLike; n
                     await context.stageAccountConfiguration({ values, secretValues: { clientSecrets: JSON.stringify(clientSecrets) } });
                     await context.attemptCredentials.set(completionKey, JSON.stringify({ issuer, resource: resource.href,
                         serverId: configuration.serverId, registration, clientSecret: clientSecrets[issuer], scopes }));
-                    const authorization = new URL(registration.authorizationEndpoint);
                     const query = { response_type: 'code', client_id: clientId, redirect_uri: input.callbackUrl, state: input.state,
                         code_challenge: input.pkce.challenge, code_challenge_method: 'S256', resource: resource.href };
                     for (const [key, value] of Object.entries(query)) authorization.searchParams.set(key, value);
                     if (scopes.length) authorization.searchParams.set('scope', scopes.join(' '));
                     return { status: 'awaitingOAuthRedirect', authorizationUrl: authorization.href, issuer,
                         issuerResponseParameterRequired: flags.issRequired };
-                } catch {
+                } catch (cause) {
                     context.signal.throwIfAborted();
-                    return { status: 'rejected', diagnostic: diagnostic('mcp_oauth_discovery_failed') };
+                    return { status: 'rejected', diagnostic: diagnostic(cause instanceof McpOAuthEndpointRequiresHttpsError
+                        ? 'mcp_oauth_endpoints_require_https' : 'mcp_oauth_discovery_failed') };
                 }
             },
             async complete(input, context) {
@@ -246,7 +256,12 @@ export function createMcpSignInRuntime(params: Readonly<{ fetchFn?: FetchLike; n
                     const scopes = await saveTokens(context.attemptCredentials, tokens, now(), sealed.scopes);
                     await context.attemptCredentials.delete(completionKey);
                     return { status: 'connected', accountId: sealed.serverId, displayName: sealed.serverId, scopes };
-                } catch { return failure(context.signal, network.status(), 'mcp_oauth_exchange_failed'); }
+                } catch (cause) {
+                    context.signal.throwIfAborted();
+                    return cause instanceof McpOAuthEndpointRequiresHttpsError
+                        ? { status: 'rejected', diagnostic: diagnostic('mcp_oauth_endpoints_require_https') }
+                        : failure(context.signal, network.status(), 'mcp_oauth_exchange_failed');
+                }
             },
             async cancel(context) { await context.attemptCredentials.delete(completionKey); },
         } } },
@@ -261,7 +276,9 @@ export function createMcpSignInRuntime(params: Readonly<{ fetchFn?: FetchLike; n
                 const previousScopes = await context.credentials.get('scopes');
                 const scopes = await saveTokens(context.stagedCredentials, tokens, now(), previousScopes ? z.array(z.string()).parse(JSON.parse(previousScopes)) : []);
                 return { status: 'connected', scopes };
-            } catch {
+            } catch (cause) {
+                context.signal.throwIfAborted();
+                if (cause instanceof McpOAuthEndpointRequiresHttpsError) return { status: 'reconnectRequired', diagnostic: diagnostic('mcp_oauth_endpoints_require_https') };
                 const result = failure(context.signal, network.status(), 'mcp_oauth_refresh_failed');
                 return result.status === 'rejected' ? { ...result, status: 'reconnectRequired' } : result;
             }
@@ -281,7 +298,11 @@ export function createMcpSignInRuntime(params: Readonly<{ fetchFn?: FetchLike; n
                 const response = await network.send(registration.revocationEndpoint, { method: 'POST', headers, body });
                 await response.body?.cancel();
                 return response.ok ? { status: 'remoteRevoked' } : { status: 'outcomeUnknown', diagnostic: diagnostic('mcp_oauth_revoke_failed') };
-            } catch { context.signal.throwIfAborted(); return { status: 'outcomeUnknown', diagnostic: diagnostic('mcp_oauth_revoke_failed') }; }
+            } catch (cause) {
+                context.signal.throwIfAborted();
+                return { status: 'outcomeUnknown', diagnostic: diagnostic(cause instanceof McpOAuthEndpointRequiresHttpsError
+                    ? 'mcp_oauth_endpoints_require_https' : 'mcp_oauth_revoke_failed') };
+            }
         },
         async status(context) {
             const accessToken = await context.credentials.get('accessToken');

@@ -2,7 +2,7 @@ import { describe, expect, it } from 'vitest';
 import { accountSettingsParse } from '@happier-dev/protocol/account/settings/accountSettings';
 import type { McpServerCatalogEntryV1 } from '@happier-dev/protocol';
 
-import { readMcpServersSettingsFromAccountSettings } from './readMcpServersSettingsFromAccountSettings';
+import { readMcpServersSettingsFromAccountSettings, readMcpServersSettingsForStartup } from './readMcpServersSettingsFromAccountSettings';
 
 describe('readMcpServersSettingsFromAccountSettings', () => {
   it('uses the admitted catalog after root removal and keeps strict policy separate', () => {
@@ -24,6 +24,25 @@ describe('readMcpServersSettingsFromAccountSettings', () => {
       settingsSecretsReadKeys: [], rawSettings: {},
       mcpServerCatalog: { status: 'unavailable', reason: 'unreachable' },
     })).toThrow();
+  });
+
+  it('distinguishes optional unavailability from strict startup refusal without inventing an empty catalog', () => {
+    const snapshot = { source: 'network' as const, settings: accountSettingsParse({ mcpServersStrictMode: false }),
+      settingsVersion: 4, loadedAtMs: 1, settingsSecretsReadKeys: [], rawSettings: {},
+      mcpServerCatalog: { status: 'unavailable' as const, reason: 'unreachable' as const },
+    };
+    expect(readMcpServersSettingsForStartup({ snapshot })).toMatchObject({
+      status: 'unavailable', error: { code: 'mcp_catalog_unavailable', reason: 'unreachable' },
+    });
+    expect(() => readMcpServersSettingsForStartup({ snapshot: { ...snapshot,
+      settings: accountSettingsParse({ mcpServersStrictMode: true }) }, settings: snapshot.settings,
+    })).toThrow();
+    expect(() => readMcpServersSettingsForStartup({ snapshot: null,
+      settings: accountSettingsParse({ mcpServersStrictMode: true }),
+    })).toThrow();
+    expect(() => readMcpServersSettingsForStartup({ snapshot: { ...snapshot,
+      mcpServerCatalog: { status: 'unavailable', reason: 'account-mode-mismatch' },
+    } })).toThrow();
   });
 
   it('admits an observed empty destination', () => {

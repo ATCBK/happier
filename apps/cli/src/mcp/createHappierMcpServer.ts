@@ -31,7 +31,6 @@ import {
 } from '@/session/transport/encryption/sessionEncryptionContext';
 import { resolvePermissionIntentFromMetadataSnapshot } from '@/agent/runtime/permissions/modeFromMetadata';
 import { resolveExecutionRunPublicBackendId } from '@/agent/runtime/bridges/executionRun/backendTargets';
-import { PromptRegistryInstallRequestV1Schema, PromptRegistryInstallResponseV1Schema } from '@happier-dev/protocol/prompts/library/promptRegistriesV1';
 import { AgentStartSessionCallerV1Schema } from '@happier-dev/protocol/account/settings/admitAgentStartV1';
 import type { ActionId, AccountSettings, ActionExecutorContext, ActionExecutorDeps, BackendTargetRefV2 } from '@happier-dev/protocol';
 import { getActionSpec, isActionSpecSurfacedOn } from '@happier-dev/protocol/actions/actionSpecs';
@@ -156,6 +155,8 @@ export function createHappierMcpServer(
     requiredDirectActionIds?: readonly ActionId[];
     toolInventory?: HappierMcpToolInventory;
     sessionInputVia?: 'action' | 'mcp';
+    /** Captured containing host/request scope, independent of the Session runtime lifetime. */
+    toolExecutionSignal?: AbortSignal;
   }>,
 ): {
   mcp: McpServer;
@@ -354,6 +355,7 @@ export function createHappierMcpServer(
       rawSession,
       getCurrentSessionBackendTarget: () => resolveLiveClientBackendTarget(client),
       getCurrentSessionMetadata: () => client.getMetadataSnapshot?.() ?? null,
+      ...(client.getCurrentSessionSkillItems ? { getCurrentSessionSkillItems: () => client.getCurrentSessionSkillItems!() } : {}),
       ...(client.getCurrentResolvedRoles ? { getCurrentResolvedRoles: () => client.getCurrentResolvedRoles!() } : {}),
       ...(client.readRoleSources ? { readRoleSources: (signal) => client.readRoleSources!(signal) } : {}),
       ...(client.getCurrentWorkspaceWrites ? { getCurrentWorkspaceWrites: () => client.getCurrentWorkspaceWrites!() } : {}),
@@ -532,21 +534,6 @@ export function createHappierMcpServer(
             await sessionScopedRpc(RPC_METHODS.DAEMON_MEMORY_ENSURE_UP_TO_DATE, sessionId ? { sessionId } : {}),
         }),
 
-      promptRegistryInstall: async (args) => {
-        if (!args.installTarget) {
-          return { ok: false as const, errorCode: 'invalid_request' as const, error: 'installTarget is required' };
-        }
-
-        const request = PromptRegistryInstallRequestV1Schema.parse({
-          sourceId: args.sourceId,
-          itemId: args.itemId,
-          configuredSources: args.configuredSources ?? [],
-          installTarget: args.installTarget,
-        });
-        const res = await sessionScopedRpc(RPC_METHODS.DAEMON_PROMPT_REGISTRY_INSTALL, request);
-        return PromptRegistryInstallResponseV1Schema.parse(res);
-      },
-
       resetGlobalVoiceAgent: async () => {},
       isActionEnabled: (id) => isActionEnabled(id),
       isActionApprovalRequired: (id) => isActionApprovalRequired(id),
@@ -602,7 +589,14 @@ export function createHappierMcpServer(
         getInitiatingActionCaller,
         ...(boundCallerSessionId ? { startedBy: 'agent' } : {}),
       });
-  const executor = createSessionAccountActionExecutor({ base: localExecutor, client });
+  const accountExecutor = createSessionAccountActionExecutor({ base: localExecutor, client });
+  const toolExecutionSignal = opts?.toolExecutionSignal ?? client.getHostTurnAbortSignal?.() ?? undefined;
+  const executor = toolExecutionSignal ? {
+    execute: (actionId: ActionId, input: unknown, context?: ActionExecutorContext) => accountExecutor.execute(actionId, input, {
+      ...context,
+      signal: context?.signal ? AbortSignal.any([toolExecutionSignal, context.signal]) : toolExecutionSignal,
+    }),
+  } : accountExecutor;
 
   const actionToolBridge = createActionToolExecutorBridge({
     executor,

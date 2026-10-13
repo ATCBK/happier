@@ -56,6 +56,7 @@ export type PluginHostedMcpServerHandle = Readonly<{
 export type StartPluginHostedMcpRuntimeEndpoint = (params: Readonly<{
     pluginId: string;
     spec: PluginHostedMcpServerSpec;
+    toolNameSource?: 'mcpServer';
 }>) => Promise<PluginHostedMcpRuntimeEndpointHandle> | PluginHostedMcpRuntimeEndpointHandle;
 
 function requestsLoopbackHttpExposure(spec: PluginHostedMcpServerSpec): boolean {
@@ -97,8 +98,9 @@ export async function createPluginHostedMcpServerHandle(params: Readonly<{
     spec: PluginHostedMcpServerSpec;
     registry: PluginHostedMcpServerRegistryV1;
     startRuntimeEndpoint?: StartPluginHostedMcpRuntimeEndpoint;
+    toolNameSource?: 'mcpServer';
 }>): Promise<PluginHostedMcpServerHandle> {
-    assertMcpRuntimeServerRegistrationSafe(params.spec, { pluginId: params.pluginId });
+    assertMcpRuntimeServerRegistrationSafe(params.spec, { pluginId: params.pluginId, toolNameSource: params.toolNameSource });
     if (params.registry.has(params.pluginId, params.spec.id)) {
         throw new Error(`Hosted MCP server '${params.spec.id}' is already active for plugin '${params.pluginId}'`);
     }
@@ -112,6 +114,7 @@ export async function createPluginHostedMcpServerHandle(params: Readonly<{
             endpointHandle = await params.startRuntimeEndpoint({
                 pluginId: params.pluginId,
                 spec: params.spec,
+                toolNameSource: params.toolNameSource,
             });
             assertSanitizedHostedEndpoint(endpointHandle.endpoint);
         }

@@ -35,14 +35,19 @@ async function authorizationServer(options: Readonly<{
     probeSse?: boolean;
     onRequest?: (path: string) => void;
     httpResource?: boolean;
+    insecureEndpoint?: 'metadata' | 'issuer' | 'authorization' | 'token' | 'registration' | 'revocation';
 }> = {}) {
     const requests: Array<{ path: string; body: string; authorization: string | undefined }> = [];
+    const fetches: string[] = [];
     let base = '';
+    let physicalBase = '';
+    let insecureBase = '';
     let resource = '';
     let tokenCount = 0;
     let tokenOverrides = options.tokenOverrides;
     let metadataOverrides = options.metadata;
     let tokenStatus = options.tokenStatus;
+    const endpoint = (path: string, kind: typeof options.insecureEndpoint) => `${options.insecureEndpoint === kind ? insecureBase : base}${path}`;
     const server = createServer(async (request, response) => {
         const chunks: Buffer[] = [];
         for await (const chunk of request) chunks.push(Buffer.from(chunk));
@@ -53,14 +58,14 @@ async function authorizationServer(options: Readonly<{
         response.setHeader('content-type', 'application/json');
         if (path === '/mcp') {
             if (options.probeSse) { response.writeHead(200, { 'content-type': 'text/event-stream' }); response.write(': keepalive\n\n'); return; }
-            response.writeHead(401, { 'www-authenticate': options.challenge ?? `Bearer resource_metadata="${new URL('/prm', resource).href}", scope="read"` });
+            response.writeHead(401, { 'www-authenticate': options.challenge ?? `Bearer resource_metadata="${options.insecureEndpoint === 'metadata' ? `${insecureBase}/prm` : new URL('/prm', resource).href}", scope="read"` });
             response.end('{}');
         } else if (path === '/prm' || path === '/.well-known/oauth-protected-resource/mcp' || path === '/.well-known/oauth-protected-resource') {
             const status = path === '/prm' ? options.headerPrmStatus : path === '/.well-known/oauth-protected-resource/mcp' ? options.pathPrmStatus : undefined;
             if (status) { response.writeHead(status); response.end('{}'); return; }
-            response.end(JSON.stringify({ resource: options.prmResource ?? resource, authorization_servers: [`${base}/issuer`], scopes_supported: ['ignored'] }));
+            response.end(JSON.stringify({ resource: options.prmResource ?? resource, authorization_servers: [endpoint('/issuer', 'issuer')], scopes_supported: ['ignored'] }));
         } else if (path === '/.well-known/oauth-authorization-server/issuer' && !options.oauthMissing || path === options.oidcPath) {
-            response.end(JSON.stringify({ issuer: `${base}/issuer`, authorization_endpoint: `${base}/authorize`, token_endpoint: `${base}/token`, registration_endpoint: `${base}/register`, revocation_endpoint: `${base}/revoke`, response_types_supported: ['code'], code_challenge_methods_supported: ['S256'], token_endpoint_auth_methods_supported: ['client_secret_post'], authorization_response_iss_parameter_supported: true, jwks_uri: `${base}/jwks`, subject_types_supported: ['public'], id_token_signing_alg_values_supported: ['RS256'], ...metadataOverrides }));
+            response.end(JSON.stringify({ issuer: endpoint('/issuer', 'issuer'), authorization_endpoint: endpoint('/authorize', 'authorization'), token_endpoint: endpoint('/token', 'token'), registration_endpoint: endpoint('/register', 'registration'), revocation_endpoint: endpoint('/revoke', 'revocation'), response_types_supported: ['code'], code_challenge_methods_supported: ['S256'], token_endpoint_auth_methods_supported: ['client_secret_post'], authorization_response_iss_parameter_supported: true, jwks_uri: `${base}/jwks`, subject_types_supported: ['public'], id_token_signing_alg_values_supported: ['RS256'], ...metadataOverrides }));
         } else if (path === '/register') {
             response.end(JSON.stringify({ ...JSON.parse(body), client_id: 'fixture-client', client_secret: 'registration-secret', ...(options.assignedClientAuthMethod ? { token_endpoint_auth_method: options.assignedClientAuthMethod } : {}) }));
         } else if (path === '/token') {
@@ -78,16 +83,19 @@ async function authorizationServer(options: Readonly<{
     await new Promise<void>((resolve) => server.listen(0, '127.0.0.1', resolve));
     const address = server.address();
     if (!address || typeof address === 'string') throw new Error('Missing fixture port');
-    base = `http://127.0.0.1:${address.port}`;
-    resource = options.httpResource ? `${base}/mcp` : `https://resource-${address.port}.fixture.test/mcp`;
+    physicalBase = `http://127.0.0.1:${address.port}`;
+    base = `https://authorization-${address.port}.fixture.test`;
+    insecureBase = `http://authorization-${address.port}.fixture.test`;
+    resource = options.httpResource ? `${physicalBase}/mcp` : `https://resource-${address.port}.fixture.test/mcp`;
     const resourceOrigin = new URL(resource).origin;
-    // Only the resource/PRM network boundary is remapped. The admitted audience
-    // is HTTPS; discovery, registration and token endpoints remain real HTTP AS
-    // requests. Actual HTTPS bridge transport has its separate TLS fixture.
+    // The fixture's network boundary maps logical HTTPS audiences and AS
+    // endpoints to its real local HTTP server. This is not a production TLS
+    // exemption; actual HTTPS bridge transport has its separate TLS fixture.
     vi.spyOn(globalThis, 'fetch').mockImplementation((input, init) => {
         const requested = typeof input === 'string' || input instanceof URL ? new URL(input) : new URL(input.url);
-        if (!options.httpResource && requested.origin === resourceOrigin) {
-            return networkFetch(new URL(`${requested.pathname}${requested.search}`, base), init);
+        fetches.push(requested.href);
+        if (requested.origin === base || requested.origin === insecureBase || !options.httpResource && requested.origin === resourceOrigin) {
+            return networkFetch(new URL(`${requested.pathname}${requested.search}`, physicalBase), init);
         }
         return networkFetch(input, init);
     });
@@ -95,7 +103,7 @@ async function authorizationServer(options: Readonly<{
         server.closeAllConnections();
         await new Promise<void>((resolve, reject) => server.close(error => error ? reject(error) : resolve()));
     });
-    return { base, resource, resourceOrigin, requests,
+    return { base, insecureBase, resource, resourceOrigin, requests, fetches,
         setTokenOverrides(value: Readonly<Record<string, unknown>>) { tokenOverrides = value; },
         setMetadataOverrides(value: Readonly<Record<string, unknown>>) { metadataOverrides = value; },
         setTokenStatus(value?: number) { tokenStatus = value; },
@@ -167,6 +175,60 @@ describe('MCP server sign-in runtime', () => {
         expect(fixture.requests).toEqual([]);
         expect(staged.content).toBeNull();
         expect(entries.size).toBe(0);
+    });
+
+    it.each(['metadata', 'issuer'] as const)('refuses a non-loopback HTTP %s before fetching its discovery authority', async insecureEndpoint => {
+        const { result, fixture, staged, entries } = await begin({ insecureEndpoint });
+        expect(result).toMatchObject({ status: 'rejected', diagnostic: { code: 'mcp_oauth_endpoints_require_https' } });
+        expect(fixture.fetches.some(url => url.startsWith(fixture.insecureBase))).toBe(false);
+        expect(fixture.requests.some(request => request.path === '/register')).toBe(false);
+        expect(staged.content).toBeNull();
+        expect(entries.size).toBe(0);
+    });
+
+    it.each(['authorization', 'registration'] as const)('refuses a non-loopback HTTP %s endpoint before registering, staging or publishing a browser URL', async insecureEndpoint => {
+        const { result, fixture, staged, entries } = await begin({ insecureEndpoint });
+        expect(result).toMatchObject({ status: 'rejected', diagnostic: { code: 'mcp_oauth_endpoints_require_https' } });
+        expect(fixture.fetches.some(url => url.startsWith(fixture.insecureBase))).toBe(false);
+        expect(fixture.requests.some(request => request.path === '/register')).toBe(false);
+        expect(staged.content).toBeNull();
+        expect(entries.size).toBe(0);
+    });
+
+    it('refuses a non-loopback HTTP token endpoint before transmitting code, verifier or client secret', async () => {
+        const { result, fixture, mode, context, entries } = await begin({ insecureEndpoint: 'token' });
+        expect(result.status).toBe('awaitingOAuthRedirect');
+        const completion = await mode.complete({ code: 'private-code', callbackUrl: 'https://app.happier.dev/oauth/mcp/callback',
+            state: 'attempt-failure.state', pkceVerifier: 'private-verifier' }, context);
+        expect(completion).toMatchObject({ status: 'rejected', diagnostic: { code: 'mcp_oauth_endpoints_require_https' } });
+        expect(fixture.fetches.some(url => url.startsWith(fixture.insecureBase))).toBe(false);
+        expect(fixture.requests.some(request => request.path === '/token')).toBe(false);
+        expect(entries.has('accessToken')).toBe(false);
+        expect(JSON.stringify(completion)).not.toMatch(/private-code|private-verifier|registration-secret/);
+    });
+
+    it('refuses stored non-loopback HTTP refresh and revocation endpoints before disclosing or changing credentials', async () => {
+        const { result, fixture, mode, context, entries, staged, lease } = await begin();
+        expect(result.status).toBe('awaitingOAuthRedirect');
+        await expect(mode.complete({ code: 'code', callbackUrl: 'https://app.happier.dev/oauth/mcp/callback',
+            state: 'attempt-failure.state', pkceVerifier: 'verifier' }, context)).resolves.toMatchObject({ status: 'connected' });
+        const priorCredentials = [...entries];
+        const priorFetches = [...fixture.fetches];
+        const issuer = `${fixture.base}/issuer`;
+        const configuration = { ...context.configuration, values: { ...staged.content!.values,
+            registrations: { [issuer]: { clientId: 'fixture-client', authorizationEndpoint: `${fixture.base}/authorize`,
+                tokenEndpoint: `${fixture.insecureBase}/token`, revocationEndpoint: `${fixture.insecureBase}/revoke`,
+                tokenEndpointAuthMethods: ['client_secret_post'] } } },
+            getSecret: async (key: string) => staged.content!.secretValues?.[key] ?? null };
+        const established = { account: { service: HOST_CONNECTED_ACCOUNT_SERVICE_REF_V1, accountId: 'server-a' },
+            configuration, credentials: context.attemptCredentials, signal: context.signal, invokedAtMs: context.invokedAtMs };
+        await expect(lease.runtime.refresh({ ...established, stagedCredentials: context.attemptCredentials,
+            operation: { operationId: 'refresh-http', configurationRevision: configuration.revision } }))
+            .resolves.toMatchObject({ status: 'reconnectRequired', diagnostic: { code: 'mcp_oauth_endpoints_require_https' } });
+        await expect(lease.runtime.revoke(established))
+            .resolves.toMatchObject({ status: 'outcomeUnknown', diagnostic: { code: 'mcp_oauth_endpoints_require_https' } });
+        expect(fixture.fetches).toEqual(priorFetches);
+        expect([...entries]).toEqual(priorCredentials);
     });
 
     it.each([

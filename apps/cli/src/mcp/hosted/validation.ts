@@ -1,7 +1,11 @@
+import { ToolSchema } from '@modelcontextprotocol/sdk/types.js';
+
 const HOSTED_TOOL_NAME_SEGMENT_PATTERN = /^[a-z0-9][a-z0-9_-]*$/;
 
 export type HostedMcpServerRegistrationValidationOptions = Readonly<{
     pluginId?: string;
+    /** Host-only forwarding of tool names already owned by an MCP peer. */
+    toolNameSource?: 'mcpServer';
 }>;
 
 function isRecord(value: unknown): value is Record<string, unknown> {
@@ -27,6 +31,10 @@ function assertHostedMcpToolName(
     path: readonly string[],
     options?: HostedMcpServerRegistrationValidationOptions,
 ): asserts value is string {
+    if (options?.toolNameSource === 'mcpServer') {
+        ToolSchema.shape.name.parse(value);
+        return;
+    }
     if (typeof value !== 'string' || !isNamespacedHostedMcpToolName(value)) {
         throw new Error(`Hosted MCP tool name at '${path.join('.')}' must use a canonical namespace`);
     }

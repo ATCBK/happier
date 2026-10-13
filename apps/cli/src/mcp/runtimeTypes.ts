@@ -11,8 +11,7 @@ export type HostedMcpRuntimeEndpoint =
         expiresAtMs?: number;
     }>;
 
-export type McpSessionResolutionInput = Readonly<{
-    sessionId: string;
+export type McpSessionResolutionInput = Readonly<({ sessionId: string; executionRunId?: never } | { sessionId?: never; executionRunId: string }) & {
     accountId?: string | null;
     workspaceId?: string | null;
     directory?: string | null;
@@ -22,7 +21,8 @@ export type ResolvedMcpEndpointDiscoveryResult = Readonly<{
     warnings?: readonly DaemonMcpServersDetectWarningV1[];
 }>;
 export type ResolvedSessionMcpScope = Readonly<{
-    sessionId: string;
+    sessionId?: string;
+    executionRunId?: string;
     accountId?: string | null;
     workspaceId?: string | null;
     directory?: string | null;

@@ -4,7 +4,7 @@
  * Converts protocol-level MCP server settings (value refs + bindings already resolved)
  * into runtime `McpServerConfig` records with plaintext env/header values.
  *
- * - `stdio` servers pass through as-is (command/args/env).
+ * - `stdio` env values stay in a private launcher configuration file.
  * - `http`/`sse` servers are materialized as stdio servers by spawning a local bridge.
  *
  * Strict mode:
@@ -24,6 +24,7 @@ import type { McpServerConfig } from '@/agent';
 import { resolveNodeBackedMcpServerCommand } from '@/mcp/runtime/resolveNodeBackedMcpServerCommand';
 import { removeWrittenMcpRuntimeConfigFile, writeSecureMcpRuntimeConfigFile } from '@/mcp/runtime/writeSecureMcpRuntimeConfigFile';
 import {
+  listValueRefSecretIdsV1,
   type McpServerCatalogEntryV1,
   type McpServerMaterializationV1,
 } from '@happier-dev/protocol';
@@ -38,6 +39,9 @@ import { isSharedSavedSecretReferenceV1 } from '@happier-dev/protocol/account/se
 import type { SavedSecretOperationReferenceV1 } from '@/settings/secrets/hydrateSavedSecretCatalog';
 import type { McpRequestAuthCapability } from '@/mcp/runtime/mcpRequestAuth';
 import { canonicalMcpOAuthResourceUrlV1 } from '@happier-dev/protocol/mcp/oauth/mcpOAuthResourceV1';
+import { createProviderRedactionLease, type ProviderStreamingSanitizer } from '@/providers/spawn/redaction';
+import { expandHomeDirPath } from '@/utils/path/expandHomeDirPath';
+import { buildScopedProcessEnv } from '@/utils/processEnv/buildScopedProcessEnv';
 
 export function listSelectedMcpSharedSecretReferences(
   serversByName: McpServerMaterializationV1['serversByName'],
@@ -45,9 +49,10 @@ export function listSelectedMcpSharedSecretReferences(
   const references = new Map<string, SavedSecretOperationReferenceV1>();
   for (const item of Object.values(serversByName)) {
     if (item.enabled !== true) continue;
-    for (const valueRef of [...Object.values(item.config.env), ...Object.values(item.config.remote?.headers ?? {})]) {
-      if (valueRef.t === 'savedSecret' && isSharedSavedSecretReferenceV1(valueRef.secretId)) {
-        references.set(valueRef.secretId, { ref: valueRef.secretId });
+    for (const valueRef of [...Object.values(item.config.env), ...Object.values(item.config.remote?.headers ?? {}),
+      ...(item.config.remote?.urlTemplate ? [item.config.remote.urlTemplate] : [])]) {
+      for (const secretId of listValueRefSecretIdsV1(valueRef)) {
+        if (isSharedSavedSecretReferenceV1(secretId)) references.set(secretId, { ref: secretId });
       }
     }
   }
@@ -64,6 +69,8 @@ export type MaterializeMcpServerConfigRecordResult = Readonly<{
   mcpServers: Record<string, McpServerConfig>;
   warnings: ReadonlyArray<MaterializeMcpServerConfigRecordWarning>;
   cleanup: () => void;
+  sanitizeDiagnosticText: (value: string) => string;
+  createDiagnosticStreamingSanitizer: () => ProviderStreamingSanitizer;
 }>;
 
 type Deps = Readonly<{
@@ -101,6 +108,30 @@ function resolveNeutralLaunchCwd(processEnv: NodeJS.ProcessEnv): string {
   }
 }
 
+async function materializePrivateStdioLaunch(params: Readonly<{
+  command: string;
+  args: string[];
+  env: Record<string, string>;
+  cwd?: string;
+  tmpDir: string | null;
+  deps: Deps;
+  writtenPaths: string[];
+}>): Promise<McpServerConfig> {
+  const launcherCommand = await (params.deps.resolveStdioLauncherCommand?.() ?? resolveDefaultStdioLauncherCommand());
+  const configPath = await writeSecureMcpRuntimeConfigFile({
+    prefix: 'happier-mcp-stdio-launcher',
+    tmpDir: params.tmpDir,
+    payload: { command: params.command, args: params.args, env: params.env,
+      ...(params.cwd === undefined ? {} : { cwd: params.cwd }) },
+  });
+  params.writtenPaths.push(configPath);
+  return {
+    command: launcherCommand.command,
+    args: launcherCommand.args,
+    env: { ...(launcherCommand.env ?? {}), HAPPIER_MCP_STDIO_LAUNCHER_CONFIG_FILE: configPath },
+  };
+}
+
 async function materializeStdioServer(params: Readonly<{
   server: McpServerCatalogEntryV1;
   directory: string;
@@ -116,11 +147,19 @@ async function materializeStdioServer(params: Readonly<{
 > {
   if (params.server.transport !== 'stdio' || !params.server.stdio) return null;
 
+  let command = params.server.stdio.command;
+  let args = params.server.stdio.args;
+  let launchEnv = params.resolvedEnv;
+  const configuredCwd = params.server.stdio.cwd;
+  let cwd = configuredCwd?.t === 'session' ? params.directory
+    : configuredCwd?.t === 'path' ? resolvePath(params.directory, expandHomeDirPath(configuredCwd.path, params.processEnv))
+      : undefined;
   if (isPackageRunnerCommand(params.server.stdio.command)) {
     const normalizedInvocation = await normalizePackageRunnerInvocation({
       command: params.server.stdio.command,
       args: params.server.stdio.args,
       processEnv: params.processEnv,
+      launchEnv: params.resolvedEnv,
     });
     if (!normalizedInvocation) {
       return {
@@ -128,45 +167,25 @@ async function materializeStdioServer(params: Readonly<{
         detail: 'managed runtime unavailable for package-runner command',
       };
     }
-    const launcherCommand = await (params.deps.resolveStdioLauncherCommand?.() ?? resolveDefaultStdioLauncherCommand());
-    const configPath = await writeSecureMcpRuntimeConfigFile({
-      prefix: 'happier-mcp-stdio-launcher',
-      tmpDir: params.tmpDir,
-      payload: {
-        command: normalizedInvocation.command,
-        args: normalizedInvocation.args,
-        env: params.resolvedEnv,
-        cwd: normalizedInvocation.cwdPolicy === 'workspace' ? params.directory : resolveNeutralLaunchCwd(params.processEnv),
-      },
-    });
-    params.writtenPaths.push(configPath);
-
-    return {
-      ok: true,
-      config: {
-        command: launcherCommand.command,
-        args: launcherCommand.args,
-        env: {
-          ...(launcherCommand.env ?? {}),
-          HAPPIER_MCP_STDIO_LAUNCHER_CONFIG_FILE: configPath,
-        },
-      },
-    };
+    command = normalizedInvocation.command;
+    args = normalizedInvocation.args;
+    launchEnv = buildScopedProcessEnv({ baseEnv: params.resolvedEnv, explicitEnv: normalizedInvocation.env });
+    cwd ??= normalizedInvocation.cwdPolicy === 'workspace' ? params.directory : resolveNeutralLaunchCwd(params.processEnv);
+  } else if (Object.keys(params.resolvedEnv).length === 0 && cwd === undefined) {
+    return { ok: true, config: { command, args } };
   }
 
-  const env = Object.keys(params.resolvedEnv).length > 0 ? params.resolvedEnv : undefined;
   return {
     ok: true,
-    config: {
-      command: params.server.stdio.command,
-      args: params.server.stdio.args,
-      env,
-    },
+    config: await materializePrivateStdioLaunch({ command, args, env: launchEnv, cwd,
+      tmpDir: params.tmpDir, deps: params.deps, writtenPaths: params.writtenPaths }),
   };
 }
 
 async function materializeRemoteServer(params: Readonly<{
   server: McpServerCatalogEntryV1;
+  resolvedUrl: string;
+  urlRedactionValues: readonly string[];
   resolvedEnv: Record<string, string>;
   resolvedHeaders: Record<string, string>;
   tmpDir: string | null;
@@ -183,7 +202,8 @@ async function materializeRemoteServer(params: Readonly<{
     tmpDir: params.tmpDir,
     payload: {
       transport: params.server.transport,
-      url: params.server.remote.url,
+      url: params.resolvedUrl,
+      ...(params.urlRedactionValues.length > 0 ? { redactionValues: params.urlRedactionValues } : {}),
       headers: params.resolvedHeaders,
       ...(params.requestAuth ? { auth: params.requestAuth } : {}),
     },
@@ -192,10 +212,19 @@ async function materializeRemoteServer(params: Readonly<{
 
   const env = {
     ...(bridgeCommand.env ?? {}),
-    ...params.resolvedEnv,
     HAPPIER_MCP_REMOTE_BRIDGE_CONFIG_FILE: configPath,
   };
 
+  if (Object.keys(params.resolvedEnv).length > 0) {
+    return materializePrivateStdioLaunch({
+      command: bridgeCommand.command,
+      args: bridgeCommand.args,
+      env: { ...env, ...params.resolvedEnv, HAPPIER_MCP_REMOTE_BRIDGE_CONFIG_FILE: configPath },
+      tmpDir: params.tmpDir,
+      deps: params.deps,
+      writtenPaths: params.writtenPaths,
+    });
+  }
   return {
     command: bridgeCommand.command,
     args: bridgeCommand.args,
@@ -220,7 +249,9 @@ export async function materializeMcpServerConfigRecord(params: Readonly<{
   const mcpServers: Record<string, McpServerConfig> = {};
   const warnings: MaterializeMcpServerConfigRecordWarning[] = [];
   const writtenPaths: string[] = [];
+  const diagnosticRedaction = createProviderRedactionLease({ values: [] });
   const cleanup = () => {
+    diagnosticRedaction.close();
     let firstError: unknown = null;
     for (const path of writtenPaths.splice(0)) {
       try {
@@ -245,16 +276,16 @@ export async function materializeMcpServerConfigRecord(params: Readonly<{
           valueRef,
           savedSecretMaterializer: params.savedSecretMaterializer,
           processEnv,
+          onResolvedValue: value => { if (value) diagnosticRedaction.add([value]); },
         });
         if (
           resolved.status !== 'ready'
           && resolved.status !== 'literal_unavailable'
           && resolved.status !== 'session_attested_unavailable'
-          && valueRef.t === 'savedSecret'
         ) {
           throw new SavedSecretResolutionError({
             status: resolved.status,
-            reference: valueRef.secretId,
+            reference: resolved.reference,
             consumer: 'mcp',
             field: `env:${envKey}`,
           });
@@ -314,6 +345,30 @@ export async function materializeMcpServerConfigRecord(params: Readonly<{
         continue;
       }
 
+      let resolvedUrl = server.remote.url;
+      const urlRedactionValues: string[] = [];
+      if (server.remote.urlTemplate) {
+        const resolved = resolveValueRefPlaintext({
+          valueRef: server.remote.urlTemplate,
+          savedSecretMaterializer: params.savedSecretMaterializer,
+          processEnv,
+          onResolvedValue: value => {
+            if (value) { diagnosticRedaction.add([value]); urlRedactionValues.push(value); }
+          },
+        });
+        if (resolved.status !== 'ready' && resolved.status !== 'literal_unavailable'
+          && resolved.status !== 'session_attested_unavailable') {
+          throw new SavedSecretResolutionError({ status: resolved.status, reference: resolved.reference,
+            consumer: 'mcp', field: 'url' });
+        }
+        if (resolved.status !== 'ready') {
+          if (strictMode) throw new Error(`Failed to materialize MCP server ${serverName}: missing url`);
+          warnings.push({ serverName, code: 'missing_value_ref', detail: 'url' });
+          continue;
+        }
+        resolvedUrl = resolved.value;
+      }
+
       const resolvedHeaders: Record<string, string> = {};
       for (const [headerKey, valueRef] of Object.entries(server.remote.headers)) {
         const resolved = resolveValueRefPlaintext({
@@ -321,6 +376,7 @@ export async function materializeMcpServerConfigRecord(params: Readonly<{
           savedSecretMaterializer: params.savedSecretMaterializer,
           processEnv,
           session: params.session,
+          onResolvedValue: value => { if (value) diagnosticRedaction.add([value]); },
         });
         // An unattested Session still has a usable MCP server. The integrator
         // decides whether its operation permits the omitted assertion.
@@ -328,11 +384,10 @@ export async function materializeMcpServerConfigRecord(params: Readonly<{
         if (
           resolved.status !== 'ready'
           && resolved.status !== 'literal_unavailable'
-          && valueRef.t === 'savedSecret'
         ) {
           throw new SavedSecretResolutionError({
             status: resolved.status,
-            reference: valueRef.secretId,
+            reference: resolved.reference,
             consumer: 'mcp',
             field: `header:${headerKey}`,
           });
@@ -358,7 +413,13 @@ export async function materializeMcpServerConfigRecord(params: Readonly<{
       }
 
       const requestAuth = server.remote.auth?.kind === 'oauth' ? params.requestAuthByServerId?.[server.id] : undefined;
-      if (server.remote.auth?.kind === 'oauth' && (!requestAuth || canonicalMcpOAuthResourceUrlV1(requestAuth.resource) !== canonicalMcpOAuthResourceUrlV1(server.remote.url))) {
+      let resourceMatches = false;
+      if (requestAuth) {
+        try {
+          resourceMatches = canonicalMcpOAuthResourceUrlV1(requestAuth.resource) === canonicalMcpOAuthResourceUrlV1(resolvedUrl);
+        } catch { /* Invalid private URLs refuse auth without disclosing resolved values in parser errors. */ }
+      }
+      if (server.remote.auth?.kind === 'oauth' && !resourceMatches) {
         const warning: MaterializeMcpServerConfigRecordWarning = { serverName, code: 'invalid_server',
           detail: requestAuth ? 'mcp_resource_mismatch' : 'mcp_sign_in_required' };
         if (strictMode) throw new Error(warning.detail);
@@ -367,6 +428,8 @@ export async function materializeMcpServerConfigRecord(params: Readonly<{
       }
       const remoteCfg = await materializeRemoteServer({
         server,
+        resolvedUrl,
+        urlRedactionValues,
         resolvedEnv,
         resolvedHeaders,
         tmpDir: params.tmpDir,
@@ -389,7 +452,8 @@ export async function materializeMcpServerConfigRecord(params: Readonly<{
       mcpServers[serverName] = remoteCfg;
     }
 
-    return { mcpServers, warnings, cleanup };
+    return { mcpServers, warnings, cleanup, sanitizeDiagnosticText: diagnosticRedaction.redact,
+      createDiagnosticStreamingSanitizer: diagnosticRedaction.createStreamingSanitizer };
   } catch (error) {
     cleanup();
     throw error;

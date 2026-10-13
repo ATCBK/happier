@@ -14,6 +14,7 @@ import { Client } from '@modelcontextprotocol/sdk/client/index.js';
 import { StdioClientTransport } from '@modelcontextprotocol/sdk/client/stdio.js';
 import { describe, expect, it } from 'vitest';
 import { z } from 'zod';
+import type { CallToolResult } from '@modelcontextprotocol/sdk/types.js';
 
 import { resolveNodeBackedMcpServerCommand } from '@/mcp/runtime/resolveNodeBackedMcpServerCommand';
 import { createDaemonControlApp } from '@/daemon/controlServer';
@@ -23,6 +24,9 @@ import { CONNECTED_ACCOUNT_REQUEST_AUTH_LOOKUP_PATH } from '@happier-dev/protoco
 import { HOST_CONNECTED_ACCOUNT_SERVICE_REF_V1 } from '@happier-dev/protocol/connect/qualified-connected-account-persistence';
 import { MCP_REQUEST_AUTH_PURPOSE } from '@/mcp/runtime/mcpRequestAuth';
 import { createEphemeralTlsServerFixture, type EphemeralTlsServerFixture } from '../../../../../packages/tests/src/testkit/tls/ephemeralTlsServerFixture.mjs';
+import { McpServerCatalogEntryV1Schema, sealSavedSecretResourceStoredContentV1 } from '@happier-dev/protocol';
+import { createSavedSecretMaterializerV1 } from '@/settings/secrets/savedSecretCatalog';
+import { materializeMcpServerConfigRecord } from '@/mcp/servers/materializeMcpServerConfigRecord';
 
 const bridgePurpose = MCP_REQUEST_AUTH_PURPOSE;
 
@@ -163,7 +167,7 @@ async function waitForChildExit(
   });
 }
 
-async function startTestMcpHttpServer(onRequest?: (req: IncomingMessage, res: ServerResponse) => boolean, tls?: EphemeralTlsServerFixture): Promise<{ url: string; stop: () => void }> {
+async function startTestMcpHttpServer(onRequest?: (req: IncomingMessage, res: ServerResponse) => boolean, tls?: EphemeralTlsServerFixture, toolResult?: (request: IncomingMessage) => CallToolResult): Promise<{ url: string; stop: () => void }> {
   const server = tls ? createSecureServer({ key: await readFile(tls.privateKeyPath), cert: await readFile(tls.leafCertificatePath) }) : createServer();
   server.on('request', async (req, res) => {
     if (onRequest && !onRequest(req, res)) return;
@@ -173,11 +177,11 @@ async function startTestMcpHttpServer(onRequest?: (req: IncomingMessage, res: Se
       {
         description: 'Echo',
         inputSchema: z.object({ text: z.string() }).passthrough(),
-        outputSchema: z.object({ echoed: z.string() }),
+        outputSchema: z.object({ echoed: z.string() }).passthrough(),
         annotations: { readOnlyHint: true },
         _meta: { 'acme.example/source': 'integration-test' },
       } as any,
-      async (args: any) => ({
+      async (args: any) => toolResult ? toolResult(req) : ({
         content: [{ type: 'text' as const, text: String(args?.text ?? '') }],
         structuredContent: { echoed: String(args?.text ?? '') },
         isError: false as const,
@@ -272,6 +276,176 @@ async function startTestMcpSseServer(tls?: EphemeralTlsServerFixture, observe?: 
 }
 
 describe('remoteMcpStdioBridge', () => {
+  it('keeps a materialized URL template secret private through real transport failures and tool output', async () => {
+    const secret = 'saved-url-template-key';
+    const tls = await createEphemeralTlsServerFixture();
+    let failTransport = false;
+    let receivedKey = '';
+    const remote = await startTestMcpHttpServer((request, response) => {
+      receivedKey = new URL(request.url ?? '/', 'https://fixture.test').searchParams.get('api_key') ?? '';
+      if (!failTransport) return true;
+      response.writeHead(500, { 'Content-Type': 'text/plain' }).end(`Remote failure for ${receivedKey}`);
+      return false;
+    }, tls, () => ({ content: [{ type: 'text', text: `Tool failure for ${receivedKey}` }],
+      structuredContent: { echoed: receivedKey }, isError: true }));
+    const root = await mkdtemp(join(tmpdir(), 'happier-mcp-url-template-redaction-'));
+    const client = new Client({ name: 'url-template-bridge-test', version: '1' });
+    let materialized: Awaited<ReturnType<typeof materializeMcpServerConfigRecord>> | undefined;
+    try {
+      const config = McpServerCatalogEntryV1Schema.parse({ id: 'remote', name: 'remote', transport: 'http',
+        remote: { url: remote.url, headers: {}, urlTemplate: { t: 'template', template: `${remote.url}?api_key={key}`,
+          vars: { key: { t: 'savedSecret', secretId: 'happier:shared-secret:v1:url-key' } } } },
+        env: {}, createdAt: 1, updatedAt: 1 });
+      const invocation = await resolveRemoteBridgeInvocation();
+      materialized = await materializeMcpServerConfigRecord({
+        resolved: { strictMode: true, directory: root, serversByName: { remote: {
+          enabled: true, serverId: 'remote', name: 'remote', bindingId: 'on', config,
+        } } }, tmpDir: root, processEnv: {}, deps: { resolveRemoteBridgeCommand: () => invocation },
+        savedSecretMaterializer: createSavedSecretMaterializerV1({ accountSettings: {}, settingsSecretsReadKeys: [],
+          resourceCatalogState: 'ready', resources: [{ resourceId: 'url-key', ownerAccountId: 'owner', displayName: 'key',
+            kind: 'token', encryptionMode: 'plain', revision: 1, materialStatus: 'ready',
+            storedContent: sealSavedSecretResourceStoredContentV1({ resourceId: 'url-key', mode: 'plain',
+              content: { v: 1, name: 'key', kind: 'token', value: secret } }) }] }),
+      });
+      expect(JSON.stringify(materialized.mcpServers)).not.toContain(secret);
+      const bridge = materialized.mcpServers.remote!;
+      await client.connect(new StdioClientTransport({ command: bridge.command, args: bridge.args,
+        env: { ...resolveEnvRecord(), ...bridge.env, NODE_EXTRA_CA_CERTS: tls.caCertificatePath } }));
+      const result = await client.callTool({ name: 'echo', arguments: { text: 'ordinary argument' } });
+      expect(receivedKey).toBe(secret);
+      expect(result.content).toEqual([{ type: 'text', text: 'Tool failure for [REDACTED]' }]);
+      expect(result.structuredContent).toEqual({ echoed: '[REDACTED]' });
+      failTransport = true;
+      const failure = await client.callTool({ name: 'echo', arguments: { text: 'ordinary argument' } });
+      expect(failure.isError).toBe(true);
+      expect(JSON.stringify(failure)).toContain('Remote failure for [REDACTED]');
+      expect(JSON.stringify(failure)).not.toContain(secret);
+    } finally {
+      await client.close().catch(() => undefined); materialized?.cleanup(); remote.stop();
+      await rm(root, { recursive: true, force: true }); await tls.cleanup();
+    }
+  });
+  it('redacts a saved static API-key header echoed in a fatal HTTPS transport error', async () => {
+    const secret = 'saved-static-api-key';
+    const tls = await createEphemeralTlsServerFixture();
+    const remote = await startTestMcpHttpServer((request, response) => {
+      response.writeHead(500, { 'Content-Type': 'text/plain' }).end(`Remote failure for ${String(request.headers['x-api-key'])}`);
+      return false;
+    }, tls);
+    const root = await mkdtemp(join(tmpdir(), 'happier-mcp-static-fatal-redaction-'));
+    let child: ChildProcessWithoutNullStreams | null = null;
+    try {
+      const invocation = await resolveRemoteBridgeInvocation();
+      const configPath = join(root, 'bridge.json');
+      await writeFile(configPath, JSON.stringify({ transport: 'http', url: remote.url, headers: { 'X-Api-Key': secret } }), { mode: 0o600 });
+      child = spawn(invocation.command, invocation.args, { env: { ...resolveEnvRecord(), ...invocation.env, NODE_EXTRA_CA_CERTS: tls.caCertificatePath, HAPPIER_MCP_REMOTE_BRIDGE_CONFIG_FILE: configPath }, stdio: ['pipe', 'pipe', 'pipe'] });
+      let stderr = '';
+      child.stderr.on('data', chunk => { stderr += String(chunk); });
+      expect(await waitForChildExit(child, 30_000)).not.toBe(0);
+      expect(stderr).toContain('Remote failure for');
+      expect(stderr).not.toContain(secret);
+      expect(stderr).toContain('[REDACTED]');
+    } finally {
+      if (child && child.exitCode === null) { child.kill('SIGKILL'); await waitForChildExit(child).catch(() => undefined); }
+      remote.stop(); await rm(root, { recursive: true, force: true }); await tls.cleanup();
+    }
+  });
+
+  it.each([
+    { name: 'API-key', header: 'X-Api-Key', value: 'result', echoed: 'result', forms: ['result'] },
+    { name: 'Bearer', header: 'Authorization', value: 'Bearer text', echoed: 'text', forms: ['Bearer text', 'text'] },
+    { name: 'Basic', header: 'Authorization', value: `Basic ${Buffer.from('ordinary-user:content').toString('base64')}`, echoed: 'content',
+      forms: [`Basic ${Buffer.from('ordinary-user:content').toString('base64')}`, Buffer.from('ordinary-user:content').toString('base64'), 'ordinary-user:content', 'content'] },
+  ])('redacts a saved static $name credential echoed in a forwarded MCP tool error', async ({ header, value, echoed, forms }) => {
+    const tls = await createEphemeralTlsServerFixture();
+    let receivedValue = '';
+    const remote = await startTestMcpHttpServer(request => {
+      receivedValue = String(request.headers[header.toLowerCase()] ?? '');
+      return true;
+    }, tls, () => ({
+      content: [{ type: 'text', text: `Tool failure for ${echoed}` }],
+      structuredContent: { echoed, [echoed]: 'ordinary value', nested: { [echoed]: forms }, username: 'ordinary-user' },
+      _meta: { [echoed]: value },
+      isError: true,
+    }));
+    const root = await mkdtemp(join(tmpdir(), 'happier-mcp-static-tool-redaction-'));
+    const client = new Client({ name: 'static-redaction-bridge-test', version: '1' });
+    try {
+      const invocation = await resolveRemoteBridgeInvocation();
+      const configPath = join(root, 'bridge.json');
+      await writeFile(configPath, JSON.stringify({ transport: 'http', url: remote.url, headers: { [header]: value } }), { mode: 0o600 });
+      await client.connect(new StdioClientTransport({ ...invocation, env: { ...resolveEnvRecord(), ...invocation.env, NODE_EXTRA_CA_CERTS: tls.caCertificatePath, HAPPIER_MCP_REMOTE_BRIDGE_CONFIG_FILE: configPath } }));
+      const result = await client.callTool({ name: 'echo', arguments: { text: 'ordinary argument' } });
+      expect(receivedValue).toBe(value);
+      expect(result.isError).toBe(true);
+      expect(result.content).toEqual([{ type: 'text', text: 'Tool failure for [REDACTED]' }]);
+      expect(result.structuredContent).toEqual({
+        echoed: '[REDACTED]', '[REDACTED]': 'ordinary value',
+        nested: { '[REDACTED]': forms.map(() => '[REDACTED]') }, username: 'ordinary-user',
+      });
+      expect(result._meta).toEqual({ '[REDACTED]': '[REDACTED]' });
+    } finally { await client.close().catch(() => undefined); remote.stop(); await rm(root, { recursive: true, force: true }); await tls.cleanup(); }
+  });
+
+  it('redacts a known OAuth bearer echoed in a fatal HTTPS transport error', async () => {
+    const tls = await createEphemeralTlsServerFixture();
+    const remote = await startTestMcpHttpServer((request, response) => {
+      response.writeHead(500, { 'Content-Type': 'text/plain' }).end(`Remote failure for ${String(request.headers.authorization).slice(7)}`);
+      return false;
+    }, tls);
+    const root = await mkdtemp(join(tmpdir(), 'happier-mcp-fatal-redaction-'));
+    const auth = await startBridgeRequestAuth(root, remote.url);
+    let child: ChildProcessWithoutNullStreams | null = null;
+    try {
+      const invocation = await resolveRemoteBridgeInvocation();
+      const configPath = join(root, 'bridge.json');
+      await writeFile(configPath, JSON.stringify({ transport: 'http', url: remote.url, auth: { capabilityFile: auth.capabilityFile, resource: remote.url } }), { mode: 0o600 });
+      child = spawn(invocation.command, invocation.args, { env: { ...resolveEnvRecord(), ...invocation.env, NODE_EXTRA_CA_CERTS: tls.caCertificatePath, HAPPIER_MCP_REMOTE_BRIDGE_CONFIG_FILE: configPath }, stdio: ['pipe', 'pipe', 'pipe'] });
+      let stderr = '';
+      child.stderr.on('data', chunk => { stderr += String(chunk); });
+      expect(await waitForChildExit(child, 30_000)).not.toBe(0);
+      expect(stderr).toContain('Remote failure for');
+      expect(stderr).not.toContain('bearer-0');
+      expect(stderr).toContain('[REDACTED]');
+    } finally {
+      if (child && child.exitCode === null) { child.kill('SIGKILL'); await waitForChildExit(child).catch(() => undefined); }
+      await auth.stop(); remote.stop(); await rm(root, { recursive: true, force: true }); await tls.cleanup();
+    }
+  });
+
+  it('redacts known OAuth bearers in forwarded transport and MCP tool error results', async () => {
+    const tls = await createEphemeralTlsServerFixture();
+    let transportError = false;
+    const remote = await startTestMcpHttpServer((request, response) => {
+      if (!transportError) return true;
+      response.writeHead(500, { 'Content-Type': 'text/plain' }).end(`Remote failure for ${String(request.headers.authorization).slice(7)}`);
+      return false;
+    }, tls, request => ({ content: [{ type: 'text', text: `Tool failure for ${String(request.headers.authorization).slice(7)}` }], structuredContent: { echoed: String(request.headers.authorization).slice(7) }, isError: true }));
+    const root = await mkdtemp(join(tmpdir(), 'happier-mcp-tool-redaction-'));
+    const auth = await startBridgeRequestAuth(root, remote.url);
+    const client = new Client({ name: 'redaction-bridge-test', version: '1' });
+    try {
+      const invocation = await resolveRemoteBridgeInvocation();
+      const configPath = join(root, 'bridge.json');
+      await writeFile(configPath, JSON.stringify({ transport: 'http', url: remote.url, auth: { capabilityFile: auth.capabilityFile, resource: remote.url } }), { mode: 0o600 });
+      const transport = new StdioClientTransport({ ...invocation, stderr: 'pipe', env: { ...resolveEnvRecord(), ...invocation.env, NODE_EXTRA_CA_CERTS: tls.caCertificatePath, HAPPIER_MCP_REMOTE_BRIDGE_CONFIG_FILE: configPath } });
+      let stderr = '';
+      transport.stderr?.on('data', chunk => { stderr += String(chunk); });
+      await client.connect(transport);
+      const toolError = await client.callTool({ name: 'echo', arguments: { text: 'ordinary argument' } });
+      expect(toolError.isError).toBe(true);
+      expect(JSON.stringify(toolError)).not.toContain('bearer-0');
+      expect(toolError.structuredContent).toEqual({ echoed: '[REDACTED]' });
+      auth.rotate();
+      transportError = true;
+      const httpError = await client.callTool({ name: 'echo', arguments: { text: 'ordinary argument' } });
+      expect(httpError.isError).toBe(true);
+      expect(JSON.stringify(httpError)).not.toContain('bearer-1');
+      expect(JSON.stringify(httpError)).toContain('[REDACTED]');
+      expect(stderr).not.toContain('bearer-0');
+      expect(stderr).not.toContain('bearer-1');
+    } finally { await client.close().catch(() => undefined); await auth.stop(); remote.stop(); await rm(root, { recursive: true, force: true }); await tls.cleanup(); }
+  });
   it('refuses a different configured resource before requesting a bearer or reaching the MCP server', async () => {
     const tls = await createEphemeralTlsServerFixture();
     let remoteRequests = 0;

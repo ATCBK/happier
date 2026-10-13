@@ -6,9 +6,12 @@ import type {
 import type { RuntimeActiveTurnPermissionWitness } from '@/agent/runtime/turns/runtimeTurnOperations';
 import type { ResolvedRolesSnapshotV1 } from '@happier-dev/protocol';
 import type { RoleSourceReader } from '@/session/roles/roleSources';
+import type { SessionSkillReadItemV1 } from '@happier-dev/protocol/prompts/library/skills/skillReadV1';
 type WorkspaceWritesPolicyPreparation = (workspaceWrites: 'allow' | 'deny', context: import('@happier-dev/protocol').ActionExecutorContext) => Promise<Readonly<{ ok: true }> | Readonly<{ ok: false; errorCode: string }>>;
 
 export type RunnerMcpSessionContextAccessors = Readonly<{
+  getPluginMcpRuntimeRegistry?: () => import('@/plugins/runtime/resolveExecutablePluginRuntimeRegistry').ResolvedExecutablePluginRuntimeRegistry | null;
+  getCurrentSessionSkillItems?: () => readonly SessionSkillReadItemV1[] | null;
   getCurrentResolvedRoles?: () => ResolvedRolesSnapshotV1;
   readRoleSources?: RoleSourceReader;
   getCurrentWorkspaceWrites?: () => 'allow' | 'deny' | undefined;
@@ -17,6 +20,7 @@ export type RunnerMcpSessionContextAccessors = Readonly<{
   getActiveTurnPermissionWitness?: (() => RuntimeActiveTurnPermissionWitness | null | undefined) | null;
   getActiveTurnAdmissionWitness?: (() => import('@/plugins/runtime/invocation/services/types').AgentInvocationTurnAdmissionWitness | null) | null;
   getRuntimeLifetimeSignal?: (() => AbortSignal | null | undefined) | null;
+  getHostTurnAbortSignal?: (() => AbortSignal | null | undefined) | null;
   getBackendTarget?: (() => BackendTargetRefV2 | null | undefined) | null;
   getCurrentSessionLocation?: (() => Readonly<{
     path?: string | null;
@@ -27,6 +31,8 @@ export type RunnerMcpSessionContextAccessors = Readonly<{
 }>;
 
 export type RunnerMcpSessionWithContext<TSession> = TSession & {
+  getPluginMcpRuntimeRegistry?: RunnerMcpSessionContextAccessors['getPluginMcpRuntimeRegistry'];
+  getCurrentSessionSkillItems?: RunnerMcpSessionContextAccessors['getCurrentSessionSkillItems'];
   getCurrentResolvedRoles?: () => ResolvedRolesSnapshotV1;
   readRoleSources?: RoleSourceReader;
   getCurrentWorkspaceWrites?: () => 'allow' | 'deny' | undefined;
@@ -36,6 +42,7 @@ export type RunnerMcpSessionWithContext<TSession> = TSession & {
   getActiveTurnPermissionWitness?: () => RuntimeActiveTurnPermissionWitness | null | undefined;
   getActiveTurnAdmissionWitness?: () => import('@/plugins/runtime/invocation/services/types').AgentInvocationTurnAdmissionWitness | null;
   getRuntimeLifetimeSignal?: () => AbortSignal | null | undefined;
+  getHostTurnAbortSignal?: () => AbortSignal | null | undefined;
   getBackendTarget?: () => BackendTargetRefV2 | null | undefined;
   getCurrentSessionLocation?: () => Readonly<{
     path?: string | null;
@@ -50,6 +57,8 @@ export function applyRunnerMcpSessionContext<TSession extends object>(
   accessors: RunnerMcpSessionContextAccessors,
 ): RunnerMcpSessionWithContext<TSession> {
   const target = session as RunnerMcpSessionWithContext<TSession>;
+  if (accessors.getCurrentSessionSkillItems) target.getCurrentSessionSkillItems = accessors.getCurrentSessionSkillItems;
+  if (accessors.getPluginMcpRuntimeRegistry) target.getPluginMcpRuntimeRegistry = accessors.getPluginMcpRuntimeRegistry;
   if (accessors.getCurrentResolvedRoles) target.getCurrentResolvedRoles = accessors.getCurrentResolvedRoles;
   if (accessors.readRoleSources) target.readRoleSources = accessors.readRoleSources;
   if (accessors.getCurrentWorkspaceWrites) target.getCurrentWorkspaceWrites = accessors.getCurrentWorkspaceWrites;
@@ -65,6 +74,9 @@ export function applyRunnerMcpSessionContext<TSession extends object>(
   }
   if (accessors.getRuntimeLifetimeSignal) {
     target.getRuntimeLifetimeSignal = accessors.getRuntimeLifetimeSignal;
+  }
+  if (accessors.getHostTurnAbortSignal) {
+    target.getHostTurnAbortSignal = accessors.getHostTurnAbortSignal;
   }
   if (accessors.getBackendTarget) {
     target.getBackendTarget = accessors.getBackendTarget;

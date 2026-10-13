@@ -23,8 +23,14 @@ import { McpServerCatalogV1Schema } from '@happier-dev/protocol/mcp/servers/serv
 import { resolveAccountSettingsScopeKeyForToken } from '@/settings/accountSettings/accountSettingsScopeKey';
 import { resolveRunnerMcpServers } from './resolveRunnerMcpServers';
 import { resolveServerHttpBaseUrl } from '@/api/client/serverHttpBaseUrl';
+import { createDeferred } from '@/testkit/async/deferred';
+import { createMutableApiSessionClientFixture } from '@/testkit/backends/sessionFixtures';
+import { readSessionCapabilityNoticeV1 } from '@happier-dev/protocol/sessions/messages/sessionCapabilityNoticeV1';
 
 const persistenceMocks = vi.hoisted(() => ({ readStoredCredentials: vi.fn() }));
+const daemonCatalogBoundary = vi.hoisted(() => ({
+  read: vi.fn(async (_input?: Readonly<{ signal?: AbortSignal }>) => ({ kind: 'available' as const, plugins: [] as [], tools: [] as [] })),
+}));
 
 vi.mock('axios', () => ({ default: { get: vi.fn() } }));
 vi.mock('@/persistence', async (importOriginal) => ({
@@ -35,16 +41,101 @@ vi.mock('@/persistence', async (importOriginal) => ({
 // The daemon catalog is a transport boundary; the MCP server and Action execution stay real.
 vi.mock('@/daemon/controlClient', async (importOriginal) => ({
   ...await importOriginal<typeof import('@/daemon/controlClient')>(),
-  readDaemonPluginCatalog: async () => ({ kind: 'available', plugins: [], tools: [] }),
+  readDaemonPluginCatalog: daemonCatalogBoundary.read,
+  // With no contributed metadata Action, the actual daemon reports unmatched
+  // and the Session's built-in catalog owner handles this read.
+  requestDaemonPluginActionExecution: async () => ({ matched: false }),
 }));
 
 afterEach(() => {
   vi.unstubAllEnvs();
   vi.unstubAllGlobals();
   resetActiveAccountSettingsSnapshotForTests();
+  daemonCatalogBoundary.read.mockReset().mockResolvedValue({ kind: 'available', plugins: [], tools: [] });
 });
 
 describe('Session-owned Run MCP binding', () => {
+  it.each([false, true])('keeps Run MCP catalog admission independent of parent Stop and settles its own Run cancellation (optional Account MCP: %s)', async optionalAccountMcp => {
+    vi.stubEnv('HAPPIER_E2E_PROVIDER_USE_CLI_SOURCE_ENTRYPOINT', '1');
+    const parentTurn = new AbortController();
+    const lifetime = new AbortController();
+    const witness: AgentInvocationTurnAdmissionWitness = {
+      inputId: 'run-catalog-input', turnId: 'run-catalog-turn', userMessageSeq: 1, userMessageSeqs: [1],
+      causalPermissionAuthority: { kind: 'admittedSessionInputV1', admittedPermissionCeiling: 'default' },
+    };
+    // Native controller identity is the provider boundary; occurrence ownership
+    // and currentness are derived by the real registry, as in the adjacent test.
+    const controller = { kind: 'backend', controllerOccurrenceId: 'run-catalog-occurrence' } as Extract<ExecutionRunController, { kind: 'backend' }>;
+    const registry = createExecutionRunOccurrenceWitnessRegistry(new Map([['run-catalog', controller]]));
+    const occurrence = registry.register({ runId: 'run-catalog', sidechainId: 'run-catalog-sidechain',
+      controller, runtimeLifetimeSignal: lifetime.signal, readActiveTurnAdmissionWitness: () => witness });
+    const notices: unknown[] = [];
+    const parent = Object.assign(createMutableApiSessionClientFixture({ sessionId: 'run-catalog-session', overrides: {
+      enqueueSessionEventCommitted: async event => { notices.push(event); return { persisted: true, delivered: true }; },
+    } }), {
+      getHostTurnAbortSignal: () => parentTurn.signal,
+    });
+    const credentials = { token: 'run-catalog-fixture', encryption: null };
+    const settings = accountSettingsParse({ mcpServersStrictMode: false });
+    const binding = await resolveRunnerMcpServers({
+      session: parent, credentials, accountCredentials: optionalAccountMcp ? credentials : null,
+      accountSettings: settings,
+      ...(optionalAccountMcp ? { accountSettingsSnapshot: {
+        source: 'network' as const, settings, rawSettings: {}, settingsVersion: 1, loadedAtMs: 1, settingsSecretsReadKeys: [],
+        scopeKey: resolveAccountSettingsScopeKeyForToken(credentials.token),
+        mcpServerCatalog: { status: 'unavailable' as const, reason: 'unreachable' as const },
+      } } : {}),
+      machineId: 'run-machine', directory: '/run/catalog', env: {},
+      executionRun: { runId: 'run-catalog', workDepth: 1, cwd: '/run/catalog', signal: lifetime.signal,
+        isCurrent: () => !lifetime.signal.aborted, getPermissionMode: () => 'default',
+        readActiveTurnAdmissionWitness: () => witness,
+        readCurrentRunOccurrence: registry.reader.readCurrentRunOccurrence },
+    });
+    if (optionalAccountMcp) expect(readSessionCapabilityNoticeV1(notices[0])?.items[0])
+      .toMatchObject({ code: 'mcp_catalog_unavailable', detail: 'unreachable' });
+    const client = new Client({ name: 'run-catalog-cancellation', version: '1' });
+    let entered = createDeferred<AbortSignal | undefined>();
+    let release = createDeferred<void>();
+    const holdCatalog = () => daemonCatalogBoundary.read.mockImplementation(async input => {
+      entered.resolve(input?.signal);
+      await new Promise<void>((resolve, reject) => {
+        void release.promise.then(resolve);
+        input?.signal?.addEventListener('abort', () => reject(input.signal?.reason), { once: true });
+      });
+      return { kind: 'available', plugins: [], tools: [] };
+    });
+    try {
+      await client.connect(new StreamableHTTPClientTransport(new URL(binding.happierMcpServer.url)));
+      holdCatalog();
+      const surviving = client.callTool({ name: 'action_spec_get', arguments: { id: 'browser.view.open' } });
+      try {
+        const sourceSignal = await entered.promise;
+        expect(sourceSignal).toBeDefined();
+        parentTurn.abort();
+        expect(lifetime.signal.aborted).toBe(false);
+        expect(sourceSignal?.aborted).toBe(false);
+        release.resolve();
+        expect(await surviving).toMatchObject({ isError: false });
+      } finally { release.resolve(); await Promise.allSettled([surviving]); }
+      entered = createDeferred<AbortSignal | undefined>();
+      release = createDeferred<void>();
+      holdCatalog();
+      const cancelled = fetch(binding.happierMcpServer.url, { method: 'POST',
+        headers: { 'Content-Type': 'application/json', Accept: 'application/json, text/event-stream' },
+        body: JSON.stringify({ jsonrpc: '2.0', id: 'run-stop', method: 'tools/call',
+          params: { name: 'action_spec_get', arguments: { id: 'browser.view.open' } } }),
+      });
+      try {
+        const sourceSignal = await entered.promise;
+        lifetime.abort();
+        expect(sourceSignal?.aborted).toBe(true);
+        const response = await cancelled;
+        expect(response.status).toBe(503);
+        expect(await response.json()).toMatchObject({ ok: false, errorCode: 'cancelled' });
+      } finally { release.resolve(); await cancelled; }
+    } finally { release.resolve(); await client.close(); binding.happierMcpServer.stop(); occurrence.dispose(); }
+  });
+
   it('refreshes selected shared Saved Secrets before composing an Execution Run MCP profile', async () => {
     vi.stubGlobal('fetch', vi.fn<typeof fetch>(async () => Response.json(FeaturesResponseSchema.parse({
       features: { teams: { enabled: true, credentialResources: { enabled: true } } }, capabilities: {},

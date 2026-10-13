@@ -115,6 +115,7 @@ describe('startHappyServer notification stream', () => {
     });
 
     it('refreshes the admitted inventory on policy, feature and contributor occurrence changes', async () => {
+        vi.stubEnv('HAPPIER_ACTIONS_SETTINGS_V1', '');
         // Board reads also serve transcript visuals. Layout is the Action
         // whose canonical availability actually depends on sessions.board.
         const boardLayoutAction = 'session.board.layout.update' as const;
@@ -145,7 +146,7 @@ describe('startHappyServer notification stream', () => {
             expect(await names()).toContain(boardLayoutTool);
             vi.stubEnv('HAPPIER_BUILD_FEATURES_DENY', 'sessions.board');
             expect(await names()).not.toContain(boardLayoutTool);
-            vi.unstubAllEnvs();
+            vi.stubEnv('HAPPIER_BUILD_FEATURES_DENY', '');
             expect(await names()).toContain(boardLayoutTool);
             // Supply the reader's effective policy rather than exercise a
             // persisted Settings migration in this inventory regression.

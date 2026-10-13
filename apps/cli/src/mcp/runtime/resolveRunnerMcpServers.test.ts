@@ -4,6 +4,9 @@ import { Server } from 'node:http';
 import { mkdtemp, readFile, rm, stat } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
+import { Client } from '@modelcontextprotocol/sdk/client/index.js';
+import { StreamableHTTPClientTransport } from '@modelcontextprotocol/sdk/client/streamableHttp.js';
+import { readSessionCapabilityNoticeV1 } from '@happier-dev/protocol/sessions/messages/sessionCapabilityNoticeV1';
 import { accountSettingsParse, FeaturesResponseSchema, formatSavedSecretCatalogReferenceV1,
   sealSavedSecretResourceStoredContentV1, type McpServerCatalogEntryV1 } from '@happier-dev/protocol';
 import { RpcHandlerManager } from '@/api/rpc/RpcHandlerManager';
@@ -14,7 +17,8 @@ import { resolveAccountSettingsScopeKeyForToken } from '@/settings/accountSettin
 import { clearActiveAccountSettingsSnapshot, getActiveAccountSettingsSnapshot, resetActiveAccountSettingsSnapshotForTests, setActiveAccountSettingsSnapshot,
   type ActiveAccountSettingsSnapshot } from '@/settings/accountSettings/activeAccountSettingsSnapshot';
 import { createDeferred } from '@/testkit/async/deferred';
-import { withdrawActiveProjectAccountRowsSnapshot } from '@/workspaces/projectAccountRows';
+import { getActiveProjectAccountRowsSnapshot, withdrawActiveProjectAccountRowsSnapshot } from '@/workspaces/projectAccountRows';
+import { PROJECT_ACCOUNT_ROWS_ROUTE_V1 } from '@happier-dev/protocol/projects/projectAccountRowsV1';
 import * as persistence from '@/persistence';
 import type { HappyMcpSessionClient } from '../startHappyServer';
 import { resolveRunnerMcpServers } from './resolveRunnerMcpServers';
@@ -24,6 +28,7 @@ import { resolveRunnerMcpServers } from './resolveRunnerMcpServers';
 vi.mock('@/daemon/controlClient', async importOriginal => ({
   ...await importOriginal<typeof import('@/daemon/controlClient')>(),
   readDaemonPluginCatalog: async () => ({ kind: 'available', plugins: [], tools: [] }),
+  requestDaemonPluginActionExecution: async () => ({ matched: false }),
 }));
 
 afterEach(() => { vi.restoreAllMocks(); vi.unstubAllGlobals(); vi.unstubAllEnvs(); resetActiveAccountSettingsSnapshotForTests(); withdrawActiveProjectAccountRowsSnapshot(); });
@@ -45,19 +50,53 @@ function session(): HappyMcpSessionClient & Required<Pick<HappyMcpSessionClient,
     updateMetadata: () => undefined,
     enqueueSessionEventCommitted: async () => ({ persisted: true, delivered: true }) };
 }
-function resolve(input: Readonly<{ snapshot: ActiveAccountSettingsSnapshot | null; accountCredentials?: null; includeHappierMcpServer?: boolean }>) {
+function resolve(input: Readonly<{ snapshot: ActiveAccountSettingsSnapshot | null; accountSettings?: ActiveAccountSettingsSnapshot['settings']; accountCredentials?: null; includeHappierMcpServer?: boolean }>) {
   vi.stubEnv('HAPPIER_E2E_PROVIDER_USE_CLI_SOURCE_ENTRYPOINT', '1');
   return resolveRunnerMcpServers({ session: session(), credentials,
     ...(input.accountCredentials === null ? { accountCredentials: null } : {}),
-    accountSettings: input.snapshot?.settings ?? accountSettingsParse({}), accountSettingsSnapshot: input.snapshot,
+    accountSettings: input.accountSettings ?? input.snapshot?.settings ?? accountSettingsParse({}), accountSettingsSnapshot: input.snapshot,
     machineId: 'machine-1', directory: '/tmp/repo', env: {}, tmpDir: null,
     includeHappierMcpServer: input.includeHappierMcpServer });
 }
 
 describe('resolveRunnerMcpServers catalog admission', () => {
+  it.each([false, true])('keeps reach independent from machine cwd/env overrides (Everywhere On=%s)', async enabled => {
+    const root = await mkdtemp(join(tmpdir(), 'happier-mcp-machine-config-'));
+    const captured = snapshot([{ ...server('local'), stdio: { command: 'echo', args: ['base'], cwd: { t: 'session' } },
+      env: { REGION: { t: 'literal', v: 'base' } }, configOverrides: [{
+        target: { t: 'machine', machineId: 'machine-1' }, stdio: { cwd: { t: 'path', path: '~\\custom\\mcp' } },
+        envPatch: { REGION: { t: 'literal', v: 'machine' } },
+      }],
+    }]);
+    if (captured.mcpServerCatalog?.status !== 'ready') throw new Error('Expected ready catalog');
+    captured.mcpServerCatalog.catalog.bindings[0]!.enabled = enabled;
+    const result = await resolveRunnerMcpServers({ session: session(), credentials,
+      accountSettings: captured.settings, accountSettingsSnapshot: captured, machineId: 'machine-1', directory: '/repo',
+      env: { HOME: root, USERPROFILE: root }, tmpDir: root, includeHappierMcpServer: false,
+    });
+    try {
+      if (!enabled) expect(result.mcpServers).toEqual({});
+      else {
+        expect(result.mcpServers.local?.env).not.toHaveProperty('REGION');
+        const path = result.mcpServers.local?.env?.HAPPIER_MCP_STDIO_LAUNCHER_CONFIG_FILE;
+        expect(path).toBeDefined();
+        expect(JSON.parse(await readFile(path!, 'utf8'))).toMatchObject({
+          command: 'echo', args: ['base'], cwd: join(root, 'custom', 'mcp'), env: { REGION: 'machine' },
+        });
+      }
+    } finally { result.happierMcpServer.stop(); await rm(root, { recursive: true, force: true }); }
+  });
   it('resolves Project rules once before materializing and refuses an unreadable association', async () => {
-    const captured = snapshot([server('tools')]);
-    captured.mcpServerCatalog!.catalog!.bindings[0]!.target = { t: 'project', projectKey: 'project' };
+    const base = snapshot([server('tools')]);
+    if (base.mcpServerCatalog?.status !== 'ready') throw new Error('Expected ready catalog');
+    const projectCredentials = { token: `header.${Buffer.from(JSON.stringify({ sub: 'mcp-project-account' })).toString('base64url')}.signature`, encryption: null };
+    const serverHttpBaseUrl = session().getServerBinding().serverUrl;
+    const captured = { ...base, mcpServerCatalog: { ...base.mcpServerCatalog, catalog: { ...base.mcpServerCatalog.catalog,
+      bindings: base.mcpServerCatalog.catalog.bindings.map(rule => ({ ...rule, target: { t: 'project' as const, projectKey: 'project' } })),
+    } }, scopeKey: runWithServerHttpBaseUrl(serverHttpBaseUrl, () => resolveAccountSettingsScopeKeyForToken(projectCredentials.token)) };
+    const operationContext = runWithServerHttpBaseUrl(serverHttpBaseUrl, () => createInvocationSavedSecretOperationContextV1({
+      credentials: projectCredentials, snapshot: captured, serverHttpBaseUrl, isCurrent: async () => true,
+    }));
     const serverId = session().getServerBinding().serverId;
     const key = { kind: 'workspace-ref', serverId, id: 'checkout' };
     vi.spyOn(axios, 'get').mockResolvedValue({ status: 200, data: { mode: 'plain', updatedAt: 0 } });
@@ -65,12 +104,15 @@ describe('resolveRunnerMcpServers catalog admission', () => {
       { key, revision: 1, content: { t: 'plain', v: { key, value: { id: 'checkout', serverId, machineId: 'machine-1',
         rootPath: '/repo', projectKey: 'project', createdAtMs: 1 } } } },
     ] } });
-    const input = { session: session(), credentials, accountSettings: captured.settings, accountSettingsSnapshot: captured,
+    const input = { session: session(), credentials: projectCredentials, accountSettings: captured.settings, accountSettingsSnapshot: captured, operationContext,
       machineId: 'machine-1', directory: '/repo', agentId: 'codex', agentAcceptsUserMcp: true,
       sessionMetadata: { workspaceId: 'checkout', projectId: 'project', path: '/repo' }, includeHappierMcpServer: false as const };
     const result = await resolveRunnerMcpServers(input);
-    try { expect(Object.keys(result.mcpServers)).toEqual(['tools']); } finally { result.happierMcpServer.stop(); }
-    expect(request.mock.calls.filter(call => call[0].endsWith('/projects/account-rows/list'))).toHaveLength(1);
+    try {
+      expect(Object.keys(result.mcpServers)).toEqual(['tools']);
+      expect(getActiveProjectAccountRowsSnapshot()).toBeNull();
+    } finally { result.happierMcpServer.stop(); }
+    expect(request.mock.calls.filter(call => call[0].endsWith(`${PROJECT_ACCOUNT_ROWS_ROUTE_V1}/list`))).toHaveLength(1);
     request.mockRejectedValue(new Error('network_unavailable'));
     await expect(resolveRunnerMcpServers(input)).rejects.toMatchObject({ code: 'preparation_pending', reason: 'project_association_unavailable' });
     request.mockClear();
@@ -133,7 +175,10 @@ describe('resolveRunnerMcpServers catalog admission', () => {
     const configPath = resolved.mcpServers.remote?.env?.HAPPIER_MCP_REMOTE_BRIDGE_CONFIG_FILE;
     try {
       expect(Object.keys(resolved.mcpServers).sort()).toEqual(['remote', 'selected']);
-      expect(resolved.mcpServers.selected?.env?.USER_VALUE).toBe('materialized-value');
+      expect(JSON.stringify(resolved.mcpServers.selected)).not.toContain('materialized-value');
+      const selectedPath = resolved.mcpServers.selected?.env?.HAPPIER_MCP_STDIO_LAUNCHER_CONFIG_FILE;
+      expect(selectedPath).toBeDefined();
+      expect(JSON.parse(await readFile(selectedPath!, 'utf8')).env).toEqual({ USER_VALUE: 'materialized-value' });
       expect(listen).not.toHaveBeenCalled();
       expect(configPath).toBeDefined();
       expect(JSON.parse(await readFile(configPath!, 'utf8')).url).toBe('https://remote.example.test/mcp');
@@ -235,8 +280,8 @@ describe('resolveRunnerMcpServers catalog admission', () => {
     captured.mcpServerCatalog.catalog.bindings[0]!.updatedAt = 20;
     const resolved = await resolve({ snapshot: captured });
     try {
-      expect(resolved.mcpBindingIdentities).toEqual({ docs: {
-        serverId: 'docs', bindingId: 'binding-docs', serverRevision: 10, bindingRevision: 20, catalogRevision: 2,
+      expect(resolved.mcpServerIdentities).toEqual({ docs: {
+        serverId: 'docs', serverTitle: 'docs', usage: { serverId: 'docs', bindingId: 'binding-docs', serverRevision: 10, bindingRevision: 20, catalogRevision: 2 },
       } });
       expect(resolved.mcpServers.docs).toBeDefined();
     } finally { resolved.happierMcpServer.stop(); }
@@ -306,21 +351,77 @@ describe('resolveRunnerMcpServers catalog admission', () => {
     finally { result.happierMcpServer.stop(); }
   });
 
-  it('refuses unobserved and partial catalogs rather than silently dropping custom servers', async () => {
+  it('refuses unobserved and partial catalogs when strict MCP policy requires them', async () => {
     setActiveAccountSettingsSnapshot(snapshot([server('ambient-server')]));
-    await expect(resolve({ snapshot: null })).rejects.toMatchObject({ code: 'mcp_catalog_unavailable', reason: 'catalog-unobserved' });
-    const withoutPreferences = resolveRunnerMcpServers({ session: session(), credentials, accountSettings: null,
-      machineId: 'machine-1', directory: '/tmp/repo' }).then(result => { result.happierMcpServer.stop(); return result; });
-    await expect(withoutPreferences).rejects.toMatchObject({ code: 'mcp_catalog_unavailable', reason: 'catalog-unobserved' });
+    await expect(resolve({ snapshot: null, accountSettings: accountSettingsParse({ mcpServersStrictMode: true }) }))
+      .rejects.toMatchObject({ code: 'mcp_catalog_unavailable', reason: 'catalog-unobserved' });
     const opened = snapshot([server('valid-neighbor')]);
     if (opened.mcpServerCatalog?.status !== 'ready') throw new Error('Fixture is not ready');
     await expect(resolve({ snapshot: { ...opened, mcpServerCatalog: { ...opened.mcpServerCatalog, status: 'partial',
       diagnostics: [{ path: 'servers[1]', reason: 'invalid-stored-content' }] } } })).rejects.toMatchObject({ code: 'mcp_catalog_unavailable' });
   });
 
-  it('does not admit an unavailable row even when non-strict policy is selected', async () => {
+  it.each([true, false])('publishes optional catalog unavailability without borrowing ambient servers (built-in bridge: %s)', async includeHappierMcpServer => {
+    setActiveAccountSettingsSnapshot(snapshot([server('ambient-server')]));
+    const captured = { ...snapshot(), settings: accountSettingsParse({ mcpServersStrictMode: false }),
+      rawSettings: { mcpServersSettingsV1: { v: 1, servers: [server('retained-server')], bindings: [] } },
+      mcpServerCatalog: { status: 'unavailable' as const, reason: 'unreachable' as const } };
+    const events: unknown[] = [];
+    const result = await resolveRunnerMcpServers({ session: { ...session(), enqueueSessionEventCommitted: async event => {
+      events.push(event); return { persisted: true, delivered: true };
+    } }, credentials, accountSettings: captured.settings, accountSettingsSnapshot: captured,
+      machineId: 'machine-1', directory: '/tmp/repo', includeHappierMcpServer, env: {},
+    });
+    try {
+      expect(Object.keys(result.mcpServers)).toEqual(includeHappierMcpServer ? ['happier'] : []);
+      expect(events).toHaveLength(1);
+      expect(readSessionCapabilityNoticeV1(events[0])).toEqual({ v: 1, items: [{
+        kind: 'mcp_server', name: 'MCP servers', code: 'mcp_catalog_unavailable', detail: 'unreachable',
+      }] });
+    } finally { result.happierMcpServer.stop(); }
+  });
+
+  it('keeps built-in tools callable with an unobserved optional catalog and no Account preferences', async () => {
+    vi.stubEnv('HAPPIER_E2E_PROVIDER_USE_CLI_SOURCE_ENTRYPOINT', '1');
+    const events: unknown[] = [];
+    const result = await resolveRunnerMcpServers({ session: { ...session(), getWorkDepth: () => 0,
+      getActiveTurnPermissionWitness: () => ({ turnId: 'optional-startup-turn', workDepth: 0,
+        causalPermissionAuthority: { kind: 'admittedSessionInputV1', admittedPermissionCeiling: 'default' } }),
+      enqueueSessionEventCommitted: async event => {
+      events.push(event); return { persisted: true, delivered: true };
+    } }, credentials, accountSettings: null, accountSettingsSnapshot: null,
+      machineId: 'machine-1', directory: '/tmp/repo', env: {},
+    });
+    const client = new Client({ name: 'optional-mcp-startup', version: '1' });
+    try {
+      expect(readSessionCapabilityNoticeV1(events[0])?.items[0]).toMatchObject({ code: 'mcp_catalog_unavailable', detail: 'catalog-unobserved' });
+      await client.connect(new StreamableHTTPClientTransport(new URL(result.happierMcpServer.url)));
+      expect((await client.listTools()).tools.map(tool => tool.name)).toEqual(expect.arrayContaining(['action_execute', 'action_spec_get']));
+      const reply = await client.callTool({ name: 'action_spec_get', arguments: { id: 'session.title.set' } });
+      expect(reply, JSON.stringify(reply)).toMatchObject({ isError: false });
+    } finally { await client.close(); result.happierMcpServer.stop(); }
+  });
+
+  it.each(['scope-retired', 'account-mode-mismatch'] as const)('refuses optional MCP catalog authority failure %s', async reason => {
     await expect(resolve({ snapshot: { ...snapshot(), settings: accountSettingsParse({ mcpServersStrictMode: false }),
-      mcpServerCatalog: { status: 'unavailable', reason: 'unreachable' } } })).rejects.toMatchObject({ code: 'mcp_catalog_unavailable' });
+      mcpServerCatalog: { status: 'unavailable', reason } } })).rejects.toMatchObject({ code: 'mcp_catalog_unavailable', reason });
+  });
+
+  it('refuses optional MCP startup when its captured Account retires during notice publication', async () => {
+    const serverHttpBaseUrl = session().getServerBinding().serverUrl;
+    const captured = runWithServerHttpBaseUrl(serverHttpBaseUrl, () => ({ ...snapshot(),
+      settings: accountSettingsParse({ mcpServersStrictMode: false }),
+      mcpServerCatalog: { status: 'unavailable' as const, reason: 'unreachable' as const },
+    }));
+    let current = true;
+    const operationContext = runWithServerHttpBaseUrl(serverHttpBaseUrl, () => createInvocationSavedSecretOperationContextV1({
+      credentials, snapshot: captured, serverHttpBaseUrl, isCurrent: async () => current,
+    }));
+    await expect(resolveRunnerMcpServers({ session: { ...session(), enqueueSessionEventCommitted: async () => {
+      current = false; return { persisted: true, delivered: true };
+    } }, credentials, accountSettings: captured.settings, accountSettingsSnapshot: captured, operationContext,
+      machineId: 'machine-1', directory: '/tmp/repo', includeHappierMcpServer: false,
+    })).rejects.toMatchObject({ code: 'mcp_catalog_unavailable', reason: 'scope-retired' });
   });
 
   it.each([true, false])('keeps restricted Session authority independent from Account catalog availability (built-in bridge: %s)', async includeHappierMcpServer => {
@@ -376,7 +477,11 @@ describe('resolveRunnerMcpServers catalog admission', () => {
       savedSecretResources: [resource], operationContext, machineId: 'machine-1', directory: '/tmp/repo', env: {}, tmpDir: null };
     const result = await resolveRunnerMcpServers(input);
     try {
-      expect(result.mcpServers['private-server']?.env?.API_KEY).toBe('fresh-private-value');
+      const launch = result.mcpServers['private-server'];
+      expect(JSON.stringify(launch)).not.toContain('fresh-private-value');
+      const configPath = launch?.env?.HAPPIER_MCP_STDIO_LAUNCHER_CONFIG_FILE;
+      expect(configPath).toBeDefined();
+      expect(JSON.parse(await readFile(configPath!, 'utf8')).env.API_KEY).toBe('fresh-private-value');
       expect(getActiveAccountSettingsSnapshot()).toBe(ambient);
     } finally { result.happierMcpServer.stop(); }
     revoked = true;

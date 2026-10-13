@@ -1,122 +1,61 @@
-import { beforeEach, describe, expect, it, vi } from 'vitest';
+import { describe, expect, it } from 'vitest';
+import Fastify from 'fastify';
+import { Client } from '@modelcontextprotocol/sdk/client/index.js';
+import { InMemoryTransport } from '@modelcontextprotocol/sdk/inMemory.js';
+import { CallToolResultSchema } from '@modelcontextprotocol/sdk/types.js';
+import { ExternalActionRequestEnvelopeSchema } from '@happier-dev/protocol/actions';
+import { getActionSpec } from '@happier-dev/protocol/actions/actionSpecs';
 import type { ProjectedPluginToolCatalogEntry } from '@/plugins/runtime/toolCatalog';
-
-const boundary = vi.hoisted(() => {
-  const execute = vi.fn();
-  return {
-    createCliActionExecutorFromCredentials: vi.fn(() => ({ execute })),
-    createCliActionExecutorHarness: vi.fn(() => {
-      throw new Error('local_harness_used');
-    }),
-    execute,
-    registeredTools: null as null | Record<string, unknown>,
-  };
-});
-
-vi.mock('@modelcontextprotocol/sdk/server/mcp.js', () => ({
-  McpServer: class FakeMcpServer {
-    registerResource() {}
-    registerTool() {}
-  },
-}));
-
-vi.mock('@/mcp/resources/registerHappierMcpResources', () => ({
-  registerHappierMcpResources: () => {},
-}));
-
-vi.mock('@/mcp/server/registerHappierMcpBuiltInTools', () => ({
-  registerHappierMcpBuiltInTools: (_server: unknown, params: Record<string, unknown>) => {
-    boundary.registeredTools = params;
-    return { toolNames: [] };
-  },
-}));
-
-vi.mock('@/session/actions/createCliActionExecutorFromCredentials', () => ({
-  createCliActionExecutorFromCredentials: boundary.createCliActionExecutorFromCredentials,
-}));
-
-vi.mock('@/session/actions/createCliActionExecutorHarness', () => ({
-  createCliActionExecutorHarness: boundary.createCliActionExecutorHarness,
-}));
-
+import { runWithServerHttpBaseUrl } from '@/api/client/serverHttpBaseUrl';
 import { createExternalMcpServer } from './createExternalMcpServer';
 
-function isExecuteActionByToolName(value: unknown): value is (
-  toolName: string,
-  toolArgs: unknown,
-  defaultSessionId: string,
-) => Promise<unknown> {
-  return typeof value === 'function';
-}
-
 describe('createExternalMcpServer with an API token', () => {
-  beforeEach(() => {
-    boundary.createCliActionExecutorFromCredentials.mockClear();
-    boundary.createCliActionExecutorHarness.mockClear();
-    boundary.execute.mockReset();
-    boundary.registeredTools = null;
-  });
-
-  it('routes a token-only MCP Session Action through the PAT adapter and excludes local plugin execution', async () => {
-    const credentials = {
-      token: 'hap_v1_pat_secret',
-      encryption: null,
-      credentialProvenance: 'api_token' as const,
-    };
-    boundary.execute.mockResolvedValueOnce({
-      ok: true,
-      result: { session: { id: 'session_e2ee_exact', active: true } },
+  it('routes the advertised MCP Session Action through the real PAT executor and HTTP transport', async () => {
+    const token = 'hap_v1_11111111-1111-4111-8111-111111111111_' + 'A'.repeat(43);
+    const sessionId = 'c123456789012345678901234';
+    const spec = getActionSpec('session.status.get');
+    if (!spec.outputSchema) throw new Error('Session status must declare its public output');
+    const status = spec.outputSchema.parse({ session: { id: sessionId, active: true } });
+    const app = Fastify();
+    const requests: unknown[] = [];
+    // Home HTTP is the genuine system boundary. MCP registration, the Action
+    // bridge, PAT executor, SDK, target selection and schemas all stay real.
+    app.post('/v1/actions/session.status.get', async request => {
+      expect(request.headers.authorization).toBe(`Bearer ${token}`);
+      const envelope = ExternalActionRequestEnvelopeSchema.parse(request.body);
+      requests.push(envelope);
+      expect(envelope).toMatchObject({ v: 1, target: { kind: 'session', sessionId }, input: { sessionId } });
+      return { v: 1, actionId: spec.id, requestId: envelope.requestId, execution: { ok: true, result: status } };
     });
-
+    const endpoint = await app.listen({ port: 0, host: '127.0.0.1' });
     const pluginToolCatalog = [{
-      toolId: 'acme.review.plugin/review-tool',
-      actionId: 'acme.review.plugin/review-start',
-      name: 'acme_review_start',
-      title: 'Acme Review Start',
-      description: 'A local-only plugin Action',
-      inputSchema: { type: 'object' },
-      surfaces: ['mcp'],
+      toolId: 'acme.review.plugin/review-tool', actionId: 'acme.review.plugin/review-start',
+      name: 'acme_review_start', title: 'Review', description: 'A local-only plugin Action',
+      inputSchema: { type: 'object' }, surfaces: ['mcp'],
     }] satisfies readonly ProjectedPluginToolCatalogEntry[];
-
-    createExternalMcpServer({
-      credentials,
-      defaultSessionId: 'session_e2ee_exact',
-      pluginToolCatalog,
-    });
-
-    expect(boundary.createCliActionExecutorFromCredentials).toHaveBeenCalledWith({
-      credentials,
-      serverId: expect.any(String),
-      serverApiUrl: expect.any(String),
-    });
-    expect(boundary.createCliActionExecutorHarness).not.toHaveBeenCalled();
-    expect(boundary.registeredTools).toEqual(expect.objectContaining({
-      pluginToolCatalog: [],
+    const { mcp } = runWithServerHttpBaseUrl(endpoint, () => createExternalMcpServer({
+      credentials: { token, encryption: null, credentialProvenance: 'api_token' },
+      defaultSessionId: sessionId, pluginToolCatalog,
     }));
-
-    const executeActionByToolName = (boundary.registeredTools?.deps as {
-      executeActionByToolName?: unknown;
-    } | undefined)?.executeActionByToolName;
-    expect(isExecuteActionByToolName(executeActionByToolName)).toBe(true);
-    if (!isExecuteActionByToolName(executeActionByToolName)) {
-      throw new Error('expected MCP Action bridge');
+    const [clientTransport, serverTransport] = InMemoryTransport.createLinkedPair();
+    const client = new Client({ name: 'pat-mcp-test', version: '1' });
+    try {
+      await mcp.connect(serverTransport);
+      await client.connect(clientTransport);
+      const tools = await client.listTools();
+      expect(tools.tools.map(tool => tool.name)).toContain('session_status_get');
+      expect(tools.tools.map(tool => tool.name)).not.toContain('acme_review_start');
+      const response = CallToolResultSchema.parse(await client.callTool({ name: 'action_execute',
+        arguments: { actionId: 'session.status.get', input: {} } }));
+      expect(response.isError, JSON.stringify(response)).not.toBe(true);
+      expect(response.structuredContent).toEqual(status);
+      const text = response.content.find(content => content.type === 'text');
+      expect(text?.type === 'text' ? JSON.parse(text.text) : null).toEqual(status);
+      expect(requests).toHaveLength(1);
+    } finally {
+      await client.close();
+      await mcp.close();
+      await app.close();
     }
-
-    await expect(executeActionByToolName(
-      'action_execute',
-      { actionId: 'session.status.get', input: {} },
-      'session_e2ee_exact',
-    )).resolves.toEqual({
-      ok: true,
-      result: { session: { id: 'session_e2ee_exact', active: true } },
-    });
-    expect(boundary.execute).toHaveBeenCalledWith(
-      'session.status.get',
-      { sessionId: 'session_e2ee_exact' },
-      expect.objectContaining({
-        defaultSessionId: 'session_e2ee_exact',
-        surface: 'mcp',
-      }),
-    );
   });
 });

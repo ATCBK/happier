@@ -19,6 +19,11 @@ import { StreamableHTTPClientTransport } from '@modelcontextprotocol/sdk/client/
 import { SSEClientTransport } from '@modelcontextprotocol/sdk/client/sse.js';
 import { extractWWWAuthenticateParams } from '@modelcontextprotocol/sdk/client/auth.js';
 import type { FetchLike } from '@modelcontextprotocol/sdk/shared/transport.js';
+import {
+  CallToolResultSchema, InitializeResultSchema, JSONRPCMessageSchema,
+  JSONRPCNotificationSchema, JSONRPCRequestSchema, JSONRPCResultResponseSchema,
+  ListToolsResultSchema, ProgressNotificationSchema, ProgressTokenSchema, RequestIdSchema,
+} from '@modelcontextprotocol/sdk/types.js';
 import { createConnectedAccountRequestAuthClient } from '@happier-dev/plugin-sdk/connected-accounts/request-auth';
 import { canonicalMcpOAuthResourceUrlV1 } from '@happier-dev/protocol/mcp/oauth/mcpOAuthResourceV1';
 import { z } from 'zod';
@@ -28,13 +33,56 @@ import { withMcpTimeout } from '@/mcp/runtime/withMcpTimeout';
 import { runMcpStdioBridgeLifecycle } from '@/mcp/runtime/runMcpStdioBridgeLifecycle';
 import { registerHappierBridgeTools } from './registerHappierBridgeTools';
 import { MCP_REQUEST_AUTH_PURPOSE } from '@/mcp/runtime/mcpRequestAuth';
+import { createProviderRedactionLease } from '@/providers/spawn/redaction';
+import { readCredentialRedactionValues } from '@/plugins/runtime/invocation/services/credentialRedactionValues';
 
 const MCP_BRIDGE_STARTUP_STEP_TIMEOUT_MS = 60_000;
+// Keep already-issued values protected through late responses and credential
+// rotations; this lease ends with this single bridge process, not a request.
+const outputRedaction = createProviderRedactionLease({ values: [] });
+
+const BridgeOutputSchema = z.union([
+  JSONRPCResultResponseSchema.extend({ result: z.union([InitializeResultSchema, ListToolsResultSchema, CallToolResultSchema]) }),
+  JSONRPCNotificationSchema.extend(ProgressNotificationSchema.shape),
+  JSONRPCMessageSchema,
+]);
+
+// Preserve only SDK-owned fields, literals and correlation facts. Dictionary
+// keys and string payloads use the same credential lease as stderr; redacting
+// the serialized message would corrupt syntax when a secret is "content".
+function projectRedactedBridgeOutput(value: unknown, schema?: z.core.$ZodType): unknown {
+  if (schema instanceof z.ZodOptional || schema instanceof z.ZodNullable || schema instanceof z.ZodDefault) {
+    return projectRedactedBridgeOutput(value, schema.unwrap());
+  }
+  if (schema === RequestIdSchema || schema === ProgressTokenSchema
+    || schema === InitializeResultSchema.shape.protocolVersion
+    || schema === JSONRPCNotificationSchema.shape.method || schema === JSONRPCRequestSchema.shape.method
+    || schema instanceof z.ZodLiteral || schema instanceof z.ZodEnum) return value;
+  if (schema instanceof z.ZodUnion) {
+    const option = schema.options.find(candidate => z.safeParse(candidate, value).success);
+    return projectRedactedBridgeOutput(value, option);
+  }
+  if (typeof value === 'string') return outputRedaction.redact(value);
+  if (Array.isArray(value)) {
+    const element = schema instanceof z.ZodArray ? schema.element : undefined;
+    return value.map(item => projectRedactedBridgeOutput(item, element));
+  }
+  if (value === null || typeof value !== 'object') return value;
+  const fields = schema instanceof z.ZodObject ? schema.shape : undefined;
+  const entrySchema = schema instanceof z.ZodRecord ? schema.valueType : undefined;
+  return Object.fromEntries(Object.entries(value).map(([key, entry]) => [
+    fields && Object.hasOwn(fields, key) ? key : outputRedaction.redact(key),
+    // Remote metadata is an arbitrary private dictionary, including any keys
+    // whose spelling happens to match a protocol field.
+    projectRedactedBridgeOutput(entry, key === '_meta' ? undefined : fields?.[key] ?? entrySchema),
+  ]));
+}
 
 const RemoteBridgeConfigSchema = z.object({
   transport: z.enum(['http', 'sse']),
   url: z.string().min(1),
   headers: z.record(z.string(), z.string()).optional().default({}),
+  redactionValues: z.array(z.string().min(1)).optional().default([]),
   auth: z.object({ capabilityFile: z.string().min(1), resource: z.string().url() }).strict().optional(),
 });
 
@@ -47,7 +95,8 @@ class McpResourceMismatchError extends Error {
 
 function writeStderr(line: string): void {
   try {
-    process.stderr.write(line.endsWith('\n') ? line : `${line}\n`);
+    const safeLine = outputRedaction.redact(line);
+    process.stderr.write(safeLine.endsWith('\n') ? safeLine : `${safeLine}\n`);
   } catch {
     // ignore
   }
@@ -64,7 +113,11 @@ async function connectRemoteClient(config: RemoteBridgeConfig): Promise<Client> 
     if (canonicalMcpOAuthResourceUrlV1(String(target)) !== canonicalMcpOAuthResourceUrlV1(config.auth!.resource)) throw new McpResourceMismatchError();
     const signal = init?.signal ?? undefined;
     const lookup = async () => {
-      try { return await requestAuth.lookupConnectedAccountRequestAuth({ purpose: MCP_REQUEST_AUTH_PURPOSE, signal }); }
+      try {
+        const lease = await requestAuth.lookupConnectedAccountRequestAuth({ purpose: MCP_REQUEST_AUTH_PURPOSE, signal });
+        outputRedaction.add([lease.accessToken, JSON.stringify(lease.accessToken).slice(1, -1)]);
+        return lease;
+      }
       catch (error) { if (signal?.aborted) throw error; throw new Error('Sign in to this MCP server in Happier.'); }
     };
     const send = async (lease: Awaited<ReturnType<typeof lookup>>) => {
@@ -134,6 +187,11 @@ async function main(): Promise<void> {
     process.exit(2);
   }
 
+  outputRedaction.add(config.redactionValues.flatMap(value => [value, JSON.stringify(value).slice(1, -1)]));
+  outputRedaction.add(Object.values(config.headers).flatMap(value =>
+    readCredentialRedactionValues({ rawCredential: value, authorizationValue: value })
+      .flatMap(credential => [credential, JSON.stringify(credential).slice(1, -1)]),
+  ));
   const remoteClient = await connectRemoteClient(config);
   const server = new McpServer({ name: 'Happier MCP Remote Bridge', version: '1.0.0' });
   const requestedSignal = await runMcpStdioBridgeLifecycle({
@@ -157,6 +215,12 @@ async function main(): Promise<void> {
       });
 
       const stdio = new StdioServerTransport();
+      // One actual Agent-facing output boundary covers tool metadata, results,
+      // protocol errors and progress without choosing or filtering any tools.
+      const send = stdio.send.bind(stdio);
+      stdio.send = async (message) => await send(JSONRPCMessageSchema.parse(
+        projectRedactedBridgeOutput(message, BridgeOutputSchema),
+      ));
       await server.connect(stdio);
       return { transport: stdio, upstream: remoteClient };
     },
@@ -170,4 +234,4 @@ async function main(): Promise<void> {
 main().catch((err) => {
   writeStderr(`[happier-mcp-remote-bridge] Fatal: ${err instanceof Error ? err.message : String(err)}`);
   process.exit(1);
-});
+}).finally(() => outputRedaction.close());

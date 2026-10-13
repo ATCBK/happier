@@ -6,6 +6,7 @@ import { dirname, join } from 'node:path';
 import { pathToFileURL } from 'node:url';
 
 import { describe, expect, it } from 'vitest';
+import { deserializeMessage, serializeMessage } from '@modelcontextprotocol/sdk/shared/stdio.js';
 
 import { projectPath } from '@/projectPath';
 import { removeWrittenMcpRuntimeConfigFile, writeSecureMcpRuntimeConfigFile } from '@/mcp/runtime/writeSecureMcpRuntimeConfigFile';
@@ -44,6 +45,59 @@ function resolveLauncherInvocation(options: Readonly<{ forceSource?: boolean }> 
 }
 
 describe('stdioMcpServerLauncher', () => {
+  it('reports a spawn failure when initialize framing finishes after the child error', async () => {
+    const configPath = await writeSecureMcpRuntimeConfigFile({ prefix: 'happier-mcp-delayed-initialize', tmpDir: null,
+      payload: { command: 'happier-fixture-missing-command', args: [] } });
+    try {
+      const invocation = resolveLauncherInvocation({ forceSource: true });
+      const child = spawn(invocation.command, invocation.args, { env: { ...resolveEnvRecord(), ...invocation.env,
+        HAPPIER_MCP_STDIO_LAUNCHER_CONFIG_FILE: configPath }, stdio: ['pipe', 'pipe', 'pipe'] });
+      const request = serializeMessage({ jsonrpc: '2.0', id: 7, method: 'initialize', params: {} });
+      const split = request.length - 2;
+      let output = '';
+      let stderr = '';
+      let finished = false;
+      child.stdout.on('data', chunk => { output += String(chunk); });
+      child.stderr.on('data', chunk => {
+        stderr += String(chunk);
+        if (!finished && stderr.includes('ENOENT')) {
+          finished = true;
+          child.stdin.end(request.slice(split));
+        }
+      });
+      child.stdin.write(request.slice(0, split));
+      const code = await new Promise<number | null>((resolve, reject) => {
+        child.once('error', reject); child.once('close', resolve);
+      });
+      expect(code).toBe(1);
+      expect(deserializeMessage(output.trim())).toMatchObject({ id: 7, error: { code: -32603,
+        data: { t: 'happier-mcp-stdio-spawn-failure-v1', code: 'ENOENT', path: 'happier-fixture-missing-command' } } });
+      expect(stderr).not.toContain('EPIPE');
+    } finally { removeWrittenMcpRuntimeConfigFile(configPath, true); }
+  });
+
+  it.each(['ignore', 'end', 'cancel'] as const)('exits a missing child when stdin is %s without removing its config', async stdinMode => {
+    const configPath = await writeSecureMcpRuntimeConfigFile({ prefix: 'happier-mcp-missing-child', tmpDir: null,
+      payload: { command: 'happier-fixture-missing-command', args: [] } });
+    try {
+      const invocation = resolveLauncherInvocation({ forceSource: true });
+      const child = spawn(invocation.command, invocation.args, { env: { ...resolveEnvRecord(), ...invocation.env,
+        HAPPIER_MCP_STDIO_LAUNCHER_CONFIG_FILE: configPath }, stdio: [stdinMode === 'ignore' ? 'ignore' : 'pipe', 'pipe', 'pipe'] });
+      let stderr = '';
+      child.stderr?.on('data', chunk => {
+        stderr += String(chunk);
+        if (stdinMode === 'end') child.stdin?.end();
+        if (stdinMode === 'cancel') child.kill('SIGTERM');
+      });
+      const code = await new Promise<number | null>((resolve, reject) => {
+        child.once('error', reject); child.once('close', resolve);
+      });
+      expect(code).not.toBe(0);
+      expect(stderr).toContain('ENOENT');
+      expect(existsSync(configPath)).toBe(true);
+    } finally { removeWrittenMcpRuntimeConfigFile(configPath, true); }
+  });
+
   it('keeps host ownership when MCP config supplies a forged owner', async () => {
     const tmp = await mkdtemp(join(tmpdir(), 'happier-mcp-owner-'));
     try {

@@ -8,6 +8,7 @@ import type {
 
 import { acquireAuthoritativePluginRuntimeRegistryLease } from '@/plugins/runtime/reload/runtimeLease';
 import type { ResolvedMcpEndpointDiscoveryResult } from '@/mcp/runtimeTypes';
+import type { ResolvedExecutablePluginRuntimeRegistry } from '@/plugins/runtime/resolveExecutablePluginRuntimeRegistry';
 
 export type PluginMcpEndpointDiscoveryResult = ResolvedMcpEndpointDiscoveryResult;
 
@@ -96,6 +97,7 @@ function toDetectionInput(directory: string | null): PluginMcpDiscoveryRequest {
 async function acquireDiscoverySources(
   entries: readonly PluginMcpDiscoverySourceEntry[] | undefined,
   providers: ReadonlySet<McpDetectedProviderV1> | null,
+  runtimeRegistry?: ResolvedExecutablePluginRuntimeRegistry,
 ): Promise<Readonly<{
   entries: readonly PluginMcpDiscoverySourceEntry[];
   warnings: readonly DaemonMcpServersDetectWarningV1[];
@@ -108,7 +110,7 @@ async function acquireDiscoverySources(
       release: async () => {},
     });
   }
-  const lease = await acquireAuthoritativePluginRuntimeRegistryLease();
+  const lease = runtimeRegistry ? { registry: runtimeRegistry, release: async () => {} } : await acquireAuthoritativePluginRuntimeRegistryLease();
   const contributions = (lease.registry.contributes.mcpDiscoverySources ?? [])
     .map((contribution) => ({
       contribution,
@@ -331,6 +333,7 @@ export async function detectProviderMcpServers(params: Readonly<{
   env?: NodeJS.ProcessEnv;
   discoveryTimeoutMs?: number;
   mcpDiscoverySources?: readonly PluginMcpDiscoverySourceEntry[];
+  runtimeRegistry?: ResolvedExecutablePluginRuntimeRegistry;
 }>): Promise<DetectProviderMcpServersResult> {
   const providersFilter = normalizeProvidersFilter(params.providers);
   const providers = providersFilter.providers;
@@ -342,7 +345,7 @@ export async function detectProviderMcpServers(params: Readonly<{
   });
   const servers: DetectedMcpServerV1[] = [];
   const warnings: DaemonMcpServersDetectWarningV1[] = [...providersFilter.warnings];
-  const discoverySources = await acquireDiscoverySources(params.mcpDiscoverySources, providers);
+  const discoverySources = await acquireDiscoverySources(params.mcpDiscoverySources, providers, params.runtimeRegistry);
   warnings.push(...discoverySources.warnings);
 
   try {

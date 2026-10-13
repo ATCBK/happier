@@ -1,9 +1,16 @@
 import { chmod, mkdtemp, readFile, rm, stat, writeFile } from 'node:fs/promises';
-import { existsSync } from 'node:fs';
+import { spawn } from 'node:child_process';
+import { createServer } from 'node:https';
+import { existsSync, realpathSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 
 import { describe, expect, it } from 'vitest';
+import { McpServer } from '@modelcontextprotocol/sdk/server/mcp.js';
+import { StreamableHTTPServerTransport } from '@modelcontextprotocol/sdk/server/streamableHttp.js';
+import { Client } from '@modelcontextprotocol/sdk/client/index.js';
+import { StdioClientTransport } from '@modelcontextprotocol/sdk/client/stdio.js';
+import { createEphemeralTlsServerFixture } from '../../../../../packages/tests/src/testkit/tls/ephemeralTlsServerFixture.mjs';
 
 import {
   McpServersSettingsV1Schema,
@@ -23,6 +30,8 @@ function resolveMcpMaterialization(settings: McpServersSettingsV1, context: { ma
 }
 
 import { projectPath } from '@/projectPath';
+import { resolveNodeBackedMcpServerCommand } from '@/mcp/runtime/resolveNodeBackedMcpServerCommand';
+import { readRetainedMcpServerCatalogSourceV1 } from '@happier-dev/protocol/mcp/servers/serverCatalogV1';
 import { resolvePackagedRuntimeEntrypoint } from '@/packagedRuntime/resolvePackagedRuntimeEntrypoint';
 import { resolveCliTsxTsconfigPath, resolveTsxImportHookPath } from '@/utils/spawnHappyCLI';
 import {
@@ -30,7 +39,7 @@ import {
   type SavedSecretCatalogResourceInputV1,
 } from '@/settings/secrets/savedSecretCatalog';
 
-import { materializeMcpServerConfigRecord } from './materializeMcpServerConfigRecord';
+import { listSelectedMcpSharedSecretReferences, materializeMcpServerConfigRecord } from './materializeMcpServerConfigRecord';
 
 function deterministicRandomBytesFactory(): (length: number) => Uint8Array {
   let counter = 1;
@@ -45,6 +54,233 @@ function deterministicRandomBytesFactory(): (length: number) => Uint8Array {
 }
 
 describe('materializeMcpServerConfigRecord', () => {
+  it('hydrates URL template secrets and resolves them only inside the private bridge configuration', async () => {
+    const secretRef = 'happier:shared-secret:v1:url-key';
+    const settings = McpServersSettingsV1Schema.parse({ v: 1, strictMode: true, servers: [{ id: 'remote', name: 'remote',
+      transport: 'http', remote: { url: 'https://example.test/mcp', headers: {}, urlTemplate: {
+        t: 'template', template: 'https://example.test/mcp?api_key={key}', vars: { key: { t: 'savedSecret', secretId: secretRef } },
+      } }, env: {}, createdAt: 1, updatedAt: 1 }], bindings: [{ id: 'on', serverId: 'remote', enabled: true,
+        target: { t: 'allMachines' }, createdAt: 1, updatedAt: 1 }] });
+    const resolved = resolveMcpMaterialization(settings, { machineId: 'machine', directory: '/repo' });
+    expect(listSelectedMcpSharedSecretReferences(resolved.serversByName)).toEqual([{ ref: secretRef }]);
+    const savedSecretMaterializer = createSavedSecretMaterializerV1({ accountSettings: {}, settingsSecretsReadKeys: [],
+      resourceCatalogState: 'ready', resources: [{ resourceId: 'url-key', ownerAccountId: 'owner', displayName: 'key',
+        kind: 'token', encryptionMode: 'plain', revision: 1, materialStatus: 'ready',
+        storedContent: sealSavedSecretResourceStoredContentV1({ resourceId: 'url-key', mode: 'plain',
+          content: { v: 1, name: 'key', kind: 'token', value: 'private-url-key' } }) }] });
+    const result = await materializeMcpServerConfigRecord({ resolved, savedSecretMaterializer, processEnv: {}, tmpDir: null,
+      deps: { resolveRemoteBridgeCommand: () => ({ command: 'fixture-bridge', args: [] }) } });
+    try {
+      expect(JSON.stringify(result.mcpServers)).not.toContain('private-url-key');
+      const path = result.mcpServers.remote!.env!.HAPPIER_MCP_REMOTE_BRIDGE_CONFIG_FILE!;
+      expect(JSON.parse(await readFile(path, 'utf8')).url).toBe('https://example.test/mcp?api_key=private-url-key');
+      expect((await stat(path)).mode & 0o777).toBe(0o600);
+      expect(result.sanitizeDiagnosticText('private-url-key')).toBe('[REDACTED]');
+    } finally { result.cleanup(); }
+    await expect(materializeMcpServerConfigRecord({ resolved, processEnv: {}, tmpDir: null, strictMode: false,
+      savedSecretMaterializer: createSavedSecretMaterializerV1({ accountSettings: {}, settingsSecretsReadKeys: [],
+        resourceCatalogState: 'ready', resources: [] }) })).rejects.toMatchObject({
+      code: 'saved_secret_resolution_failed', field: 'url', reference: secretRef,
+    });
+  });
+
+  it('refuses a resolved OAuth URL template outside its request-auth resource', async () => {
+    const settings = McpServersSettingsV1Schema.parse({ v: 1, strictMode: true, servers: [{ id: 'oauth', name: 'oauth',
+      transport: 'http', remote: { url: 'https://example.test/mcp', headers: {}, auth: { kind: 'oauth' }, urlTemplate: {
+        t: 'template', template: 'https://example.test/{tenant}/mcp', vars: { tenant: { t: 'literal', v: 'different' } },
+      } }, env: {}, createdAt: 1, updatedAt: 1 }], bindings: [{ id: 'on', serverId: 'oauth', enabled: true,
+        target: { t: 'allMachines' }, createdAt: 1, updatedAt: 1 }] });
+    const resolved = resolveMcpMaterialization(settings, { machineId: 'machine', directory: '/repo' });
+    await expect(materializeMcpServerConfigRecord({ resolved, processEnv: {}, tmpDir: null,
+      requestAuthByServerId: { oauth: { capabilityFile: '/private/capability', resource: 'https://example.test/mcp' } },
+    }).then(result => { result.cleanup(); return result; })).rejects.toThrow('mcp_resource_mismatch');
+    const matching = await materializeMcpServerConfigRecord({ resolved, processEnv: {}, tmpDir: null,
+      requestAuthByServerId: { oauth: { capabilityFile: '/private/capability', resource: 'https://example.test/different/mcp' } },
+      deps: { resolveRemoteBridgeCommand: () => ({ command: 'fixture-bridge', args: [] }) } });
+    matching.cleanup();
+  });
+  it('preserves strict-mode handling for an unavailable URL template variable', async () => {
+    const settings = McpServersSettingsV1Schema.parse({ v: 1, strictMode: false, servers: [{ id: 'remote', name: 'remote',
+      transport: 'http', remote: { url: 'https://example.test/mcp', headers: {}, urlTemplate: {
+        t: 'template', template: 'https://example.test/{tenant}/mcp', vars: { tenant: { t: 'literal', v: '${TENANT}' } },
+      } }, env: {}, createdAt: 1, updatedAt: 1 }], bindings: [{ id: 'on', serverId: 'remote', enabled: true,
+        target: { t: 'allMachines' }, createdAt: 1, updatedAt: 1 }] });
+    const resolved = resolveMcpMaterialization(settings, { machineId: 'machine', directory: '/repo' });
+    const result = await materializeMcpServerConfigRecord({ resolved, processEnv: {}, tmpDir: null });
+    expect(result.mcpServers).toEqual({});
+    expect(result.warnings).toEqual([{ serverName: 'remote', code: 'missing_value_ref', detail: 'url' }]);
+    result.cleanup();
+    await expect(materializeMcpServerConfigRecord({ resolved, processEnv: {}, tmpDir: null, strictMode: true }))
+      .rejects.toThrow('missing url');
+  });
+  it('redacts a used Saved Secret template atom through the materialization diagnostic lifetime', async () => {
+    const savedSecretMaterializer = createSavedSecretMaterializerV1({ accountSettings: {}, settingsSecretsReadKeys: [],
+      resourceCatalogState: 'ready', resources: [{ resourceId: 'diagnostic-key', ownerAccountId: 'owner', displayName: 'key',
+        kind: 'token', encryptionMode: 'plain', revision: 1, materialStatus: 'ready',
+        storedContent: sealSavedSecretResourceStoredContentV1({ resourceId: 'diagnostic-key', mode: 'plain',
+          content: { v: 1, name: 'key', kind: 'token', value: 'saved-template-private-atom' } }) }] });
+    const config = McpServersSettingsV1Schema.parse({ v: 1, strictMode: true, servers: [{ id: 'remote', name: 'remote',
+      transport: 'http', remote: { url: 'https://fixture.example.test/mcp', headers: { Authorization: {
+        t: 'template', template: 'Bearer {key}', vars: { key: { t: 'savedSecret', secretId: 'happier:shared-secret:v1:diagnostic-key' } },
+      } } }, env: {}, createdAt: 1, updatedAt: 1 }], bindings: [{ id: 'on', serverId: 'remote', enabled: true,
+        target: { t: 'allMachines' }, createdAt: 1, updatedAt: 1 }] });
+    const out = await materializeMcpServerConfigRecord({ savedSecretMaterializer, processEnv: {}, tmpDir: null,
+      resolved: resolveMcpMaterialization(config, { machineId: 'machine', directory: '/repo' }),
+      deps: { resolveRemoteBridgeCommand: () => ({ command: 'fixture-bridge', args: [] }) },
+    });
+    try {
+      expect(out.sanitizeDiagnosticText('echoed saved-template-private-atom')).toBe('echoed [REDACTED]');
+      expect(out.sanitizeDiagnosticText('Bearer saved-template-private-atom')).toBe('[REDACTED]');
+    } finally { out.cleanup(); }
+    expect(out.sanitizeDiagnosticText('saved-template-private-atom')).toBe('saved-template-private-atom');
+  });
+  it('starts the remote bridge with private startup-sensitive TLS environment', async () => {
+    const root = await mkdtemp(join(tmpdir(), 'happier-mcp-remote-ca-'));
+    const tls = await createEphemeralTlsServerFixture();
+    const https = createServer({ key: await readFile(tls.privateKeyPath), cert: await readFile(tls.leafCertificatePath) });
+    https.on('request', async (request, response) => {
+      const mcp = new McpServer({ name: 'tls-boundary', version: '1' });
+      mcp.registerTool('ready', {}, async () => ({ content: [{ type: 'text', text: 'ready' }] }));
+      const transport = new StreamableHTTPServerTransport({ sessionIdGenerator: undefined });
+      response.once('close', () => { transport.close().catch(() => {}); mcp.close().catch(() => {}); });
+      await mcp.connect(transport);
+      await transport.handleRequest(request, response);
+    });
+    await new Promise<void>(resolve => https.listen(0, '127.0.0.1', resolve));
+    const address = https.address();
+    if (!address || typeof address === 'string') throw new Error('TLS fixture address unavailable');
+    const settings = McpServersSettingsV1Schema.parse({ v: 1, strictMode: true, servers: [{
+      id: 'remote', name: 'remote', transport: 'http', remote: { url: `https://127.0.0.1:${address.port}`, headers: {} },
+      env: { NODE_EXTRA_CA_CERTS: { t: 'literal', v: tls.caCertificatePath } }, createdAt: 0, updatedAt: 0,
+    }], bindings: [{ id: 'on', serverId: 'remote', enabled: true, target: { t: 'allMachines' }, createdAt: 0, updatedAt: 0 }] });
+    // OS executable resolution is the boundary; both bridge and launcher execute current source.
+    const invocation = async (entry: 'bridge' | 'launcher') => {
+      const command = await resolveNodeBackedMcpServerCommand({
+        distEntrypointSegments: ['mcp', entry === 'bridge' ? 'bridges' : 'launchers',
+          entry === 'bridge' ? 'remoteMcpStdioBridge.mjs' : 'stdioMcpServerLauncher.mjs'],
+        sourceEntrypointSegments: ['mcp', entry === 'bridge' ? 'bridges' : 'launchers',
+          entry === 'bridge' ? 'remoteMcpStdioBridge.ts' : 'stdioMcpServerLauncher.ts'], preferSourceEntrypoint: true,
+      });
+      return { ...command, args: ['--conditions=happier-source', ...command.args] };
+    };
+    const result = await materializeMcpServerConfigRecord({
+      resolved: resolveMcpMaterialization(settings, { machineId: 'm', directory: root }), tmpDir: root, processEnv: {},
+      deps: { resolveRemoteBridgeCommand: () => invocation('bridge'), resolveStdioLauncherCommand: () => invocation('launcher') },
+    });
+    const config = result.mcpServers.remote!;
+    const env: Record<string, string> = {};
+    for (const [key, value] of Object.entries({ ...process.env, ...config.env })) {
+      if (typeof value === 'string') env[key] = value;
+    }
+    delete env.NODE_EXTRA_CA_CERTS;
+    const transport = new StdioClientTransport({ command: config.command, args: config.args, env, stderr: 'pipe' });
+    let stderr = '';
+    transport.stderr?.on('data', chunk => { stderr += String(chunk); });
+    const client = new Client({ name: 'private-env-test', version: '1' }, { capabilities: {} });
+    try {
+      expect(JSON.stringify(config)).not.toContain(tls.caCertificatePath);
+      try { await client.connect(transport); }
+      catch (error) { throw new Error(`Private TLS bridge failed; child stderr: ${stderr}`, { cause: error }); }
+    } finally {
+      await client.close(); await transport.close(); result.cleanup();
+      await new Promise<void>(resolve => https.close(() => resolve()));
+      await tls.cleanup(); await rm(root, { recursive: true, force: true });
+    }
+  }, 120_000);
+  it('materializes the retained 0.2 winning-binding configuration after canonical transfer', async () => {
+    // ../0.2 cd2bb4d853a259ae00ebc3e5981224e3e4bb5380: the winning binding
+    // patches the original base, so narrower bindings never inherit Everywhere overrides.
+    const opened = readRetainedMcpServerCatalogSourceV1({ mcpServersSettingsV1: { v: 1, servers: [{
+      id: 'local', name: 'local', transport: 'stdio', stdio: { command: 'example-mcp', args: ['base'] },
+      env: { REGION: { t: 'literal', v: 'original' } }, createdAt: 1, updatedAt: 1,
+    }], bindings: [
+      { id: 'all', serverId: 'local', enabled: true, target: { t: 'allMachines' }, createdAt: 1, updatedAt: 1,
+        overrides: { stdio: { args: ['everywhere'] }, envPatch: {
+          REGION: { t: 'literal', v: 'everywhere' }, NEW: { t: 'literal', v: 'new' },
+        } } },
+      { id: 'm1', serverId: 'local', enabled: true, target: { t: 'machine', machineId: 'm1' }, createdAt: 1, updatedAt: 1,
+        overrides: { envPatch: { REGION: { t: 'literal', v: 'machine' } } } },
+      { id: 'm2', serverId: 'local', enabled: true, target: { t: 'machine', machineId: 'm2' }, createdAt: 1, updatedAt: 1 },
+    ] } });
+    if (opened.status !== 'opened') throw new Error('Expected complete retained catalog');
+    for (const [machineId, args, env] of [
+      ['m1', ['base'], { REGION: 'machine' }], ['m2', ['base'], { REGION: 'original' }],
+      ['other', ['everywhere'], { REGION: 'everywhere', NEW: 'new' }],
+    ] as const) {
+      const out = await materializeMcpServerConfigRecord({ tmpDir: null, processEnv: {}, resolved:
+        resolveMcpMaterialization({ ...opened.catalog, strictMode: true }, { machineId, directory: '/repo' }),
+      });
+      try {
+        const path = out.mcpServers.local!.env!.HAPPIER_MCP_STDIO_LAUNCHER_CONFIG_FILE!;
+        expect(JSON.parse(await readFile(path, 'utf8'))).toMatchObject({ command: 'example-mcp', args, env });
+      } finally { out.cleanup(); }
+    }
+  });
+  it('starts normalized node stdio in the configured folder through a private config', async () => {
+    const root = await mkdtemp(join(tmpdir(), 'happier-mcp-session-cwd-'));
+    const resolved = resolveMcpMaterialization({ v: 1, strictMode: true, servers: [{
+      id: 'local', name: 'local', transport: 'stdio', stdio: { command: process.execPath,
+        args: ['-e', 'process.stdout.write(process.cwd())'], cwd: { t: 'path', path: root } },
+      env: {}, createdAt: 0, updatedAt: 0,
+    }], bindings: [{ id: 'on', serverId: 'local', enabled: true, target: { t: 'allMachines' }, createdAt: 0, updatedAt: 0 }] },
+    { machineId: 'm1', directory: tmpdir() });
+    const out = await materializeMcpServerConfigRecord({ resolved, tmpDir: root, processEnv: {}, deps: {
+      resolveStdioLauncherCommand: () => resolveNodeBackedMcpServerCommand({
+        distEntrypointSegments: ['mcp', 'launchers', 'stdioMcpServerLauncher.mjs'],
+        sourceEntrypointSegments: ['mcp', 'launchers', 'stdioMcpServerLauncher.ts'], preferSourceEntrypoint: true,
+      }),
+    } });
+    try {
+      const config = out.mcpServers.local!;
+      expect(config.env?.HAPPIER_MCP_STDIO_LAUNCHER_CONFIG_FILE).toBeDefined();
+      const child = spawn(config.command, config.args, { env: { ...process.env, ...config.env }, stdio: ['ignore', 'pipe', 'pipe'] });
+      let stdout = '';
+      let stderr = '';
+      child.stdout.on('data', chunk => { stdout += String(chunk); });
+      child.stderr.on('data', chunk => { stderr += String(chunk); });
+      const code = await new Promise<number | null>((resolve, reject) => {
+        child.once('error', reject); child.once('close', resolve);
+      });
+      expect({ code, stderr }).toEqual({ code: 0, stderr: '' });
+      expect(stdout).toBe(realpathSync(root));
+    } finally { out.cleanup(); await rm(root, { recursive: true, force: true }); }
+  });
+  it('uses the launcher for ordinary stdio with session cwd even without env', async () => {
+    const resolved = resolveMcpMaterialization({ v: 1, strictMode: true, servers: [{
+      id: 'local', name: 'local', transport: 'stdio', stdio: {
+        command: 'example-mcp', args: [], cwd: { t: 'session' },
+      }, env: {}, createdAt: 0, updatedAt: 0,
+    }], bindings: [{ id: 'on', serverId: 'local', enabled: true, target: { t: 'allMachines' }, createdAt: 0, updatedAt: 0 }] },
+    { machineId: 'm1', directory: '/repo' });
+    const out = await materializeMcpServerConfigRecord({ resolved, tmpDir: null, processEnv: {} });
+    try {
+      const path = out.mcpServers.local!.env?.HAPPIER_MCP_STDIO_LAUNCHER_CONFIG_FILE;
+      expect(path).toBeDefined();
+      expect(JSON.parse(await readFile(path!, 'utf8'))).toMatchObject({ command: 'example-mcp', args: [], cwd: '/repo', env: {} });
+    } finally { out.cleanup(); }
+  });
+  it('includes shared template variables in the selected hydration census and preserves typed missing-secret failures', async () => {
+    const shared = 'happier:shared-secret:v1:template-key';
+    const enabled = { id: 'template', name: 'template', transport: 'http' as const,
+      remote: { url: 'https://mcp.example.test', headers: { Authorization: {
+        t: 'template' as const, template: 'Bearer {key}', vars: { key: { t: 'savedSecret' as const, secretId: shared } },
+      } } }, env: {}, createdAt: 0, updatedAt: 0 };
+    const resolved = { strictMode: false, directory: '/repo', serversByName: {
+      template: { enabled: true, config: enabled, serverId: enabled.id, name: enabled.name, bindingId: 'on' },
+      off: { enabled: false, config: { ...enabled, id: 'off', name: 'off', env: {
+        OFF_TOKEN: { t: 'template' as const, template: '{key}', vars: {
+          key: { t: 'savedSecret' as const, secretId: 'happier:shared-secret:v1:disabled-key' },
+        } },
+      } }, serverId: 'off', name: 'off', bindingId: 'off' },
+    } };
+    expect(listSelectedMcpSharedSecretReferences(resolved.serversByName)).toEqual([{ ref: shared }]);
+    await expect(materializeMcpServerConfigRecord({ resolved, tmpDir: null, processEnv: {},
+      savedSecretMaterializer: createSavedSecretMaterializerV1({ accountSettings: {}, settingsSecretsReadKeys: [],
+        resources: [{ resourceId: 'template-key', ownerAccountId: 'owner', displayName: 'key', kind: 'token',
+          encryptionMode: 'plain', revision: 1, materialStatus: 'deleted', storedContent: null }], resourceCatalogState: 'ready' }),
+    })).rejects.toMatchObject({ code: 'saved_secret_resolution_failed', status: 'deleted', reference: shared,
+      consumer: 'mcp', field: 'header:Authorization' });
+  });
   it('keeps personal Saved Secret env out of plain stdio and remote Agent configurations', async () => {
     const dir = await mkdtemp(join(tmpdir(), 'happier-mcp-private-env-'));
     const key = deriveSettingsSecretsKeyV1(new Uint8Array(32).fill(3));
@@ -66,12 +302,17 @@ describe('materializeMcpServerConfigRecord', () => {
     });
     try {
       expect(JSON.stringify(out.mcpServers)).not.toContain(secret);
-      for (const [name, pathKey] of [['local', 'HAPPIER_MCP_STDIO_LAUNCHER_CONFIG_FILE'],
-        ['remote', 'HAPPIER_MCP_REMOTE_BRIDGE_CONFIG_FILE']] as const) {
-        const path = out.mcpServers[name]!.env?.[pathKey];
+      for (const name of ['local', 'remote'] as const) {
+        const path = out.mcpServers[name]!.env?.HAPPIER_MCP_STDIO_LAUNCHER_CONFIG_FILE;
         expect(path).toBeDefined();
-        expect(JSON.parse(await readFile(path!, 'utf8')).env).toEqual({ API_KEY: secret });
+        const launch = JSON.parse(await readFile(path!, 'utf8'));
+        expect(launch.env).toMatchObject({ API_KEY: secret });
         expect((await stat(path!)).mode & 0o777).toBe(0o600);
+        if (name === 'remote') {
+          const bridgePath = launch.env.HAPPIER_MCP_REMOTE_BRIDGE_CONFIG_FILE;
+          expect(JSON.parse(await readFile(bridgePath, 'utf8'))).not.toHaveProperty('env');
+          expect((await stat(bridgePath)).mode & 0o777).toBe(0o600);
+        }
       }
     } finally { out.cleanup(); await rm(dir, { recursive: true, force: true }); }
   });
@@ -109,35 +350,6 @@ describe('materializeMcpServerConfigRecord', () => {
       })).rejects.toThrow('mcp_resource_mismatch');
     } finally { await rm(root, { recursive: true, force: true }); }
   });
-  it.each([true, false])('materializes attested headers and omits absent facts (attested=%s)', async (attested) => {
-    const settings = McpServersSettingsV1Schema.parse({ v: 1, strictMode: true, servers: [{
-      id: 'wilson', name: 'wilson', transport: 'http',
-      remote: { url: 'https://wilson.example.test/mcp', headers: {
-        'X-Wilson-On-Behalf-Of': { t: 'sessionAttested', field: 'externalPrincipalId' },
-        'X-Wilson-Source-Message': { t: 'sessionAttested', field: 'sourceMessageId' },
-        'X-Happier-Session': { t: 'sessionAttested', field: 'sessionId' },
-      } }, env: {}, createdAt: 0, updatedAt: 0,
-    }], bindings: [{ id: 'b', serverId: 'wilson', enabled: true, target: { t: 'allMachines' }, createdAt: 0, updatedAt: 0 }] });
-    const dir = await mkdtemp(join(tmpdir(), 'happier-attested-mcp-'));
-    try {
-      const result = await materializeMcpServerConfigRecord({
-        resolved: resolveMcpMaterialization(settings, { machineId: 'm', directory: '/repo' }),
-        session: { sessionId: 'session-1', ...(attested ? { attestedContext: {
-          externalPrincipalId: 'sales@batiplus.ch', sourceMessageId: '<lead@example.test>',
-        } } : {}) }, processEnv: { externalPrincipalId: 'forged' }, tmpDir: dir,
-      });
-      try {
-        expect(result.warnings).toEqual([]);
-        const configPath = result.mcpServers.wilson.env?.HAPPIER_MCP_REMOTE_BRIDGE_CONFIG_FILE;
-        expect(typeof configPath).toBe('string');
-        const config = JSON.parse(await readFile(configPath!, 'utf8'));
-        expect(config.headers).toEqual({ 'X-Happier-Session': 'session-1', ...(attested ? {
-          'X-Wilson-On-Behalf-Of': 'sales@batiplus.ch', 'X-Wilson-Source-Message': '<lead@example.test>',
-        } : {}) });
-      } finally { result.cleanup(); }
-    } finally { await rm(dir, { recursive: true, force: true }); }
-  });
-
   it.each([
     ['missing', 'personal_missing', null],
     ['temporarily_unavailable', 'happier:shared-secret:v1:resource_1', 'temporarily_unavailable'],
@@ -284,9 +496,11 @@ describe('materializeMcpServerConfigRecord', () => {
       tmpDir: null,
     });
 
-    expect(out.mcpServers.alpha.command).toBe('example-mcp');
-    expect(out.mcpServers.alpha.args).toEqual(['server.js']);
-    expect(out.mcpServers.alpha.env).toEqual({ API_KEY: 'sk-test' });
+    try {
+      expect(JSON.stringify(out.mcpServers)).not.toContain('sk-test');
+      const config = JSON.parse(await readFile(out.mcpServers.alpha.env!.HAPPIER_MCP_STDIO_LAUNCHER_CONFIG_FILE!, 'utf8'));
+      expect(config).toMatchObject({ command: 'example-mcp', args: ['server.js'], env: { API_KEY: 'sk-test' } });
+    } finally { out.cleanup(); }
   });
 
   it('decrypts savedSecret env values using the settings secrets key', async () => {
@@ -323,7 +537,11 @@ describe('materializeMcpServerConfigRecord', () => {
       tmpDir: null,
     });
 
-    expect(out.mcpServers.alpha.env).toEqual({ API_KEY: 'sk-real' });
+    try {
+      expect(JSON.stringify(out.mcpServers)).not.toContain('sk-real');
+      const config = JSON.parse(await readFile(out.mcpServers.alpha.env!.HAPPIER_MCP_STDIO_LAUNCHER_CONFIG_FILE!, 'utf8'));
+      expect(config.env).toEqual({ API_KEY: 'sk-real' });
+    } finally { out.cleanup(); }
   });
 
   it('decrypts savedSecret env values using read-key fallbacks when legacy credentials read canonicalized settings', async () => {
@@ -362,7 +580,11 @@ describe('materializeMcpServerConfigRecord', () => {
       tmpDir: null,
     });
 
-    expect(out.mcpServers.alpha.env).toEqual({ API_KEY: 'sk-legacy' });
+    try {
+      expect(JSON.stringify(out.mcpServers)).not.toContain('sk-legacy');
+      const config = JSON.parse(await readFile(out.mcpServers.alpha.env!.HAPPIER_MCP_STDIO_LAUNCHER_CONFIG_FILE!, 'utf8'));
+      expect(config.env).toEqual({ API_KEY: 'sk-legacy' });
+    } finally { out.cleanup(); }
   });
 
   it('skips unresolved literal refs when strictMode=false and throws when strictMode=true', async () => {

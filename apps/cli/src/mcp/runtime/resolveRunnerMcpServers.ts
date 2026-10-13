@@ -6,15 +6,24 @@ import type { StoredCredentials } from '@/persistence';
 import { logger } from '@/ui/logger';
 import { readSessionCapabilitySelectionFromMetadataV1 } from '@happier-dev/protocol/reach/sessionCapabilityMetadataV1';
 import { SESSION_RUN_PROMPT_READ_ACTION_IDS_V1 } from '@happier-dev/protocol/sessions/messages/sessionInputPromptContextV1';
-import { SessionCapabilityNoticeV1Schema, SESSION_CAPABILITY_NOTICE_SIDECAR_KEY } from '@happier-dev/protocol/sessions/messages/sessionCapabilityNoticeV1';
+import { SessionCapabilityNoticeV1Schema, SESSION_CAPABILITY_NOTICE_SIDECAR_KEY, type SessionCapabilityNoticeV1 } from '@happier-dev/protocol/sessions/messages/sessionCapabilityNoticeV1';
 import type { AccountSettings, ActionExecutorDeps, SessionRunPromptReadActionIdV1 } from '@happier-dev/protocol';
-import type { UsageMcpBindingIdentity } from '@happier-dev/protocol/usage/coach/usageMcpBindingUsage';
+import { readLoadedMcpNativeServerNames, type McpServerIdentity } from './assignMcpWireNames';
+import { detectProviderMcpServers } from '../providerDetection/detectProviderMcpServers';
+import type { ResolvedSessionMcpServer } from '../runtimeTypes';
+import { projectResolvedMcpServers } from './projectResolvedMcpServers';
+import type { McpPluginItemV1 } from '@happier-dev/protocol/mcp/servers/settingsV1';
+import type { DetectedMcpServerV1 } from '@happier-dev/protocol';
+import { projectMcpToolLaunchPolicies } from './projectMcpToolLaunchPolicy';
+import type { PluginAgentToolsCapabilityV2 } from '@happier-dev/protocol';
+import { parseAgentPermissionIntentV1Alias } from '@happier-dev/protocol/runtime/permissionIntentV1';
+import type { AgentSessionOpenRequest } from '@happier-dev/plugin-sdk/agents/runtime';
 
-import { McpServerCatalogUnavailableError, readMcpServersSettingsFromAccountSettings } from '../servers/readMcpServersSettingsFromAccountSettings';
+import { McpServerCatalogUnavailableError, readMcpServersSettingsFromAccountSettings, readMcpServersSettingsForStartup } from '../servers/readMcpServersSettingsFromAccountSettings';
 import { resolveSessionCapabilitiesForDirectory } from '../servers/resolveSessionCapabilitiesForDirectory';
 import {
   deriveSettingsSecretsReadKeysForCredentials,
-} from '@/settings/valueRefs/resolveValueRefPlaintext';
+} from '@/settings/secrets/settingsSecretsKey';
 import { listSelectedMcpSharedSecretReferences, materializeMcpServerConfigRecord } from '../servers/materializeMcpServerConfigRecord';
 import { mergeWithBuiltInHappierMcpServer } from '../servers/mergeWithBuiltInHappierMcpServer';
 import {
@@ -81,6 +90,8 @@ function createRunScopedMcpSessionView(
     // admitted Session transport's immutable Home binding explicitly so a
     // Run-scoped MCP view cannot fall back to ambient Home configuration.
     getServerBinding: () => session.getServerBinding(),
+    ...(session.getCurrentSessionSkillItems
+      ? { getCurrentSessionSkillItems: () => session.getCurrentSessionSkillItems!() } : {}),
     getMcpRequestAuthPort: () => session.getMcpRequestAuthPort?.(),
     ...(session.getEphemeralStreamConnectionEpoch
       ? { getEphemeralStreamConnectionEpoch: () => session.getEphemeralStreamConnectionEpoch!() } : {}),
@@ -117,6 +128,9 @@ function createRunScopedMcpSessionView(
         : null;
     },
     getActiveTurnAdmissionWitness: readWitness,
+    // This profile belongs to the Run, not its concurrently active parent turn.
+    // Run cancellation already comes from its own lifetime below.
+    getHostTurnAbortSignal: () => null,
     getRuntimeLifetimeSignal: () => run.signal,
     getSessionActionConfirmationBinding: () => {
       const occurrence = run.readCurrentRunOccurrence(run.runId);
@@ -158,10 +172,14 @@ type RunnerMcpServersParams = Readonly<{
   actionsSettingsProvider?: RuntimeActionSettingsProvider;
   /** Exact caller-owned registry lease for daemonless scoped runtimes. */
   pluginRuntimeRegistryLease?: PluginRuntimeRegistryLease;
+  pluginMcpRuntimeRegistry?: PluginRuntimeRegistryLease['registry'];
+  detectedMcpServers?: readonly DetectedMcpServerV1[];
+  mcpPermissionHandler?: Pick<import('@/agent/permissions/providerEnforced/handler').ProviderEnforcedPermissionHandler, 'handleToolCall'>;
   machineId: string;
   directory: string;
   agentId?: string | null;
   agentAcceptsUserMcp?: boolean;
+  mcpToolControl?: PluginAgentToolsCapabilityV2['mcpToolControl'];
   sessionMetadata?: Readonly<Record<string, unknown>> | null;
   env?: NodeJS.ProcessEnv;
   tmpDir?: string | null;
@@ -185,7 +203,9 @@ type RunnerMcpServersParams = Readonly<{
 type RunnerMcpServersResult<Bridge extends { stop: () => void }> = Readonly<{
   happierMcpServer: Bridge;
   mcpServers: Record<string, McpServerConfig>;
-  mcpBindingIdentities?: Readonly<Record<string, UsageMcpBindingIdentity>>;
+  mcpServerIdentities?: Readonly<Record<string, McpServerIdentity>>;
+  mcpToolPolicy?: AgentSessionOpenRequest['mcpToolPolicy'];
+  resolvedServers?: readonly ResolvedSessionMcpServer[];
 }>;
 type HappierMcpBridgeHandle = {
   url: string;
@@ -238,19 +258,57 @@ export async function resolveRunnerMcpServers(params: RunnerMcpServersParams): P
     && accountSnapshot.scopeKey !== accountScopeKey) {
     throw new McpServerCatalogUnavailableError('scope-retired');
   }
-  let mcpSettings = accountCredentials ? readMcpServersSettingsFromAccountSettings(accountSnapshot) : null;
+  const publishCapabilityNotice = async (items: SessionCapabilityNoticeV1['items']) => {
+    const notice = SessionCapabilityNoticeV1Schema.parse({ v: 1, items });
+    await params.session.enqueueSessionEventCommitted({
+      type: 'message',
+      message: notice.items.map(item => `${item.name} couldn't start · ${item.detail ?? item.code}`).join('\n'),
+      [SESSION_CAPABILITY_NOTICE_SIDECAR_KEY]: notice,
+    });
+    if (operationContext && !await operationContext.isCurrent()) {
+      throw new McpServerCatalogUnavailableError('scope-retired');
+    }
+  };
+  let mcpSettings: ReturnType<typeof readMcpServersSettingsFromAccountSettings> | null = null;
+  if (accountCredentials) {
+    const startup = readMcpServersSettingsForStartup({ snapshot: accountSnapshot, settings: accountSettings });
+    if (startup.status === 'ready') mcpSettings = startup.settings;
+    else await publishCapabilityNotice([{ kind: 'mcp_server', name: 'MCP servers', code: startup.error.code, detail: startup.error.reason }]);
+  }
   let mcpCatalog = accountSnapshot?.mcpServerCatalog;
+  const pluginRegistry = params.pluginMcpRuntimeRegistry ?? params.pluginRuntimeRegistryLease?.registry ?? params.session.getPluginMcpRuntimeRegistry?.();
+  let mcpPluginItems: readonly McpPluginItemV1[] = [];
+  if (mcpSettings && pluginRegistry?.projectMcpServerItems && mcpCatalog?.status === 'ready') {
+    mcpPluginItems = await pluginRegistry.projectMcpServerItems(mcpCatalog.catalog);
+  }
+  const detected = params.detectedMcpServers ?? (pluginRegistry?.discoverMcpServersForDetection && params.agentId
+    ? (await detectProviderMcpServers({ directory: params.directory, providers: [params.agentId], env,
+      runtimeRegistry: pluginRegistry })).servers : []);
+  const nativeServerNames = readLoadedMcpNativeServerNames({ servers: detected, agentId: params.agentId });
+  const pluginAttachments: Readonly<{ dispose(): void | Promise<void> }>[] = [];
+  const disposePluginAttachments = () => {
+    for (const attachment of pluginAttachments.splice(0)) void Promise.resolve(attachment.dispose()).catch(error => {
+      logger.debug('[mcp] Plugin attachment cleanup failed', { error });
+    });
+  };
   let resolvedSelection: ReturnType<typeof resolveSessionCapabilitiesForDirectory> | null = null;
   if (mcpSettings && accountCredentials) {
     const selection = readSessionCapabilitySelectionFromMetadataV1(params.sessionMetadata ?? null).mcp;
-    const initialSelection = resolveSessionCapabilitiesForDirectory({
+    const serverBinding = params.session.getServerBinding();
+    const projectInput = { credentials: accountCredentials, metadata: params.sessionMetadata ?? null,
+      serverId: serverBinding.serverId, signal: run?.signal ?? params.session.getRuntimeLifetimeSignal?.(),
+      ...(operationContext ? { operationContext } : {}) };
+    const initialSelection = await runWithServerHttpBaseUrl(serverBinding.serverUrl, () => resolveSessionCapabilitiesForDirectory({
       settings: mcpSettings,
       machineId: params.machineId,
       directory: params.directory,
       selection: selection ? { mcp: selection } : {},
       agentId: params.agentId,
       agentAcceptsUserMcp: params.agentAcceptsUserMcp,
-    });
+      sessionProject: projectInput,
+      mcpPluginItems, nativeServerNames,
+    }));
+    resolvedSelection = initialSelection;
     const sharedReferences = listSelectedMcpSharedSecretReferences(initialSelection.selectedServersByName);
     if (sharedReferences.length > 0) {
       let admitted: Awaited<ReturnType<typeof refreshSavedSecretCatalogForOperation>>;
@@ -278,15 +336,18 @@ export async function resolveRunnerMcpServers(params: RunnerMcpServersParams): P
       savedSecretCatalogState = admitted.savedSecretCatalogState;
       mcpSettings = readMcpServersSettingsFromAccountSettings({ ...admitted, mcpServerCatalog: admitted.mcpServerCatalog ?? accountSnapshot?.mcpServerCatalog });
       mcpCatalog = admitted.mcpServerCatalog ?? accountSnapshot?.mcpServerCatalog;
+      resolvedSelection = await runWithServerHttpBaseUrl(serverBinding.serverUrl, () => resolveSessionCapabilitiesForDirectory({
+        settings: mcpSettings,
+        machineId: params.machineId,
+        directory: params.directory,
+        selection: selection ? { mcp: selection } : {},
+        agentId: params.agentId,
+        agentAcceptsUserMcp: params.agentAcceptsUserMcp,
+        projectKey: initialSelection.projectKey,
+        sessionProject: projectInput,
+        mcpPluginItems, nativeServerNames,
+      }));
     }
-    resolvedSelection = resolveSessionCapabilitiesForDirectory({
-      settings: mcpSettings,
-      machineId: params.machineId,
-      directory: params.directory,
-      selection: selection ? { mcp: selection } : {},
-      agentId: params.agentId,
-      agentAcceptsUserMcp: params.agentAcceptsUserMcp,
-    });
   }
   if (operationContext && !await operationContext.isCurrent()) throw new McpServerCatalogUnavailableError('scope-retired');
   const builtIn = params.includeHappierMcpServer === false
@@ -349,6 +410,23 @@ export async function resolveRunnerMcpServers(params: RunnerMcpServersParams): P
   };
   let materialized: Awaited<ReturnType<typeof materializeMcpServerConfigRecord>>;
   try {
+    if (pluginRegistry?.materializePluginMcpServers) {
+      const selected = Object.values(resolvedSelection.selectedServersByName).map(server => ({
+        id: server.serverId, name: server.name, title: server.config.title,
+        transport: server.config.remote ? { kind: server.config.transport === 'sse' ? 'sse' as const : 'http' as const, url: server.config.remote.url }
+          : { kind: 'stdio' as const }, scope: { sessionId: params.session.sessionId, directory: params.directory },
+      }));
+      const attached = await pluginRegistry.materializePluginMcpServers({ scope: { kind: 'session', sessionId: params.session.sessionId }, directory: params.directory,
+        permissionHandler: params.mcpPermissionHandler,
+        servers: selected, signal: run?.signal ?? params.session.getRuntimeLifetimeSignal?.(),
+        addDisposable: attachment => pluginAttachments.push(attachment) });
+      resolvedSelection = { ...resolvedSelection, selectedServersByName: Object.fromEntries(attached.map(server => {
+        const selectedServer = resolvedSelection!.selectedServersByName[server.name]!;
+        return [server.name, server.transport.kind === 'http' || server.transport.kind === 'sse'
+          ? { ...selectedServer, config: { ...selectedServer.config, remote: { ...selectedServer.config.remote!, url: server.transport.url } } }
+          : selectedServer];
+      })) };
+    }
     for (const { config: server } of Object.values(resolvedSelection.selectedServersByName)) {
       if (server.transport === 'stdio' || server.remote.auth?.kind !== 'oauth') continue;
       if (!requestAuthPort) continue;
@@ -384,11 +462,13 @@ export async function resolveRunnerMcpServers(params: RunnerMcpServersParams): P
     requestAuthByServerId,
   });
   } catch (error) {
+    disposePluginAttachments();
     retireRequestAuth();
     builtIn.happierMcpServer.stop();
     throw error;
   }
   if (operationContext && !await operationContext.isCurrent()) {
+    disposePluginAttachments();
     materialized.cleanup();
     retireRequestAuth();
     builtIn.happierMcpServer.stop();
@@ -401,31 +481,31 @@ export async function resolveRunnerMcpServers(params: RunnerMcpServersParams): P
       warnings: materialized.warnings.map((w) => ({ serverName: w.serverName, code: w.code, detail: w.detail })),
     });
   }
-  const merged = mergeWithBuiltInHappierMcpServer({ builtIn: builtIn.mcpServers, extra: params.resolvedMcpServers ?? materialized.mcpServers });
+  const identities = { mcpServerIdentities: Object.fromEntries(params.resolvedMcpServers ? [] : Object.keys(materialized.mcpServers).flatMap(name => {
+    const item = resolvedSelection.itemsByName[name];
+    const server = mcpSettings.servers.find(server => server.id === item?.serverId);
+    const identity = resolvedSelection.mcpServerIdentities[name];
+    if (!identity) return [];
+    if (!server) return [[name, identity]];
+    const binding = item?.bindingId ? mcpSettings.bindings.find(binding => binding.id === item.bindingId && binding.serverId === server.id) : undefined;
+    const usage = binding?.enabled && mcpCatalog?.status === 'ready' && mcpCatalog.authority === 'active' && typeof mcpCatalog.revision === 'number'
+      ? { serverId: server.id, bindingId: binding.id, serverRevision: server.updatedAt, bindingRevision: binding.updatedAt, catalogRevision: mcpCatalog.revision } : undefined;
+    return [[name, { ...identity, ...(usage ? { usage } : {}) }]];
+  })) as Record<string, McpServerIdentity> };
+  const extra = params.resolvedMcpServers ?? materialized.mcpServers;
+  const merged = mergeWithBuiltInHappierMcpServer({ builtIn: builtIn.mcpServers, extra });
   const warningsByName = new Map(materialized.warnings
     .filter(warning => !Object.hasOwn(merged, warning.serverName))
     .map(warning => [warning.serverName, warning]));
   if (warningsByName.size > 0) {
-    const notice = SessionCapabilityNoticeV1Schema.parse({
-      v: 1,
-      items: [...warningsByName.values()].map(warning => ({
-        kind: 'mcp_server',
-        name: warning.serverName,
-        itemId: resolvedSelection.itemsByName[warning.serverName]?.serverId,
-        code: warning.code,
-        detail: warning.detail,
-      })),
-    });
     try {
-      await params.session.enqueueSessionEventCommitted({
-        type: 'message',
-        message: notice.items.map(item => `${item.name} couldn't start · ${item.detail ?? item.code}`).join('\n'),
-        [SESSION_CAPABILITY_NOTICE_SIDECAR_KEY]: notice,
-      });
-      if (operationContext && !await operationContext.isCurrent()) {
-        throw new McpServerCatalogUnavailableError('scope-retired');
-      }
+      await publishCapabilityNotice([...warningsByName.values()].map(warning => ({
+        kind: 'mcp_server', name: warning.serverName,
+        itemId: resolvedSelection.itemsByName[warning.serverName]?.serverId,
+        code: warning.code, detail: warning.detail,
+      })));
     } catch (error) {
+      disposePluginAttachments();
       materialized.cleanup();
       retireRequestAuth();
       builtIn.happierMcpServer.stop();
@@ -433,27 +513,20 @@ export async function resolveRunnerMcpServers(params: RunnerMcpServersParams): P
     }
   }
 
-  const mcpBindingIdentities: Record<string, UsageMcpBindingIdentity> = {};
-  if (!params.resolvedMcpServers && mcpCatalog?.status === 'ready' && mcpCatalog.authority === 'active'
-      && typeof mcpCatalog.revision === 'number') {
-    for (const name of Object.keys(materialized.mcpServers)) {
-      const item = resolvedSelection.itemsByName[name];
-      if (!item?.selected || !item.bindingId) continue;
-      const binding = mcpSettings.bindings.find(row => row.id === item.bindingId && row.serverId === item.serverId);
-      const server = mcpSettings.servers.find(row => row.id === item.serverId);
-      if (!binding?.enabled || !server) continue;
-      mcpBindingIdentities[name] = { serverId: server.id, bindingId: binding.id,
-        serverRevision: server.updatedAt, bindingRevision: binding.updatedAt, catalogRevision: mcpCatalog.revision };
-    }
-  }
+  const mcpServerIdentities = identities.mcpServerIdentities;
+  const mcpToolPolicy = projectMcpToolLaunchPolicies({ catalog: { v: 1, servers: mcpSettings.servers, bindings: mcpSettings.bindings, ...(mcpSettings.pluginServers ? { pluginServers: mcpSettings.pluginServers } : {}) },
+    mcpServerIdentities, control: params.mcpToolControl, permissionMode: parseAgentPermissionIntentV1Alias(String(scopedSession.getPermissionMode?.() ?? 'default')) ?? 'default' });
   return {
     happierMcpServer: {
       ...builtIn.happierMcpServer,
       stop: () => {
-        try { builtIn.happierMcpServer.stop(); } finally { materialized.cleanup(); retireRequestAuth(); }
+        try { builtIn.happierMcpServer.stop(); } finally { materialized.cleanup(); retireRequestAuth(); disposePluginAttachments(); }
       },
     },
     mcpServers: merged,
-    mcpBindingIdentities,
+    mcpServerIdentities,
+    resolvedServers: projectResolvedMcpServers({ mcpServers: merged, identities: mcpServerIdentities,
+      scope: { sessionId: params.session.sessionId, directory: params.directory } }),
+    ...(mcpToolPolicy ? { mcpToolPolicy } : {}),
   };
 }

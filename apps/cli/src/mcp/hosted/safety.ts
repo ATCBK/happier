@@ -81,7 +81,7 @@ export function assertMcpRuntimeRegistrationSecretFree(value: unknown, path: rea
 
 export function assertMcpRuntimeServerRegistrationSafe(
     value: unknown,
-    options?: Readonly<{ pluginId?: string }>,
+    options?: import('./validation').HostedMcpServerRegistrationValidationOptions,
 ): void {
     assertMcpRuntimeRegistrationSecretFree(value);
     assertHostedMcpServerRegistration(value, options);
