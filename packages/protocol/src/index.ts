@@ -1245,6 +1245,7 @@ export {
   type PluginAgentCapabilitySurfaceV2,
   type PluginAgentCapabilitySurfacesV2,
   type PluginAgentToolsDeliveryV2,
+  type AgentToolsDelivery,
   type PluginAgentToolsCapabilityV2,
   type PluginAgentSkillsCapabilityV2,
   type PluginAgentAcpSkillsSessionDeliveryV2,
@@ -2202,6 +2203,7 @@ export {
   AcpBackendDefinitionV1Schema,
   AcpBackendDefinitionV1StoredSchema,
   AcpBackendLaunchV1Schema,
+  AcpBackendOriginV1Schema,
   AcpCatalogAuthSupportV1Schema,
   AcpCatalogCommandV1Schema,
   AcpCatalogSettingsV1Schema,
@@ -2210,6 +2212,7 @@ export {
   type AcpBackendCapabilitiesV1,
   type AcpBackendDefinitionV1,
   type AcpBackendLaunchV1,
+  type AcpBackendOriginV1,
   type AcpCatalogAuthSupportV1,
   type AcpCatalogCommandV1,
   type AcpCatalogEnvValueRefV1,
@@ -3351,6 +3354,8 @@ export {
   McpServerCatalogEntryTransportV1Schema,
   McpServerCatalogEntryV1Schema,
   McpServersSettingsV1Schema,
+  McpToolSettingV1Schema, McpServerToolPolicyV1Schema, McpToolAnnotationsV1Schema, McpServerToolsSnapshotV1Schema,
+  type McpToolSettingV1, type McpServerToolPolicyV1, type McpToolAnnotationsV1, type McpServerToolsSnapshotV1,
   type McpServerConfigOverrideFieldsV1,
   type McpServerConfigOverrideV1,
   mcpPluginItemIdV1, isMcpPluginItemIdV1, type McpPluginItemV1,
@@ -3362,7 +3367,8 @@ export {
 } from './mcp/servers/settingsV1.js';
 
 export {
-  ValueRefV1Schema, type ValueRefV1, resolveValueRefPlaintextV1, listValueRefSecretIdsV1,
+  ValueRefV1Schema, type ValueRefV1, resolveValueRefPlaintextV1, listValueRefSecretIdsV1, listValueRefSavedSecretRefsV1,
+  remapValueRefSavedSecretReferencesV1,
 } from './valueRefs/valueRefV1.js';
 
 export {
@@ -3391,6 +3397,13 @@ export {
   MCP_SERVER_ACTION_OUTPUT_SCHEMAS_V1, createMcpServerActionExecuteV1, projectMcpServerActionFailureV1,
   type McpServerActionIdV1, type McpServerActionRequestV1, type McpServerActionPortsV1,
 } from './mcp/servers/serverActionsV1.js';
+export { parseMcpServerImportV1, mcpImportValueInputIdV1, isMcpImportSecretNameV1,
+  type ParseMcpServerImportV1Result, type ImportedMcpServerDraftV1, type ImportedMcpInputDefinitionV1,
+  type ImportedMcpDraftValueV1 } from './mcp/servers/import/parseMcpServerImportV1.js';
+export { prepareMcpServerImportV1, prepareDetectedMcpServerImportV1, materializeMcpServerImportV1,
+  mcpServerImportIdentityV1, McpImportValueChoiceV1Schema, McpImportValuesV1Schema, McpImportPreviewV1Schema,
+  McpImportCommitV1Schema, McpImportMovedSecretV1Schema, type McpImportValueChoiceV1, type McpImportValuesV1,
+  type McpImportPreviewV1, type McpImportMovedSecretV1, type McpServerImportPreparationV1 } from './mcp/servers/import/mcpServerImportV1.js';
 
 export { resolveReachV1, isReachPortableV1, type ReachContextV1, type ReachDecisionV1 } from './reach/resolveReachV1.js';
 export { ReachRuleV1Schema, ReachRuleDraftV1Schema, SkillRuleV1Schema, type ReachRuleV1, type ReachRulesV1, type ReachRuleDraftV1, type SkillRuleV1 } from './reach/reachRuleV1.js';
@@ -3398,9 +3411,13 @@ export { ReachRulesChangeV1Schema, ReachRuleWriteV1Schema, applyReachRulesChange
   reachRulesToDraftsV1,
   MIGRATED_STACK_RULE_ID_PREFIX_V1, isMigratedReachRuleIdV1, type ReachRulesChangeV1, type ReachRuleWriteV1 } from './reach/reachRulesChangeV1.js';
 export { projectReachForMachinesV1, type ReachProjectionV1 } from './reach/projectReachV1.js';
+export { resolveCapabilityApplyTimingV1, readCapabilityLaunchRestartFromMetadataV1, CapabilityApplyTimingV1Schema,
+  SessionCapabilityAgentFactsV1Schema, readSessionCapabilityAgentFactsV1,
+  type CapabilityApplyTimingV1, type CapabilityApplyTimingInputV1, type CapabilityLaunchRestartV1 } from './reach/capabilityApplyTimingV1.js';
 export { SessionSkillSelectionAuthoringV1Schema, SessionSkillSelectionV1Schema, SessionCapabilitySelectionAuthoringV1Schema,
   SessionCapabilitySelectionV1Schema, applySessionSelectionV1, type SessionSkillSelectionV1, type SessionCapabilitySelectionV1,
-  type CapabilitySelectionReasonV1 } from './reach/sessionCapabilitySelectionV1.js';
+  type CapabilitySelectionReasonV1, setSessionCapabilitySelectionItemV1, readSessionCapabilityOverrideV1,
+  type SessionCapabilityKindV1, type SessionCapabilityOverrideV1 } from './reach/sessionCapabilitySelectionV1.js';
 export { resolveSessionCapabilitiesV1, projectMcpServerMaterializationV1, type CapabilityItemStateV1, type CapabilityMcpItemStateV1,
   type ResolveSessionCapabilitiesV1Result, type ResolvedMcpServerV1, type McpServerMaterializationV1 } from './reach/resolveSessionCapabilitiesV1.js';
 export { resolveMcpServerConfigForContextV1, applyMcpServerConfigOverrideV1 } from './mcp/servers/resolveMcpServerConfigForContextV1.js';
@@ -7631,7 +7648,6 @@ export { MEMORY_DOCUMENT_ACTION_IDS_V1, MEMORY_WRITE_ACTION_IDS_V1, isMemoryWrit
   MemoryActionInputSchemasV1, MemoryActionOutputSchemasV1 } from './prompts/library/memoryActionsV1.js';
 
 export {
-  PROMPT_BUNDLE_SCHEMA_LIMITS_V1,
   PromptBundleBodyV1Schema,
   projectPromptBundleActionEntriesV1,
   PromptBundleEntryV1Schema,
@@ -7646,6 +7662,24 @@ export {
   type PromptBundleSchemaIdV1,
   type PromptBundleValidationResult,
 } from './prompts/library/promptBundleSchemas.js';
+export { SKILL_ACTION_INPUT_SCHEMAS_V1, SKILL_ACTION_OUTPUT_SCHEMAS_V1, SkillFileInputV1Schema, SkillFileChangeV1Schema, SkillInstallAcknowledgedEffectsV1Schema,
+  type SkillFileInputV1, type SkillLibraryActionIdV1, type SkillLibraryActionInputByIdV1, type SkillLibraryActionResultByIdV1, type SkillInstallAcknowledgedEffectsV1 } from './prompts/library/skills/skillActionSchemasV1.js';
+export { SKILL_MACHINE_ACTION_INPUT_SCHEMAS_V1, SKILL_MACHINE_ACTION_OUTPUT_SCHEMAS_V1,
+  SkillFoundListInputV1Schema, SkillFoundListResultV1Schema,
+  SkillMachineInstallInputV1Schema, SkillMachineInstallResultV1Schema,
+  SkillMachineUninstallInputV1Schema, SkillMachineUninstallResultV1Schema,
+  type SkillFoundListInputV1, type SkillFoundListResultV1,
+  type SkillMachineInstallInputV1, type SkillMachineInstallResultV1,
+  type SkillMachineUninstallInputV1, type SkillMachineUninstallResultV1,
+  type SkillMachineActionIdV1, type SkillMachineActionInputByIdV1, type SkillMachineActionResultByIdV1,
+} from './prompts/library/skills/skillActionSchemasV1.js';
+export { SkillListItemV1Schema, SkillProvenanceV1Schema, SkillLockV1Schema, SkillRevisionV1Schema, readSkillLockV1, isSkillModifiedV1,
+  encodeSkillRevisionV1, decodeSkillRevisionV1, type SkillListItemV1, type SkillLockV1, type SkillProvenanceV1 } from './prompts/library/skills/skillLibraryItemV1.js';
+export { deriveSkillTrustV1, SkillTrustV1Schema, type SkillTrustV1 } from './prompts/library/skills/skillTrustV1.js';
+export { estimateSkillCostV1, SkillCostV1Schema, type SkillCostV1 } from './prompts/library/skills/skillCostV1.js';
+export { deriveSkillAccountStatusesV1, type SkillAccountStatusV1 } from './prompts/library/skills/skillStatusV1.js';
+export { createSkillActionExecuteV1, type SkillActionPortV1, type SkillActionCallerV1 } from './prompts/library/skills/skillActionOperations.js';
+export { FoundSkillDownloadRequestV1Schema, FoundSkillBundleV1Schema, type FoundSkillDownloadRequestV1, type FoundSkillBundleV1 } from './prompts/library/skills/foundSkillTransferV1.js';
 
 export {
   computePromptBundleDigestV1,
@@ -7664,6 +7698,9 @@ export {
   type PromptLibraryListItem,
   findPromptExternalLink,
   installPromptRegistryItemInLibrary,
+  LegacySkillRegistryInstallEffectsV1Schema,
+  type LegacySkillRegistryInstallEffectsV1,
+  type LegacySkillRegistryInstallResultV1,
   readPromptLibraryArtifactForExport,
   readPromptDocInLibrary,
   updatePromptBundleInLibrary,
@@ -7736,44 +7773,6 @@ export {
   type PromptAssetWriteRequest,
   type PromptAssetWriteBundleRequest,
 } from './prompts/library/promptAssetsV1.js';
-export {
-  PromptRegistryAdapterDescriptorV1Schema,
-  PromptRegistryConfiguredSourceV1Schema,
-  PromptRegistryErrorCodeV1Schema,
-  PromptRegistryErrorResponseV1Schema,
-  PromptRegistryFetchItemRequestV1Schema,
-  PromptRegistryFetchItemResponseV1Schema,
-  PromptRegistryFetchedItemV1Schema,
-  PromptRegistryInstallRequestV1Schema,
-  PromptRegistryInstallResponseV1Schema,
-  PromptRegistryInstallTargetV1Schema,
-  PromptRegistryItemSummaryV1Schema,
-  PromptRegistryListAdaptersResponseV1Schema,
-  PromptRegistryListSourcesRequestV1Schema,
-  PromptRegistryListSourcesResponseV1Schema,
-  PromptRegistryScanSourceRequestV1Schema,
-  PromptRegistryScanSourceResponseV1Schema,
-  PromptRegistrySourceDescriptorV1Schema,
-  PromptRegistrySourcesV1Schema,
-  type PromptRegistryAdapterDescriptorV1,
-  type PromptRegistryConfiguredSourceV1,
-  type PromptRegistryErrorCodeV1,
-  type PromptRegistryErrorResponseV1,
-  type PromptRegistryFetchItemRequestV1,
-  type PromptRegistryFetchItemResponseV1,
-  type PromptRegistryFetchedItemV1,
-  type PromptRegistryInstallRequestV1,
-  type PromptRegistryInstallResponseV1,
-  type PromptRegistryInstallTargetV1,
-  type PromptRegistryItemSummaryV1,
-  type PromptRegistryListAdaptersResponseV1,
-  type PromptRegistryListSourcesRequestV1,
-  type PromptRegistryListSourcesResponseV1,
-  type PromptRegistryScanSourceRequestV1,
-  type PromptRegistryScanSourceResponseV1,
-  type PromptRegistrySourceDescriptorV1,
-  type PromptRegistrySourcesV1,
-} from './prompts/library/promptRegistriesV1.js';
 export {
   PromptPlacementV1Schema,
   type PromptPlacementV1,
@@ -9778,3 +9777,10 @@ export * from './workspaces/projectSetup/projectManifestDocument.js';
 export { parseOauthAuthorizationResponse, type OauthAuthorizationResponse } from './connect/oauthAuthorizationResponse.js';
 
 export { PluginAtmospherePictureContributionV1Schema, type PluginAtmospherePictureContributionV1 } from './plugins/contributions/atmospherePictures.js';
+export { PluginRegistrySourceContributionV1Schema, type PluginRegistrySourceContributionV1 } from './plugins/contributions/registrySources.js';
+export { SKILL_ACTION_IDS_V1, type SkillActionIdV1 } from './prompts/library/skills/skillActionIdsV1.js';
+export { SkillReadInputV1Schema, SkillReadResultV1Schema, type SkillReadInputV1, type SkillReadResultV1,
+  type SessionSkillReadItemV1 } from './prompts/library/skills/skillReadV1.js';
+export { readSkillInLibrary } from './prompts/library/promptLibraryActionOperations.js';
+export { renderSkillIndexV1 } from './prompts/library/skills/skillIndexV1.js';
+export * from './registries/index.js';

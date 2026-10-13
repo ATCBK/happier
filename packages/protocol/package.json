@@ -7,6 +7,73 @@
   "main": "./dist/index.js",
   "types": "./dist/index.d.ts",
   "exports": {
+    "./mcp/servers/import/parseMcpServerImportV1": {
+      "happier-source": "./src/mcp/servers/import/parseMcpServerImportV1.ts",
+      "types": "./dist/mcp/servers/import/parseMcpServerImportV1.d.ts",
+      "default": "./dist/mcp/servers/import/parseMcpServerImportV1.js"
+    },
+    "./mcp/servers/import/mcpServerImportV1": {
+      "happier-source": "./src/mcp/servers/import/mcpServerImportV1.ts",
+      "types": "./dist/mcp/servers/import/mcpServerImportV1.d.ts",
+      "default": "./dist/mcp/servers/import/mcpServerImportV1.js"
+    },
+    "./prompts/library/skills/foundSkillTransferV1": {
+      "happier-source": "./src/prompts/library/skills/foundSkillTransferV1.ts",
+      "types": "./dist/prompts/library/skills/foundSkillTransferV1.d.ts",
+      "default": "./dist/prompts/library/skills/foundSkillTransferV1.js"
+    },
+    "./prompts/library/skills/convertStackSkillEntriesV1": {
+      "happier-source": "./src/prompts/library/skills/convertStackSkillEntriesV1.ts",
+      "types": "./dist/prompts/library/skills/convertStackSkillEntriesV1.d.ts",
+      "default": "./dist/prompts/library/skills/convertStackSkillEntriesV1.js"
+    },
+    "./sessions/control/sessionResumeRequestV1": {
+      "happier-source": "./src/sessions/control/sessionResumeRequestV1.ts",
+      "types": "./dist/sessions/control/sessionResumeRequestV1.d.ts",
+      "default": "./dist/sessions/control/sessionResumeRequestV1.js"
+    },
+    "./prompts/library/skills/skillActionOperations": { "happier-source": "./src/prompts/library/skills/skillActionOperations.ts", "types": "./dist/prompts/library/skills/skillActionOperations.d.ts", "default": "./dist/prompts/library/skills/skillActionOperations.js" },
+    "./prompts/library/skills/skillUsageV1": { "happier-source": "./src/prompts/library/skills/skillUsageV1.ts", "types": "./dist/prompts/library/skills/skillUsageV1.d.ts", "default": "./dist/prompts/library/skills/skillUsageV1.js" },
+    "./prompts/library/skills/skillActionSchemasV1": { "happier-source": "./src/prompts/library/skills/skillActionSchemasV1.ts", "types": "./dist/prompts/library/skills/skillActionSchemasV1.d.ts", "default": "./dist/prompts/library/skills/skillActionSchemasV1.js" },
+    "./prompts/library/skills/skillTrustV1": { "happier-source": "./src/prompts/library/skills/skillTrustV1.ts", "types": "./dist/prompts/library/skills/skillTrustV1.d.ts", "default": "./dist/prompts/library/skills/skillTrustV1.js" },
+    "./prompts/library/skills/skillCostV1": { "happier-source": "./src/prompts/library/skills/skillCostV1.ts", "types": "./dist/prompts/library/skills/skillCostV1.d.ts", "default": "./dist/prompts/library/skills/skillCostV1.js" },
+    "./prompts/library/skills/skillStatusV1": { "happier-source": "./src/prompts/library/skills/skillStatusV1.ts", "types": "./dist/prompts/library/skills/skillStatusV1.d.ts", "default": "./dist/prompts/library/skills/skillStatusV1.js" },
+    "./prompts/library/skills/skillZipV1": { "happier-source": "./src/prompts/library/skills/skillZipV1.ts", "types": "./dist/prompts/library/skills/skillZipV1.d.ts", "default": "./dist/prompts/library/skills/skillZipV1.js" },
+    "./registries": {
+      "happier-source": "./src/registries/index.ts",
+      "types": "./dist/registries/index.d.ts",
+      "default": "./dist/registries/index.js"
+    },
+    "./mcp/servers/tools/resolveMcpToolDecisionV1": {
+      "happier-source": "./src/mcp/servers/tools/resolveMcpToolDecisionV1.ts",
+      "types": "./dist/mcp/servers/tools/resolveMcpToolDecisionV1.d.ts",
+      "default": "./dist/mcp/servers/tools/resolveMcpToolDecisionV1.js"
+    },
+    "./mcp/servers/tools/mcpToolIdentityV1": {
+      "happier-source": "./src/mcp/servers/tools/mcpToolIdentityV1.ts",
+      "types": "./dist/mcp/servers/tools/mcpToolIdentityV1.d.ts",
+      "default": "./dist/mcp/servers/tools/mcpToolIdentityV1.js"
+    },
+    "./capabilities/estimateTokensV1": {
+      "happier-source": "./src/capabilities/estimateTokensV1.ts",
+      "types": "./dist/capabilities/estimateTokensV1.d.ts",
+      "default": "./dist/capabilities/estimateTokensV1.js"
+    },
+    "./prompts/library/skills/skillReadV1": {
+      "happier-source": "./src/prompts/library/skills/skillReadV1.ts",
+      "types": "./dist/prompts/library/skills/skillReadV1.d.ts",
+      "default": "./dist/prompts/library/skills/skillReadV1.js"
+    },
+    "./prompts/library/skills/skillIndexV1": {
+      "happier-source": "./src/prompts/library/skills/skillIndexV1.ts",
+      "types": "./dist/prompts/library/skills/skillIndexV1.d.ts",
+      "default": "./dist/prompts/library/skills/skillIndexV1.js"
+    },
+    "./prompts/library/skills/skillActionIdsV1": {
+      "happier-source": "./src/prompts/library/skills/skillActionIdsV1.ts",
+      "types": "./dist/prompts/library/skills/skillActionIdsV1.d.ts",
+      "default": "./dist/prompts/library/skills/skillActionIdsV1.js"
+    },
     "./prompts/library/skillRulesActionsV1": {
       "happier-source": "./src/prompts/library/skillRulesActionsV1.ts",
       "types": "./dist/prompts/library/skillRulesActionsV1.d.ts",
@@ -41,6 +108,21 @@
       "happier-source": "./src/actions/specs/capabilityRules.ts",
       "types": "./dist/actions/specs/capabilityRules.d.ts",
       "default": "./dist/actions/specs/capabilityRules.js"
+    },
+    "./actions/specs/sessionCapabilities": {
+      "happier-source": "./src/actions/specs/sessionCapabilities.ts",
+      "types": "./dist/actions/specs/sessionCapabilities.d.ts",
+      "default": "./dist/actions/specs/sessionCapabilities.js"
+    },
+    "./actions/executor/sessionCapabilities": {
+      "happier-source": "./src/actions/executor/sessionCapabilities.ts",
+      "types": "./dist/actions/executor/sessionCapabilities.d.ts",
+      "default": "./dist/actions/executor/sessionCapabilities.js"
+    },
+    "./reach/capabilityApplyTimingV1": {
+      "happier-source": "./src/reach/capabilityApplyTimingV1.ts",
+      "types": "./dist/reach/capabilityApplyTimingV1.d.ts",
+      "default": "./dist/reach/capabilityApplyTimingV1.js"
     },
     "./sessions/messages/sessionCapabilityNoticeV1": {
       "happier-source": "./src/sessions/messages/sessionCapabilityNoticeV1.ts",
@@ -796,6 +878,16 @@
       "happier-source": "./src/prompts/library/promptFolderActionsV1.ts",
       "types": "./dist/prompts/library/promptFolderActionsV1.d.ts",
       "default": "./dist/prompts/library/promptFolderActionsV1.js"
+    },
+    "./prompts/library/promptFolderActionSchemasV1": {
+      "happier-source": "./src/prompts/library/promptFolderActionSchemasV1.ts",
+      "types": "./dist/prompts/library/promptFolderActionSchemasV1.d.ts",
+      "default": "./dist/prompts/library/promptFolderActionSchemasV1.js"
+    },
+    "./prompts/library/promptPlacementV1": {
+      "happier-source": "./src/prompts/library/promptPlacementV1.ts",
+      "types": "./dist/prompts/library/promptPlacementV1.d.ts",
+      "default": "./dist/prompts/library/promptPlacementV1.js"
     },
     "./prompts/library/artifactFolderActionIdsV1": {
       "happier-source": "./src/prompts/library/artifactFolderActionIdsV1.ts",
@@ -3227,6 +3319,11 @@
       "types": "./dist/bugs/reports/submit.d.ts",
       "default": "./dist/bugs/reports/submit.js"
     },
+    "./marketplace/communityNpmDiscoveryV1": {
+      "happier-source": "./src/marketplace/communityNpmDiscoveryV1.ts",
+      "types": "./dist/marketplace/communityNpmDiscoveryV1.d.ts",
+      "default": "./dist/marketplace/communityNpmDiscoveryV1.js"
+    },
     "./marketplace/marketplaceIndexV1": {
       "happier-source": "./src/marketplace/marketplaceIndexV1.ts",
       "types": "./dist/marketplace/marketplaceIndexV1.d.ts",
@@ -3311,6 +3408,11 @@
       "happier-source": "./src/plugins/manifest/ingest.ts",
       "types": "./dist/plugins/manifest/ingest.d.ts",
       "default": "./dist/plugins/manifest/ingest.js"
+    },
+    "./plugins/availability/compatibilityProjectionV1": {
+      "happier-source": "./src/plugins/availability/compatibilityProjectionV1.ts",
+      "types": "./dist/plugins/availability/compatibilityProjectionV1.d.ts",
+      "default": "./dist/plugins/availability/compatibilityProjectionV1.js"
     },
     "./plugins/availability/v1": {
       "happier-source": "./src/plugins/availability/v1.ts",
@@ -4116,6 +4218,16 @@
       "happier-source": "./src/acp/catalog/registry/acpPlatformFitV1.ts",
       "types": "./dist/acp/catalog/registry/acpPlatformFitV1.d.ts",
       "default": "./dist/acp/catalog/registry/acpPlatformFitV1.js"
+    },
+    "./acp/catalog/registry/mapAcpRegistryAgentV1": {
+      "happier-source": "./src/acp/catalog/registry/mapAcpRegistryAgentV1.ts",
+      "types": "./dist/acp/catalog/registry/mapAcpRegistryAgentV1.d.ts",
+      "default": "./dist/acp/catalog/registry/mapAcpRegistryAgentV1.js"
+    },
+    "./acp/catalog/registry/registryInstallActionV1": {
+      "happier-source": "./src/acp/catalog/registry/registryInstallActionV1.ts",
+      "types": "./dist/acp/catalog/registry/registryInstallActionV1.d.ts",
+      "default": "./dist/acp/catalog/registry/registryInstallActionV1.js"
     },
     "./acp/catalog/settingsV1": {
       "happier-source": "./src/acp/catalog/settingsV1.ts",
@@ -5012,11 +5124,6 @@
       "types": "./dist/prompts/library/promptAssetDescriptorsV1.d.ts",
       "default": "./dist/prompts/library/promptAssetDescriptorsV1.js"
     },
-    "./prompts/library/promptRegistriesV1": {
-      "happier-source": "./src/prompts/library/promptRegistriesV1.ts",
-      "types": "./dist/prompts/library/promptRegistriesV1.d.ts",
-      "default": "./dist/prompts/library/promptRegistriesV1.js"
-    },
     "./sessions/control/handoff/workspaceSyncSchemas": {
       "happier-source": "./src/sessions/control/handoff/workspaceSyncSchemas.ts",
       "types": "./dist/sessions/control/handoff/workspaceSyncSchemas.d.ts",
@@ -5382,6 +5489,11 @@
       "types": "./dist/mcp/servers/settingsV1.d.ts",
       "default": "./dist/mcp/servers/settingsV1.js"
     },
+    "./mcp/servers/pluginItemsV1": {
+      "happier-source": "./src/mcp/servers/pluginItemsV1.ts",
+      "types": "./dist/mcp/servers/pluginItemsV1.d.ts",
+      "default": "./dist/mcp/servers/pluginItemsV1.js"
+    },
     "./mcp/servers/serverRowsV1": {
       "happier-source": "./src/mcp/servers/serverRowsV1.ts",
       "types": "./dist/mcp/servers/serverRowsV1.d.ts",
@@ -5491,6 +5603,11 @@
       "happier-source": "./src/account/settings/savedSecretReferenceV1.ts",
       "types": "./dist/account/settings/savedSecretReferenceV1.d.ts",
       "default": "./dist/account/settings/savedSecretReferenceV1.js"
+    },
+    "./account/settings/personalSavedSecretActionsV1": {
+      "happier-source": "./src/account/settings/personalSavedSecretActionsV1.ts",
+      "types": "./dist/account/settings/personalSavedSecretActionsV1.d.ts",
+      "default": "./dist/account/settings/personalSavedSecretActionsV1.js"
     },
     "./automations/automationRunLifecycle": {
       "happier-source": "./src/automations/automationRunLifecycle.ts",
@@ -7832,6 +7949,7 @@
     "typecheck:local": "node scripts/generate-embedded-feature-policies.mjs --check && node ../../scripts/workspaces/runTypeScriptCli.mjs --noEmit -p tsconfig.json"
   },
   "dependencies": {
+    "@zip.js/zip.js": "2.7.73",
     "es-module-lexer": "^1.7.0",
     "parse5": "^7.2.1",
     "tr46": "5.1.1",
