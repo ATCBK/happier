@@ -19,12 +19,21 @@ export function registerProjectOpenRpcHandlers(registrar: RpcHandlerRegistrar, i
   async function withRequesterContext<T>(context: RpcHandlerContext | undefined,
     run: (context: RpcHandlerContext | undefined, signing?: ProjectOpenRuntime['requesterMachineRpcSigning']) => Promise<T>): Promise<T> {
     const authorization = context?.callerInputAuthorization;
-    if (!authorization || authorization.requesterAccountProjection && authorization.requesterHttpProjection) return run(context);
+    if (!authorization) return run(context);
     const boundary = input.requesterBootstrapBoundary;
     const owner = input.requesterSessionRuntime;
     const origin = authorization.binding.sessionActionOrigin;
     const source = authorization.binding.sessionActionSource;
     const admission = context.machineAdmission;
+    if (authorization.requesterAccountProjection && authorization.requesterHttpProjection) {
+      const installation = await boundary?.readInstallation?.().catch(() => null);
+      if (!installation || !admission || installation.machineId !== input.machineId
+        || admission.machineId !== input.machineId || installation.identity.installationId !== admission.installationId
+        || authorization.binding.machineId !== input.machineId || authorization.binding.installationId !== admission.installationId
+        || !context.verifyMachineAdmissionCurrent || !await context.verifyMachineAdmissionCurrent()) return run(context);
+      return run(context, { installationId: installation.identity.installationId,
+        privateKey: decodeBase64(installation.identity.privateKey, 'base64url') });
+    }
     // The exact authenticated origin is the only Session lookup key. A target
     // Machine's other Sessions cannot provide custody for a requester invocation.
     if (!boundary || !owner || origin?.caller.kind !== 'session' || !source || !admission

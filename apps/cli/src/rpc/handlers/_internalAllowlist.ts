@@ -471,17 +471,7 @@ export const INTERNAL_ONLY_RPC_METHODS = Object.freeze([
         ownerPacket: 'PMS-5',
     },
     {
-        method: RPC_METHODS.DAEMON_PROMPT_REGISTRY_LIST_ADAPTERS,
-        rationale: 'PMS-5 direct-eligible daemon read projection; remains internal transport, not a public action surface.',
-        ownerPacket: 'PMS-5',
-    },
-    {
-        method: RPC_METHODS.DAEMON_PROMPT_REGISTRY_LIST_SOURCES,
-        rationale: 'PMS-5 direct-eligible daemon read projection; remains internal transport, not a public action surface.',
-        ownerPacket: 'PMS-5',
-    },
-    {
-        method: RPC_METHODS.DAEMON_MARKETPLACE_SOURCE_REGISTRY_GET,
+        method: RPC_METHODS.DAEMON_REGISTRIES_FETCH,
         rationale: 'PMS-5 direct-eligible daemon read projection; remains internal transport, not a public action surface.',
         ownerPacket: 'PMS-5',
     },
@@ -551,22 +541,22 @@ export const INTERNAL_ONLY_RPC_METHODS = Object.freeze([
         ownerPacket: 'A.12-daemon-admin',
     },
     {
-        method: RPC_METHODS.DAEMON_PROMPT_REGISTRY_DOWNLOAD_INIT,
+        method: RPC_METHODS.DAEMON_REGISTRIES_DOWNLOAD_INIT,
         rationale: PROMPT_TRANSFER_CONTROL_RATIONALE,
         ownerPacket: 'A.12-daemon-admin',
     },
     {
-        method: RPC_METHODS.DAEMON_PROMPT_REGISTRY_DOWNLOAD_CHUNK,
+        method: RPC_METHODS.DAEMON_REGISTRIES_DOWNLOAD_CHUNK,
         rationale: PROMPT_TRANSFER_CONTROL_RATIONALE,
         ownerPacket: 'A.12-daemon-admin',
     },
     {
-        method: RPC_METHODS.DAEMON_PROMPT_REGISTRY_DOWNLOAD_FINALIZE,
+        method: RPC_METHODS.DAEMON_REGISTRIES_DOWNLOAD_FINALIZE,
         rationale: PROMPT_TRANSFER_CONTROL_RATIONALE,
         ownerPacket: 'A.12-daemon-admin',
     },
     {
-        method: RPC_METHODS.DAEMON_PROMPT_REGISTRY_DOWNLOAD_ABORT,
+        method: RPC_METHODS.DAEMON_REGISTRIES_DOWNLOAD_ABORT,
         rationale: PROMPT_TRANSFER_CONTROL_RATIONALE,
         ownerPacket: 'A.12-daemon-admin',
     },

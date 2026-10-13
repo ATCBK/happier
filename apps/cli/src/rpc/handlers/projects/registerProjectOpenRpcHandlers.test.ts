@@ -23,7 +23,7 @@ import { createWorkspaceRootOwnershipManager } from '@/workspaces/sync/workspace
 import { resolveWorkspaceRefV1 } from '@happier-dev/protocol/workspaces/workspaceRefResolutionV1';
 import { createProjectAccountRowCipherV1 } from '@happier-dev/protocol/projects/projectAccountRowCipherV1';
 import type { ExternalActionExecutionAuthorizationV1 } from '@happier-dev/protocol/actions/externalActionApi';
-import { ScmHostingProviderContributionSchema } from '@happier-dev/protocol';
+import { FeaturesResponseSchema, ScmHostingProviderContributionSchema } from '@happier-dev/protocol';
 import { PluginConnectedAccountDescriptorContributionV2Schema } from '@happier-dev/protocol/connect/plugin-connected-account-authentication-v2';
 import { createProjectSetupTrustRowCipher } from '@/workspaces/projectSetup/projectSetupTrust';
 import { configuration, reloadConfiguration } from '@/configuration';
@@ -43,9 +43,12 @@ import { createScmBackendRegistry } from '@/scm/registry';
 import { createConnectedAccountPurposeBindingOwner } from '@/daemon/connectedServices/purposeBindings/ConnectedAccountPurposeBindingOwner';
 import { logger } from '@/ui/logger';
 import { createHostActionOperationRuntime } from '@/daemon/actionOperations/createHostActionOperationRuntime';
-import { prepareDaemonHomeIrohTransport } from '@/daemon/peer/iroh/daemonHomeIrohTransport';
+import { applyDaemonHomeDescriptorRefresh, prepareDaemonHomeIrohTransport } from '@/daemon/peer/iroh/daemonHomeIrohTransport';
 import { getServerProfile } from '@/server/serverProfiles';
+import { resolveCurrentCliHomeTarget } from '@/server/homeTarget';
 import { resolvePublishedMachineEncryptionContext } from '@/api/machine/machineDataEncryptionKey';
+import { ApiMachineClient } from '@/api/apiMachine';
+import { writeCredentialsTokenOnlyForServerId } from '@/persistence';
 
 const socketIo = vi.hoisted(() => vi.fn());
 vi.mock('socket.io-client', () => ({ io: socketIo }));
@@ -288,10 +291,8 @@ describe('Project Open RPC', () => {
     try {
       scope.patch({ HAPPIER_HOME_DIR: home, HAPPIER_ACTIVE_SERVER_ID: profileId });
       reloadConfiguration();
-      await updateSettings(settings => ({ ...settings, activeServerId: profileId,
-        servers: { [profileId]: { id: profileId, name: 'QA', serverUrl, webappUrl: serverUrl,
-          createdAt: 1, updatedAt: 1, lastUsedAt: 1 } } }));
       await mkdir(root);
+      await writeCredentialsTokenOnlyForServerId(profileId, { token });
       const runtime: ProjectOpenRuntime = { serverId: profileId, machineId, serverHttpBaseUrl: serverUrl,
         accountId: 'account', readCredentials: async () => ({ token, encryption: null }) };
       const context: RpcHandlerContext = { signal: new AbortController().signal, callerAuthority: 'present_user',
@@ -303,18 +304,50 @@ describe('Project Open RPC', () => {
       expect(await handler(folder, context)).toEqual({ kind: 'refused', code: 'target_mismatch' });
       // Only the Home HTTP boundary is mocked. Start from the predecessor/Stack
       // URL-only profile and pass the provisioned credential through real startup verification.
+      const features = FeaturesResponseSchema.parse({ features: {}, capabilities: { serverIdentity: { serverIdentityId: serverId } },
+        homeConnectionDescriptor: { v: 1, homeServerIdentityId: serverId, canonicalServerUrl: serverUrl,
+          revision: 1, endpoints: [{ kind: 'https', url: serverUrl }] } });
       vi.stubGlobal('fetch', vi.fn<typeof fetch>(async (url, init) => {
         expect(String(url)).toBe(`${serverUrl}/v1/features/authenticated`);
         expect(new Headers(init?.headers).get('Authorization')).toBe(`Bearer ${token}`);
-        return Response.json({ features: {}, capabilities: { serverIdentity: { serverIdentityId: serverId } },
-          homeConnectionDescriptor: { v: 1, homeServerIdentityId: serverId, canonicalServerUrl: serverUrl,
-            revision: 1, endpoints: [{ kind: 'https', url: serverUrl }] } });
+        return Response.json(features);
       }));
-      const transport = await prepareDaemonHomeIrohTransport({ runtime: null, profile: await getServerProfile(profileId),
+      const startupTarget = await resolveCurrentCliHomeTarget();
+      expect(startupTarget).toMatchObject({ profileId: null, authority: 'manual_url' });
+      const transport = await prepareDaemonHomeIrohTransport({ runtime: null, profile: { serverUrl },
         applicationCarrierEligibility: 'standard_only' });
       try {
         expect(await transport.verifyAuthenticated(token)).toEqual({ status: 'ready' });
       } finally { await transport.release(); vi.unstubAllGlobals(); }
+      await expect(getServerProfile(profileId)).rejects.toThrow('not found');
+      await updateSettings(settings => ({ ...settings, activeServerId: profileId,
+        servers: { [profileId]: { id: profileId, name: 'QA', serverUrl, webappUrl: serverUrl,
+          createdAt: 1, updatedAt: 1, lastUsedAt: 1 } } }));
+      const reconnect = vi.fn();
+      expect(await applyDaemonHomeDescriptorRefresh({ features, homeTarget: startupTarget,
+        requestReconnect: reconnect })).toBe('updated');
+      expect(reconnect).toHaveBeenCalledOnce();
+      expect(await getServerProfile(profileId)).toMatchObject({ homeConnectionDescriptor: features.homeConnectionDescriptor,
+        homeConnectionDescriptorAuthority: 'exact' });
+      // Consume the real machine composition, not a hand-supplied Project runtime.
+      const client = new ApiMachineClient(token, { id: machineId, encryptionMode: 'plain', metadata: null,
+        metadataVersion: 0, daemonState: null, daemonStateVersion: 0 });
+      const registration = client.setRPCHandlers({ spawnSession: async () => { throw new Error('Unexpected spawn'); },
+        stopSession: async () => ({ status: 'stopped' }), requestShutdown() {} });
+      try {
+        const rpcOwner: unknown = Reflect.get(client, 'rpcHandlerManager');
+        if (typeof rpcOwner !== 'object' || rpcOwner === null) throw new Error('Missing machine RPC owner');
+        const registeredHandlers: unknown = Reflect.get(rpcOwner, 'handlers');
+        if (!(registeredHandlers instanceof Map)) throw new Error('Missing registered RPC handlers');
+        const installed: RpcHandler<unknown, unknown> | undefined = registeredHandlers.get(`${machineId}:${RPC_METHODS.PROJECTS_OPEN}`);
+        if (!installed) throw new Error('Project Open was not installed by the machine composition');
+        expect(OpenProjectResultV1Schema.parse(await installed(folder, context))).toMatchObject({ kind: 'opened',
+          workspace: { serverId, machineId, rootPath: root } });
+      } finally { await registration.dispose(); }
+      // Counterfactual wiring: the same exact Home without its Project runtime
+      // remains unavailable. The composed opened assertion above detects this omission.
+      expect(await register(RPC_METHODS.PROJECTS_OPEN, undefined, target)(folder, context))
+        .toEqual({ kind: 'refused', code: 'project_open_unavailable' });
       expect(await handler(folder, context)).toMatchObject({ kind: 'opened', directory: root,
         workspace: { serverId, machineId, rootPath: root } });
       const workspaceRow = rows.find(row => row.key.kind === 'workspace-ref');

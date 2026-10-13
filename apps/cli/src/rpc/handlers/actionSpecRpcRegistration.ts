@@ -149,18 +149,18 @@ export const PROMPT_ASSET_RPC_SCOPES = Object.freeze([
     {
         id: 'daemon.admin.promptAssets',
         methods: [
-            RPC_METHODS.DAEMON_PROMPT_ASSETS_DISCOVER,
             RPC_METHODS.DAEMON_PROMPT_ASSETS_DELETE,
         ],
     },
 ] satisfies readonly ActionSpecRpcRegistrationScope[]);
 
-export const PROMPT_REGISTRY_RPC_SCOPES = Object.freeze([
+export const SKILL_MACHINE_RPC_SCOPES = Object.freeze([
     {
-        id: 'daemon.admin.promptRegistry',
+        id: 'daemon.admin.skills',
         methods: [
-            RPC_METHODS.DAEMON_PROMPT_REGISTRY_SCAN_SOURCE,
-            RPC_METHODS.DAEMON_PROMPT_REGISTRY_INSTALL,
+            RPC_METHODS.SKILLS_FOUND_LIST,
+            RPC_METHODS.SKILLS_MACHINE_INSTALL,
+            RPC_METHODS.SKILLS_MACHINE_UNINSTALL,
         ],
     },
 ] satisfies readonly ActionSpecRpcRegistrationScope[]);
@@ -196,7 +196,7 @@ export const BUG_REPORT_RPC_SCOPES = Object.freeze([
 
 export const DAEMON_ADMIN_RPC_SCOPES = Object.freeze([
     ...PROMPT_ASSET_RPC_SCOPES,
-    ...PROMPT_REGISTRY_RPC_SCOPES,
+    ...SKILL_MACHINE_RPC_SCOPES,
     ...FILESYSTEM_RPC_SCOPES,
     ...MACHINE_FILE_BROWSER_RPC_SCOPES,
     ...BUG_REPORT_RPC_SCOPES,

@@ -99,7 +99,9 @@ export function createDaemonStorageRoutes(input: Readonly<{
 
 /** Recipients receive machine capacity and Happier totals, never another Account's paths or work. */
 function projectSummary(summary: HappierStorageSummaryV1, custodian: boolean): HappierStorageSummaryV1 {
-    return custodian ? summary : { ...summary, categories: [], suggestionsTop: [],
+    if (custodian) return summary;
+    const { scanShortcuts, ...shared } = summary;
+    return { ...shared, categories: [], suggestionsTop: [],
         volumes: summary.volumes.map(volume => ({ ...volume, trashBytes: 0 })),
         pile: summary.pile, trash: { count: 0, allocatedBytes: 0 },
         wholeDisk: { enabled: false, scans: [] } };

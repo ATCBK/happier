@@ -1,11 +1,10 @@
-import { execFile } from 'node:child_process';
 import { createHash } from 'node:crypto';
 import { mkdir, mkdtemp, readFile, realpath, rm, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
-import { join, resolve } from 'node:path';
-import { promisify } from 'node:util';
+import { join } from 'node:path';
 import { afterAll, beforeAll, describe, expect, it, vi } from 'vitest';
-import { CLI_BINARY_TARGETS, resolveCurrentBinaryTarget, stageProcessCustodyRuntime } from '@happier-dev/cli-common/componentArtifacts';
+import { createProcessCustodyFixture } from '@/testkit/processCustodyFixture';
+import { MachineStorageCategoryListResultV1Schema } from '@happier-dev/protocol/storage/storageV1';
 import { createManagedSessionDirectories } from '@/session/creation/managedSessionDirectories';
 import type { RpcHandlerMap, RpcHandlerContext, RpcHandlerRegistrar } from '@/api/rpc/types';
 import { RPC_METHODS } from '@happier-dev/protocol/rpc/methods';
@@ -28,22 +27,16 @@ vi.mock('node:fs/promises', async importOriginal => {
 
 const identity = { serverId: 'home', machineId: 'machine', installationId: 'install', custodianAccountId: 'owner' };
 let lazyFixtureDirectory: string;
-const execute = promisify(execFile);
-const originalExecutable = Object.getOwnPropertyDescriptor(process, 'execPath')!;
+let disposeNative: (() => Promise<void>) | undefined;
 let nativeFixtureDirectory: string;
 beforeAll(async () => {
     // Load the actual source owner before the canonical publisher switches execPath to its staged native runtime.
     await import('@/storage/storageService');
     nativeFixtureDirectory = await realpath(await mkdtemp(join(tmpdir(), 'happier-storage-rpc-')));
-    const payload = join(nativeFixtureDirectory, 'payload');
-    await stageProcessCustodyRuntime({ repoRoot: resolve('../..'), payloadDir: payload,
-        target: resolveCurrentBinaryTarget({ availableTargets: CLI_BINARY_TARGETS }),
-        runCommand: async (command, args, options) => { await execute(command, args, { cwd: options?.cwd, env: options?.env }); },
-    });
-    Object.defineProperty(process, 'execPath', { ...originalExecutable, value: join(payload, 'happier') });
+    disposeNative = await createProcessCustodyFixture();
 });
 afterAll(async () => {
-    Object.defineProperty(process, 'execPath', originalExecutable);
+    await disposeNative?.();
     if (nativeFixtureDirectory) await rm(nativeFixtureDirectory, { recursive: true, force: true });
 });
 function context(actorAccountId = 'owner', role: 'use' | 'manage' = 'manage'): RpcHandlerContext {
@@ -386,6 +379,7 @@ describe.skipIf(process.platform !== 'linux' && process.platform !== 'darwin')('
         try {
             const list = handlers.get(RPC_METHODS.DAEMON_STORAGE_CATEGORY_LIST)!;
             const output = await list({ machineId: 'machine', categoryId: 'sessionFolders' }, context('recipient', 'use'));
+            expect(MachineStorageCategoryListResultV1Schema.parse(output)).toEqual(output);
             expect(output).toMatchObject({ categoryId: 'sessionFolders', items: [{ path: own.directory, size: { atLeast: false } }] });
             expect(JSON.stringify(output)).not.toContain(foreign.directory);
             expect(JSON.stringify(output)).not.toContain('sessionId');

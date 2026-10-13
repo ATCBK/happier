@@ -18,6 +18,10 @@ import type { Metadata } from '@/api/types';
 import type { RpcHandlerRegistrar } from '@/api/rpc/types';
 import type { ComposerAttachmentDispatchResolver } from '@/agent/runtime/runPermissionModePromptLoop';
 import type { StructuredInputComposerReferenceResolver } from '@/agent/runtime/turns/resolveStructuredInputProviderContext';
+import type { AgentSessionSkillDelivery } from '@happier-dev/plugin-sdk/agent-runtime';
+import { configuration } from '@/configuration';
+import { SkillCatalogItemV1Schema } from '@happier-dev/protocol/runtime/catalog/skills';
+import { resolveHappierSkillIdentity } from '@/prompts/skills/runtime/resolveHappierSkillIdentity';
 import { routeRuntimeAuthUsageLimitRecoveryCheckNow, type CheckRuntimeAuthUsageLimitRecovery } from '@/session/usageLimitRecoveryControls/runtimeAuthUsageLimitRecoveryControl';
 import {
   resolveUsageLimitRecoveryEnabled,
@@ -73,6 +77,8 @@ export type SessionRuntimeControls = {
   clearGoal?: () => unknown;
   listVendorPlugins?: (options?: Readonly<{ cwd?: string }>) => Promise<unknown>;
   listSkills?: (options?: Readonly<{ cwd?: string }>) => Promise<unknown>;
+  /** Current acknowledged delivery, read at catalog demand rather than captured at launch. */
+  readSkillDelivery?: () => AgentSessionSkillDelivery | undefined;
   startInlineReview?: (input: unknown) => Promise<unknown> | unknown;
   invalidateConnectedServiceAuthTransports?: () => Promise<unknown> | unknown;
   applyConnectedServiceAuthGeneration?: (
@@ -743,6 +749,18 @@ export function registerSessionControlHandlers(
     if (typeof opts.sessionRuntimeControls?.listSkills !== 'function') {
       return { unsupported: true, skills: [] };
     }
-    return await opts.sessionRuntimeControls.listSkills(readCatalogRuntimeOptions(parsed.data.cwd));
+    const result = await opts.sessionRuntimeControls.listSkills(readCatalogRuntimeOptions(parsed.data.cwd));
+    const delivery = opts.sessionRuntimeControls.readSkillDelivery?.();
+    if (!delivery || !result || typeof result !== 'object') return result;
+    const skills: unknown = Reflect.get(result, 'skills');
+    if (!Array.isArray(skills)) return result;
+    return { ...result, skills: skills.map(raw => {
+      const item = SkillCatalogItemV1Schema.safeParse(raw);
+      if (!item.success) return raw;
+      const skillId = resolveHappierSkillIdentity(item.data, delivery, configuration.happyHomeDir);
+      if (!skillId) return raw;
+      const { idSource: _generatedIdSource, ...catalogItem } = item.data;
+      return { ...catalogItem, id: skillId, origin: 'happier' as const, projectionRef: skillId };
+    }) };
   });
 }

@@ -113,14 +113,13 @@ describe('registerExternalActionRpcHandler', () => {
     expect(sessionSpawnNew).not.toHaveBeenCalled();
   });
 
-  it('keeps Bob as actor while admitting Alice exact installation through the current Home proof', async () => {
+  it('refuses a foreign Account root without private requester custody even with a current Home proof', async () => {
     const { handlers, registrar } = registerHandlerForTest();
-    const sessionSpawnNew = vi.fn(async () => SESSION_SPAWN_PENDING_RESULT);
     registerExternalActionRpcHandler(registrar, {
       machineId: 'machine-1', currentServerId: 'home-profile',
       resolveAccountId: async () => 'alice', resolveInstallationId: () => 'alice-installation',
       resolveTarget: createDaemonExternalActionTargetResolver({ credentials: { token: 'alice-daemon-token' } }),
-      executor: createActionExecutor({ ...createUnavailableActionTransportDeps(), sessionSpawnNew }),
+      executor: createActionExecutor(createUnavailableActionTransportDeps()),
       externalActionMachineRequestPrivateKey: installationIdentity.secretKey,
       verifyExecutionAuthorization: async () => true,
     });
@@ -139,14 +138,14 @@ describe('registerExternalActionRpcHandler', () => {
       authorization: ACTION_API_SERVER_ORIGIN, signal: new AbortController().signal,
     });
     expectPreparedRelayResponse(result, { v: 1, actionId: 'session.spawn_new', requestId: 'bob-start',
-      execution: { ok: true, result: SESSION_SPAWN_PENDING_RESULT } });
-    expect(sessionSpawnNew).toHaveBeenCalledTimes(1);
+      execution: { ok: false, errorCode: 'target_not_local', error: 'target_not_local' } });
     const wrongInstallation = { ...dispatch, executionAuthorization: { ...dispatch.executionAuthorization,
       binding: { ...dispatch.executionAuthorization.binding, installationId: 'replacement' } } };
-    await handlers.get(EXTERNAL_ACTION_DAEMON_RPC_METHOD_V1)?.(wrongInstallation, {
+    const replaced = await handlers.get(EXTERNAL_ACTION_DAEMON_RPC_METHOD_V1)?.(wrongInstallation, {
       authorization: ACTION_API_SERVER_ORIGIN, signal: new AbortController().signal,
     });
-    expect(sessionSpawnNew).toHaveBeenCalledTimes(1);
+    expectPreparedRelayResponse(replaced, { v: 1, actionId: 'session.spawn_new', requestId: 'bob-start',
+      execution: { ok: false, errorCode: 'target_not_local', error: 'target_not_local' } });
   });
 
   it('admits only the server-stamped exact-machine dispatch into the canonical ingress', async () => {

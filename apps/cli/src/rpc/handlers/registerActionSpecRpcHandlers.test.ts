@@ -2,6 +2,7 @@ import { describe, expect, it, vi } from 'vitest';
 import { z } from 'zod';
 
 import { RPC_METHODS } from '@happier-dev/protocol/rpc';
+import { ActionExecuteFailureSchema } from '@happier-dev/protocol/actions/actionExecutionResult';
 
 import type { RpcActionExecutor } from './_actionDispatchAdapter';
 import {
@@ -22,12 +23,6 @@ const REVIEW_COMMENT_ACTION_IDS = Object.freeze([
     'reviews.comments.attachEvidence',
     'reviews.comments.bulkTransition',
 ] as const);
-
-// These registrar tests inject focused specs directly; loading the full catalog belongs to catalog tests.
-vi.mock('@happier-dev/protocol/actions/actionSpecs', async (importOriginal) => ({
-    ...await importOriginal<typeof import('@happier-dev/protocol/actions/actionSpecs')>(),
-    ACTION_SPECS: [],
-}));
 
 function createRpcHarness() {
     const handlers = new Map<string, (
@@ -52,6 +47,23 @@ function createRpcHarness() {
 
 describe('ActionSpec-derived RPC registrar', () => {
     const module = registrarModule;
+
+    it('retains only strict declared machine-skill acknowledgements in RPC failures', () => {
+        for (const [actionId, details] of [
+            ['skills.machine.install', { receipts: [{ root: '/native/skills', path: '/native/skills/lint', digest: 'digest' }] }],
+            ['skills.machine.uninstall', { removed: ['/native/skills/lint'] }],
+        ] as const) {
+            const failure = { ok: false as const, errorCode: 'conflict', error: 'conflict', details };
+            expect(ActionExecuteFailureSchema.parse(module.unwrapActionResultForRpc(actionId, failure))).toEqual(failure);
+            expect(module.unwrapActionResultForRpc(actionId, { ...failure, details: { ...details, secret: 'private' } }))
+                .not.toHaveProperty('details');
+            expect(module.unwrapActionResultForRpc(actionId, { ...failure, details: { receipts: 'malformed' } }))
+                .not.toHaveProperty('details');
+        }
+        expect(module.unwrapActionResultForRpc('memory.search', {
+            ok: false, errorCode: 'conflict', error: 'conflict', details: { removed: ['/native/skills/lint'] },
+        })).not.toHaveProperty('details');
+    });
 
     it('projects only code-bound worker refusal facts for finite Project Actions', async () => {
         const failure = { ok: false as const, errorCode: 'not_accepting', error: 'not_accepting',

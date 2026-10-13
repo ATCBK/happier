@@ -9,7 +9,11 @@ import { createEnvKeyScope } from '@/testkit/env/envScope';
 import { createTempDir, removeTempDir } from '@/testkit/fs/tempDir';
 import { scaffoldLocalPlugin } from '@/plugins/scaffold/scaffold';
 import { createPluginStateStore } from '@/plugins/store/state.testkit';
-import { createMarketplaceSourceRegistryStore } from '@/plugins/store/marketplace/sources/store';
+import {curatedMarketplaceSourceFixture,communityMarketplaceSourceFixture,publishAccountRegistrySourcesFixture} from '@/plugins/testkit/accountRegistrySources';
+import {installMarketplaceHttpBoundaryFixture} from '@/plugins/testkit/marketplaceHttpFixture';
+import {resetActiveAccountSettingsSnapshotForTests} from '@/settings/accountSettings/activeAccountSettingsSnapshot';
+import * as undici from 'undici';
+import * as https from 'node:https';
 import { createPluginRegistryStateStore } from '@/plugins/store/registry/currentState';
 import { createNpmPluginDistributionIdentity, createPluginTrustRecord } from '@/plugins/store/install/trustIdentity';
 import { DaemonPluginChangePreparationError } from '@/plugins/daemon/changeService';
@@ -21,7 +25,9 @@ import { readCanonicalPluginManifest } from '@/plugins/manifest/normalize';
 import { createPluginManifestV2Fixture } from '@/plugins/testkit/manifestV2Fixture';
 import { createCliCapabilitiesService } from './capabilities';
 
-const loadMarketplaceIndexSourceMock = vi.hoisted(() => vi.fn());
+function serveMarketplaceHttpFixture(read:(args:Parameters<typeof createMarketplaceSnapshot>[0])=>Promise<ReturnType<typeof createMarketplaceSnapshot>>){
+  installMarketplaceHttpBoundaryFixture(kind=>{const fixture=kind==='npm'?communityMarketplaceSourceFixture():curatedMarketplaceSourceFixture();return read({source:{id:fixture.id,title:fixture.title,sourceUrl:fixture.sourceUrl,kind:fixture.origin}});});
+}
 
 const decideDaemonPluginChangeMock = vi.hoisted(() => vi.fn());
 
@@ -87,9 +93,9 @@ function createMarketplaceSnapshot(params: Readonly<{
 
 // Boundary fixtures only: remote marketplace retrieval and daemon/process/user interaction.
 // The in-process exact-install and user-change owners remain real in this suite.
-vi.mock('@/plugins/store/marketplace/indexSourceLoader', () => ({
-    loadMarketplaceIndexSource: (...args: unknown[]) => loadMarketplaceIndexSourceMock(...args),
-}));
+vi.mock('node:dns/promises',async original=>({...await original<typeof import('node:dns/promises')>(),lookup:async()=>[{address:'93.184.216.34',family:4}]}));
+vi.mock('undici',async original=>{const actual=await original<typeof import('undici')>();return {...actual,fetch:vi.fn(actual.fetch)};});
+vi.mock('node:https',async original=>{const actual=await original<typeof import('node:https')>();return {...actual,request:vi.fn(actual.request)};});
 
 vi.mock('@/daemon/controlClient', async (importOriginal) => ({
     ...(await importOriginal<typeof import('@/daemon/controlClient')>()),
@@ -157,9 +163,7 @@ function createDevelopmentCatalogEntry(pluginRoot: string): PluginCatalogEntry {
 
 // Boundary fixtures only: remote marketplace retrieval and daemon/process/user interaction.
 // The in-process exact-install and user-change owners remain real in this suite.
-vi.mock('@/plugins/store/marketplace/indexSourceLoader', () => ({
-    loadMarketplaceIndexSource: (...args: unknown[]) => loadMarketplaceIndexSourceMock(...args),
-}));
+
 
 vi.mock('@/daemon/controlClient', async (importOriginal) => ({
     ...(await importOriginal<typeof import('@/daemon/controlClient')>()),
@@ -329,6 +333,7 @@ describe('createCliCapabilitiesService dep.az', () => {
 
 describe('createCliCapabilitiesService tool.plugins', () => {
     beforeEach(() => {
+        publishAccountRegistrySourcesFixture();
         controlDaemonPluginDevelopmentMock.mockResolvedValue({
             kind: 'status',
             status: { roots: [], plugins: [] },
@@ -336,7 +341,7 @@ describe('createCliCapabilitiesService tool.plugins', () => {
     });
 
     afterEach(() => {
-        loadMarketplaceIndexSourceMock.mockReset();
+        vi.mocked(undici.fetch).mockReset();vi.mocked(https.request).mockReset();vi.restoreAllMocks();resetActiveAccountSettingsSnapshotForTests();
         decideDaemonPluginChangeMock.mockReset();
         requestDaemonPluginChangeMock.mockReset();
         controlDaemonPluginDevelopmentMock.mockReset();
@@ -528,13 +533,13 @@ describe('createCliCapabilitiesService tool.plugins', () => {
 
     it('keeps a generic curated install prepare-only even if a downstream adapter reports a commit', async () => {
         const home = await createTempDir('happier-cli-capabilities-curated-install-');
-        const sourceUrl = 'https://marketplace.example.test/catalog.json';
+        const sourceUrl = curatedMarketplaceSourceFixture().sourceUrl;
         const envScope = createEnvKeyScope(['HAPPIER_HOME_DIR']);
         envScope.patch({
             HAPPIER_HOME_DIR: home,
         });
         reloadConfiguration();
-        loadMarketplaceIndexSourceMock.mockImplementation(async ({ source }) => createMarketplaceSnapshot({ source }));
+        serveMarketplaceHttpFixture(async ({ source }) => createMarketplaceSnapshot({ source }));
         requestDaemonPluginChangeMock.mockResolvedValue({
             kind: 'committed',
             pluginId: SAMPLE_PLUGIN_ID,
@@ -544,10 +549,7 @@ describe('createCliCapabilitiesService tool.plugins', () => {
         });
 
         try {
-            const sourceId = (await createMarketplaceSourceRegistryStore({
-                happyHomeDir: home,
-                curatedSourceUrl: sourceUrl,
-            }).read()).sources[0]!.id;
+            const sourceId = curatedMarketplaceSourceFixture().id;
             const service = await createCliCapabilitiesService();
             const installResponse = await service.invoke({
                 id: 'tool.plugins',
@@ -604,7 +606,7 @@ describe('createCliCapabilitiesService tool.plugins', () => {
         const envScope = createEnvKeyScope(['HAPPIER_HOME_DIR']);
         envScope.patch({ HAPPIER_HOME_DIR: home });
         reloadConfiguration();
-        loadMarketplaceIndexSourceMock.mockImplementation(async ({ source }) => createMarketplaceSnapshot({ source }));
+        serveMarketplaceHttpFixture(async ({ source }) => createMarketplaceSnapshot({ source }));
         requestDaemonPluginChangeMock.mockResolvedValue({
             kind: 'reviewRequired', reviewKind: 'installation', reason: 'firstInstall', currentVersion: null, authorityExpansion: [],
             pendingChangeId: 'pending-community',
@@ -636,13 +638,13 @@ describe('createCliCapabilitiesService tool.plugins', () => {
 
     it('hands a registry selection back to the present user, from the listing and from preparation', async () => {
         const home = await createTempDir('happier-cli-capabilities-registry-selection-');
-        const sourceUrl = 'https://marketplace.example.test/catalog.json';
+        const sourceUrl = curatedMarketplaceSourceFixture().sourceUrl;
         const envScope = createEnvKeyScope(['HAPPIER_HOME_DIR']);
         envScope.patch({ HAPPIER_HOME_DIR: home });
         reloadConfiguration();
         // The curated listing is published on a private registry this Home has
         // no profile or source binding for; only the remote index is a fixture.
-        loadMarketplaceIndexSourceMock.mockImplementation(async ({ source }) => {
+        serveMarketplaceHttpFixture(async ({ source }) => {
             const snapshot = createMarketplaceSnapshot({ source });
             if (source.kind !== 'curated') return snapshot;
             return {
@@ -655,10 +657,7 @@ describe('createCliCapabilitiesService tool.plugins', () => {
         });
 
         try {
-            const sourceId = (await createMarketplaceSourceRegistryStore({
-                happyHomeDir: home,
-                curatedSourceUrl: sourceUrl,
-            }).read()).sources[0]!.id;
+            const sourceId = curatedMarketplaceSourceFixture().id;
             const service = await createCliCapabilitiesService();
             await expect(service.invoke({
                 id: 'tool.plugins',
@@ -755,7 +754,7 @@ describe('createCliCapabilitiesService tool.plugins', () => {
 
     it('exposes private lifecycle methods through the canonical daemon change owner without restoring reload or source-url mutation', async () => {
         const home = await createTempDir('happier-cli-capabilities-plugin-lifecycle-');
-        const sourceUrl = 'https://marketplace.example.test/catalog.json';
+        const sourceUrl = curatedMarketplaceSourceFixture().sourceUrl;
         const envScope = createEnvKeyScope(['HAPPIER_HOME_DIR']);
         envScope.patch({
             HAPPIER_HOME_DIR: home,
@@ -770,7 +769,7 @@ describe('createCliCapabilitiesService tool.plugins', () => {
             requiredHostAccess: [],
             optionalHostAccess: [],
         };
-        loadMarketplaceIndexSourceMock.mockImplementation(async ({ source }) => createMarketplaceSnapshot({ source }));
+        serveMarketplaceHttpFixture(async ({ source }) => createMarketplaceSnapshot({ source }));
         requestDaemonPluginChangeMock.mockImplementation(async (request: Readonly<{ kind: string; pluginId?: string }>) => (
             request.kind === 'update'
                 ? { kind: 'reviewRequired', reviewKind: 'installation', reason: 'firstInstall', currentVersion: null, authorityExpansion: [], pendingChangeId: 'pending-update', review }
@@ -788,10 +787,7 @@ describe('createCliCapabilitiesService tool.plugins', () => {
         ));
 
         try {
-            const sourceId = (await createMarketplaceSourceRegistryStore({
-                happyHomeDir: home,
-                curatedSourceUrl: sourceUrl,
-            }).read()).sources[0]!.id;
+            const sourceId = curatedMarketplaceSourceFixture().id;
             const service = await createCliCapabilitiesService();
             const described = service.describe() as CapabilitiesDescribeResponse;
             const plugins = described.capabilities.find((capability) => capability.id === 'tool.plugins');
@@ -982,7 +978,7 @@ describe('createCliCapabilitiesService tool.plugins', () => {
 
     it('routes update through the canonical installed-update owner so a pinned installation is refused with its own reason', async () => {
         const home = await createTempDir('happier-cli-capabilities-plugin-pinned-update-');
-        const sourceUrl = 'https://marketplace.example.test/catalog.json';
+        const sourceUrl = curatedMarketplaceSourceFixture().sourceUrl;
         const envScope = createEnvKeyScope(['HAPPIER_HOME_DIR']);
         envScope.patch({
             HAPPIER_HOME_DIR: home,
@@ -990,7 +986,7 @@ describe('createCliCapabilitiesService tool.plugins', () => {
         reloadConfiguration();
         // A newer version is genuinely offered by the catalog: an update arm that
         // installs the catalog version would advance this pinned installation.
-        loadMarketplaceIndexSourceMock.mockImplementation(async ({ source }) => {
+        serveMarketplaceHttpFixture(async ({ source }) => {
             const snapshot = createMarketplaceSnapshot({ source });
             return {
                 ...snapshot,
@@ -1073,10 +1069,7 @@ describe('createCliCapabilitiesService tool.plugins', () => {
             })();
             expect(canonicalRefusal.code).toBe('plugin_update_pinned');
 
-            const sourceId = (await createMarketplaceSourceRegistryStore({
-                happyHomeDir: home,
-                curatedSourceUrl: sourceUrl,
-            }).read()).sources[0]!.id;
+            const sourceId = curatedMarketplaceSourceFixture().id;
             const service = await createCliCapabilitiesService();
             await expect(service.invoke({
                 id: 'tool.plugins',
@@ -1328,6 +1321,7 @@ describe('createCliCapabilitiesService tool.plugins', () => {
 
 describe('createCliCapabilitiesService tool.plugins', () => {
     beforeEach(() => {
+        publishAccountRegistrySourcesFixture();
         controlDaemonPluginDevelopmentMock.mockResolvedValue({
             kind: 'status',
             status: { roots: [], plugins: [] },
@@ -1335,7 +1329,7 @@ describe('createCliCapabilitiesService tool.plugins', () => {
     });
 
     afterEach(() => {
-        loadMarketplaceIndexSourceMock.mockReset();
+        vi.mocked(undici.fetch).mockReset();vi.mocked(https.request).mockReset();vi.restoreAllMocks();resetActiveAccountSettingsSnapshotForTests();
         decideDaemonPluginChangeMock.mockReset();
         requestDaemonPluginChangeMock.mockReset();
         controlDaemonPluginDevelopmentMock.mockReset();

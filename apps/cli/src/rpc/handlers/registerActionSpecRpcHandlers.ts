@@ -9,6 +9,7 @@ import { SessionFollowSourceKeyPreparationResultV1Schema, SESSION_FOLLOW_SOURCE_
 import { ProjectWorkerDependencyV1Schema } from '@happier-dev/protocol/workspaces/projectWorkerExecutionV1';
 import { PROJECT_FINITE_ACTION_RPC_METHODS_V1 } from '@happier-dev/protocol/actions/projectActionFamily';
 import { ActionOperationFailureV1Schema } from '@happier-dev/protocol/actions/operations/v1';
+import { SKILL_MACHINE_ACTION_OUTPUT_SCHEMAS_V1, type SkillMachineActionIdV1 } from '@happier-dev/protocol/prompts/library/skills/skillActionSchemasV1';
 
 import {
     dispatchActionFromRpc,
@@ -139,6 +140,10 @@ export function unwrapActionResultForRpc(actionId: ActionId, result: ActionExecu
             readExecutionRunStartRunCreation(result.details),
         )
         : undefined;
+    if (Object.hasOwn(SKILL_MACHINE_ACTION_OUTPUT_SCHEMAS_V1, actionId)) {
+        const projected = SKILL_MACHINE_ACTION_OUTPUT_SCHEMAS_V1[actionId as SkillMachineActionIdV1].safeParse(result.details);
+        details = projected.success ? projected.data : undefined;
+    }
     if (Object.prototype.hasOwnProperty.call(PROJECT_FINITE_ACTION_RPC_METHODS_V1, actionId)) {
         const projected = ActionOperationFailureV1Schema.safeParse({ errorCode: result.errorCode, error: result.error, details: result.details });
         details = projected.success ? projected.data.details : undefined;

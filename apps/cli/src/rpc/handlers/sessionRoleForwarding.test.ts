@@ -1,5 +1,12 @@
+import { createServer } from 'node:http';
+import { Server } from 'socket.io';
+import { io } from 'socket.io-client';
+import { callSocketRpc } from '@happier-dev/sync-client';
+import { SOCKET_RPC_EVENTS, type SocketRpcRequestPayload } from '@happier-dev/protocol/socketRpc';
 import { describe, expect, it } from 'vitest';
-import { createActionExecutor, createRoleSourceReaderV1, type ActionExecutorDeps } from '@happier-dev/protocol';
+import { createActionExecutor, createRoleSourceReaderV1, readSessionRoleIdV1, RoleActionInputSchemasV1, RoleActionOutputSchemasV1, type ActionExecutorDeps } from '@happier-dev/protocol';
+import type { RegisteredSessionStateFieldMutationV1 } from '@/api/session/client/transport/mutations/sessionClientDurableMutationTypes';
+import { createUnavailableActionTransportDeps } from '@/testkit/actionTransportDeps';
 import { RpcHandlerManager } from '@/api/rpc/RpcHandlerManager';
 import { createTestMetadata } from '@/testkit/backends/sessionMetadata';
 import { createRoleActionExecutor } from '@/session/actions/roleActions';
@@ -9,6 +16,65 @@ import { resolveCliAgentStartContextV1 } from '@/session/actions/resolveCliAgent
 import { createCliActionDeps } from '@/session/actions/createCliActionDeps';
 
 describe('Session role RPC provenance', () => {
+  it('uses one registered Role writer for a transported UI edit and CLI edit, with an idle-runtime refusal', async () => {
+    let metadata = createTestMetadata();
+    const queued: RegisteredSessionStateFieldMutationV1[] = [];
+    const rpc = new RpcHandlerManager({ scopePrefix: 'child', encryptionMode: 'plain', logger: () => {} });
+    const roleActionExecute = createRoleActionExecutor({ sessionId: 'misbound-child', readSessionMetadata: () => metadata,
+      readSettingsOverrides: () => ({ status: 'ready', overrides: {} }),
+      readRoleSources: createRoleSourceReaderV1({}),
+      stageSessionStateMutation: async mutation => {
+        queued.push(mutation);
+        metadata = applyRegisteredSessionStateFieldMutationToMetadata(metadata, mutation);
+      },
+    });
+    const executor = createActionExecutor({ ...createUnavailableActionTransportDeps(), roleActionExecute });
+    registerActionSpecRpcHandlers({ rpcHandlerManager: rpc, actionIds: ['session.role.set'], actionExecutor: executor });
+    const http = createServer();
+    const server = new Server(http);
+    server.on('connection', socket => socket.on(SOCKET_RPC_EVENTS.CALL, async (payload: unknown, acknowledge) => {
+      // Socket.IO's untyped callback carries the canonical RPC client's wire payload.
+      const request = payload as SocketRpcRequestPayload;
+      // This test Home authenticates a present user at the actual network boundary.
+      acknowledge({ ok: true, result: await rpc.handleRequest({ method: request.method, params: request.params,
+        callerAuthority: 'present_user' }) });
+    }));
+    await new Promise<void>(resolve => http.listen(0, '127.0.0.1', resolve));
+    const address = http.address();
+    if (!address || typeof address === 'string') throw new Error('Session RPC fixture has no listening address');
+    const client = io(`http://127.0.0.1:${address.port}`, { transports: ['websocket'], autoConnect: false });
+    try {
+      await new Promise<void>((resolve, reject) => {
+        client.once('connect', resolve); client.once('connect_error', reject); client.connect();
+      });
+      const input = RoleActionInputSchemasV1['session.role.set'].parse({ sessionId: 'child', roleId: 'builder' });
+      const output = await callSocketRpc({ socket: client, target: { kind: 'session', id: 'child' },
+        method: 'session.role.set', params: input, content: { mode: 'plain' } });
+      expect(RoleActionOutputSchemasV1['session.role.set'].parse(output)).toEqual({ updated: true });
+      expect(readSessionRoleIdV1(metadata)).toBe('builder');
+      expect(queued).toMatchObject([{ fieldId: 'intent.role', deliveryClass: 'durable_required',
+        op: { kind: 'set', value: 'builder' } }]);
+      const cli = createActionExecutor({ ...createUnavailableActionTransportDeps(),
+        roleActionExecute: createRoleActionExecutor({ sessionId: 'cli-global', forwardSessionRoleAction: async request =>
+          callSocketRpc({ socket: client, target: { kind: 'session', id: 'child' }, method: request.actionId,
+            params: request.input, content: { mode: 'plain' } }) }),
+      });
+      expect(await cli.execute('session.role.set', input, { surface: 'cli', authority: 'present_user' }))
+        .toEqual({ ok: true, result: { updated: true } });
+      expect(queued).toHaveLength(2);
+      expect(queued[1]).toMatchObject({ fieldId: queued[0].fieldId, deliveryClass: queued[0].deliveryClass, op: queued[0].op });
+      // A tightening Role on an idle/unbound runtime must refuse without adding a mutation.
+      expect(await cli.execute('session.role.set', { sessionId: 'child', roleId: 'orchestrator' },
+        { surface: 'cli', authority: 'present_user' })).toMatchObject({ ok: false, errorCode: 'role_policy_unenforceable' });
+      expect(queued).toHaveLength(2);
+      expect(readSessionRoleIdV1(metadata)).toBe('builder');
+    } finally {
+      client.disconnect();
+      await rpc.waitForIdle();
+      await server.close();
+    }
+  });
+
   it('admits the original Session caller and refuses the next edit after subtree membership changes', async () => {
     let metadata = createTestMetadata();
     let inSubtree = true;

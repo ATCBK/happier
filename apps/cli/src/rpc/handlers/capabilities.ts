@@ -1203,6 +1203,11 @@ function createPluginMarketplaceCapability(
 }
 
 export async function createCliCapabilitiesService(dependencies: Readonly<{
+    observeCliSnapshot?: (input: Readonly<{
+        snapshot: NonNullable<Awaited<ReturnType<typeof buildDetectContext>>['cliSnapshot']>;
+        observedAgentIds: readonly string[];
+        checkedAt: number;
+    }>) => Promise<void>;
     createApiClient?: CliProbeDependencies['createApiClient'];
     readPluginCatalog?: () => Promise<readonly PluginCatalogEntry[]>;
     getAgentCatalogObservation?: () => Readonly<{
@@ -1284,7 +1289,18 @@ export async function createCliCapabilitiesService(dependencies: Readonly<{
             installablesRegistry,
             resolvedContributionRegistry,
         ),
-        buildContext: buildDetectContext,
+        buildContext: async (requests) => {
+            const context = await buildDetectContext(requests);
+            if (context.cliSnapshot && dependencies.observeCliSnapshot) {
+                const observedAgentIds = requests.some(request => request.id === 'tool.executionRuns')
+                    ? Object.keys(context.cliSnapshot.clis)
+                    : requests.filter(request => request.id.startsWith('cli.')).map(request => request.id.slice(4));
+                if (observedAgentIds.length) await dependencies.observeCliSnapshot({
+                    snapshot: context.cliSnapshot, observedAgentIds, checkedAt: Date.now(),
+                }).catch(error => logger.warn('[CAPABILITIES] Failed to publish Machine Agent install facts', error));
+            }
+            return context;
+        },
     });
 }
 
