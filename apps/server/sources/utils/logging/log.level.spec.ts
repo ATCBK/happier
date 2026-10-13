@@ -1,41 +1,57 @@
 import { afterEach, describe, expect, it, vi } from 'vitest';
+import { symbols, type DestinationStream } from 'pino';
 
 import { log, logger } from './log';
 
 describe('log', () => {
+  const originalLevel = logger.level;
+
   afterEach(() => {
     vi.restoreAllMocks();
+    logger.level = originalLevel;
   });
 
-  it('emits at the level named by the entry so error-level entries survive a warn threshold', () => {
-    const error = vi.spyOn(logger, 'error').mockImplementation(() => undefined);
-    const warn = vi.spyOn(logger, 'warn').mockImplementation(() => undefined);
-    const info = vi.spyOn(logger, 'info').mockImplementation(() => undefined);
+  function captureOutput() {
+    const records: unknown[] = [];
+    // Replace only the output destination; pino's real level filtering and serialization run.
+    const stream = (logger as unknown as { [symbols.streamSym]: DestinationStream })[symbols.streamSym];
+    vi.spyOn(stream, 'write').mockImplementation((message) => {
+      records.push(JSON.parse(message));
+    });
+    return records;
+  }
+
+  it('emits errors and warnings only when their thresholds admit them', () => {
+    logger.level = 'error';
+    const records = captureOutput();
 
     log(
       { module: 'fastify-error', level: 'error', statusCode: 500 },
       'Unhandled error',
     );
+    log({ module: 'socket', level: 'warn' }, 'Filtered warning');
+    logger.level = 'warn';
     log({ module: 'socket', level: 'warn' }, 'Slow handler');
+    log({ module: 'api' }, 'Filtered info');
 
-    expect(error).toHaveBeenCalledWith(
-      { module: 'fastify-error', level: 'error', statusCode: 500 },
-      'Unhandled error',
-    );
-    expect(warn).toHaveBeenCalledWith(
-      { module: 'socket', level: 'warn' },
-      'Slow handler',
-    );
-    expect(info).not.toHaveBeenCalled();
+    expect(records).toMatchObject([
+      { module: 'fastify-error', statusCode: 500, msg: 'Unhandled error' },
+      { module: 'socket', msg: 'Slow handler' },
+    ]);
   });
 
   it('keeps info for entries without a recognised level', () => {
-    const info = vi.spyOn(logger, 'info').mockImplementation(() => undefined);
+    logger.level = 'info';
+    const records = captureOutput();
 
     log({ module: 'api' }, 'Request served');
     log({ module: 'api', level: 'loud' }, 'Unknown level');
     log('plain message');
 
-    expect(info).toHaveBeenCalledTimes(3);
+    expect(records).toMatchObject([
+      { module: 'api', msg: 'Request served' },
+      { module: 'api', msg: 'Unknown level' },
+      { msg: 'plain message' },
+    ]);
   });
 });
