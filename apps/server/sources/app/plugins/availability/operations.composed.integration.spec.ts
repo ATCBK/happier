@@ -1,12 +1,15 @@
 import { afterAll, afterEach, beforeAll, describe, expect, it, vi } from "vitest";
 import { join } from "node:path";
 import axios from "axios";
+import { projectPluginAccountCollectionDeclaration } from "@happier-dev/plugin-sdk/host/registration";
+import { CORPUS_ACCOUNT_COLLECTIONS } from "../../../../../../packages/plugins/triage/src/corpus/collections/definitions.js";
 
 import {
     ARTIFACT_PLAIN_DATA_KEY_MARKER,
     encodePlainArtifactStoredContent,
     PluginAvailabilityActionHttpPathsV1,
     PluginAvailabilityIntentsListActionOutputV1Schema,
+    PluginAvailabilityCollectionWritersClaimActionOutputV1Schema,
     PluginAccountCollectionContributionV1Schema,
     PluginAvailabilityReleaseReadActionOutputV1Schema,
     PluginAvailabilityMaterializationsReportActionInputV1Schema,
@@ -1528,6 +1531,71 @@ describe("plugin Availability operations", () => {
                 input: { pluginId: PLUGIN_ID },
             })).resolves.toMatchObject({
                 intent: { writableCollections: [claimedRef(CLAIMED_TASKS_V2)], revision: "1" },
+            });
+        });
+
+        it("claims the real Triage declaration after its embedded Connected Account schema widens", async () => {
+            await seedAccountAndMachine();
+            const pluginId = "happier.triage";
+            const current = CORPUS_ACCOUNT_COLLECTIONS.map(definition =>
+                PluginAccountCollectionContributionV1Schema.parse(projectPluginAccountCollectionDeclaration(definition.id, definition)));
+            // PP's retained declaration differs only at the embedded service
+            // schema. Rebuild that projection from the real schema owners and
+            // pin its observed digest, rather than copying a Collection fixture.
+            const retainOldService = (value: unknown, path = ""): unknown => {
+                if (path === "properties.configured.properties.binding.anyOf.0.properties.account.properties.service") {
+                    if (value !== null && typeof value === "object" && "anyOf" in value && Array.isArray(value.anyOf)) {
+                        return value.anyOf[0];
+                    }
+                    throw new Error("Expected the canonical Connected Account service union");
+                }
+                const childPath = (key: string) => path ? `${path}.${key}` : key;
+                if (Array.isArray(value)) return value.map((child, index) => retainOldService(child, childPath(String(index))));
+                if (value !== null && typeof value === "object") {
+                    return Object.fromEntries(Object.entries(value).map(([key, child]) => [key, retainOldService(child, childPath(key))]));
+                }
+                return value;
+            };
+            const incumbent = current.map(collection => collection.id === "source-instances"
+                ? PluginAccountCollectionContributionV1Schema.parse({
+                    ...collection, schemaVersion: 2, readableSchemaVersions: [1, 2],
+                    migrations: collection.migrations?.filter(migration => migration.toSchemaVersion <= 2),
+                    schema: retainOldService(collection.schema),
+                })
+                : collection);
+            const contracts = normalizePluginAccountCollectionContractsV1({ pluginId, contributions: incumbent });
+            expect(Object.fromEntries(contracts.map(contract => [contract.collectionId, contract.contractDigest]))).toEqual({
+                "source-instances": "fnxQ5XZRR8KaIcNU0L-qljTn1OP9KGakoTJhglng13Q",
+                "session-links": "7OxVGO5f3OdmHC6exY-u1nCQY30dPe98CVIogKgcgWI",
+                "user-marks": "jiFKXbm8Du4B_p0TMOwv6kehlyNZN0PyZwuwzF1jVmM",
+            });
+            const manifest = (accountCollections: typeof current) => ({
+                ...claimManifest(accountCollections), id: pluginId,
+            });
+            await withAuthenticatedTestApp(registerPluginAvailabilityRoutes, async app => {
+                const claim = (accountCollections: typeof current) => app.inject({
+                    method: "POST",
+                    url: PluginAvailabilityActionHttpPathsV1["account.plugins.availability.collectionWriters.claim"],
+                    headers: { "x-test-user-id": ACCOUNT_ID },
+                    payload: { manifest: manifest(accountCollections) },
+                });
+                const original = await claim(incumbent);
+                expect(original.statusCode, original.body).toBe(200);
+                const unbumped = current.map(collection => collection.id === "source-instances"
+                    ? { ...collection, schemaVersion: 2, readableSchemaVersions: [1, 2], migrations: incumbent[0]!.migrations }
+                    : collection);
+                const refusal = await claim(unbumped);
+                expect(refusal.statusCode, refusal.body).toBe(409);
+                expect(refusal.json()).toMatchObject({ error: "plugin_collection_contract_conflict" });
+                const published = await claim(current);
+                expect(published.statusCode, published.body).toBe(200);
+                const parsed = PluginAvailabilityCollectionWritersClaimActionOutputV1Schema.parse(published.json());
+                expect(parsed.intent?.writableCollections.map(ref => [ref.collectionId, ref.schemaVersion])).toEqual([
+                    ["session-links", 2], ["source-instances", 3], ["user-marks", 2],
+                ]);
+                const repeated = await claim(current);
+                expect(repeated.statusCode, repeated.body).toBe(200);
+                expect(PluginAvailabilityCollectionWritersClaimActionOutputV1Schema.parse(repeated.json()).intent).toEqual(parsed.intent);
             });
         });
 
