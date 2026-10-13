@@ -2,10 +2,12 @@ import { describe, expect, it } from 'vitest';
 
 import type { AppPaneScopeLayoutState } from '@/components/appShell/panes/hooks/useAppPaneScopeLayout';
 import { DEFAULT_MAIN_MIN_PX } from '@/components/ui/panels/paneBreakpoints';
+import { SESSION_BOARD_MIN_ITEM_WIDTH_PX } from '@/components/sessions/board/sessionBoardGridLayout';
 
 import type { SessionCompanionPreferenceV1 } from '../state/sessionCompanionPreference';
 import {
     resolveSessionCompanionPhysicalSide,
+    resolveSessionCompanionOuterRailWidthPx,
     resolveSessionCompanionPlacement,
     SESSION_COMPANION_RAIL_GUTTER_PX,
     type SessionCompanionPlacementInput,
@@ -49,6 +51,15 @@ function placement(overrides: Partial<SessionCompanionPlacementInput> = {}) {
 }
 
 describe('resolveSessionCompanionPlacement', () => {
+    it('keeps the readable rail floor after a smaller card is measured and still requires enough Chat space', () => {
+        const widthPx = resolveSessionCompanionOuterRailWidthPx(SESSION_BOARD_MIN_ITEM_WIDTH_PX);
+        expect(placement({ cardBounds: { widthPx: 110, heightPx: 168 } }))
+            .toEqual({ kind: 'reserved_rail', edge: 'trailing', widthPx });
+        expect(placement({ cardBounds: { widthPx: 110, heightPx: 168 },
+            paneLayout: paneLayout({ mainRegionWidthPx: DEFAULT_MAIN_MIN_PX + SESSION_COMPANION_RAIL_GUTTER_PX + widthPx - 1 }),
+        })).toEqual({ kind: 'collapsed_control', edge: 'trailing', reason: 'geometry' });
+    });
+
     it('reserves a rail when the main region fits the card plus the canonical Chat minimum', () => {
         expect(placement()).toEqual({ kind: 'reserved_rail', edge: 'trailing', widthPx: 280 });
     });

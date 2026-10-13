@@ -271,6 +271,14 @@ describe('SessionCompanionHost (mounted, desktop/tablet)', () => {
         expect(flattenTestStyle(
             renderer.findByTestId('session-companion-reserved-rail')?.props.style,
         ).width).toBe(264);
+        // A compact row can report a narrower body after Add changes the rail.
+        // Exercise Content → measurement store → placement → Host again.
+        for (const width of [136, 86, 240]) {
+            React.act(() => renderer.findByTestId('session-companion-content-item-builtin:session_summary')?.props.onLayout?.({
+                nativeEvent: { layout: { x: 0, y: 0, width, height: 168 } },
+            }));
+            expect(flattenTestStyle(renderer.findByTestId('session-companion-reserved-rail')?.props.style).width).toBe(264);
+        }
         expect(openFullSurface).not.toHaveBeenCalled();
     });
 

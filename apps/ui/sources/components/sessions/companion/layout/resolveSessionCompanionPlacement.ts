@@ -132,15 +132,15 @@ export function resolveSessionCompanionPlacement(
     if (!isFinitePositive(input.fontScale)) return collapsedControl(preference.edge, 'geometry');
 
     const cardBounds = input.cardBounds;
+    const readableOuterRailWidthPx = resolveSessionCompanionOuterRailWidthPx(
+        SESSION_BOARD_MIN_ITEM_WIDTH_PX,
+    );
     if (!cardBounds) {
         // Cold measurement must use a real constraint rather than a persisted or
         // guessed card size. Companion embeds the same card shells as Board, so
         // Board's canonical readable-item floor is the narrowest truthful rail
         // candidate. If even that cannot coexist with Chat, there is nothing to
         // measure: the existing full destination remains the truthful fallback.
-        const readableOuterRailWidthPx = resolveSessionCompanionOuterRailWidthPx(
-            SESSION_BOARD_MIN_ITEM_WIDTH_PX,
-        );
         if (budgetPx < readableOuterRailWidthPx) {
             return collapsedControl(preference.edge, 'geometry');
         }
@@ -156,13 +156,16 @@ export function resolveSessionCompanionPlacement(
         || !isFinitePositive(cardBounds.heightPx)
     ) return collapsedControl(preference.edge, 'geometry');
     if (usableHeightPx < cardBounds.heightPx) return collapsedControl(preference.edge, 'geometry');
-    if (budgetPx < cardBounds.widthPx) return collapsedControl(preference.edge, 'geometry');
+    // A newly added compact row may measure narrower than the readable card
+    // constraint. That measurement must not ratchet the containing rail down.
+    const widthPx = Math.max(readableOuterRailWidthPx, cardBounds.widthPx);
+    if (budgetPx < widthPx) return collapsedControl(preference.edge, 'geometry');
 
     if (preference.collapsed) return collapsedControl(preference.edge, 'preference');
 
     return Object.freeze({
         kind: 'reserved_rail',
         edge: preference.edge,
-        widthPx: cardBounds.widthPx,
+        widthPx,
     });
 }
