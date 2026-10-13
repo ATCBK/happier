@@ -186,6 +186,8 @@ export async function listReservedAccountScopedKvRowsInTx<TEnvelope>(
         physicalPrefix: string;
         /** Singleton reserved keys must not admit ordinary keys sharing their prefix. */
         physicalKey?: string;
+        /** A finite domain census admits only keys known to its current reader. */
+        physicalKeys?: readonly string[];
         domain: ReservedAccountScopedKvRowDomain<TEnvelope>;
         cursor?: string;
         limit?: number;
@@ -201,6 +203,10 @@ export async function listReservedAccountScopedKvRowsInTx<TEnvelope>(
     if (input.physicalKey !== undefined && !input.physicalKey.startsWith(input.physicalPrefix)) {
         throw new Error(`${input.domain.label} physical key must belong to the physical prefix`);
     }
+    if (input.physicalKeys !== undefined && (input.physicalKey !== undefined
+        || input.physicalKeys.some(key => !key.startsWith(input.physicalPrefix)))) {
+        throw new Error(`${input.domain.label} physical keys must belong to the prefix without a singleton key`);
+    }
     if (input.cursor !== undefined && !input.cursor.startsWith(input.physicalPrefix)) {
         throw new Error(`${input.domain.label} cursor must belong to the physical prefix`);
     }
@@ -211,6 +217,8 @@ export async function listReservedAccountScopedKvRowsInTx<TEnvelope>(
     if (scope.status !== "ready") return scope;
     const keyScope = input.physicalKey !== undefined
         ? { equals: input.physicalKey }
+        : input.physicalKeys !== undefined
+        ? { in: [...input.physicalKeys] }
         : { startsWith: input.physicalPrefix };
     const storedRows = await tx.userKVStore.findMany({
         where: { accountId: input.accountId, key: { ...keyScope,
