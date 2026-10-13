@@ -8,6 +8,7 @@
     "generate:agents-strip": "node --experimental-strip-types scripts/generateSupportedAgentsStrip.mjs",
     "dev": "node ./apps/stack/scripts/repo_local.mjs dev",
     "dev-targets": "node ./apps/stack/scripts/repo_local.mjs dev-targets",
+    "dev-vm": "node ./apps/stack/scripts/repo_local.mjs dev-vm",
     "stop": "node ./apps/stack/scripts/repo_local.mjs stop",
     "start": "node ./apps/stack/scripts/repo_local.mjs start",
     "build": "node ./apps/stack/scripts/repo_local.mjs build",
