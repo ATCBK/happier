@@ -78,6 +78,7 @@ export type SavedSecretSharingActionInputById = {
                 providerConnections: number | 'absent';
                 connectedConfigurations: number | 'absent';
                 connectedPurposes: number | 'absent';
+                registrySources?: number | 'absent' | undefined;
             } | undefined;
             remoteHosts?: {
                 revision: number | 'absent';
@@ -96,6 +97,7 @@ export type SavedSecretSharingActionInputById = {
                 providerConnections?: number | 'absent' | undefined;
                 connectedConfigurations?: number | 'absent' | undefined;
                 connectedPurposes?: number | 'absent' | undefined;
+                registrySources?: number | 'absent' | undefined;
             };
             remoteHosts?: {
                 revision: number | 'absent';
@@ -215,8 +217,10 @@ export type SavedSecretSharingActionInputById = {
                         placement?: 'system_append' | 'composer_insert' | 'skill_instructions' | 'provider_asset' | undefined;
                         maxChars?: number | undefined;
                         required?: boolean | undefined;
+                        skillMigrationV1?: true | undefined;
                     }[];
                     secretBindings: Record<string, string | null>;
+                    skillSeeds?: string[] | undefined;
                 };
             } | {
                 t: 'encrypted';
@@ -272,6 +276,16 @@ export type SavedSecretSharingActionInputById = {
                                 t: 'savedSecret';
                                 secretId: string;
                             } | {
+                                t: 'template';
+                                template: string;
+                                vars: Record<string, {
+                                    t: 'literal';
+                                    v: string;
+                                } | {
+                                    t: 'savedSecret';
+                                    secretId: string;
+                                }>;
+                            } | {
                                 t: 'sessionAttested';
                                 field: 'externalPrincipalId' | 'sourceMessageId' | 'sessionId';
                             }>;
@@ -282,6 +296,12 @@ export type SavedSecretSharingActionInputById = {
                             stdio?: {
                                 command: string;
                                 args: string[];
+                                cwd?: {
+                                    t: 'session';
+                                } | {
+                                    t: 'path';
+                                    path: string;
+                                } | undefined;
                             } | undefined;
                             remote?: {
                                 url: string;
@@ -292,9 +312,30 @@ export type SavedSecretSharingActionInputById = {
                                     t: 'savedSecret';
                                     secretId: string;
                                 } | {
+                                    t: 'template';
+                                    template: string;
+                                    vars: Record<string, {
+                                        t: 'literal';
+                                        v: string;
+                                    } | {
+                                        t: 'savedSecret';
+                                        secretId: string;
+                                    }>;
+                                } | {
                                     t: 'sessionAttested';
                                     field: 'externalPrincipalId' | 'sourceMessageId' | 'sessionId';
                                 }>;
+                                urlTemplate?: {
+                                    t: 'template';
+                                    template: string;
+                                    vars: Record<string, {
+                                        t: 'literal';
+                                        v: string;
+                                    } | {
+                                        t: 'savedSecret';
+                                        secretId: string;
+                                    }>;
+                                } | undefined;
                                 auth?: {
                                     kind: 'oauth';
                                 } | undefined;
@@ -311,6 +352,10 @@ export type SavedSecretSharingActionInputById = {
                                 stdio?: {
                                     command?: string | undefined;
                                     args?: string[] | undefined;
+                                    cwd?: {
+                                        t: 'path';
+                                        path: string;
+                                    } | undefined;
                                 } | undefined;
                                 remote?: {
                                     url?: string | undefined;
@@ -320,6 +365,16 @@ export type SavedSecretSharingActionInputById = {
                                     } | {
                                         t: 'savedSecret';
                                         secretId: string;
+                                    } | {
+                                        t: 'template';
+                                        template: string;
+                                        vars: Record<string, {
+                                            t: 'literal';
+                                            v: string;
+                                        } | {
+                                            t: 'savedSecret';
+                                            secretId: string;
+                                        }>;
                                     } | {
                                         t: 'sessionAttested';
                                         field: 'externalPrincipalId' | 'sourceMessageId' | 'sessionId';
@@ -332,10 +387,83 @@ export type SavedSecretSharingActionInputById = {
                                     t: 'savedSecret';
                                     secretId: string;
                                 } | {
+                                    t: 'template';
+                                    template: string;
+                                    vars: Record<string, {
+                                        t: 'literal';
+                                        v: string;
+                                    } | {
+                                        t: 'savedSecret';
+                                        secretId: string;
+                                    }>;
+                                } | {
                                     t: 'sessionAttested';
                                     field: 'externalPrincipalId' | 'sourceMessageId' | 'sessionId';
                                 } | null> | undefined;
                             }[] | undefined;
+                            tools?: {
+                                default: 'ask' | 'allow_read_only' | 'allow_all';
+                                overrides: Readonly<Record<string, 'ask' | 'off' | 'allow'>>;
+                            } | undefined;
+                            toolsSnapshot?: {
+                                checkedAt: number;
+                                machineId: string;
+                                tools: {
+                                    name: string;
+                                    tokens: number;
+                                    title?: string | undefined;
+                                    description?: string | undefined;
+                                    annotations?: {
+                                        readOnlyHint?: boolean | undefined;
+                                        destructiveHint?: boolean | undefined;
+                                        idempotentHint?: boolean | undefined;
+                                        openWorldHint?: boolean | undefined;
+                                    } | undefined;
+                                }[];
+                                protocolVersion?: string | undefined;
+                                serverInfo?: {
+                                    name: string;
+                                    version?: string | undefined;
+                                } | undefined;
+                                instructions?: string | undefined;
+                            } | undefined;
+                            origin?: {
+                                kind: 'registry';
+                                provenance: {
+                                    sourceId: string;
+                                    format: 'skills-sh' | 'git' | 'claude-marketplace' | 'mcp-registry' | 'acp-registry' | 'happier-catalog' | 'happier-npm';
+                                    sourceUrl: string;
+                                    itemId: string;
+                                    ref: {
+                                        kind: 'gitTree';
+                                        repo: string;
+                                        path: string;
+                                        commit: string;
+                                        treeSha: string;
+                                    } | {
+                                        kind: 'version';
+                                        version: string;
+                                    };
+                                    importedAt: number;
+                                };
+                                upstream?: {
+                                    state: 'current' | 'update_available' | 'removed_from_source';
+                                    latest?: {
+                                        kind: 'gitTree';
+                                        repo: string;
+                                        path: string;
+                                        commit: string;
+                                        treeSha: string;
+                                    } | {
+                                        kind: 'version';
+                                        version: string;
+                                    } | undefined;
+                                } | undefined;
+                            } | {
+                                kind: 'machine';
+                                machineId: string;
+                                agentId: string;
+                            } | undefined;
                         }[];
                         bindings: {
                             id: string;
@@ -358,6 +486,34 @@ export type SavedSecretSharingActionInputById = {
                             serverId: string;
                             agentId?: string | undefined;
                         }[];
+                        pluginServers?: Record<string, {
+                            tools?: {
+                                default: 'ask' | 'allow_read_only' | 'allow_all';
+                                overrides: Readonly<Record<string, 'ask' | 'off' | 'allow'>>;
+                            } | undefined;
+                            toolsSnapshot?: {
+                                checkedAt: number;
+                                machineId: string;
+                                tools: {
+                                    name: string;
+                                    tokens: number;
+                                    title?: string | undefined;
+                                    description?: string | undefined;
+                                    annotations?: {
+                                        readOnlyHint?: boolean | undefined;
+                                        destructiveHint?: boolean | undefined;
+                                        idempotentHint?: boolean | undefined;
+                                        openWorldHint?: boolean | undefined;
+                                    } | undefined;
+                                }[];
+                                protocolVersion?: string | undefined;
+                                serverInfo?: {
+                                    name: string;
+                                    version?: string | undefined;
+                                } | undefined;
+                                instructions?: string | undefined;
+                            } | undefined;
+                        }> | undefined;
                     };
                 } | {
                     t: 'encrypted';
@@ -455,6 +611,44 @@ export type SavedSecretSharingActionInputById = {
                             createdAt: number;
                             updatedAt: number;
                             description?: string | undefined;
+                            origin?: {
+                                kind: 'registry';
+                                provenance: {
+                                    sourceId: string;
+                                    format: 'skills-sh' | 'git' | 'claude-marketplace' | 'mcp-registry' | 'acp-registry' | 'happier-catalog' | 'happier-npm';
+                                    sourceUrl: string;
+                                    itemId: string;
+                                    ref: {
+                                        kind: 'gitTree';
+                                        repo: string;
+                                        path: string;
+                                        commit: string;
+                                        treeSha: string;
+                                    } | {
+                                        kind: 'version';
+                                        version: string;
+                                    };
+                                    importedAt: number;
+                                };
+                                iconUrl?: string | undefined;
+                                publisher?: string | undefined;
+                                license?: string | undefined;
+                                repository?: string | undefined;
+                                website?: string | undefined;
+                                upstream?: {
+                                    state: 'current' | 'update_available' | 'removed_from_source';
+                                    latest?: {
+                                        kind: 'gitTree';
+                                        repo: string;
+                                        path: string;
+                                        commit: string;
+                                        treeSha: string;
+                                    } | {
+                                        kind: 'version';
+                                        version: string;
+                                    } | undefined;
+                                } | undefined;
+                            } | undefined;
                             runtime?: {
                                 stderrRules: {
                                     authenticationErrorDetail?: string | undefined;
@@ -501,6 +695,16 @@ export type SavedSecretSharingActionInputById = {
                             } | {
                                 t: 'savedSecret';
                                 secretId: string;
+                            } | {
+                                t: 'template';
+                                template: string;
+                                vars: Record<string, {
+                                    t: 'literal';
+                                    v: string;
+                                } | {
+                                    t: 'savedSecret';
+                                    secretId: string;
+                                }>;
                             } | {
                                 t: 'sessionAttested';
                                 field: 'externalPrincipalId' | 'sourceMessageId' | 'sessionId';
@@ -928,6 +1132,206 @@ export type SavedSecretSharingActionInputById = {
                 }[] | undefined;
                 settingsMutation?: undefined;
             } | undefined;
+            registrySources?: {
+                expectedRevision: number | 'absent';
+                content: {
+                    t: 'plain';
+                    v: {
+                        key: 'coding';
+                        value: {
+                            v: 1;
+                            scope: {
+                                kind: 'coding' | 'voice';
+                            };
+                            entries: {
+                                id: string;
+                                ref: {
+                                    kind: 'doc' | 'bundle';
+                                    artifactId: string;
+                                    serverId?: string | undefined;
+                                };
+                                enabled?: boolean | undefined;
+                                placement?: 'system_append' | 'composer_insert' | 'skill_instructions' | 'provider_asset' | undefined;
+                                maxChars?: number | undefined;
+                                required?: boolean | undefined;
+                                skillMigrationV1?: true | undefined;
+                            }[];
+                        };
+                    } | {
+                        key: 'voice';
+                        value: {
+                            v: 1;
+                            scope: {
+                                kind: 'coding' | 'voice';
+                            };
+                            entries: {
+                                id: string;
+                                ref: {
+                                    kind: 'doc' | 'bundle';
+                                    artifactId: string;
+                                    serverId?: string | undefined;
+                                };
+                                enabled?: boolean | undefined;
+                                placement?: 'system_append' | 'composer_insert' | 'skill_instructions' | 'provider_asset' | undefined;
+                                maxChars?: number | undefined;
+                                required?: boolean | undefined;
+                                skillMigrationV1?: true | undefined;
+                            }[];
+                        };
+                    } | {
+                        key: 'folders';
+                        value: {
+                            v: 1;
+                            folders: {
+                                id: string;
+                                name: string;
+                                parentId?: string | null | undefined;
+                            }[];
+                            artifactHeadersById?: Record<string, {
+                                folderId?: string | null | undefined;
+                                tags?: string[] | undefined;
+                            }> | undefined;
+                        };
+                    } | {
+                        key: 'invocations';
+                        value: {
+                            v: 1;
+                            entries: {
+                                id: string;
+                                token: string;
+                                title: string;
+                                target: {
+                                    artifactId: string;
+                                    kind: 'doc';
+                                    serverId?: string | undefined;
+                                };
+                                behavior?: 'insert' | 'insert_on_send' | 'insert_and_send' | undefined;
+                                allowArgs?: boolean | undefined;
+                                availableIn?: 'global' | 'session_only' | undefined;
+                            }[];
+                        };
+                    } | {
+                        key: 'external-links';
+                        value: {
+                            v: 1;
+                            links: {
+                                id: string;
+                                artifactId: string;
+                                assetTypeId: string;
+                                scope: 'project' | 'user';
+                                machineId: string;
+                                externalRef: Record<string, unknown>;
+                                serverIdentityId?: string | undefined;
+                                workspacePath?: string | null | undefined;
+                                syncMode?: unknown;
+                                baseDigest?: string | null | undefined;
+                                lastLibraryDigest?: string | null | undefined;
+                                lastExternalDigest?: string | null | undefined;
+                                lastSyncAtMs?: number | undefined;
+                            }[];
+                        };
+                    } | {
+                        key: 'registry-sources';
+                        value: {
+                            v: 2;
+                            sources: {
+                                id: string;
+                                title: string;
+                                format: 'skills-sh' | 'git' | 'claude-marketplace' | 'mcp-registry' | 'acp-registry' | 'happier-catalog' | 'happier-npm';
+                                kinds: ('agent' | 'skill' | 'mcpServer' | 'plugin')[];
+                                url: string;
+                                enabled: boolean;
+                                addedAt: number;
+                                path?: string | undefined;
+                                ref?: string | undefined;
+                                token?: {
+                                    secretRef: string;
+                                    header?: {
+                                        name: string;
+                                        scheme?: 'token' | 'Bearer' | undefined;
+                                    } | undefined;
+                                } | undefined;
+                                npmRegistryProfileId?: string | undefined;
+                            }[];
+                            disabledSourceIds: string[];
+                        };
+                    } | {
+                        key: 'contexts';
+                        value: {
+                            v: 1;
+                            selectionsByKey: Record<string, {
+                                machineId?: string | null | undefined;
+                                workspacePath?: string | null | undefined;
+                            }>;
+                        };
+                    } | {
+                        key: 'role-overrides';
+                        value: {
+                            overrides: Record<string, {
+                                roleId: string;
+                                engine?: {
+                                    agentTargetKey: string;
+                                    modelId?: string | undefined;
+                                    effort?: string | undefined;
+                                } | undefined;
+                                runsAs?: {
+                                    kind: 'session';
+                                } | {
+                                    kind: 'background_run';
+                                    intent: 'plan' | 'agent' | 'review' | 'delegate' | 'task' | 'voice_agent' | 'memory_hints' | 'scm_commit_message' | 'scm_diff_summary';
+                                } | undefined;
+                                profileId?: string | undefined;
+                                workspaceWrites?: 'allow' | 'deny' | undefined;
+                                secondOpinion?: 'off' | 'encouraged' | undefined;
+                                instructionsOverride?: string | undefined;
+                            }>;
+                            v: 1;
+                        };
+                    } | {
+                        key: 'skill-rules';
+                        value: {
+                            v: 1;
+                            rules: {
+                                id: string;
+                                target: {
+                                    t: 'allMachines';
+                                } | {
+                                    t: 'machine';
+                                    machineId: string;
+                                } | {
+                                    t: 'project';
+                                    projectKey: string;
+                                } | {
+                                    t: 'workspace';
+                                    machineId: string;
+                                    workspaceRoot: string;
+                                };
+                                enabled: boolean;
+                                createdAt: number;
+                                updatedAt: number;
+                                skillId: string;
+                                agentId?: string | undefined;
+                            }[];
+                            consumedLegacyEntryIds?: string[] | undefined;
+                        };
+                    } | {
+                        key: 'skill-usage';
+                        value: {
+                            v: 1;
+                            lastUsedAt: Record<string, number>;
+                        };
+                    };
+                } | {
+                    t: 'encrypted';
+                    c: string;
+                } | null;
+                sourceSettingsVersion?: number | undefined;
+                referencedSavedSecretIds?: string[] | undefined;
+                savedSecretRevisions?: {
+                    resourceId: string;
+                    expectedRevision: number;
+                }[] | undefined;
+            } | undefined;
         } | undefined;
         additionalSavedSecretResources?: {
             resourceId: string;
@@ -1091,6 +1495,7 @@ export type SavedSecretSharingActionInputById = {
                 providerConnections: number | 'absent';
                 connectedConfigurations: number | 'absent';
                 connectedPurposes: number | 'absent';
+                registrySources?: number | 'absent' | undefined;
             } | undefined;
             remoteHosts?: {
                 revision: number | 'absent';
@@ -1236,6 +1641,7 @@ export type SavedSecretSharingActionResultById = {
             providerConnections?: number | 'absent' | undefined;
             connectedConfigurations?: number | 'absent' | undefined;
             connectedPurposes?: number | 'absent' | undefined;
+            registrySources?: number | 'absent' | undefined;
         } | undefined;
     };
     readonly "secrets.shared.grants.set": {

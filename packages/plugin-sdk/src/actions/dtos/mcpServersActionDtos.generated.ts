@@ -20,6 +20,16 @@ export type McpServersActionInputById = {
                 t: 'savedSecret';
                 secretId: string;
             } | {
+                t: 'template';
+                template: string;
+                vars: Record<string, {
+                    t: 'literal';
+                    v: string;
+                } | {
+                    t: 'savedSecret';
+                    secretId: string;
+                }>;
+            } | {
                 t: 'sessionAttested';
                 field: 'externalPrincipalId' | 'sourceMessageId' | 'sessionId';
             }>;
@@ -30,6 +40,12 @@ export type McpServersActionInputById = {
             stdio?: {
                 command: string;
                 args: string[];
+                cwd?: {
+                    t: 'session';
+                } | {
+                    t: 'path';
+                    path: string;
+                } | undefined;
             } | undefined;
             remote?: {
                 url: string;
@@ -40,9 +56,30 @@ export type McpServersActionInputById = {
                     t: 'savedSecret';
                     secretId: string;
                 } | {
+                    t: 'template';
+                    template: string;
+                    vars: Record<string, {
+                        t: 'literal';
+                        v: string;
+                    } | {
+                        t: 'savedSecret';
+                        secretId: string;
+                    }>;
+                } | {
                     t: 'sessionAttested';
                     field: 'externalPrincipalId' | 'sourceMessageId' | 'sessionId';
                 }>;
+                urlTemplate?: {
+                    t: 'template';
+                    template: string;
+                    vars: Record<string, {
+                        t: 'literal';
+                        v: string;
+                    } | {
+                        t: 'savedSecret';
+                        secretId: string;
+                    }>;
+                } | undefined;
                 auth?: {
                     kind: 'oauth';
                 } | undefined;
@@ -59,6 +96,10 @@ export type McpServersActionInputById = {
                 stdio?: {
                     command?: string | undefined;
                     args?: string[] | undefined;
+                    cwd?: {
+                        t: 'path';
+                        path: string;
+                    } | undefined;
                 } | undefined;
                 remote?: {
                     url?: string | undefined;
@@ -68,6 +109,16 @@ export type McpServersActionInputById = {
                     } | {
                         t: 'savedSecret';
                         secretId: string;
+                    } | {
+                        t: 'template';
+                        template: string;
+                        vars: Record<string, {
+                            t: 'literal';
+                            v: string;
+                        } | {
+                            t: 'savedSecret';
+                            secretId: string;
+                        }>;
                     } | {
                         t: 'sessionAttested';
                         field: 'externalPrincipalId' | 'sourceMessageId' | 'sessionId';
@@ -80,10 +131,83 @@ export type McpServersActionInputById = {
                     t: 'savedSecret';
                     secretId: string;
                 } | {
+                    t: 'template';
+                    template: string;
+                    vars: Record<string, {
+                        t: 'literal';
+                        v: string;
+                    } | {
+                        t: 'savedSecret';
+                        secretId: string;
+                    }>;
+                } | {
                     t: 'sessionAttested';
                     field: 'externalPrincipalId' | 'sourceMessageId' | 'sessionId';
                 } | null> | undefined;
             }[] | undefined;
+            tools?: {
+                default: 'ask' | 'allow_read_only' | 'allow_all';
+                overrides: Readonly<Record<string, 'ask' | 'off' | 'allow'>>;
+            } | undefined;
+            toolsSnapshot?: {
+                checkedAt: number;
+                machineId: string;
+                tools: {
+                    name: string;
+                    tokens: number;
+                    title?: string | undefined;
+                    description?: string | undefined;
+                    annotations?: {
+                        readOnlyHint?: boolean | undefined;
+                        destructiveHint?: boolean | undefined;
+                        idempotentHint?: boolean | undefined;
+                        openWorldHint?: boolean | undefined;
+                    } | undefined;
+                }[];
+                protocolVersion?: string | undefined;
+                serverInfo?: {
+                    name: string;
+                    version?: string | undefined;
+                } | undefined;
+                instructions?: string | undefined;
+            } | undefined;
+            origin?: {
+                kind: 'registry';
+                provenance: {
+                    sourceId: string;
+                    format: 'skills-sh' | 'git' | 'claude-marketplace' | 'mcp-registry' | 'acp-registry' | 'happier-catalog' | 'happier-npm';
+                    sourceUrl: string;
+                    itemId: string;
+                    ref: {
+                        kind: 'gitTree';
+                        repo: string;
+                        path: string;
+                        commit: string;
+                        treeSha: string;
+                    } | {
+                        kind: 'version';
+                        version: string;
+                    };
+                    importedAt: number;
+                };
+                upstream?: {
+                    state: 'current' | 'update_available' | 'removed_from_source';
+                    latest?: {
+                        kind: 'gitTree';
+                        repo: string;
+                        path: string;
+                        commit: string;
+                        treeSha: string;
+                    } | {
+                        kind: 'version';
+                        version: string;
+                    } | undefined;
+                } | undefined;
+            } | {
+                kind: 'machine';
+                machineId: string;
+                agentId: string;
+            } | undefined;
         };
         expectedRevision: number | 'absent';
         where?: {
@@ -102,7 +226,7 @@ export type McpServersActionInputById = {
                     machineId: string;
                     workspaceRoot: string;
                 };
-                state: 'on' | 'off' | 'inherit';
+                state: 'off' | 'on' | 'inherit';
                 agentId?: string | undefined;
             };
         } | {
@@ -139,6 +263,16 @@ export type McpServersActionInputById = {
                     t: 'savedSecret';
                     secretId: string;
                 } | {
+                    t: 'template';
+                    template: string;
+                    vars: Record<string, {
+                        t: 'literal';
+                        v: string;
+                    } | {
+                        t: 'savedSecret';
+                        secretId: string;
+                    }>;
+                } | {
                     t: 'sessionAttested';
                     field: 'externalPrincipalId' | 'sourceMessageId' | 'sessionId';
                 }>;
@@ -149,6 +283,12 @@ export type McpServersActionInputById = {
                 stdio?: {
                     command: string;
                     args: string[];
+                    cwd?: {
+                        t: 'session';
+                    } | {
+                        t: 'path';
+                        path: string;
+                    } | undefined;
                 } | undefined;
                 remote?: {
                     url: string;
@@ -159,9 +299,30 @@ export type McpServersActionInputById = {
                         t: 'savedSecret';
                         secretId: string;
                     } | {
+                        t: 'template';
+                        template: string;
+                        vars: Record<string, {
+                            t: 'literal';
+                            v: string;
+                        } | {
+                            t: 'savedSecret';
+                            secretId: string;
+                        }>;
+                    } | {
                         t: 'sessionAttested';
                         field: 'externalPrincipalId' | 'sourceMessageId' | 'sessionId';
                     }>;
+                    urlTemplate?: {
+                        t: 'template';
+                        template: string;
+                        vars: Record<string, {
+                            t: 'literal';
+                            v: string;
+                        } | {
+                            t: 'savedSecret';
+                            secretId: string;
+                        }>;
+                    } | undefined;
                     auth?: {
                         kind: 'oauth';
                     } | undefined;
@@ -178,6 +339,10 @@ export type McpServersActionInputById = {
                     stdio?: {
                         command?: string | undefined;
                         args?: string[] | undefined;
+                        cwd?: {
+                            t: 'path';
+                            path: string;
+                        } | undefined;
                     } | undefined;
                     remote?: {
                         url?: string | undefined;
@@ -187,6 +352,16 @@ export type McpServersActionInputById = {
                         } | {
                             t: 'savedSecret';
                             secretId: string;
+                        } | {
+                            t: 'template';
+                            template: string;
+                            vars: Record<string, {
+                                t: 'literal';
+                                v: string;
+                            } | {
+                                t: 'savedSecret';
+                                secretId: string;
+                            }>;
                         } | {
                             t: 'sessionAttested';
                             field: 'externalPrincipalId' | 'sourceMessageId' | 'sessionId';
@@ -199,10 +374,83 @@ export type McpServersActionInputById = {
                         t: 'savedSecret';
                         secretId: string;
                     } | {
+                        t: 'template';
+                        template: string;
+                        vars: Record<string, {
+                            t: 'literal';
+                            v: string;
+                        } | {
+                            t: 'savedSecret';
+                            secretId: string;
+                        }>;
+                    } | {
                         t: 'sessionAttested';
                         field: 'externalPrincipalId' | 'sourceMessageId' | 'sessionId';
                     } | null> | undefined;
                 }[] | undefined;
+                tools?: {
+                    default: 'ask' | 'allow_read_only' | 'allow_all';
+                    overrides: Readonly<Record<string, 'ask' | 'off' | 'allow'>>;
+                } | undefined;
+                toolsSnapshot?: {
+                    checkedAt: number;
+                    machineId: string;
+                    tools: {
+                        name: string;
+                        tokens: number;
+                        title?: string | undefined;
+                        description?: string | undefined;
+                        annotations?: {
+                            readOnlyHint?: boolean | undefined;
+                            destructiveHint?: boolean | undefined;
+                            idempotentHint?: boolean | undefined;
+                            openWorldHint?: boolean | undefined;
+                        } | undefined;
+                    }[];
+                    protocolVersion?: string | undefined;
+                    serverInfo?: {
+                        name: string;
+                        version?: string | undefined;
+                    } | undefined;
+                    instructions?: string | undefined;
+                } | undefined;
+                origin?: {
+                    kind: 'registry';
+                    provenance: {
+                        sourceId: string;
+                        format: 'skills-sh' | 'git' | 'claude-marketplace' | 'mcp-registry' | 'acp-registry' | 'happier-catalog' | 'happier-npm';
+                        sourceUrl: string;
+                        itemId: string;
+                        ref: {
+                            kind: 'gitTree';
+                            repo: string;
+                            path: string;
+                            commit: string;
+                            treeSha: string;
+                        } | {
+                            kind: 'version';
+                            version: string;
+                        };
+                        importedAt: number;
+                    };
+                    upstream?: {
+                        state: 'current' | 'update_available' | 'removed_from_source';
+                        latest?: {
+                            kind: 'gitTree';
+                            repo: string;
+                            path: string;
+                            commit: string;
+                            treeSha: string;
+                        } | {
+                            kind: 'version';
+                            version: string;
+                        } | undefined;
+                    } | undefined;
+                } | {
+                    kind: 'machine';
+                    machineId: string;
+                    agentId: string;
+                } | undefined;
             };
             where?: {
                 kind: 'write';
@@ -220,7 +468,7 @@ export type McpServersActionInputById = {
                         machineId: string;
                         workspaceRoot: string;
                     };
-                    state: 'on' | 'off' | 'inherit';
+                    state: 'off' | 'on' | 'inherit';
                     agentId?: string | undefined;
                 };
             } | {
@@ -244,6 +492,81 @@ export type McpServersActionInputById = {
                 }[];
             } | undefined;
         }[];
+    } | {
+        expectedRevision: number | 'absent';
+        from: {
+            registry: {
+                sourceId: string;
+                itemId: string;
+                version: string;
+            };
+        };
+        name?: string | undefined;
+        title?: string | undefined;
+        inputs?: Record<string, {
+            t: 'literal';
+            v: string;
+        } | {
+            t: 'savedSecret';
+            secretId: string;
+        } | {
+            t: 'template';
+            template: string;
+            vars: Record<string, {
+                t: 'literal';
+                v: string;
+            } | {
+                t: 'savedSecret';
+                secretId: string;
+            }>;
+        } | {
+            t: 'sessionAttested';
+            field: 'externalPrincipalId' | 'sourceMessageId' | 'sessionId';
+        }> | undefined;
+        remote?: {
+            auth: {
+                kind: 'oauth';
+            };
+        } | undefined;
+        where?: {
+            kind: 'write';
+            write: {
+                place: {
+                    t: 'allMachines';
+                } | {
+                    t: 'machine';
+                    machineId: string;
+                } | {
+                    t: 'project';
+                    projectKey: string;
+                } | {
+                    t: 'workspace';
+                    machineId: string;
+                    workspaceRoot: string;
+                };
+                state: 'off' | 'on' | 'inherit';
+                agentId?: string | undefined;
+            };
+        } | {
+            kind: 'replace';
+            rules: {
+                target: {
+                    t: 'allMachines';
+                } | {
+                    t: 'machine';
+                    machineId: string;
+                } | {
+                    t: 'project';
+                    projectKey: string;
+                } | {
+                    t: 'workspace';
+                    machineId: string;
+                    workspaceRoot: string;
+                };
+                enabled: boolean;
+                agentId?: string | undefined;
+            }[];
+        } | undefined;
     };
     readonly "mcp.servers.update": {
         expectedRevision: number | 'absent';
@@ -258,6 +581,16 @@ export type McpServersActionInputById = {
                 t: 'savedSecret';
                 secretId: string;
             } | {
+                t: 'template';
+                template: string;
+                vars: Record<string, {
+                    t: 'literal';
+                    v: string;
+                } | {
+                    t: 'savedSecret';
+                    secretId: string;
+                }>;
+            } | {
                 t: 'sessionAttested';
                 field: 'externalPrincipalId' | 'sourceMessageId' | 'sessionId';
             }>;
@@ -268,6 +601,12 @@ export type McpServersActionInputById = {
             stdio?: {
                 command: string;
                 args: string[];
+                cwd?: {
+                    t: 'session';
+                } | {
+                    t: 'path';
+                    path: string;
+                } | undefined;
             } | undefined;
             remote?: {
                 url: string;
@@ -278,9 +617,30 @@ export type McpServersActionInputById = {
                     t: 'savedSecret';
                     secretId: string;
                 } | {
+                    t: 'template';
+                    template: string;
+                    vars: Record<string, {
+                        t: 'literal';
+                        v: string;
+                    } | {
+                        t: 'savedSecret';
+                        secretId: string;
+                    }>;
+                } | {
                     t: 'sessionAttested';
                     field: 'externalPrincipalId' | 'sourceMessageId' | 'sessionId';
                 }>;
+                urlTemplate?: {
+                    t: 'template';
+                    template: string;
+                    vars: Record<string, {
+                        t: 'literal';
+                        v: string;
+                    } | {
+                        t: 'savedSecret';
+                        secretId: string;
+                    }>;
+                } | undefined;
                 auth?: {
                     kind: 'oauth';
                 } | undefined;
@@ -297,6 +657,10 @@ export type McpServersActionInputById = {
                 stdio?: {
                     command?: string | undefined;
                     args?: string[] | undefined;
+                    cwd?: {
+                        t: 'path';
+                        path: string;
+                    } | undefined;
                 } | undefined;
                 remote?: {
                     url?: string | undefined;
@@ -306,6 +670,16 @@ export type McpServersActionInputById = {
                     } | {
                         t: 'savedSecret';
                         secretId: string;
+                    } | {
+                        t: 'template';
+                        template: string;
+                        vars: Record<string, {
+                            t: 'literal';
+                            v: string;
+                        } | {
+                            t: 'savedSecret';
+                            secretId: string;
+                        }>;
                     } | {
                         t: 'sessionAttested';
                         field: 'externalPrincipalId' | 'sourceMessageId' | 'sessionId';
@@ -318,10 +692,83 @@ export type McpServersActionInputById = {
                     t: 'savedSecret';
                     secretId: string;
                 } | {
+                    t: 'template';
+                    template: string;
+                    vars: Record<string, {
+                        t: 'literal';
+                        v: string;
+                    } | {
+                        t: 'savedSecret';
+                        secretId: string;
+                    }>;
+                } | {
                     t: 'sessionAttested';
                     field: 'externalPrincipalId' | 'sourceMessageId' | 'sessionId';
                 } | null> | undefined;
             }[] | undefined;
+            tools?: {
+                default: 'ask' | 'allow_read_only' | 'allow_all';
+                overrides: Readonly<Record<string, 'ask' | 'off' | 'allow'>>;
+            } | undefined;
+            toolsSnapshot?: {
+                checkedAt: number;
+                machineId: string;
+                tools: {
+                    name: string;
+                    tokens: number;
+                    title?: string | undefined;
+                    description?: string | undefined;
+                    annotations?: {
+                        readOnlyHint?: boolean | undefined;
+                        destructiveHint?: boolean | undefined;
+                        idempotentHint?: boolean | undefined;
+                        openWorldHint?: boolean | undefined;
+                    } | undefined;
+                }[];
+                protocolVersion?: string | undefined;
+                serverInfo?: {
+                    name: string;
+                    version?: string | undefined;
+                } | undefined;
+                instructions?: string | undefined;
+            } | undefined;
+            origin?: {
+                kind: 'registry';
+                provenance: {
+                    sourceId: string;
+                    format: 'skills-sh' | 'git' | 'claude-marketplace' | 'mcp-registry' | 'acp-registry' | 'happier-catalog' | 'happier-npm';
+                    sourceUrl: string;
+                    itemId: string;
+                    ref: {
+                        kind: 'gitTree';
+                        repo: string;
+                        path: string;
+                        commit: string;
+                        treeSha: string;
+                    } | {
+                        kind: 'version';
+                        version: string;
+                    };
+                    importedAt: number;
+                };
+                upstream?: {
+                    state: 'current' | 'update_available' | 'removed_from_source';
+                    latest?: {
+                        kind: 'gitTree';
+                        repo: string;
+                        path: string;
+                        commit: string;
+                        treeSha: string;
+                    } | {
+                        kind: 'version';
+                        version: string;
+                    } | undefined;
+                } | undefined;
+            } | {
+                kind: 'machine';
+                machineId: string;
+                agentId: string;
+            } | undefined;
         };
         configOverrides?: {
             target: {
@@ -335,6 +782,10 @@ export type McpServersActionInputById = {
             stdio?: {
                 command?: string | undefined;
                 args?: string[] | undefined;
+                cwd?: {
+                    t: 'path';
+                    path: string;
+                } | undefined;
             } | undefined;
             remote?: {
                 url?: string | undefined;
@@ -344,6 +795,16 @@ export type McpServersActionInputById = {
                 } | {
                     t: 'savedSecret';
                     secretId: string;
+                } | {
+                    t: 'template';
+                    template: string;
+                    vars: Record<string, {
+                        t: 'literal';
+                        v: string;
+                    } | {
+                        t: 'savedSecret';
+                        secretId: string;
+                    }>;
                 } | {
                     t: 'sessionAttested';
                     field: 'externalPrincipalId' | 'sourceMessageId' | 'sessionId';
@@ -356,10 +817,50 @@ export type McpServersActionInputById = {
                 t: 'savedSecret';
                 secretId: string;
             } | {
+                t: 'template';
+                template: string;
+                vars: Record<string, {
+                    t: 'literal';
+                    v: string;
+                } | {
+                    t: 'savedSecret';
+                    secretId: string;
+                }>;
+            } | {
                 t: 'sessionAttested';
                 field: 'externalPrincipalId' | 'sourceMessageId' | 'sessionId';
             } | null> | undefined;
         }[] | undefined;
+    } | {
+        expectedRevision: number | 'absent';
+        serverId: string;
+        from: {
+            registry: {
+                sourceId: string;
+                itemId: string;
+                version: string;
+            };
+        };
+        inputs?: Record<string, {
+            t: 'literal';
+            v: string;
+        } | {
+            t: 'savedSecret';
+            secretId: string;
+        } | {
+            t: 'template';
+            template: string;
+            vars: Record<string, {
+                t: 'literal';
+                v: string;
+            } | {
+                t: 'savedSecret';
+                secretId: string;
+            }>;
+        } | {
+            t: 'sessionAttested';
+            field: 'externalPrincipalId' | 'sourceMessageId' | 'sessionId';
+        }> | undefined;
     };
     readonly "mcp.servers.duplicate": {
         entry: {
@@ -373,6 +874,16 @@ export type McpServersActionInputById = {
                 t: 'savedSecret';
                 secretId: string;
             } | {
+                t: 'template';
+                template: string;
+                vars: Record<string, {
+                    t: 'literal';
+                    v: string;
+                } | {
+                    t: 'savedSecret';
+                    secretId: string;
+                }>;
+            } | {
                 t: 'sessionAttested';
                 field: 'externalPrincipalId' | 'sourceMessageId' | 'sessionId';
             }>;
@@ -383,6 +894,12 @@ export type McpServersActionInputById = {
             stdio?: {
                 command: string;
                 args: string[];
+                cwd?: {
+                    t: 'session';
+                } | {
+                    t: 'path';
+                    path: string;
+                } | undefined;
             } | undefined;
             remote?: {
                 url: string;
@@ -393,9 +910,30 @@ export type McpServersActionInputById = {
                     t: 'savedSecret';
                     secretId: string;
                 } | {
+                    t: 'template';
+                    template: string;
+                    vars: Record<string, {
+                        t: 'literal';
+                        v: string;
+                    } | {
+                        t: 'savedSecret';
+                        secretId: string;
+                    }>;
+                } | {
                     t: 'sessionAttested';
                     field: 'externalPrincipalId' | 'sourceMessageId' | 'sessionId';
                 }>;
+                urlTemplate?: {
+                    t: 'template';
+                    template: string;
+                    vars: Record<string, {
+                        t: 'literal';
+                        v: string;
+                    } | {
+                        t: 'savedSecret';
+                        secretId: string;
+                    }>;
+                } | undefined;
                 auth?: {
                     kind: 'oauth';
                 } | undefined;
@@ -412,6 +950,10 @@ export type McpServersActionInputById = {
                 stdio?: {
                     command?: string | undefined;
                     args?: string[] | undefined;
+                    cwd?: {
+                        t: 'path';
+                        path: string;
+                    } | undefined;
                 } | undefined;
                 remote?: {
                     url?: string | undefined;
@@ -421,6 +963,16 @@ export type McpServersActionInputById = {
                     } | {
                         t: 'savedSecret';
                         secretId: string;
+                    } | {
+                        t: 'template';
+                        template: string;
+                        vars: Record<string, {
+                            t: 'literal';
+                            v: string;
+                        } | {
+                            t: 'savedSecret';
+                            secretId: string;
+                        }>;
                     } | {
                         t: 'sessionAttested';
                         field: 'externalPrincipalId' | 'sourceMessageId' | 'sessionId';
@@ -433,10 +985,83 @@ export type McpServersActionInputById = {
                     t: 'savedSecret';
                     secretId: string;
                 } | {
+                    t: 'template';
+                    template: string;
+                    vars: Record<string, {
+                        t: 'literal';
+                        v: string;
+                    } | {
+                        t: 'savedSecret';
+                        secretId: string;
+                    }>;
+                } | {
                     t: 'sessionAttested';
                     field: 'externalPrincipalId' | 'sourceMessageId' | 'sessionId';
                 } | null> | undefined;
             }[] | undefined;
+            tools?: {
+                default: 'ask' | 'allow_read_only' | 'allow_all';
+                overrides: Readonly<Record<string, 'ask' | 'off' | 'allow'>>;
+            } | undefined;
+            toolsSnapshot?: {
+                checkedAt: number;
+                machineId: string;
+                tools: {
+                    name: string;
+                    tokens: number;
+                    title?: string | undefined;
+                    description?: string | undefined;
+                    annotations?: {
+                        readOnlyHint?: boolean | undefined;
+                        destructiveHint?: boolean | undefined;
+                        idempotentHint?: boolean | undefined;
+                        openWorldHint?: boolean | undefined;
+                    } | undefined;
+                }[];
+                protocolVersion?: string | undefined;
+                serverInfo?: {
+                    name: string;
+                    version?: string | undefined;
+                } | undefined;
+                instructions?: string | undefined;
+            } | undefined;
+            origin?: {
+                kind: 'registry';
+                provenance: {
+                    sourceId: string;
+                    format: 'skills-sh' | 'git' | 'claude-marketplace' | 'mcp-registry' | 'acp-registry' | 'happier-catalog' | 'happier-npm';
+                    sourceUrl: string;
+                    itemId: string;
+                    ref: {
+                        kind: 'gitTree';
+                        repo: string;
+                        path: string;
+                        commit: string;
+                        treeSha: string;
+                    } | {
+                        kind: 'version';
+                        version: string;
+                    };
+                    importedAt: number;
+                };
+                upstream?: {
+                    state: 'current' | 'update_available' | 'removed_from_source';
+                    latest?: {
+                        kind: 'gitTree';
+                        repo: string;
+                        path: string;
+                        commit: string;
+                        treeSha: string;
+                    } | {
+                        kind: 'version';
+                        version: string;
+                    } | undefined;
+                } | undefined;
+            } | {
+                kind: 'machine';
+                machineId: string;
+                agentId: string;
+            } | undefined;
         };
         expectedRevision: number | 'absent';
         serverId: string;
@@ -456,7 +1081,7 @@ export type McpServersActionInputById = {
                     machineId: string;
                     workspaceRoot: string;
                 };
-                state: 'on' | 'off' | 'inherit';
+                state: 'off' | 'on' | 'inherit';
                 agentId?: string | undefined;
             };
         } | {
@@ -500,6 +1125,16 @@ export type McpServersActionInputById = {
                 t: 'savedSecret';
                 secretId: string;
             } | {
+                t: 'template';
+                template: string;
+                vars: Record<string, {
+                    t: 'literal';
+                    v: string;
+                } | {
+                    t: 'savedSecret';
+                    secretId: string;
+                }>;
+            } | {
                 t: 'sessionAttested';
                 field: 'externalPrincipalId' | 'sourceMessageId' | 'sessionId';
             }>;
@@ -510,6 +1145,12 @@ export type McpServersActionInputById = {
             stdio?: {
                 command: string;
                 args: string[];
+                cwd?: {
+                    t: 'session';
+                } | {
+                    t: 'path';
+                    path: string;
+                } | undefined;
             } | undefined;
             remote?: {
                 url: string;
@@ -520,9 +1161,30 @@ export type McpServersActionInputById = {
                     t: 'savedSecret';
                     secretId: string;
                 } | {
+                    t: 'template';
+                    template: string;
+                    vars: Record<string, {
+                        t: 'literal';
+                        v: string;
+                    } | {
+                        t: 'savedSecret';
+                        secretId: string;
+                    }>;
+                } | {
                     t: 'sessionAttested';
                     field: 'externalPrincipalId' | 'sourceMessageId' | 'sessionId';
                 }>;
+                urlTemplate?: {
+                    t: 'template';
+                    template: string;
+                    vars: Record<string, {
+                        t: 'literal';
+                        v: string;
+                    } | {
+                        t: 'savedSecret';
+                        secretId: string;
+                    }>;
+                } | undefined;
                 auth?: {
                     kind: 'oauth';
                 } | undefined;
@@ -539,6 +1201,10 @@ export type McpServersActionInputById = {
                 stdio?: {
                     command?: string | undefined;
                     args?: string[] | undefined;
+                    cwd?: {
+                        t: 'path';
+                        path: string;
+                    } | undefined;
                 } | undefined;
                 remote?: {
                     url?: string | undefined;
@@ -548,6 +1214,16 @@ export type McpServersActionInputById = {
                     } | {
                         t: 'savedSecret';
                         secretId: string;
+                    } | {
+                        t: 'template';
+                        template: string;
+                        vars: Record<string, {
+                            t: 'literal';
+                            v: string;
+                        } | {
+                            t: 'savedSecret';
+                            secretId: string;
+                        }>;
                     } | {
                         t: 'sessionAttested';
                         field: 'externalPrincipalId' | 'sourceMessageId' | 'sessionId';
@@ -560,10 +1236,83 @@ export type McpServersActionInputById = {
                     t: 'savedSecret';
                     secretId: string;
                 } | {
+                    t: 'template';
+                    template: string;
+                    vars: Record<string, {
+                        t: 'literal';
+                        v: string;
+                    } | {
+                        t: 'savedSecret';
+                        secretId: string;
+                    }>;
+                } | {
                     t: 'sessionAttested';
                     field: 'externalPrincipalId' | 'sourceMessageId' | 'sessionId';
                 } | null> | undefined;
             }[] | undefined;
+            tools?: {
+                default: 'ask' | 'allow_read_only' | 'allow_all';
+                overrides: Readonly<Record<string, 'ask' | 'off' | 'allow'>>;
+            } | undefined;
+            toolsSnapshot?: {
+                checkedAt: number;
+                machineId: string;
+                tools: {
+                    name: string;
+                    tokens: number;
+                    title?: string | undefined;
+                    description?: string | undefined;
+                    annotations?: {
+                        readOnlyHint?: boolean | undefined;
+                        destructiveHint?: boolean | undefined;
+                        idempotentHint?: boolean | undefined;
+                        openWorldHint?: boolean | undefined;
+                    } | undefined;
+                }[];
+                protocolVersion?: string | undefined;
+                serverInfo?: {
+                    name: string;
+                    version?: string | undefined;
+                } | undefined;
+                instructions?: string | undefined;
+            } | undefined;
+            origin?: {
+                kind: 'registry';
+                provenance: {
+                    sourceId: string;
+                    format: 'skills-sh' | 'git' | 'claude-marketplace' | 'mcp-registry' | 'acp-registry' | 'happier-catalog' | 'happier-npm';
+                    sourceUrl: string;
+                    itemId: string;
+                    ref: {
+                        kind: 'gitTree';
+                        repo: string;
+                        path: string;
+                        commit: string;
+                        treeSha: string;
+                    } | {
+                        kind: 'version';
+                        version: string;
+                    };
+                    importedAt: number;
+                };
+                upstream?: {
+                    state: 'current' | 'update_available' | 'removed_from_source';
+                    latest?: {
+                        kind: 'gitTree';
+                        repo: string;
+                        path: string;
+                        commit: string;
+                        treeSha: string;
+                    } | {
+                        kind: 'version';
+                        version: string;
+                    } | undefined;
+                } | undefined;
+            } | {
+                kind: 'machine';
+                machineId: string;
+                agentId: string;
+            } | undefined;
         };
         binding?: {
             id: string;
@@ -593,14 +1342,223 @@ export type McpServersActionInputById = {
         serverId: string;
         bindingId?: string | undefined;
     };
-    readonly "mcp.servers.probe": {
-        machineId: string;
+    readonly "mcp.found.list": {
         directory?: string | undefined;
         providers?: string[] | undefined;
+        machineId?: string | undefined;
+    };
+    readonly "mcp.found.adopt": {
+        machineId: string;
+        items: {
+            [x: string]: unknown;
+            provider: string;
+            name: string;
+            transport: 'stdio' | 'http' | 'sse';
+            envKeys: string[];
+            enabled: boolean | null;
+            source: {
+                [x: string]: unknown;
+                kind: 'project' | 'user';
+                path: string;
+            };
+            stdio?: {
+                command: string;
+                args: string[];
+            } | undefined;
+            remote?: {
+                url: string;
+                headers: string[];
+            } | undefined;
+            loadedInHappierSessions?: boolean | undefined;
+        }[];
+        expectedRevision?: number | 'absent' | undefined;
+        where?: {
+            kind: 'write';
+            write: {
+                place: {
+                    t: 'allMachines';
+                } | {
+                    t: 'machine';
+                    machineId: string;
+                } | {
+                    t: 'project';
+                    projectKey: string;
+                } | {
+                    t: 'workspace';
+                    machineId: string;
+                    workspaceRoot: string;
+                };
+                state: 'off' | 'on' | 'inherit';
+                agentId?: string | undefined;
+            };
+        } | {
+            kind: 'replace';
+            rules: {
+                target: {
+                    t: 'allMachines';
+                } | {
+                    t: 'machine';
+                    machineId: string;
+                } | {
+                    t: 'project';
+                    projectKey: string;
+                } | {
+                    t: 'workspace';
+                    machineId: string;
+                    workspaceRoot: string;
+                };
+                enabled: boolean;
+                agentId?: string | undefined;
+            }[];
+        } | undefined;
+        values?: Record<string, {
+            t: 'literal';
+            v: string;
+        } | {
+            t: 'savedSecret';
+            secretId: string;
+        } | {
+            t: 'template';
+            template: string;
+            vars: Record<string, {
+                t: 'literal';
+                v: string;
+            } | {
+                t: 'savedSecret';
+                secretId: string;
+            }>;
+        } | {
+            t: 'sessionAttested';
+            field: 'externalPrincipalId' | 'sourceMessageId' | 'sessionId';
+        } | {
+            name: string;
+            value: string;
+            t: 'createSecret';
+            kind?: 'apiKey' | 'token' | 'password' | 'other' | undefined;
+        } | {
+            name: string;
+            t: 'saveSecret';
+            kind?: 'apiKey' | 'token' | 'password' | 'other' | undefined;
+        }> | Record<string, Record<string, {
+            t: 'literal';
+            v: string;
+        } | {
+            t: 'savedSecret';
+            secretId: string;
+        } | {
+            t: 'template';
+            template: string;
+            vars: Record<string, {
+                t: 'literal';
+                v: string;
+            } | {
+                t: 'savedSecret';
+                secretId: string;
+            }>;
+        } | {
+            t: 'sessionAttested';
+            field: 'externalPrincipalId' | 'sourceMessageId' | 'sessionId';
+        } | {
+            name: string;
+            value: string;
+            t: 'createSecret';
+            kind?: 'apiKey' | 'token' | 'password' | 'other' | undefined;
+        } | {
+            name: string;
+            t: 'saveSecret';
+            kind?: 'apiKey' | 'token' | 'password' | 'other' | undefined;
+        }>> | undefined;
+    };
+    readonly "mcp.servers.import": {
+        source: {
+            kind: 'paste';
+            text: string;
+        } | {
+            kind: 'link';
+            url: string;
+        };
+        dryRun: boolean;
+        expectedRevision?: number | 'absent' | undefined;
+        values?: Record<string, {
+            t: 'literal';
+            v: string;
+        } | {
+            t: 'savedSecret';
+            secretId: string;
+        } | {
+            t: 'template';
+            template: string;
+            vars: Record<string, {
+                t: 'literal';
+                v: string;
+            } | {
+                t: 'savedSecret';
+                secretId: string;
+            }>;
+        } | {
+            t: 'sessionAttested';
+            field: 'externalPrincipalId' | 'sourceMessageId' | 'sessionId';
+        } | {
+            name: string;
+            value: string;
+            t: 'createSecret';
+            kind?: 'apiKey' | 'token' | 'password' | 'other' | undefined;
+        } | {
+            name: string;
+            t: 'saveSecret';
+            kind?: 'apiKey' | 'token' | 'password' | 'other' | undefined;
+        }> | undefined;
+        where?: {
+            kind: 'write';
+            write: {
+                place: {
+                    t: 'allMachines';
+                } | {
+                    t: 'machine';
+                    machineId: string;
+                } | {
+                    t: 'project';
+                    projectKey: string;
+                } | {
+                    t: 'workspace';
+                    machineId: string;
+                    workspaceRoot: string;
+                };
+                state: 'off' | 'on' | 'inherit';
+                agentId?: string | undefined;
+            };
+        } | {
+            kind: 'replace';
+            rules: {
+                target: {
+                    t: 'allMachines';
+                } | {
+                    t: 'machine';
+                    machineId: string;
+                } | {
+                    t: 'project';
+                    projectKey: string;
+                } | {
+                    t: 'workspace';
+                    machineId: string;
+                    workspaceRoot: string;
+                };
+                enabled: boolean;
+                agentId?: string | undefined;
+            }[];
+        } | undefined;
     };
     readonly "mcp.servers.signIn.start": {
         serverId: string;
         stepUp?: boolean | undefined;
+    };
+    readonly "mcp.servers.tools.list": {
+        serverId: string;
+    };
+    readonly "mcp.servers.tools.set": {
+        serverId: string;
+        default?: 'ask' | 'allow_read_only' | 'allow_all' | undefined;
+        tools?: Readonly<Record<string, 'ask' | 'off' | 'allow' | 'inherit'>> | undefined;
     };
 };
 export type McpServersActionResultById = {
@@ -619,7 +1577,7 @@ export type McpServersActionResultById = {
         status: 'ready';
         catalog: {
             v: 1;
-            servers: {
+            servers: ({
                 id: string;
                 name: string;
                 transport: 'stdio' | 'http' | 'sse';
@@ -627,7 +1585,18 @@ export type McpServersActionResultById = {
                 updatedAt: number;
                 title?: string | undefined;
                 description?: string | undefined;
-            }[];
+            } | {
+                id: string;
+                name: string;
+                transport: 'stdio' | 'http' | 'sse';
+                source: {
+                    kind: 'plugin';
+                    pluginId: string;
+                    pluginName: string;
+                };
+                title?: string | undefined;
+                description?: string | undefined;
+            })[];
             bindings: {
                 id: string;
                 target: {
@@ -649,6 +1618,7 @@ export type McpServersActionResultById = {
                 serverId: string;
                 agentId?: string | undefined;
             }[];
+            pluginItemsStatus?: 'unavailable' | 'ready' | undefined;
         };
         cleanup?: {
             status: 'complete';
@@ -666,7 +1636,7 @@ export type McpServersActionResultById = {
         status: 'partial';
         catalog: {
             v: 1;
-            servers: {
+            servers: ({
                 id: string;
                 name: string;
                 transport: 'stdio' | 'http' | 'sse';
@@ -674,7 +1644,18 @@ export type McpServersActionResultById = {
                 updatedAt: number;
                 title?: string | undefined;
                 description?: string | undefined;
-            }[];
+            } | {
+                id: string;
+                name: string;
+                transport: 'stdio' | 'http' | 'sse';
+                source: {
+                    kind: 'plugin';
+                    pluginId: string;
+                    pluginName: string;
+                };
+                title?: string | undefined;
+                description?: string | undefined;
+            })[];
             bindings: {
                 id: string;
                 target: {
@@ -696,6 +1677,7 @@ export type McpServersActionResultById = {
                 serverId: string;
                 agentId?: string | undefined;
             }[];
+            pluginItemsStatus?: 'unavailable' | 'ready' | undefined;
         };
         cleanup?: {
             status: 'complete';
@@ -723,6 +1705,16 @@ export type McpServersActionResultById = {
                     t: 'savedSecret';
                     secretId: string;
                 } | {
+                    t: 'template';
+                    template: string;
+                    vars: Record<string, {
+                        t: 'literal';
+                        v: string;
+                    } | {
+                        t: 'savedSecret';
+                        secretId: string;
+                    }>;
+                } | {
                     t: 'sessionAttested';
                     field: 'externalPrincipalId' | 'sourceMessageId' | 'sessionId';
                 }>;
@@ -733,6 +1725,12 @@ export type McpServersActionResultById = {
                 stdio?: {
                     command: string;
                     args: string[];
+                    cwd?: {
+                        t: 'session';
+                    } | {
+                        t: 'path';
+                        path: string;
+                    } | undefined;
                 } | undefined;
                 remote?: {
                     url: string;
@@ -743,9 +1741,30 @@ export type McpServersActionResultById = {
                         t: 'savedSecret';
                         secretId: string;
                     } | {
+                        t: 'template';
+                        template: string;
+                        vars: Record<string, {
+                            t: 'literal';
+                            v: string;
+                        } | {
+                            t: 'savedSecret';
+                            secretId: string;
+                        }>;
+                    } | {
                         t: 'sessionAttested';
                         field: 'externalPrincipalId' | 'sourceMessageId' | 'sessionId';
                     }>;
+                    urlTemplate?: {
+                        t: 'template';
+                        template: string;
+                        vars: Record<string, {
+                            t: 'literal';
+                            v: string;
+                        } | {
+                            t: 'savedSecret';
+                            secretId: string;
+                        }>;
+                    } | undefined;
                     auth?: {
                         kind: 'oauth';
                     } | undefined;
@@ -762,6 +1781,10 @@ export type McpServersActionResultById = {
                     stdio?: {
                         command?: string | undefined;
                         args?: string[] | undefined;
+                        cwd?: {
+                            t: 'path';
+                            path: string;
+                        } | undefined;
                     } | undefined;
                     remote?: {
                         url?: string | undefined;
@@ -771,6 +1794,16 @@ export type McpServersActionResultById = {
                         } | {
                             t: 'savedSecret';
                             secretId: string;
+                        } | {
+                            t: 'template';
+                            template: string;
+                            vars: Record<string, {
+                                t: 'literal';
+                                v: string;
+                            } | {
+                                t: 'savedSecret';
+                                secretId: string;
+                            }>;
                         } | {
                             t: 'sessionAttested';
                             field: 'externalPrincipalId' | 'sourceMessageId' | 'sessionId';
@@ -783,10 +1816,83 @@ export type McpServersActionResultById = {
                         t: 'savedSecret';
                         secretId: string;
                     } | {
+                        t: 'template';
+                        template: string;
+                        vars: Record<string, {
+                            t: 'literal';
+                            v: string;
+                        } | {
+                            t: 'savedSecret';
+                            secretId: string;
+                        }>;
+                    } | {
                         t: 'sessionAttested';
                         field: 'externalPrincipalId' | 'sourceMessageId' | 'sessionId';
                     } | null> | undefined;
                 }[] | undefined;
+                tools?: {
+                    default: 'ask' | 'allow_read_only' | 'allow_all';
+                    overrides: Readonly<Record<string, 'ask' | 'off' | 'allow'>>;
+                } | undefined;
+                toolsSnapshot?: {
+                    checkedAt: number;
+                    machineId: string;
+                    tools: {
+                        name: string;
+                        tokens: number;
+                        title?: string | undefined;
+                        description?: string | undefined;
+                        annotations?: {
+                            readOnlyHint?: boolean | undefined;
+                            destructiveHint?: boolean | undefined;
+                            idempotentHint?: boolean | undefined;
+                            openWorldHint?: boolean | undefined;
+                        } | undefined;
+                    }[];
+                    protocolVersion?: string | undefined;
+                    serverInfo?: {
+                        name: string;
+                        version?: string | undefined;
+                    } | undefined;
+                    instructions?: string | undefined;
+                } | undefined;
+                origin?: {
+                    kind: 'registry';
+                    provenance: {
+                        sourceId: string;
+                        format: 'skills-sh' | 'git' | 'claude-marketplace' | 'mcp-registry' | 'acp-registry' | 'happier-catalog' | 'happier-npm';
+                        sourceUrl: string;
+                        itemId: string;
+                        ref: {
+                            kind: 'gitTree';
+                            repo: string;
+                            path: string;
+                            commit: string;
+                            treeSha: string;
+                        } | {
+                            kind: 'version';
+                            version: string;
+                        };
+                        importedAt: number;
+                    };
+                    upstream?: {
+                        state: 'current' | 'update_available' | 'removed_from_source';
+                        latest?: {
+                            kind: 'gitTree';
+                            repo: string;
+                            path: string;
+                            commit: string;
+                            treeSha: string;
+                        } | {
+                            kind: 'version';
+                            version: string;
+                        } | undefined;
+                    } | undefined;
+                } | {
+                    kind: 'machine';
+                    machineId: string;
+                    agentId: string;
+                } | undefined;
             }[];
             bindings: {
                 id: string;
@@ -809,6 +1915,34 @@ export type McpServersActionResultById = {
                 serverId: string;
                 agentId?: string | undefined;
             }[];
+            pluginServers?: Record<string, {
+                tools?: {
+                    default: 'ask' | 'allow_read_only' | 'allow_all';
+                    overrides: Readonly<Record<string, 'ask' | 'off' | 'allow'>>;
+                } | undefined;
+                toolsSnapshot?: {
+                    checkedAt: number;
+                    machineId: string;
+                    tools: {
+                        name: string;
+                        tokens: number;
+                        title?: string | undefined;
+                        description?: string | undefined;
+                        annotations?: {
+                            readOnlyHint?: boolean | undefined;
+                            destructiveHint?: boolean | undefined;
+                            idempotentHint?: boolean | undefined;
+                            openWorldHint?: boolean | undefined;
+                        } | undefined;
+                    }[];
+                    protocolVersion?: string | undefined;
+                    serverInfo?: {
+                        name: string;
+                        version?: string | undefined;
+                    } | undefined;
+                    instructions?: string | undefined;
+                } | undefined;
+            }> | undefined;
         };
         revision: number | 'absent';
         authority: 'active' | 'inactive';
@@ -837,6 +1971,16 @@ export type McpServersActionResultById = {
                     t: 'savedSecret';
                     secretId: string;
                 } | {
+                    t: 'template';
+                    template: string;
+                    vars: Record<string, {
+                        t: 'literal';
+                        v: string;
+                    } | {
+                        t: 'savedSecret';
+                        secretId: string;
+                    }>;
+                } | {
                     t: 'sessionAttested';
                     field: 'externalPrincipalId' | 'sourceMessageId' | 'sessionId';
                 }>;
@@ -847,6 +1991,12 @@ export type McpServersActionResultById = {
                 stdio?: {
                     command: string;
                     args: string[];
+                    cwd?: {
+                        t: 'session';
+                    } | {
+                        t: 'path';
+                        path: string;
+                    } | undefined;
                 } | undefined;
                 remote?: {
                     url: string;
@@ -857,9 +2007,30 @@ export type McpServersActionResultById = {
                         t: 'savedSecret';
                         secretId: string;
                     } | {
+                        t: 'template';
+                        template: string;
+                        vars: Record<string, {
+                            t: 'literal';
+                            v: string;
+                        } | {
+                            t: 'savedSecret';
+                            secretId: string;
+                        }>;
+                    } | {
                         t: 'sessionAttested';
                         field: 'externalPrincipalId' | 'sourceMessageId' | 'sessionId';
                     }>;
+                    urlTemplate?: {
+                        t: 'template';
+                        template: string;
+                        vars: Record<string, {
+                            t: 'literal';
+                            v: string;
+                        } | {
+                            t: 'savedSecret';
+                            secretId: string;
+                        }>;
+                    } | undefined;
                     auth?: {
                         kind: 'oauth';
                     } | undefined;
@@ -876,6 +2047,10 @@ export type McpServersActionResultById = {
                     stdio?: {
                         command?: string | undefined;
                         args?: string[] | undefined;
+                        cwd?: {
+                            t: 'path';
+                            path: string;
+                        } | undefined;
                     } | undefined;
                     remote?: {
                         url?: string | undefined;
@@ -885,6 +2060,16 @@ export type McpServersActionResultById = {
                         } | {
                             t: 'savedSecret';
                             secretId: string;
+                        } | {
+                            t: 'template';
+                            template: string;
+                            vars: Record<string, {
+                                t: 'literal';
+                                v: string;
+                            } | {
+                                t: 'savedSecret';
+                                secretId: string;
+                            }>;
                         } | {
                             t: 'sessionAttested';
                             field: 'externalPrincipalId' | 'sourceMessageId' | 'sessionId';
@@ -897,10 +2082,83 @@ export type McpServersActionResultById = {
                         t: 'savedSecret';
                         secretId: string;
                     } | {
+                        t: 'template';
+                        template: string;
+                        vars: Record<string, {
+                            t: 'literal';
+                            v: string;
+                        } | {
+                            t: 'savedSecret';
+                            secretId: string;
+                        }>;
+                    } | {
                         t: 'sessionAttested';
                         field: 'externalPrincipalId' | 'sourceMessageId' | 'sessionId';
                     } | null> | undefined;
                 }[] | undefined;
+                tools?: {
+                    default: 'ask' | 'allow_read_only' | 'allow_all';
+                    overrides: Readonly<Record<string, 'ask' | 'off' | 'allow'>>;
+                } | undefined;
+                toolsSnapshot?: {
+                    checkedAt: number;
+                    machineId: string;
+                    tools: {
+                        name: string;
+                        tokens: number;
+                        title?: string | undefined;
+                        description?: string | undefined;
+                        annotations?: {
+                            readOnlyHint?: boolean | undefined;
+                            destructiveHint?: boolean | undefined;
+                            idempotentHint?: boolean | undefined;
+                            openWorldHint?: boolean | undefined;
+                        } | undefined;
+                    }[];
+                    protocolVersion?: string | undefined;
+                    serverInfo?: {
+                        name: string;
+                        version?: string | undefined;
+                    } | undefined;
+                    instructions?: string | undefined;
+                } | undefined;
+                origin?: {
+                    kind: 'registry';
+                    provenance: {
+                        sourceId: string;
+                        format: 'skills-sh' | 'git' | 'claude-marketplace' | 'mcp-registry' | 'acp-registry' | 'happier-catalog' | 'happier-npm';
+                        sourceUrl: string;
+                        itemId: string;
+                        ref: {
+                            kind: 'gitTree';
+                            repo: string;
+                            path: string;
+                            commit: string;
+                            treeSha: string;
+                        } | {
+                            kind: 'version';
+                            version: string;
+                        };
+                        importedAt: number;
+                    };
+                    upstream?: {
+                        state: 'current' | 'update_available' | 'removed_from_source';
+                        latest?: {
+                            kind: 'gitTree';
+                            repo: string;
+                            path: string;
+                            commit: string;
+                            treeSha: string;
+                        } | {
+                            kind: 'version';
+                            version: string;
+                        } | undefined;
+                    } | undefined;
+                } | {
+                    kind: 'machine';
+                    machineId: string;
+                    agentId: string;
+                } | undefined;
             }[];
             bindings: {
                 id: string;
@@ -923,6 +2181,34 @@ export type McpServersActionResultById = {
                 serverId: string;
                 agentId?: string | undefined;
             }[];
+            pluginServers?: Record<string, {
+                tools?: {
+                    default: 'ask' | 'allow_read_only' | 'allow_all';
+                    overrides: Readonly<Record<string, 'ask' | 'off' | 'allow'>>;
+                } | undefined;
+                toolsSnapshot?: {
+                    checkedAt: number;
+                    machineId: string;
+                    tools: {
+                        name: string;
+                        tokens: number;
+                        title?: string | undefined;
+                        description?: string | undefined;
+                        annotations?: {
+                            readOnlyHint?: boolean | undefined;
+                            destructiveHint?: boolean | undefined;
+                            idempotentHint?: boolean | undefined;
+                            openWorldHint?: boolean | undefined;
+                        } | undefined;
+                    }[];
+                    protocolVersion?: string | undefined;
+                    serverInfo?: {
+                        name: string;
+                        version?: string | undefined;
+                    } | undefined;
+                    instructions?: string | undefined;
+                } | undefined;
+            }> | undefined;
         };
         revision: number | 'absent';
         authority: 'active' | 'inactive';
@@ -938,6 +2224,70 @@ export type McpServersActionResultById = {
             reason: 'cancelled' | 'source-unavailable' | 'source-conflict' | 'history-incomplete';
         } | undefined;
     } | {
+        status: 'plugin';
+        server: {
+            id: string;
+            name: string;
+            transport: 'stdio' | 'http' | 'sse';
+            source: {
+                kind: 'plugin';
+                pluginId: string;
+                pluginName: string;
+            };
+            title?: string | undefined;
+            description?: string | undefined;
+        };
+        bindings: {
+            id: string;
+            target: {
+                t: 'allMachines';
+            } | {
+                t: 'machine';
+                machineId: string;
+            } | {
+                t: 'project';
+                projectKey: string;
+            } | {
+                t: 'workspace';
+                machineId: string;
+                workspaceRoot: string;
+            };
+            enabled: boolean;
+            createdAt: number;
+            updatedAt: number;
+            serverId: string;
+            agentId?: string | undefined;
+        }[];
+        revision: number | 'absent';
+        settings?: {
+            tools?: {
+                default: 'ask' | 'allow_read_only' | 'allow_all';
+                overrides: Readonly<Record<string, 'ask' | 'off' | 'allow'>>;
+            } | undefined;
+            toolsSnapshot?: {
+                checkedAt: number;
+                machineId: string;
+                tools: {
+                    name: string;
+                    tokens: number;
+                    title?: string | undefined;
+                    description?: string | undefined;
+                    annotations?: {
+                        readOnlyHint?: boolean | undefined;
+                        destructiveHint?: boolean | undefined;
+                        idempotentHint?: boolean | undefined;
+                        openWorldHint?: boolean | undefined;
+                    } | undefined;
+                }[];
+                protocolVersion?: string | undefined;
+                serverInfo?: {
+                    name: string;
+                    version?: string | undefined;
+                } | undefined;
+                instructions?: string | undefined;
+            } | undefined;
+        } | undefined;
+    } | {
         status: 'present';
         server: {
             id: string;
@@ -950,6 +2300,16 @@ export type McpServersActionResultById = {
                 t: 'savedSecret';
                 secretId: string;
             } | {
+                t: 'template';
+                template: string;
+                vars: Record<string, {
+                    t: 'literal';
+                    v: string;
+                } | {
+                    t: 'savedSecret';
+                    secretId: string;
+                }>;
+            } | {
                 t: 'sessionAttested';
                 field: 'externalPrincipalId' | 'sourceMessageId' | 'sessionId';
             }>;
@@ -960,6 +2320,12 @@ export type McpServersActionResultById = {
             stdio?: {
                 command: string;
                 args: string[];
+                cwd?: {
+                    t: 'session';
+                } | {
+                    t: 'path';
+                    path: string;
+                } | undefined;
             } | undefined;
             remote?: {
                 url: string;
@@ -970,9 +2336,30 @@ export type McpServersActionResultById = {
                     t: 'savedSecret';
                     secretId: string;
                 } | {
+                    t: 'template';
+                    template: string;
+                    vars: Record<string, {
+                        t: 'literal';
+                        v: string;
+                    } | {
+                        t: 'savedSecret';
+                        secretId: string;
+                    }>;
+                } | {
                     t: 'sessionAttested';
                     field: 'externalPrincipalId' | 'sourceMessageId' | 'sessionId';
                 }>;
+                urlTemplate?: {
+                    t: 'template';
+                    template: string;
+                    vars: Record<string, {
+                        t: 'literal';
+                        v: string;
+                    } | {
+                        t: 'savedSecret';
+                        secretId: string;
+                    }>;
+                } | undefined;
                 auth?: {
                     kind: 'oauth';
                 } | undefined;
@@ -989,6 +2376,10 @@ export type McpServersActionResultById = {
                 stdio?: {
                     command?: string | undefined;
                     args?: string[] | undefined;
+                    cwd?: {
+                        t: 'path';
+                        path: string;
+                    } | undefined;
                 } | undefined;
                 remote?: {
                     url?: string | undefined;
@@ -998,6 +2389,16 @@ export type McpServersActionResultById = {
                     } | {
                         t: 'savedSecret';
                         secretId: string;
+                    } | {
+                        t: 'template';
+                        template: string;
+                        vars: Record<string, {
+                            t: 'literal';
+                            v: string;
+                        } | {
+                            t: 'savedSecret';
+                            secretId: string;
+                        }>;
                     } | {
                         t: 'sessionAttested';
                         field: 'externalPrincipalId' | 'sourceMessageId' | 'sessionId';
@@ -1010,10 +2411,83 @@ export type McpServersActionResultById = {
                     t: 'savedSecret';
                     secretId: string;
                 } | {
+                    t: 'template';
+                    template: string;
+                    vars: Record<string, {
+                        t: 'literal';
+                        v: string;
+                    } | {
+                        t: 'savedSecret';
+                        secretId: string;
+                    }>;
+                } | {
                     t: 'sessionAttested';
                     field: 'externalPrincipalId' | 'sourceMessageId' | 'sessionId';
                 } | null> | undefined;
             }[] | undefined;
+            tools?: {
+                default: 'ask' | 'allow_read_only' | 'allow_all';
+                overrides: Readonly<Record<string, 'ask' | 'off' | 'allow'>>;
+            } | undefined;
+            toolsSnapshot?: {
+                checkedAt: number;
+                machineId: string;
+                tools: {
+                    name: string;
+                    tokens: number;
+                    title?: string | undefined;
+                    description?: string | undefined;
+                    annotations?: {
+                        readOnlyHint?: boolean | undefined;
+                        destructiveHint?: boolean | undefined;
+                        idempotentHint?: boolean | undefined;
+                        openWorldHint?: boolean | undefined;
+                    } | undefined;
+                }[];
+                protocolVersion?: string | undefined;
+                serverInfo?: {
+                    name: string;
+                    version?: string | undefined;
+                } | undefined;
+                instructions?: string | undefined;
+            } | undefined;
+            origin?: {
+                kind: 'registry';
+                provenance: {
+                    sourceId: string;
+                    format: 'skills-sh' | 'git' | 'claude-marketplace' | 'mcp-registry' | 'acp-registry' | 'happier-catalog' | 'happier-npm';
+                    sourceUrl: string;
+                    itemId: string;
+                    ref: {
+                        kind: 'gitTree';
+                        repo: string;
+                        path: string;
+                        commit: string;
+                        treeSha: string;
+                    } | {
+                        kind: 'version';
+                        version: string;
+                    };
+                    importedAt: number;
+                };
+                upstream?: {
+                    state: 'current' | 'update_available' | 'removed_from_source';
+                    latest?: {
+                        kind: 'gitTree';
+                        repo: string;
+                        path: string;
+                        commit: string;
+                        treeSha: string;
+                    } | {
+                        kind: 'version';
+                        version: string;
+                    } | undefined;
+                } | undefined;
+            } | {
+                kind: 'machine';
+                machineId: string;
+                agentId: string;
+            } | undefined;
         };
         bindings: {
             id: string;
@@ -1122,14 +2596,35 @@ export type McpServersActionResultById = {
         toolCount: number;
         durationMs: number;
         toolNamesSample?: string[] | undefined;
+        tools?: {
+            name: string;
+            tokens: number;
+            title?: string | undefined;
+            description?: string | undefined;
+            annotations?: {
+                readOnlyHint?: boolean | undefined;
+                destructiveHint?: boolean | undefined;
+                idempotentHint?: boolean | undefined;
+                openWorldHint?: boolean | undefined;
+            } | undefined;
+        }[] | undefined;
+        protocolVersion?: string | undefined;
+        serverInfo?: {
+            name: string;
+            version?: string | undefined;
+        } | undefined;
+        instructions?: string | undefined;
+        stderrTail?: string | undefined;
     } | {
         [x: string]: unknown;
         ok: false;
         errorCode: 'invalid_request' | 'missing_credentials' | 'server_not_found' | 'binding_not_found' | 'server_disabled' | 'materialization_failed' | 'mcp_connect_failed' | 'mcp_list_tools_failed';
         error: string;
         durationMs: number;
+        runtimeMissing?: string | undefined;
+        stderrTail?: string | undefined;
     };
-    readonly "mcp.servers.probe": {
+    readonly "mcp.found.list": {
         [x: string]: unknown;
         ok: true;
         servers: {
@@ -1167,10 +2662,137 @@ export type McpServersActionResultById = {
         errorCode: 'invalid_request' | 'internal_error';
         error: string;
     };
+    readonly "mcp.found.adopt": {
+        ok: true;
+        revision: number;
+        serverIds: string[];
+        duplicates: {
+            name: string;
+            serverId?: string | undefined;
+            duplicateOf?: string | undefined;
+        }[];
+        movedSecrets: {
+            inputId: string;
+            secretId: string;
+            secretRef: string;
+        }[];
+    };
+    readonly "mcp.servers.import": {
+        ok: true;
+        revision: number;
+        serverIds: string[];
+        duplicates: {
+            name: string;
+            serverId?: string | undefined;
+            duplicateOf?: string | undefined;
+        }[];
+        movedSecrets: {
+            inputId: string;
+            secretId: string;
+            secretRef: string;
+        }[];
+    } | {
+        servers: {
+            name: string;
+            transport: 'stdio' | 'http' | 'sse';
+            envNames: string[];
+            headerNames: string[];
+            title?: string | undefined;
+        }[];
+        inputs: {
+            inputId: string;
+            title: string;
+            secret: boolean;
+            suggestedEnvVarName: string;
+            description?: string | undefined;
+            suggestedValue?: string | undefined;
+            literalSecret?: true | undefined;
+        }[];
+        missingValues: {
+            inputId: string;
+            title: string;
+            secret: boolean;
+            suggestedEnvVarName: string;
+            description?: string | undefined;
+        }[];
+        duplicates: {
+            name: string;
+            serverId?: string | undefined;
+            duplicateOf?: string | undefined;
+        }[];
+        movedSecrets: {
+            inputId: string;
+        }[];
+        warnings: string[];
+        errors: string[];
+    };
     readonly "mcp.servers.signIn.start": {
         attemptId: string;
         authorizationUrl: string;
         expiresAtMs: number;
         machineId: string;
+    };
+    readonly "mcp.servers.tools.list": {
+        serverId: string;
+        revision: number | 'absent';
+        settings: {
+            default: 'ask' | 'allow_read_only' | 'allow_all';
+            tools: Readonly<Record<string, 'ask' | 'off' | 'allow'>>;
+        };
+        tools: {
+            name: string;
+            tokens: number;
+            setting: 'ask' | 'off' | 'allow' | 'inherit';
+            source: 'tool' | 'server_default';
+            title?: string | undefined;
+            description?: string | undefined;
+            annotations?: {
+                readOnlyHint?: boolean | undefined;
+                destructiveHint?: boolean | undefined;
+                idempotentHint?: boolean | undefined;
+                openWorldHint?: boolean | undefined;
+            } | undefined;
+        }[];
+        tokens: number | null;
+        perAgent: {
+            status: 'unavailable' | 'ready';
+            agents: {
+                agentId: string;
+                approval: 'native' | 'host' | null;
+                off: 'hidden' | 'blocked' | null;
+                loading: 'every_turn' | 'on_demand';
+                tokens: number | null;
+            }[];
+            machineId?: string | undefined;
+        };
+        snapshot?: {
+            checkedAt: number;
+            machineId: string;
+            tools: {
+                name: string;
+                tokens: number;
+                title?: string | undefined;
+                description?: string | undefined;
+                annotations?: {
+                    readOnlyHint?: boolean | undefined;
+                    destructiveHint?: boolean | undefined;
+                    idempotentHint?: boolean | undefined;
+                    openWorldHint?: boolean | undefined;
+                } | undefined;
+            }[];
+            protocolVersion?: string | undefined;
+            serverInfo?: {
+                name: string;
+                version?: string | undefined;
+            } | undefined;
+            instructions?: string | undefined;
+        } | undefined;
+    };
+    readonly "mcp.servers.tools.set": {
+        revision: number;
+        previous: {
+            tools: Readonly<Record<string, 'ask' | 'off' | 'allow' | 'inherit'>>;
+            default?: 'ask' | 'allow_read_only' | 'allow_all' | undefined;
+        };
     };
 };

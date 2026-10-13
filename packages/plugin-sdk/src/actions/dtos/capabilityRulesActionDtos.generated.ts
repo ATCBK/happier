@@ -50,12 +50,108 @@ export type CapabilityRulesActionInputById = {
             }[];
         };
     };
+    readonly "skills.rules.set": {
+        items: ({
+            skillId: string;
+        } | {
+            name: string;
+        })[];
+        change: {
+            kind: 'write';
+            write: {
+                place: {
+                    t: 'allMachines';
+                } | {
+                    t: 'machine';
+                    machineId: string;
+                } | {
+                    t: 'project';
+                    projectKey: string;
+                } | {
+                    t: 'workspace';
+                    machineId: string;
+                    workspaceRoot: string;
+                };
+                state: 'on' | 'off' | 'inherit';
+                agentId?: string | undefined;
+            };
+        } | {
+            kind: 'replace';
+            rules: {
+                target: {
+                    t: 'allMachines';
+                } | {
+                    t: 'machine';
+                    machineId: string;
+                } | {
+                    t: 'project';
+                    projectKey: string;
+                } | {
+                    t: 'workspace';
+                    machineId: string;
+                    workspaceRoot: string;
+                };
+                enabled: boolean;
+                agentId?: string | undefined;
+            }[];
+        };
+    };
 };
 export type CapabilityRulesActionResultById = {
     readonly "mcp.rules.set": {
         ok: true;
         items: {
             serverId: string;
+            rules: {
+                id: string;
+                target: {
+                    t: 'allMachines';
+                } | {
+                    t: 'machine';
+                    machineId: string;
+                } | {
+                    t: 'project';
+                    projectKey: string;
+                } | {
+                    t: 'workspace';
+                    machineId: string;
+                    workspaceRoot: string;
+                };
+                enabled: boolean;
+                createdAt: number;
+                updatedAt: number;
+                agentId?: string | undefined;
+            }[];
+            previous: {
+                id: string;
+                target: {
+                    t: 'allMachines';
+                } | {
+                    t: 'machine';
+                    machineId: string;
+                } | {
+                    t: 'project';
+                    projectKey: string;
+                } | {
+                    t: 'workspace';
+                    machineId: string;
+                    workspaceRoot: string;
+                };
+                enabled: boolean;
+                createdAt: number;
+                updatedAt: number;
+                agentId?: string | undefined;
+            }[];
+        }[];
+        revision: number;
+    } | {
+        ok: false;
+        code: 'conflict' | 'not_found' | 'catalog_unavailable' | 'replace_needs_one_item';
+    };
+    readonly "skills.rules.set": {
+        ok: true;
+        items: {
+            skillId: string;
             rules: {
                 id: string;
                 target: {

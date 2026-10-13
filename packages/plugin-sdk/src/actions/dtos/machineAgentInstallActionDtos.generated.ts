@@ -35,7 +35,7 @@ export type MachineAgentInstallActionResultById = {
         jobId: string;
     } | {
         ok: false;
-        errorCode: 'invalid_request' | 'job_not_found' | 'install_unavailable' | 'not_managed' | 'in_use';
+        errorCode: 'invalid_request' | 'job_not_found' | 'install_unavailable' | 'not_managed' | 'in_use' | 'definition_version_changed';
         error: string;
     };
     readonly "machines.agents.uninstall": {
@@ -43,12 +43,12 @@ export type MachineAgentInstallActionResultById = {
         jobId: string;
     } | {
         ok: false;
-        errorCode: 'invalid_request' | 'job_not_found' | 'install_unavailable' | 'not_managed' | 'in_use';
+        errorCode: 'invalid_request' | 'job_not_found' | 'install_unavailable' | 'not_managed' | 'in_use' | 'definition_version_changed';
         error: string;
     };
     readonly "machines.agents.install.status": {
         ok: false;
-        errorCode: 'invalid_request' | 'job_not_found' | 'install_unavailable' | 'not_managed' | 'in_use';
+        errorCode: 'invalid_request' | 'job_not_found' | 'install_unavailable' | 'not_managed' | 'in_use' | 'definition_version_changed';
         error: string;
     } | {
         ok: true;
@@ -92,7 +92,7 @@ export type MachineAgentInstallActionResultById = {
     };
     readonly "machines.agents.install.cancel": {
         ok: false;
-        errorCode: 'invalid_request' | 'job_not_found' | 'install_unavailable' | 'not_managed' | 'in_use';
+        errorCode: 'invalid_request' | 'job_not_found' | 'install_unavailable' | 'not_managed' | 'in_use' | 'definition_version_changed';
         error: string;
     } | {
         ok: true;

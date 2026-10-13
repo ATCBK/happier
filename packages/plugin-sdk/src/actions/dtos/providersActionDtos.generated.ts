@@ -3931,7 +3931,9 @@ export type ProvidersActionResultById = {
                 placement: 'system_append' | 'composer_insert' | 'skill_instructions' | 'provider_asset';
                 maxChars?: number | undefined;
                 required?: boolean | undefined;
+                skillMigrationV1?: true | undefined;
             }[];
+            skillSeeds: string[];
             secretBindings: Record<string, string | null>;
         }[];
     } | {

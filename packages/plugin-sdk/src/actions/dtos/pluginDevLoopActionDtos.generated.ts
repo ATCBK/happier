@@ -13,12 +13,27 @@ export type PluginDevLoopActionInputById = {
     };
     readonly "plugins.install": {
         path: string;
+        machineId?: string | undefined;
+        kind?: 'path' | 'archive' | 'npm' | undefined;
+        selector?: string | undefined;
+        integrity?: string | undefined;
+        sdkRegistryOrigin?: string | undefined;
         dev?: boolean | undefined;
         dryRun?: boolean | undefined;
         force?: boolean | undefined;
+    } | {
+        source: {
+            kind: 'marketplace';
+            sourceId: string;
+            pluginId: string;
+            version: string;
+            packageName?: string | undefined;
+        };
+        machineId: string;
     };
     readonly "plugins.uninstall": {
         pluginId: string;
+        deleteData?: boolean | undefined;
     };
     readonly "plugins.dev.submit": {
         projectRoot: string;

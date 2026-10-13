@@ -526,6 +526,7 @@ export type MachineStorageActionResultById = {
         };
         finishedAt?: number | undefined;
         previousScanAt?: number | undefined;
+        apfsLocalSnapshotCount?: number | undefined;
     };
     readonly "machines.storage.scan.get": {
         state: {
@@ -566,6 +567,7 @@ export type MachineStorageActionResultById = {
             };
             finishedAt?: number | undefined;
             previousScanAt?: number | undefined;
+            apfsLocalSnapshotCount?: number | undefined;
         } | null;
         nodes: {
             nodeId: string;
@@ -867,6 +869,7 @@ export type MachineStorageActionResultById = {
         };
         finishedAt?: number | undefined;
         previousScanAt?: number | undefined;
+        apfsLocalSnapshotCount?: number | undefined;
     };
     readonly "machines.storage.scan.skip": {
         scanId: string;
@@ -906,6 +909,7 @@ export type MachineStorageActionResultById = {
         };
         finishedAt?: number | undefined;
         previousScanAt?: number | undefined;
+        apfsLocalSnapshotCount?: number | undefined;
     };
     readonly "machines.storage.protected.add": {
         status: 'applied' | 'unchanged' | 'conflict';
@@ -1189,8 +1193,13 @@ export type MachineStorageActionResultById = {
                 };
                 finishedAt?: number | undefined;
                 previousScanAt?: number | undefined;
+                apfsLocalSnapshotCount?: number | undefined;
             }[];
         };
+        scanShortcuts?: {
+            kind: 'downloads' | 'cache';
+            path: string;
+        }[] | undefined;
     };
     readonly "machines.storage.category.list": {
         revision: number;
@@ -1375,7 +1384,12 @@ export type MachineStorageActionResultById = {
                 };
                 finishedAt?: number | undefined;
                 previousScanAt?: number | undefined;
+                apfsLocalSnapshotCount?: number | undefined;
             }[];
         };
+        scanShortcuts?: {
+            kind: 'downloads' | 'cache';
+            path: string;
+        }[] | undefined;
     };
 };

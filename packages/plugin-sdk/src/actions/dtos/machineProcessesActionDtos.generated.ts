@@ -196,7 +196,9 @@ export type MachineProcessesActionResultById = {
             } | undefined;
             ceiling?: {
                 limitBytes: number;
-                throttleCount5m: number;
+                usedBytes?: number | undefined;
+                observedAtMs?: number | undefined;
+                throttleCount5m?: number | undefined;
             } | undefined;
         }[];
         leftBehind: {
@@ -303,6 +305,7 @@ export type MachineProcessesActionResultById = {
         othersWork?: {
             count: number;
         } | undefined;
+        unverifiableCount?: number | undefined;
         history?: Record<string, {
             capturedAtMs: number;
             memoryBytes: number | null;

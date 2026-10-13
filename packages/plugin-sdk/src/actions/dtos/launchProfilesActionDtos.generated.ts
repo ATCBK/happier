@@ -121,7 +121,9 @@ export type LaunchProfilesActionInputById = {
                 placement?: 'system_append' | 'composer_insert' | 'skill_instructions' | 'provider_asset' | undefined;
                 maxChars?: number | undefined;
                 required?: boolean | undefined;
+                skillMigrationV1?: true | undefined;
             }[] | undefined;
+            skillSeeds?: readonly string[] | undefined;
             profileRecordRevision?: number | undefined;
         } | {
             v: 2;
@@ -177,10 +179,13 @@ export type LaunchProfilesActionInputById = {
                 placement?: 'system_append' | 'composer_insert' | 'skill_instructions' | 'provider_asset' | undefined;
                 maxChars?: number | undefined;
                 required?: boolean | undefined;
+                skillMigrationV1?: true | undefined;
             }[] | undefined;
+            skillSeeds?: readonly string[] | undefined;
             profileRecordRevision?: number | undefined;
         };
         secretBindings?: Record<string, string | null> | undefined;
+        skillSeeds?: string[] | undefined;
         legacyCloneSource?: {
             id: string;
             revision: number;
@@ -259,10 +264,10 @@ export type LaunchProfilesActionInputById = {
                     artifactId: string;
                     serverId?: string | undefined;
                 };
-                enabled?: boolean | undefined;
-                placement?: 'system_append' | 'composer_insert' | 'skill_instructions' | 'provider_asset' | undefined;
-                maxChars?: number | undefined;
                 required?: boolean | undefined;
+                enabled?: boolean | undefined;
+                maxChars?: number | undefined;
+                placement?: 'system_append' | undefined;
             };
         } | {
             kind: 'detach';
@@ -632,7 +637,9 @@ export type LaunchProfilesActionResultById = {
                 placement: 'system_append' | 'composer_insert' | 'skill_instructions' | 'provider_asset';
                 maxChars?: number | undefined;
                 required?: boolean | undefined;
+                skillMigrationV1?: true | undefined;
             }[] | undefined;
+            skillSeeds?: readonly string[] | undefined;
             profileRecordRevision?: number | undefined;
         } | {
             v: 2;
@@ -700,7 +707,9 @@ export type LaunchProfilesActionResultById = {
                 placement: 'system_append' | 'composer_insert' | 'skill_instructions' | 'provider_asset';
                 maxChars?: number | undefined;
                 required?: boolean | undefined;
+                skillMigrationV1?: true | undefined;
             }[] | undefined;
+            skillSeeds?: readonly string[] | undefined;
             profileRecordRevision?: number | undefined;
         };
         location: {
@@ -767,7 +776,9 @@ export type LaunchProfilesActionResultById = {
                 placement: 'system_append' | 'composer_insert' | 'skill_instructions' | 'provider_asset';
                 maxChars?: number | undefined;
                 required?: boolean | undefined;
+                skillMigrationV1?: true | undefined;
             }[] | undefined;
+            skillSeeds?: readonly string[] | undefined;
             profileRecordRevision?: number | undefined;
         } | {
             v: 2;
@@ -835,7 +846,9 @@ export type LaunchProfilesActionResultById = {
                 placement: 'system_append' | 'composer_insert' | 'skill_instructions' | 'provider_asset';
                 maxChars?: number | undefined;
                 required?: boolean | undefined;
+                skillMigrationV1?: true | undefined;
             }[] | undefined;
+            skillSeeds?: readonly string[] | undefined;
             profileRecordRevision?: number | undefined;
         };
         location: {
@@ -948,7 +961,9 @@ export type LaunchProfilesActionResultById = {
                 placement: 'system_append' | 'composer_insert' | 'skill_instructions' | 'provider_asset';
                 maxChars?: number | undefined;
                 required?: boolean | undefined;
+                skillMigrationV1?: true | undefined;
             }[];
+            skillSeeds: string[];
             secretBindings: Record<string, string | null>;
         };
         revision: number;
@@ -1013,7 +1028,9 @@ export type LaunchProfilesActionResultById = {
                 placement: 'system_append' | 'composer_insert' | 'skill_instructions' | 'provider_asset';
                 maxChars?: number | undefined;
                 required?: boolean | undefined;
+                skillMigrationV1?: true | undefined;
             }[] | undefined;
+            skillSeeds?: readonly string[] | undefined;
             profileRecordRevision?: number | undefined;
         } | {
             v: 2;
@@ -1081,7 +1098,9 @@ export type LaunchProfilesActionResultById = {
                 placement: 'system_append' | 'composer_insert' | 'skill_instructions' | 'provider_asset';
                 maxChars?: number | undefined;
                 required?: boolean | undefined;
+                skillMigrationV1?: true | undefined;
             }[] | undefined;
+            skillSeeds?: readonly string[] | undefined;
             profileRecordRevision?: number | undefined;
         };
         location: {
@@ -1152,7 +1171,9 @@ export type LaunchProfilesActionResultById = {
                 placement: 'system_append' | 'composer_insert' | 'skill_instructions' | 'provider_asset';
                 maxChars?: number | undefined;
                 required?: boolean | undefined;
+                skillMigrationV1?: true | undefined;
             }[] | undefined;
+            skillSeeds?: readonly string[] | undefined;
             profileRecordRevision?: number | undefined;
         } | {
             v: 2;
@@ -1220,7 +1241,9 @@ export type LaunchProfilesActionResultById = {
                 placement: 'system_append' | 'composer_insert' | 'skill_instructions' | 'provider_asset';
                 maxChars?: number | undefined;
                 required?: boolean | undefined;
+                skillMigrationV1?: true | undefined;
             }[] | undefined;
+            skillSeeds?: readonly string[] | undefined;
             profileRecordRevision?: number | undefined;
         };
         location: {
@@ -1336,7 +1359,9 @@ export type LaunchProfilesActionResultById = {
                 placement: 'system_append' | 'composer_insert' | 'skill_instructions' | 'provider_asset';
                 maxChars?: number | undefined;
                 required?: boolean | undefined;
+                skillMigrationV1?: true | undefined;
             }[];
+            skillSeeds: string[];
             secretBindings: Record<string, string | null>;
         };
         revision: number;
@@ -1465,7 +1490,9 @@ export type LaunchProfilesActionResultById = {
                     placement: 'system_append' | 'composer_insert' | 'skill_instructions' | 'provider_asset';
                     maxChars?: number | undefined;
                     required?: boolean | undefined;
+                    skillMigrationV1?: true | undefined;
                 }[];
+                skillSeeds: string[];
                 secretBindings: Record<string, string | null>;
             };
             revision: number;

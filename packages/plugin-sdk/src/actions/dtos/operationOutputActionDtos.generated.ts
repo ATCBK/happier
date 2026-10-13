@@ -17,6 +17,7 @@ export type OperationOutputActionInputById = {
         machineId: string;
         waitForTerminal?: true | undefined;
         includeSetupReview?: true | undefined;
+        refreshSetupReview?: true | undefined;
     };
     readonly "action.operations.cancel": {
         operationId: string;

@@ -24,6 +24,7 @@ export type SessionAuthoringActionInputById = {
                 placement?: 'system_append' | 'composer_insert' | 'skill_instructions' | 'provider_asset' | undefined;
                 maxChars?: number | undefined;
                 required?: boolean | undefined;
+                skillMigrationV1?: true | undefined;
             }[] | undefined;
             prompt?: string | undefined;
             profileId?: string | undefined;

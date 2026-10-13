@@ -105,6 +105,13 @@ export type ProjectSourcesActionInputById = {
             attachment?: {
                 kind: 'attach';
                 attachment: {
+                    purpose: 'dashboard';
+                    ref: {
+                        kind: 'doc' | 'bundle';
+                        artifactId: string;
+                        serverId?: string | undefined;
+                    };
+                } | {
                     purpose: 'context';
                     entry: {
                         id: string;
@@ -114,16 +121,9 @@ export type ProjectSourcesActionInputById = {
                             serverId?: string | undefined;
                         };
                         enabled?: boolean | undefined;
-                        placement?: 'system_append' | 'composer_insert' | 'skill_instructions' | 'provider_asset' | undefined;
                         maxChars?: number | undefined;
                         required?: boolean | undefined;
-                    };
-                } | {
-                    purpose: 'dashboard';
-                    ref: {
-                        kind: 'doc' | 'bundle';
-                        artifactId: string;
-                        serverId?: string | undefined;
+                        placement?: 'system_append' | undefined;
                     };
                 };
             } | {
@@ -213,6 +213,7 @@ export type ProjectSourcesActionResultById = {
                     };
                     maxChars?: number | undefined;
                     required?: boolean | undefined;
+                    skillMigrationV1?: true | undefined;
                 };
             } | {
                 purpose: 'dashboard';
@@ -281,6 +282,7 @@ export type ProjectSourcesActionResultById = {
                     };
                     maxChars?: number | undefined;
                     required?: boolean | undefined;
+                    skillMigrationV1?: true | undefined;
                 };
             } | {
                 purpose: 'dashboard';
@@ -346,6 +348,7 @@ export type ProjectSourcesActionResultById = {
                     };
                     maxChars?: number | undefined;
                     required?: boolean | undefined;
+                    skillMigrationV1?: true | undefined;
                 };
             } | {
                 purpose: 'dashboard';
@@ -409,6 +412,7 @@ export type ProjectSourcesActionResultById = {
                     };
                     maxChars?: number | undefined;
                     required?: boolean | undefined;
+                    skillMigrationV1?: true | undefined;
                 };
             } | {
                 purpose: 'dashboard';
@@ -475,6 +479,7 @@ export type ProjectSourcesActionResultById = {
                     };
                     maxChars?: number | undefined;
                     required?: boolean | undefined;
+                    skillMigrationV1?: true | undefined;
                 };
             } | {
                 purpose: 'dashboard';
@@ -538,6 +543,7 @@ export type ProjectSourcesActionResultById = {
                     };
                     maxChars?: number | undefined;
                     required?: boolean | undefined;
+                    skillMigrationV1?: true | undefined;
                 };
             } | {
                 purpose: 'dashboard';
@@ -604,6 +610,7 @@ export type ProjectSourcesActionResultById = {
                     };
                     maxChars?: number | undefined;
                     required?: boolean | undefined;
+                    skillMigrationV1?: true | undefined;
                 };
             } | {
                 purpose: 'dashboard';
@@ -667,6 +674,7 @@ export type ProjectSourcesActionResultById = {
                     };
                     maxChars?: number | undefined;
                     required?: boolean | undefined;
+                    skillMigrationV1?: true | undefined;
                 };
             } | {
                 purpose: 'dashboard';
@@ -733,6 +741,7 @@ export type ProjectSourcesActionResultById = {
                     };
                     maxChars?: number | undefined;
                     required?: boolean | undefined;
+                    skillMigrationV1?: true | undefined;
                 };
             } | {
                 purpose: 'dashboard';

@@ -328,11 +328,6 @@ export type SessionControlActionInputById = {
         valueId: string;
         sessionId?: string | undefined;
     };
-    readonly "session.mcp_selection.set": {
-        selection: unknown;
-        sessionActive: boolean;
-        sessionId?: string | undefined;
-    };
     readonly "session.connected_services_auth.set": {
         sessionId: string;
         agentId: string;
@@ -621,6 +616,14 @@ export type SessionControlActionResultById = {
         sessionId: string;
         leadSessionId: string | null;
         attachedAt: number | null;
+        sourceKeyPreparation?: {
+            kind: 'not_needed';
+        } | {
+            kind: 'prepared';
+        } | {
+            kind: 'waiting';
+            reason: 'unsupported' | 'source_key_unavailable' | 'runner_unreachable' | 'runner_key_unavailable';
+        } | undefined;
     } | {
         ok: false;
         error: 'reports_to_cycle';
@@ -746,9 +749,6 @@ export type SessionControlActionResultById = {
         candidates?: readonly string[] | undefined;
     };
     readonly "session.config_option.set": string | number | boolean | readonly JsonValue[] | {
-        readonly [key: string]: JsonValue;
-    } | null;
-    readonly "session.mcp_selection.set": string | number | boolean | readonly JsonValue[] | {
         readonly [key: string]: JsonValue;
     } | null;
     readonly "session.connected_services_auth.set": string | number | boolean | readonly JsonValue[] | {

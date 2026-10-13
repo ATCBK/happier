@@ -4,54 +4,12 @@
 import type { JsonValue } from '../../identity.js';
 
 export type DaemonAdminActionInputById = {
-    readonly "daemon.promptAssets.discover": {
-        [x: string]: unknown;
-        assetTypeId: string;
-        scope: 'user' | 'project';
-        directory?: string | null | undefined;
-    };
     readonly "daemon.promptAssets.delete": {
         [x: string]: unknown;
         assetTypeId: string;
         scope: 'user' | 'project';
         externalRef: Record<string, unknown>;
         directory?: string | null | undefined;
-        previewOnly?: boolean | undefined;
-        expectedDigest?: string | null | undefined;
-    };
-    readonly "daemon.promptRegistry.scanSource": {
-        [x: string]: unknown;
-        sourceId: string;
-        configuredSources?: {
-            [x: string]: unknown;
-            id: string;
-            adapterId: string;
-            title: string;
-            enabled?: boolean | undefined;
-            config?: Record<string, unknown> | undefined;
-        }[] | undefined;
-        query?: string | null | undefined;
-    };
-    readonly "daemon.promptRegistry.install": {
-        [x: string]: unknown;
-        sourceId: string;
-        itemId: string;
-        installTarget: {
-            [x: string]: unknown;
-            assetTypeId: string;
-            scope: 'user' | 'project';
-            targetName: string;
-            directory?: string | undefined;
-            installMode?: 'copy' | 'symlink' | undefined;
-        };
-        configuredSources?: {
-            [x: string]: unknown;
-            id: string;
-            adapterId: string;
-            title: string;
-            enabled?: boolean | undefined;
-            config?: Record<string, unknown> | undefined;
-        }[] | undefined;
         previewOnly?: boolean | undefined;
         expectedDigest?: string | null | undefined;
     };
@@ -77,16 +35,7 @@ export type DaemonAdminActionInputById = {
     };
 };
 export type DaemonAdminActionResultById = {
-    readonly "daemon.promptAssets.discover": string | number | boolean | readonly JsonValue[] | {
-        readonly [key: string]: JsonValue;
-    } | null;
     readonly "daemon.promptAssets.delete": string | number | boolean | readonly JsonValue[] | {
-        readonly [key: string]: JsonValue;
-    } | null;
-    readonly "daemon.promptRegistry.scanSource": string | number | boolean | readonly JsonValue[] | {
-        readonly [key: string]: JsonValue;
-    } | null;
-    readonly "daemon.promptRegistry.install": string | number | boolean | readonly JsonValue[] | {
         readonly [key: string]: JsonValue;
     } | null;
     readonly "daemon.filesystem.listRoots": string | number | boolean | readonly JsonValue[] | {

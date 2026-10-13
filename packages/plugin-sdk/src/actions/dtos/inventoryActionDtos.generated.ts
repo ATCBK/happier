@@ -519,6 +519,7 @@ export type InventoryActionResultById = {
                 placement: 'system_append' | 'composer_insert' | 'skill_instructions' | 'provider_asset';
                 maxChars?: number | undefined;
                 required?: boolean | undefined;
+                skillMigrationV1?: true | undefined;
             }[] | undefined;
         };
         revision: number;
@@ -568,6 +569,7 @@ export type InventoryActionResultById = {
                 placement: 'system_append' | 'composer_insert' | 'skill_instructions' | 'provider_asset';
                 maxChars?: number | undefined;
                 required?: boolean | undefined;
+                skillMigrationV1?: true | undefined;
             }[] | undefined;
         };
         revision: number;
@@ -636,6 +638,7 @@ export type InventoryActionResultById = {
                 placement: 'system_append' | 'composer_insert' | 'skill_instructions' | 'provider_asset';
                 maxChars?: number | undefined;
                 required?: boolean | undefined;
+                skillMigrationV1?: true | undefined;
             }[] | undefined;
         } | undefined;
     } | {
@@ -754,6 +757,7 @@ export type InventoryActionResultById = {
             signIn: {
                 status: 'unknown' | 'signedIn' | 'signedOut';
                 loginSupport: 'login_terminal' | 'status_only' | 'manual_only' | 'unsupported';
+                required?: boolean | undefined;
                 accountLabel?: string | undefined;
             };
             platform: {

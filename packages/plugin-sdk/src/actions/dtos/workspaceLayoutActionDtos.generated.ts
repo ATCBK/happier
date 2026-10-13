@@ -73,6 +73,18 @@ export type WorkspaceLayoutActionInputById = {
     readonly "workspace.tabs.close": {
         tabId: string;
     };
+    readonly "workspace.tabs.close_others": {
+        tabId: string;
+    };
+    readonly "workspace.tabs.close_left": {
+        tabId: string;
+    };
+    readonly "workspace.tabs.close_right": {
+        tabId: string;
+    };
+    readonly "workspace.tabs.close_all": {
+        groupId?: string | undefined;
+    };
     readonly "workspace.tabs.closed.list": Record<string, never>;
     readonly "workspace.tabs.reopen": {
         tabId?: string | undefined;
@@ -209,6 +221,18 @@ export type WorkspaceLayoutActionResultById = {
         ok: true;
     };
     readonly "workspace.tabs.close": {
+        ok: true;
+    };
+    readonly "workspace.tabs.close_others": {
+        ok: true;
+    };
+    readonly "workspace.tabs.close_left": {
+        ok: true;
+    };
+    readonly "workspace.tabs.close_right": {
+        ok: true;
+    };
+    readonly "workspace.tabs.close_all": {
         ok: true;
     };
     readonly "workspace.tabs.closed.list": {

@@ -70,6 +70,7 @@ export type RemoteHostsActionInputById = {
                 providerConnections?: number | 'absent' | undefined;
                 connectedConfigurations?: number | 'absent' | undefined;
                 connectedPurposes?: number | 'absent' | undefined;
+                registrySources?: number | 'absent' | undefined;
             };
             remoteHosts?: {
                 revision: number | 'absent';

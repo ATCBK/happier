@@ -28,7 +28,6 @@ export type PromptLibraryActionInputById = {
     };
     readonly "prompts.library.list": {
         query?: string | undefined;
-        includeBundles?: false | undefined;
     };
     readonly "prompts.stack.update": {
         surface: 'coding' | 'voice';
@@ -43,9 +42,9 @@ export type PromptLibraryActionInputById = {
                     serverId?: string | undefined;
                 };
                 enabled?: boolean | undefined;
-                placement?: 'system_append' | 'composer_insert' | 'skill_instructions' | 'provider_asset' | undefined;
                 maxChars?: number | undefined;
                 required?: boolean | undefined;
+                placement?: 'system_append' | undefined;
             };
         } | {
             kind: 'detach';
@@ -80,24 +79,6 @@ export type PromptLibraryActionInputById = {
         expectedRevision?: {
             headerVersion: number;
             bodyVersion: number;
-        } | undefined;
-    };
-    readonly "prompt_bundle.create": {
-        title: string;
-        bundleSchemaId: 'skills.skill_md_v1' | 'bundle.generic_v1';
-        entries: {
-            path: string;
-            contentBase64: string;
-            contentKind: 'utf8' | 'binary';
-            unixMode?: number | null | undefined;
-        }[];
-        folderId?: string | null | undefined;
-        tags?: string[] | undefined;
-        createFolder?: {
-            id: string;
-            name: string;
-            expectedRevision: number | 'absent';
-            parentId?: string | null | undefined;
         } | undefined;
     };
     readonly "prompt_bundle.update": {
@@ -150,18 +131,9 @@ export type PromptLibraryActionInputById = {
         installMode?: 'copy' | 'symlink' | undefined;
     };
     readonly "prompt_registry.install": {
-        [x: string]: unknown;
         machineId: string;
         sourceId: string;
         itemId: string;
-        configuredSources?: {
-            [x: string]: unknown;
-            id: string;
-            adapterId: string;
-            title: string;
-            enabled?: boolean | undefined;
-            config?: Record<string, unknown> | undefined;
-        }[] | undefined;
         installTarget?: {
             assetTypeId: string;
             scope: 'user' | 'project';
@@ -233,10 +205,6 @@ export type PromptLibraryActionResultById = {
             headerVersion: number;
             bodyVersion: number;
         } | undefined;
-    };
-    readonly "prompt_bundle.create": {
-        ok: true;
-        artifactId: string;
     };
     readonly "prompt_bundle.update": {
         ok: true;

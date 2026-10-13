@@ -5,6 +5,7 @@ export { readInputTypePickerLaunchInput } from './inputHints.js';
 export type { SessionTerminalLayoutV1, QualifiedAudienceSelection, SessionAudienceSelectionV1 } from './dtos/pluginActionDtoSupport.generated.js';
 export type { ProviderCatalogParserV1, VoiceProviderSettingsJsonValueV1 } from './dtos/pluginActionDtoSupport.generated.js';
 export type { ExternalSessionsSource } from './dtos/pluginActionDtoSupport.generated.js';
+export type { ManagedSessionMcpPortabilityV1, ManagedSessionMcpReasonCodeV1 } from './dtos/pluginActionDtoSupport.generated.js';
 export type { AccountCreationOperand, AccountOperand, BoundedLegacyJsonValue, PluginSettingFieldSchemaV2, SystemTaskJsonArray, SystemTaskJsonObject, SystemTaskJsonPrimitive, SystemTaskJsonValue, WorkflowSelectionEdit } from './dtos/pluginActionDtoSupport.generated.js';
 export type { BuiltinWidgetIdV1, WidgetDefinitionBodyV1, WidgetDefinitionBodyV1Input, SessionBoardItemUpsertSchemaInputV1 } from './dtos/pluginActionDtoSupport.generated.js';
 /** Named dependencies of the canonical host Action input/result maps. */
@@ -38,6 +39,10 @@ export type { BrowserDiagnosticsActionInputById, BrowserDiagnosticsActionResultB
 export type { BrowserRecordingActionInputById, BrowserRecordingActionResultById } from './dtos/browserRecordingActionDtos.generated.js';
 export type { CaptureViewingActionInputById, CaptureViewingActionResultById } from './dtos/captureViewingActionDtos.generated.js';
 export type { CapabilityRulesActionInputById, CapabilityRulesActionResultById } from './dtos/capabilityRulesActionDtos.generated.js';
+export type { SkillsActionInputById, SkillsActionResultById } from './dtos/skillsActionDtos.generated.js';
+export type { RegistriesActionInputById, RegistriesActionResultById } from './dtos/registriesActionDtos.generated.js';
+export type { PersonalSavedSecretsActionInputById, PersonalSavedSecretsActionResultById } from './dtos/personalSavedSecretsActionDtos.generated.js';
+export type { SessionCapabilitiesActionInputById, SessionCapabilitiesActionResultById } from './dtos/sessionCapabilitiesActionDtos.generated.js';
 export type { CommandPaletteActionInputById, CommandPaletteActionResultById } from './dtos/commandPaletteActionDtos.generated.js';
 export type { CompanionControlsActionInputById, CompanionControlsActionResultById } from './dtos/companionControlsActionDtos.generated.js';
 export type { ComposerIngressActionInputById, ComposerIngressActionResultById } from './dtos/composerIngressActionDtos.generated.js';

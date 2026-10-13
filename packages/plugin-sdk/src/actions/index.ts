@@ -66,6 +66,9 @@ export type { BrowserRecordingActionInputById } from './dtos/browserRecordingAct
 export type { BrowserRecordingActionResultById } from './dtos/browserRecordingActionDtos.generated.js';
 export type { BugReportSubmissionActionInputById } from './dtos/bugReportSubmissionActionDtos.generated.js';
 export type { BugReportSubmissionActionResultById } from './dtos/bugReportSubmissionActionDtos.generated.js';
+export type { BuiltinWidgetIdV1 } from './dtos/pluginActionDtoSupport.generated.js';
+export type { CapabilityRulesActionInputById } from './dtos/capabilityRulesActionDtos.generated.js';
+export type { CapabilityRulesActionResultById } from './dtos/capabilityRulesActionDtos.generated.js';
 export type { CaptureViewingActionInputById } from './dtos/captureViewingActionDtos.generated.js';
 export type { CaptureViewingActionResultById } from './dtos/captureViewingActionDtos.generated.js';
 export type { ClipboardActionInputById } from './dtos/clipboardActionDtos.generated.js';
@@ -170,6 +173,8 @@ export type { MachineWorkSummaryActionInputById } from './dtos/machineWorkSummar
 export type { MachineWorkSummaryActionResultById } from './dtos/machineWorkSummaryActionDtos.generated.js';
 export type { ManagedMachinesActionInputById } from './dtos/managedMachinesActionDtos.generated.js';
 export type { ManagedMachinesActionResultById } from './dtos/managedMachinesActionDtos.generated.js';
+export type { ManagedSessionMcpPortabilityV1 } from './dtos/pluginActionDtoSupport.generated.js';
+export type { ManagedSessionMcpReasonCodeV1 } from './dtos/pluginActionDtoSupport.generated.js';
 export type { McpServersActionInputById } from './dtos/mcpServersActionDtos.generated.js';
 export type { McpServersActionResultById } from './dtos/mcpServersActionDtos.generated.js';
 export type { MemoryActionInputById } from './dtos/memoryActionDtos.generated.js';
@@ -188,6 +193,8 @@ export type { OperationOutputActionInputById } from './dtos/operationOutputActio
 export type { OperationOutputActionResultById } from './dtos/operationOutputActionDtos.generated.js';
 export type { PeerMediationObservabilityActionInputById } from './dtos/peerMediationObservabilityActionDtos.generated.js';
 export type { PeerMediationObservabilityActionResultById } from './dtos/peerMediationObservabilityActionDtos.generated.js';
+export type { PersonalSavedSecretsActionInputById } from './dtos/personalSavedSecretsActionDtos.generated.js';
+export type { PersonalSavedSecretsActionResultById } from './dtos/personalSavedSecretsActionDtos.generated.js';
 export type { PluginActionAuthorDefaults } from '../definePlugin.js';
 export type { PluginActionDeclaration } from '../definePlugin.js';
 export type { PluginActionExecutionV2 } from '../definePlugin.js';
@@ -246,6 +253,8 @@ export type { ProviderCatalogParserV1 } from './dtos/pluginActionDtoSupport.gene
 export type { ProvidersActionInputById } from './dtos/providersActionDtos.generated.js';
 export type { ProvidersActionResultById } from './dtos/providersActionDtos.generated.js';
 export type { QualifiedAudienceSelection } from './dtos/pluginActionDtoSupport.generated.js';
+export type { RegistriesActionInputById } from './dtos/registriesActionDtos.generated.js';
+export type { RegistriesActionResultById } from './dtos/registriesActionDtos.generated.js';
 export type { RemoteHostsActionInputById } from './dtos/remoteHostsActionDtos.generated.js';
 export type { RemoteHostsActionResultById } from './dtos/remoteHostsActionDtos.generated.js';
 export type { ReviewCommentsActionInputById } from './dtos/reviewCommentsActionDtos.generated.js';
@@ -274,6 +283,8 @@ export type { SessionAuthoringActionResultById } from './dtos/sessionAuthoringAc
 export type { SessionBoardActionInputById } from './dtos/sessionBoardActionDtos.generated.js';
 export type { SessionBoardActionResultById } from './dtos/sessionBoardActionDtos.generated.js';
 export type { SessionBoardItemUpsertSchemaInputV1 } from './dtos/pluginActionDtoSupport.generated.js';
+export type { SessionCapabilitiesActionInputById } from './dtos/sessionCapabilitiesActionDtos.generated.js';
+export type { SessionCapabilitiesActionResultById } from './dtos/sessionCapabilitiesActionDtos.generated.js';
 export type { SessionControlActionInputById } from './dtos/sessionControlActionDtos.generated.js';
 export type { SessionControlActionResultById } from './dtos/sessionControlActionDtos.generated.js';
 export type { SessionDiscussionActionInputById } from './dtos/sessionDiscussionActionDtos.generated.js';
@@ -303,6 +314,8 @@ export type { SessionUsageLimitCheckNowRequestV1Input } from './actionTypeMap.ge
 export type { SessionUsageLimitConsumeResetCreditRequestV1Input } from './actionTypeMap.generated.js';
 export type { SettingsDeclarationsActionInputById } from './dtos/settingsDeclarationsActionDtos.generated.js';
 export type { SettingsDeclarationsActionResultById } from './dtos/settingsDeclarationsActionDtos.generated.js';
+export type { SkillsActionInputById } from './dtos/skillsActionDtos.generated.js';
+export type { SkillsActionResultById } from './dtos/skillsActionDtos.generated.js';
 export type { SubagentRegistryActionInputById } from './dtos/subagentRegistryActionDtos.generated.js';
 export type { SubagentRegistryActionResultById } from './dtos/subagentRegistryActionDtos.generated.js';
 export type { SystemTaskJsonArray } from './dtos/pluginActionDtoSupport.generated.js';
