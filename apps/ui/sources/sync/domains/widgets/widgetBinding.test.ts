@@ -5,6 +5,13 @@ import type { PluginUiProjectionCurrentness } from '@/sync/domains/plugins/ui/us
 import { createSessionFixture } from '@/dev/testkit/fixtures/sessionFixtures';
 import { resolveConfiguredWidgetInputs, readBuiltinWidgetDescriptorV1, WidgetDefinitionV1Schema, type WidgetInstanceV1 } from '@happier-dev/protocol/widgets';
 import { restoreServerAccountForTest } from '@/dev/testkit/harness/serverAccountConnectionHarness';
+import { captureActiveServerAccountScopeLifetime } from '@/sync/domains/scope/activeServerAccountScope';
+import { widgetProjectionOf, widgetInstalledPackage } from '@/dev/testkit/fixtures/pluginWidgetProjectionFixtures';
+import { readWidgetDescriptor } from '@/components/widgets/widgetCatalog';
+import { resolveInstalledWidgetMount } from '@/components/widgets/installedWidgetMount';
+import { TRIAGE_SOURCES_TARGET_PLUGIN_ID_V1 } from '@happier-dev/triage-protocol/v1';
+import { EMPTY_PLUGIN_UI_PROJECTION } from '@/sync/domains/plugins/ui/projection';
+import { unionPluginUiProjections } from '@/sync/domains/plugins/ui/projectionUnion';
 import '@/sync/syncEngine';
 
 const runtime = (serverId: string, machineId: string): PluginUiProjectionCurrentness => ({
@@ -14,6 +21,38 @@ const runtime = (serverId: string, machineId: string): PluginUiProjectionCurrent
 const session = (id: string, serverId = 'home'): Session => createSessionFixture({ id, serverId });
 
 describe('configured widget executable target', () => {
+  it('admits an installed Home widget from its current Account projection without inventing a union machine', async () => {
+    const connection = await restoreServerAccountForTest({ serverUrl: 'https://home-widget-union.test', accountId: 'viewer' });
+    try {
+      const lifetime = captureActiveServerAccountScopeLifetime()!;
+      const definition = { kind: 'installed', surface: { pluginId: TRIAGE_SOURCES_TARGET_PLUGIN_ID_V1, localId: 'latest' } } as const;
+      const union = unionPluginUiProjections([
+        { machineId: 'origin-a', serverId: connection.home.id, phase: 'current', interactionEnabled: true,
+          projection: widgetProjectionOf([{ ...definition.surface, target: 'app', homeDefault: 'shown' }], {
+            [definition.surface.pluginId]: widgetInstalledPackage(definition.surface.pluginId, 'PRs & Issues'),
+          }) },
+        { machineId: 'origin-b', serverId: connection.home.id, phase: 'current', interactionEnabled: true, projection: EMPTY_PLUGIN_UI_PROJECTION },
+      ]);
+      const descriptor = readWidgetDescriptor(union.pluginUiProjection, definition)!;
+      expect(descriptor).not.toBeNull();
+      const appRuntime = { ...runtime(connection.home.id, 'unused'), ...union, accountLifetime: lifetime };
+      expect(appRuntime.serverId).toBeNull();
+      expect(appRuntime.machineId).toBeNull();
+      const input = { scope: { serverId: connection.home.id, accountId: 'viewer', owner: { kind: 'home' as const } },
+        definition, descriptor, targetKind: 'app' as const, appRuntime, resolvedInput: { status: 'ready' as const, input: {} },
+        readSession: () => { throw new Error('The app widget must not borrow a Session'); } };
+      const admitted = resolveConfiguredWidgetTarget(input);
+      expect(admitted).toMatchObject({ status: 'ready', target: { kind: 'app' }, runtime: appRuntime });
+      // The exact installed identity still resolves through the canonical mount selector.
+      expect(resolveInstalledWidgetMount({ source: { kind: 'installedSurface', surface: definition.surface }, target: 'app',
+        presentation: 'content', runtime: appRuntime }).placement?.pluginId).toBe(TRIAGE_SOURCES_TARGET_PLUGIN_ID_V1);
+      expect(resolveConfiguredWidgetTarget({ ...input, scope: { ...input.scope, serverId: 'foreign-home' } }))
+        .toMatchObject({ status: 'denied', reasonCode: 'widget_target_scope_mismatch' });
+      await connection.dispose();
+      expect(resolveConfiguredWidgetTarget(input)).toMatchObject({ status: 'denied', reasonCode: 'widget_target_scope_mismatch' });
+    } finally { await connection.dispose(); }
+  });
+
   it('admits a saved native Session body without plugin runtime identity and retains Session denial', () => {
     const native = readBuiltinWidgetDescriptorV1({ kind: 'builtin', id: 'changes' })!;
     const body = { kind: 'builtin', id: 'changes' } as const;

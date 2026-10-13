@@ -31,6 +31,9 @@ import { createSessionBoardSourceAvailabilityResolver } from '@/components/sessi
 import { createSessionAccessFixture, createSessionFixture } from '@/dev/testkit/fixtures/sessionFixtures';
 import { storage } from '@/sync/domains/state/storage';
 import { loadPluginUiHostSupport } from '@/components/plugins/hostApi/loadPluginUiHostSupport';
+import { TRIAGE_SOURCES_TARGET_PLUGIN_ID_V1 } from '@happier-dev/triage-protocol/v1';
+import { widgetProjectionOf, widgetInstalledPackage } from '@/dev/testkit/fixtures/pluginWidgetProjectionFixtures';
+import { unionPluginUiProjections } from '@/sync/domains/plugins/ui/projectionUnion';
 
 // Statically imported surface consumers reach Sync; install its external Socket boundary before that graph loads.
 vi.mock('socket.io-client', async importOriginal =>
@@ -43,6 +46,35 @@ vi.mock('@/components/browser/frame/BrowserViewFrame.web', () => ({
 }));
 
 installDisconnectedServerSocketBoundary();
+
+it('mounts the exact installed app widget from a multi-machine Home union and retires on viewer loss', async () => {
+    const http = createHomeHubArtifactHttpBoundary('viewer');
+    const connection = await restoreServerAccountForTest({ serverUrl: 'https://installed-widget-union.test', accountId: 'viewer', request: http.request });
+    const viewer = getActiveServerAccountScope()!;
+    const definition = { kind: 'installed', surface: { pluginId: TRIAGE_SOURCES_TARGET_PLUGIN_ID_V1, localId: 'latest' } } as const;
+    const union = unionPluginUiProjections([
+        { machineId: 'origin-a', serverId: viewer.serverId, phase: 'current', interactionEnabled: true,
+            projection: widgetProjectionOf([{ ...definition.surface, target: 'app', homeDefault: 'shown' }], {
+                [definition.surface.pluginId]: widgetInstalledPackage(definition.surface.pluginId, 'PRs & Issues'),
+            }) },
+        { machineId: 'origin-b', serverId: viewer.serverId, phase: 'current', interactionEnabled: true, projection: EMPTY_PLUGIN_UI_PROJECTION },
+    ]);
+    const runtime = { ...union, pluginBrowserProjection: null, platform: 'web' as const, accountLifetime: captureActiveServerAccountScopeLifetime() };
+    const descriptor = readWidgetDescriptor(union.pluginUiProjection, definition);
+    expect(descriptor).not.toBeNull();
+    const screen = await renderScreen(<WidgetSurface scope={{ ...viewer, owner: { kind: 'home' } }}
+        instance={{ v: 1, id: 'latest-copy', definition, bindings: {} }} descriptor={descriptor}
+        providedContext={{}} appRuntime={runtime} recordRevision="latest:1" presentation="content"
+        reference={<Text testID="latest-admitted-reference">Open PRs &amp; Issues</Text>} testID="latest-union" />);
+    let disconnected = false;
+    try {
+        expect(screen.tree.root.findAllByType(ConfiguredWidgetRefusal)).toHaveLength(0);
+        expect(screen.tree.root.findAllByProps({ testID: 'latest-admitted-reference' }).length).toBeGreaterThan(0);
+        await React.act(async () => { await connection.dispose(); disconnected = true; });
+        expect(screen.tree.root.findAllByProps({ testID: 'latest-admitted-reference' })).toHaveLength(0);
+        expect(http.writes).toEqual([]);
+    } finally { await screen.unmount(); if (!disconnected) await connection.dispose(); }
+});
 
 it.each([['artifact', 'home'], ['artifact', 'project'], ['inline', 'sessionBoard']] as const)('renders a saved builtin daily widget through %s on %s with viewer admission and retires its Resource on authority loss', async (kind, owner) => {
     const disposeActionLoader = await installRealActionExecutorModuleLoader();

@@ -112,9 +112,14 @@ function resolveConfiguredWidgetTargetFacts(input: ConfiguredWidgetTargetInput):
     // The AppShell union has no unique server/machine with zero or several
     // members. It is not that body's authority: live Resource nodes separately
     // admit their exact contribution origin against the Account lifetime.
-    if (input.definition?.kind !== 'builtin' && (!input.authoredBody || input.authoredBody.kind === 'installed')
-      && (!input.appRuntime.serverId || !areServerProfileIdentifiersEquivalent(input.appRuntime.serverId, input.scope.serverId)))
-      return { status: 'denied', reasonCode: 'widget_target_scope_mismatch' };
+    if (input.definition?.kind !== 'builtin' && (!input.authoredBody || input.authoredBody.kind === 'installed')) {
+      // An app union has no scalar machine/server. Its captured Account owns catalog admission;
+      // the plugin host still selects and validates this contribution's exact execution origin.
+      const lifetime = input.appRuntime.accountLifetime;
+      const serverId = input.appRuntime.serverId ?? (lifetime?.isCurrent() ? lifetime.scope.serverId : null);
+      if (!serverId || !areServerProfileIdentifiersEquivalent(serverId, input.scope.serverId))
+        return { status: 'denied', reasonCode: 'widget_target_scope_mismatch' };
+    }
     return { status: 'ready', target: { kind: 'app' }, runtime: input.appRuntime, input: input.resolvedInput.input };
   }
   const path = declaredTarget.path;
