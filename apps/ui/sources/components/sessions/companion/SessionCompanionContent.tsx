@@ -606,6 +606,7 @@ export const SessionCompanionContent = React.memo(function SessionCompanionConte
         return (
             <SessionWidgetHost
                 sessionId={props.session.id}
+                serverId={props.serverId}
                 session={props.session}
                 item={entry.item}
                 host="companion"

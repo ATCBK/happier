@@ -11,10 +11,29 @@ import {
 } from '@/components/sessions/presentation/presentationNotices';
 import { createSessionBoardSourceAvailabilityResolver } from '@/components/sessions/board/sessionBoardItemPresentation';
 import { createSessionFixture } from '@/dev/testkit';
-import { createSessionSurfaceNoteDocumentV1 } from '@happier-dev/protocol/sessions/board';
-import { resolveWidgetSizeChoicesV1, WidgetSizeDeclarationV1Schema, type WidgetInstanceV1 } from '@happier-dev/protocol/widgets';
+import { createSessionSurfaceNoteDocumentV1, SessionSurfaceItemV1Schema } from '@happier-dev/protocol/sessions/board';
+import { resolveWidgetSizeChoicesV1, WidgetDefinitionV1Schema, WidgetSizeDeclarationV1Schema, type WidgetInstanceV1 } from '@happier-dev/protocol/widgets';
 import type { SessionWidgetHostProps } from '@/components/sessions/board/SessionWidgetHost';
 import { sessionCompanionGlanceLabel } from './glances/SessionCompanionGlance';
+import { installDisconnectedServerSocketBoundary, restoreServerAccountForTest } from '@/dev/testkit/harness/serverAccountConnectionHarness';
+import { createHomeHubArtifactHttpBoundary } from '@/dev/testkit/harness/homeHubArtifactHttpBoundary';
+import { getActiveServerAccountScope } from '@/sync/domains/scope/activeServerAccountScope';
+import { storage } from '@/sync/domains/state/storage';
+import { InjectedAuthProvider } from '@/auth/context/AuthContext';
+import { HostedHtmlSurfaceAdapter } from '@/components/ui/surfaces/hostedHtml/HostedHtmlSurfaceAdapter';
+import { loadPluginUiHostSupport } from '@/components/plugins/hostApi/loadPluginUiHostSupport';
+import { PROJECT_ACCOUNT_ROWS_ROUTE_V1, ProjectAccountRowListResponseV1Schema } from '@happier-dev/protocol/projects/projectAccountRowsV1';
+
+vi.mock('socket.io-client', async importOriginal =>
+    (await import('@/dev/testkit/harness/serverAccountConnectionHarness')).createSocketIoClientBoundary(importOriginal));
+
+// Only the physical iframe is replaced; Companion, the shared widget host,
+// authored definition admission and hosted runtime stay real.
+vi.mock('@/components/browser/frame/BrowserViewFrame.web', () => ({
+    BrowserViewFrame: () => React.createElement('BrowserViewFrame', { testID: 'companion-visual-frame' }),
+}));
+
+installDisconnectedServerSocketBoundary();
 
 vi.mock('@/text', () => createTextModuleMock());
 
@@ -175,6 +194,60 @@ describe('SessionCompanionContent (mounted)', () => {
         show.mockClear();
         applyLocalInverse.mockClear();
         retirePresentationNotice();
+    });
+
+    it('renders an agent-published inline HTML visual in the exact Companion Home through the real shared host', async () => {
+        const http = createHomeHubArtifactHttpBoundary('viewer');
+        const connection = await restoreServerAccountForTest({ serverUrl: 'https://companion-visual.test',
+            serverIdentityId: 'srv_companion_visual', accountId: 'viewer', request: (url, init) => {
+                // Restoring the viewer also bootstraps Account Project rows; this
+                // widget fixture has none and uses that reader's strict response.
+                if (new URL(String(url)).pathname === `${PROJECT_ACCOUNT_ROWS_ROUTE_V1}/list`) {
+                    return Promise.resolve(Response.json(ProjectAccountRowListResponseV1Schema.parse({ status: 'listed', rows: [], coverage: 'complete' })));
+                }
+                return http.request(url, init);
+            } });
+        const viewer = getActiveServerAccountScope();
+        if (!viewer) throw new Error('Expected current viewer');
+        const exactSession = createSessionFixture({ id: 'visual-session', serverId: viewer.serverId });
+        storage.getState().applySessions([exactSession]);
+        const definition = WidgetDefinitionV1Schema.parse({ v: 1, id: 'daily-visual', name: 'Daily usage',
+            sizeDeclaration: { sizes: ['medium'], defaultSize: 'medium' }, inputs: { fields: [] },
+            inputSchema: { type: 'object', additionalProperties: false }, provenance: { source: { kind: 'authored' } },
+            body: { kind: 'html', source: artifactHtmlBundleFromBodyV1('<main>Daily usage</main>'),
+                requestedCapabilities: { network: 'none' } } });
+        const item = SessionSurfaceItemV1Schema.parse({ v: 1, title: definition.name, frame: 'card',
+            height: { mode: 'auto', fallback: 'regular' }, source: { kind: 'widget', instance: {
+                v: 1, id: 'daily-placement', definition: { kind: 'inline', definition }, bindings: {},
+            } } });
+        const board = projectSessionBoard({ layout: undefined,
+            items: new Map([['daily-placement', { revision: 'visual:1', outcome: { status: 'ready', value: item } }]]),
+            capabilities: { readTranscript: true, editSessionRecords: true }, freshness: 'fresh',
+            reachability: 'reachable', loading: 'idle', incomplete: false });
+        vi.stubGlobal('location', { origin: 'https://app.happier.dev' });
+        const content = (serverId: string) => <InjectedAuthProvider credentials={connection.credentials}>
+            <SessionCompanionContent session={exactSession} serverId={serverId}
+                controller={controller([{ kind: 'widget', widgetId: 'daily-placement' }])}
+                boardBinding={{ status: 'ready', snapshot: board }} resolvePrimaryHost={() => 'companion'}
+                resolveSourceAvailability={createSessionBoardSourceAvailabilityResolver({ hostedHtmlRendererAvailable: true })} />
+        </InjectedAuthProvider>;
+        const screen = await renderScreen(content(viewer.serverId));
+        try {
+            expect(screen.tree.root.findAllByProps({ diagnosticCode: 'widget_viewer_scope_mismatch' })).toHaveLength(0);
+            await act(async () => { await loadPluginUiHostSupport(); });
+            await vi.waitFor(() => expect(screen.tree.root.findAllByType(HostedHtmlSurfaceAdapter)).toHaveLength(1));
+            await vi.waitFor(() => expect(screen.findByTestId('companion-visual-frame')).not.toBeNull());
+            expect(screen.tree.root.findByType(HostedHtmlSurfaceAdapter).props.source).toEqual(
+                definition.body.kind === 'html' ? definition.body.source : null,
+            );
+            expect(screen.findByTestId('session-companion-widget-daily-placement-state')).toBeNull();
+            await screen.update(content('other-home'));
+            expect(screen.tree.root.findAllByType(HostedHtmlSurfaceAdapter)).toHaveLength(0);
+            expect(screen.findByTestId('companion-visual-frame')).toBeNull();
+            await screen.update(content(viewer.serverId));
+            await vi.waitFor(() => expect(screen.findByTestId('companion-visual-frame')).not.toBeNull());
+            expect(http.writes).toEqual([]);
+        } finally { await screen.unmount(); await connection.dispose(); vi.unstubAllGlobals(); }
     });
 
     it('mounts a widget through the shared host with the exact Session and shell-derived primary mount', async () => {
