@@ -6,6 +6,7 @@ import { renderHook } from '@/dev/testkit/hooks/renderHook';
 import { approvalArtifactBodyMatchesHeaderV1 } from '@happier-dev/protocol/approvals/approvalArtifactHeaderV1';
 import { ApprovalRequestSchema, ARTIFACT_PLAIN_DATA_KEY_MARKER, buildApprovalRequestArtifactHeaderV1, encodePlainArtifactStoredContent } from '@happier-dev/protocol';
 import { t } from '@/text';
+import { HappyError } from '@/utils/errors/errors';
 
 const harness = createHomeGovernanceHarness();
 installHomeGovernanceBoundaries(harness);
@@ -13,6 +14,28 @@ const { captureActionAccountContext } = await import('@/sync/ops/actions/actionA
 const { getApprovalDecisionErrorMessage, useApprovalDecisionHandler } = await import('./useApprovalDecisionHandler');
 
 describe('built-in approval decisions through the canonical owner', () => {
+    it('retains the exact typed failure code in the shared decision failure presentation', () => {
+        expect(getApprovalDecisionErrorMessage(new HappyError('private transport detail', false,
+            { code: 'approval_origin_unavailable' }))).toBe(`${t('approvals.decisionError')} (approval_origin_unavailable)`);
+        expect(getApprovalDecisionErrorMessage(new Error('private transport detail'))).toBe(t('approvals.decisionError'));
+        expect(getApprovalDecisionErrorMessage(new HappyError('private transport detail', false,
+            { code: 'present_user_required' }))).toBe(t('approvals.decisionAuthorityError'));
+    });
+    it('reports exact-daemon route refusal with its code before recording a Machine decision', async () => {
+        const serverId = await harness.addHome({ name: 'Approval Home', serverUrl: 'https://missing-replay.test', accountId: 'bob' });
+        const request = ApprovalRequestSchema.parse({ v: 2, status: 'open', createdAtMs: 1, updatedAtMs: 1,
+            createdBy: { surface: 'agent', sessionId: 'source' }, requestedSurface: 'agent',
+            actionId: 'session.stop', actionArgs: { sessionId: 'source' }, summary: 'Stop session',
+            executionOriginV1: { v: 1, authority: 'account_automation', surface: 'agent',
+                caller: { kind: 'session', sessionId: 'source', starterDepth: 0, turnDepth: 0 },
+                serverId, machineId: 'missing-machine', actionId: 'session.stop', requestId: 'missing-route' } });
+        const artifact = { id: 'missing-route-approval', header: buildApprovalRequestArtifactHeaderV1(request) };
+        const hook = await renderHook(() => useApprovalDecisionHandler(artifact, request, 'source', serverId));
+        try {
+            await expect(hook.getCurrent()('approve')).rejects.toMatchObject({ code: 'approval_origin_unavailable' });
+            expect(harness.requests.filter(({ path }) => path.includes('/rpc'))).toEqual([]);
+        } finally { await hook.unmount(); }
+    });
     beforeEach(async () => { standardCleanup(); await harness.reset(); });
     it('reports a durably stale execution instead of accepting it as a successful answer', async () => {
         const serverId = await harness.addHome({ name: 'Approval Home', serverUrl: 'https://stale-approval.test', accountId: 'bob' });
@@ -44,7 +67,7 @@ describe('built-in approval decisions through the canonical owner', () => {
         await hook.unmount();
     });
     it('cancels a real pending Machine open without running the physical effect', async () => {
-        const serverId = await harness.addHome({ name: 'Terminal Home', serverUrl: 'https://terminal-cancel.test', accountId: 'bob' });
+        const serverId = await harness.addHome({ name: 'Terminal Home', serverUrl: 'https://terminal-cancel.test', accountId: 'bob', currentAccount: true });
         await harness.requireUiApproval(serverId, 'machines.terminal.open');
         const artifactId = await createUiApprovalRequest({ serverId, actionId: 'machines.terminal.open',
             actionInput: { serverId, machineId: 'machine', terminalKey: 'owned-member', cwd: '/accepted' }, actionRequestId: 'open-own-member' });

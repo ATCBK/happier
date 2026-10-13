@@ -102,7 +102,7 @@ describe('useApprovalDecisionHandler portable Home recovery', () => {
         const { useApprovalDecisionHandler } = await import('./useApprovalDecisionHandler');
         const hook = await renderHook(() => useApprovalDecisionHandler(artifact, approval, 'session-1'));
 
-        await expect(hook.getCurrent()('approve')).resolves.toBe(false);
+        await expect(hook.getCurrent()('approve')).rejects.toMatchObject({ code: 'approval_origin_unavailable' });
         expect(boundary.execute).not.toHaveBeenCalled();
 
         await act(async () => {

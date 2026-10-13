@@ -1,6 +1,7 @@
 import { extractShellCommand } from '@happier-dev/protocol/activity/shellCommand';
 import { formatPermissionRequestSummary } from '@happier-dev/protocol/activity/agentRequestSummary';
 import type { SessionPermissionDecisionActorV1 } from '@happier-dev/protocol/sessions/permissions/v1';
+import type { ResolvedMcpToolIdentityV1 } from '@happier-dev/protocol/mcp/servers/tools/mcpToolIdentityV1';
 import React, { useRef, useState } from 'react';
 import { View, TouchableOpacity, Platform } from 'react-native';
 import { useSessionTranscriptSource } from '@/components/sessions/transcript/source/SessionTranscriptSourceContext';
@@ -47,6 +48,7 @@ type PermissionFooterProps = PromptResponseOrigin & {
         decision?: 'approved' | 'approved_for_session' | 'approved_execpolicy_amendment' | 'denied' | 'abort';
         suggestions?: unknown;
         decisionActor?: SessionPermissionDecisionActorV1;
+        mcpTool?: ResolvedMcpToolIdentityV1;
     };
     serverId?: string;
     messageId?: string;

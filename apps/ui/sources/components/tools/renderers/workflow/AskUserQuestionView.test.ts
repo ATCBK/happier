@@ -1,5 +1,5 @@
 import React from 'react';
-import { beforeEach, describe, expect, it, vi } from 'vitest';
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { act } from 'react-test-renderer';
 import type { ToolCall } from "@happier-dev/session-core/messages";
 import { createSessionFixture, makeToolCall, makeToolViewProps } from '@/dev/testkit';
@@ -10,37 +10,32 @@ import {
     pressTestInstanceAsync,
     createTestSessionTranscriptSource,
     renderWithSessionTranscriptSource,
+    standardCleanup,
 } from '@/dev/testkit';
-import { installWorkflowRendererCommonModuleMocks } from './workflowRendererTestHelpers';
 import { readSessionOwnerMetadataView } from '@/sync/domains/session/readSessionOwnerMetadataView';
 import {
     clearProjectedAgentUiBehaviorDescriptors,
-    publishProjectedAgentUiBehaviorDescriptors,
 } from '@/agents/registry/agentUiBehaviorProjection';
+import { createProviderSettingsAccountHarness } from '@/dev/testkit/harness/providerSettingsHarness';
+import { installDisconnectedServerSocketBoundary } from '@/dev/testkit/harness/serverAccountConnectionHarness';
+import { createMachineFixture, createRootLayoutFeaturesResponse } from '@/dev/testkit';
+import { createPlainMachineRowFixture } from '@/dev/testkit/fixtures/machineFixtures';
+import { PluginProjectionV2Schema, DaemonContributionRegistryProjectionDescribeResponseSchema, DaemonPluginSettingsGetRequestSchema, DaemonPluginSettingsSetRequestSchema, DaemonPluginSettingsGetResponseSchema, DaemonPluginSettingsSetResponseSchema } from '@happier-dev/protocol/daemon/contributionRegistryProjection';
+import { PluginAccountSettingsMutationRequestV1Schema, PluginAccountSettingsReadResponseV1Schema, PluginAccountSettingsMutationResponseV1Schema } from '@happier-dev/protocol/plugins/settings/accountSettingsV1';
+import { RPC_ERROR_CODES, RPC_METHODS } from '@happier-dev/protocol/rpc';
+import { SOCKET_RPC_EVENTS } from '@happier-dev/protocol/socketRpc';
 
 
-(globalThis as any).IS_REACT_ACT_ENVIRONMENT = true;
+Object.assign(globalThis, { IS_REACT_ACT_ENVIRONMENT: true });
 
 const sessionDeny = vi.fn();
 const sendMessage = vi.fn();
 const sessionAllowWithAnswers = vi.fn();
-const modalAlert = vi.fn();
-const openAttachedSessionTerminal = vi.fn();
-const useSettingMutable = vi.fn(() => [null, vi.fn()]);
-const machinePluginSettingsSet = vi.fn();
-const machineProjectionRevision = vi.hoisted(() => ({ current: 0 }));
-const resolvePreferredServerIdForSessionId = vi.fn(() => 'server-a');
-const getServerProfileById = vi.fn((_serverId: string) => ({ serverIdentityId: 'srv_server_a' }));
-const scopedPluginSettingsRead = vi.fn();
-const scopedPluginSettingsWrite = vi.fn();
-const resolveScopedPluginSettingsServerIdentity = vi.fn((_serverId: string): string | null => 'srv_server_a');
-const activeAccountLifetime = vi.hoisted(() => Object.freeze({
-    scope: Object.freeze({ serverId: 'server-a', accountId: 'account-a' }),
-    isCurrent: () => true,
-    onRetire: () => Object.freeze({ dispose(): void {} }),
-}));
-let attachedSessionTerminalAvailable = true;
-let attachedSessionTerminalUnavailableReason: 'missing_machine' | 'terminal_disabled' | 'cli_update_required' | null = null;
+const pluginSettingsRecords = new Map<string, { revision: number; values: Record<string, unknown> }>();
+const daemonSettingRequests: unknown[] = [];
+const daemonProjectionRequests: unknown[] = [];
+let daemonSettingValues: Record<string, unknown> = {};
+let daemonSessionAttachSupported = true;
 let supportsAnswersInPermission = true;
 let activeAskUserQuestionRequest: { tool: string; kind?: 'user_action'; source?: string } | null = null;
 let activeAskUserQuestionRequestId = 'toolu_1';
@@ -48,10 +43,11 @@ const askUserQuestionSessionState = vi.hoisted(() => ({
     current: null as Record<string, unknown> | null,
 }));
 function readSessionFixture() {
-    return createSessionFixture({
-        id: 's1', serverId: 'server-a',
+    const session = createSessionFixture({
+        id: 's1', serverId: account.serverId, active: true,
         metadata: {
-            path: '', host: '',
+            path: '/repo', host: 'tester.local',
+            terminal: { mode: 'zellij', controlServiceabilityV1: { v: 1, attachmentId: 'question-attachment', state: 'servable', observedAt: 1 } },
             machineId: 'machine-1',
             runtimeDescriptorV1: { v: 1, agentId: 'claude', agent: {} },
         },
@@ -64,230 +60,172 @@ function readSessionFixture() {
         },
         ...askUserQuestionSessionState.current,
     });
+    const owner = readSessionOwnerMetadataView(session);
+    if (owner && !owner.terminal) {
+        const key = session.metadataLayoutVersion === 1 ? 'ownerMetadataView' : 'metadata';
+        session[key] = { ...owner, path: owner.path || '/repo', terminal: { mode: 'zellij', controlServiceabilityV1: {
+            v: 1, attachmentId: 'question-attachment', state: 'servable', observedAt: 1,
+        } } };
+    }
+    return session;
 }
 
-function renderScreen(element: React.ReactElement) {
+async function renderScreen(element: React.ReactElement) {
     const props = element.props as Readonly<{ serverId?: string; session?: ReturnType<typeof createSessionFixture> }>;
     const read = () => props.session ?? readSessionFixture();
+    await act(async () => {
+        storage.setState({ sessions: { s1: readSessionFixture() } });
+        const machine = createMachineFixture({ id: 'machine-1', activeAt: Date.now() });
+        if (!machine.metadata) throw new Error('Question machine fixture must carry metadata');
+        storage.getState().applyMachines([{ ...machine, metadata: { ...machine.metadata, daemonTerminalSessionAttachSupported: daemonSessionAttachSupported } }], true, { sourceServerId: account.serverId });
+        // Account-qualified projection reads use the scoped RPC transport,
+        // whose cold machine-key lookup asks for the exact Home census row.
+        homes.answer(account.serverId, '/v1/machines/machine-1', { body: {
+            machine: createPlainMachineRowFixture({ id: 'machine-1', accountId: 'account-a' }),
+        } });
+        const metadata = readSessionOwnerMetadataView(read());
+        if (metadata?.machineId && read().serverId === account.serverId) {
+            const projection = await loadDaemonMergedProjectionCacheEntry({ machineId: metadata.machineId, serverId: read().serverId });
+            expect(projection?.kind, JSON.stringify({
+                reason: projection?.kind === 'error' ? projection.reason : null,
+                requests: daemonProjectionRequests,
+            })).toBe('ready');
+        }
+    });
     const source = createTestSessionTranscriptSource({
         sessionId: 's1', serverId: props.serverId ?? read().serverId ?? null,
         interaction: { canSendMessages: true, canApprovePermissions: true },
         actions: {
             answerUserAction: (params) => sessionAllowWithAnswers(params),
             respondToPermission: (params) => sessionDeny(params),
-            abort: async () => {}, submitMessage: async () => {},
+            abort: async () => {}, submitMessage: (params) => sendMessage(params),
         },
         navigate: () => {},
     });
-    return renderWithSessionTranscriptSource(element, {
+    return renderWithSessionTranscriptSource(React.createElement(ModalProvider, {
+        children: React.createElement(AppPaneProvider, { children: element }),
+    }), {
         ...source,
         useAgentState: () => read().agentState,
         useMetadata: () => readSessionOwnerMetadataView(read()),
     });
 }
-const daemonMergedProjectionState = vi.hoisted(() => ({
-    current: {
-        phase: 'ready' as const,
-        inputs: {
-            pluginProjectionV2: {
-                v: 2,
-                generation: 1,
-                agentsById: {
-                    claude: {
-                        id: 'claude',
-                        identity: {
-                            pluginId: 'happier.agent.claude',
-                            localId: 'claude',
-                        },
-                    },
-                    'acme.review': {
-                        id: 'acme.review',
-                        identity: {
-                            pluginId: 'acme.review',
-                            localId: 'review',
-                        },
-                    },
-                },
+function createQuestionDaemonProjection() {
+    const identities = {
+        claude: { pluginId: 'happier.agent.claude', localId: 'claude' },
+        'acme.review': { pluginId: 'acme.review', localId: 'review' },
+    };
+    const fields = {
+        'happier.agent.claude': [
+            { id: 'claudeUnifiedTerminalWorkspaceTrust', allowedValues: ['ask_every_time', 'always_trust_happier_workspaces', 'always_reject_happier_workspaces'] },
+            { id: 'claudeUnifiedTerminalResumeChoice', allowedValues: ['ask_every_time', 'resume_from_summary', 'resume_full_session'] },
+        ],
+        'acme.review': [{ id: 'reviewScopePreference', allowedValues: ['ask_every_time', 'always_include'] }],
+    };
+    return PluginProjectionV2Schema.parse({
+        v: 2, generation: 1,
+        installedPackagesById: Object.fromEntries(Object.keys(fields).map(pluginId => [
+            pluginId, { id: pluginId, displayName: pluginId, enabled: true, source: { kind: 'local', locator: '/plugins' } },
+        ])),
+        agentsById: Object.fromEntries(Object.entries(identities).map(([id, identity]) => [id, { id, identity }])),
+        settingsById: Object.fromEntries(Object.values(identities).map(identity => [
+            `${identity.pluginId}.settings`, {
+                id: `${identity.pluginId}.settings`, pluginId: identity.pluginId, version: 1, title: 'Remembered choices',
+                scope: { kind: 'account' }, presentation: { sections: [], subagentSections: [] },
+                target: { kind: 'agent', agent: identity },
+                fields: fields[identity.pluginId as keyof typeof fields].map(field => ({
+                    id: field.id, kind: 'settings.field', version: '1.0.0', displayKey: field.id,
+                    valueType: 'string', valueSchema: { type: 'string', enum: field.allowedValues }, control: 'select',
+                    secretCustody: null, redaction: 'none',
+                })),
             },
-            pluginProjectionById: {
-                'happier.agent.claude': {
-                    pluginId: 'happier.agent.claude',
-                    editableSettingsGroups: [{
-                        pluginId: 'happier.agent.claude',
-                        scope: { kind: 'account' },
-                        target: {
-                            kind: 'agent',
-                            agent: {
-                                pluginId: 'happier.agent.claude',
-                                localId: 'claude',
-                            },
-                        },
-                        fields: [
-                            {
-                                key: 'claudeUnifiedTerminalWorkspaceTrust',
-                                valueType: 'string',
-                                valueSchema: {
-                                    type: 'string',
-                                    enum: [
-                                        'ask_every_time',
-                                        'always_trust_happier_workspaces',
-                                        'always_reject_happier_workspaces',
-                                    ],
-                                },
-                                control: 'select',
-                                secretCustody: null,
-                                redaction: 'none',
-                            },
-                            {
-                                key: 'claudeUnifiedTerminalResumeChoice',
-                                valueType: 'string',
-                                valueSchema: {
-                                    type: 'string',
-                                    enum: ['ask_every_time', 'resume_from_summary', 'resume_full_session'],
-                                },
-                                control: 'select',
-                                secretCustody: null,
-                                redaction: 'none',
-                            },
-                        ],
-                    }],
-                },
-                'acme.review': {
-                    pluginId: 'acme.review',
-                    editableSettingsGroups: [{
-                        pluginId: 'acme.review',
-                        scope: { kind: 'account' },
-                        target: {
-                            kind: 'agent',
-                            agent: {
-                                pluginId: 'acme.review',
-                                localId: 'review',
-                            },
-                        },
-                        fields: [{
-                            key: 'reviewScopePreference',
-                            valueType: 'string',
-                            valueSchema: {
-                                type: 'string',
-                                enum: ['ask_every_time', 'always_include'],
-                            },
-                            control: 'select',
-                            secretCustody: null,
-                            redaction: 'none',
-                        }],
-                    }],
-                },
-            },
-        },
-    },
-}));
+        ])),
+    });
+}
+let daemonProjection = createQuestionDaemonProjection();
 
-installWorkflowRendererCommonModuleMocks({
-    modal: async () => {
-        const { createModalModuleMock } = await import('@/dev/testkit/mocks/modal');
-        return createModalModuleMock({
-            spies: {
-                alert: (...args: any[]) => modalAlert(...args),
-            },
-        }).module;
-    },
-    storage: async () => {
-        const { createStorageModuleStub } = await import('@/dev/testkit/mocks/storage');
-        return createStorageModuleStub({
-            useSettingMutable,
-            storage: {
-                getState: () => ({
-                    sessions: {
-                        s1: askUserQuestionSessionState.current ?? {
-                            metadata: {
-                                machineId: 'machine-1',
-                                runtimeDescriptorV1: { v: 1, agentId: 'claude', agent: {} },
-                            },
-                            agentState: {
-                                capabilities: { askUserQuestionAnswersInPermission: supportsAnswersInPermission },
-                                requests: activeAskUserQuestionRequest
-                                    ? {
-                                        [activeAskUserQuestionRequestId]: {
-                                            tool: activeAskUserQuestionRequest.tool,
-                                            ...(activeAskUserQuestionRequest.kind ? { kind: activeAskUserQuestionRequest.kind } : {}),
-                                            ...(activeAskUserQuestionRequest.source ? { source: activeAskUserQuestionRequest.source } : {}),
-                                            arguments: {},
-                                            createdAt: 1,
-                                        },
-                                    }
-                                    : {},
-                            },
-                        },
-                    },
-                }),
-            },
-        });
-    },
-});
-
-vi.mock('@/agents/backendCatalog/useDaemonMergedProjectionInputs', () => ({
-    useDaemonMergedProjectionInputs: () => daemonMergedProjectionState.current,
-}));
-
-vi.mock('@/sync/ops/machineContributionRegistryProjection', async (importOriginal) => ({
-    ...(await importOriginal<typeof import('@/sync/ops/machineContributionRegistryProjection')>()),
-    getMachineContributionRegistryProjectionRevision: () => machineProjectionRevision.current,
-    subscribeMachineContributionRegistryProjectionInvalidation: () => () => {},
-    machinePluginSettingsSet: (...args: unknown[]) => machinePluginSettingsSet(...args),
-    machinePluginSecretStatus: vi.fn(async () => ({ supported: false, reason: 'not-supported' })),
-    machinePluginSecretSet: vi.fn(async () => ({ supported: false, reason: 'not-supported' })),
-    machinePluginSecretDelete: vi.fn(async () => ({ supported: false, reason: 'not-supported' })),
-}));
-
-vi.mock('@/sync/runtime/orchestration/serverScopedRpc/resolvePreferredServerIdForSessionId', () => ({
-    resolvePreferredServerIdForSessionId: () => resolvePreferredServerIdForSessionId(),
-}));
-
-vi.mock('@/sync/domains/server/serverProfiles', async (importOriginal) => ({
-    ...await importOriginal<typeof import('@/sync/domains/server/serverProfiles')>(),
-    getServerProfileById: (serverId: string) => getServerProfileById(serverId),
-}));
-
-vi.mock('@/sync/domains/scope/activeServerAccountScope', async (importOriginal) => ({
-    ...(await importOriginal<typeof import('@/sync/domains/scope/activeServerAccountScope')>()),
-    // A mounted Account answers both capture entry points with the same
-    // lifetime, exactly as the real owner does while that Account is current.
-    captureActiveServerAccountScopeLifetime: () => activeAccountLifetime,
-    captureActiveServerAccountScopeCurrentness: () => activeAccountLifetime,
-    getActiveServerAccountScope: () => null,
-}));
-
-vi.mock('@/sync/domains/plugins/settings/scopedPluginSettingsRuntime', async (importOriginal) => ({
-    ...(await importOriginal<typeof import('@/sync/domains/plugins/settings/scopedPluginSettingsRuntime')>()),
-    scopedPluginSettingsAdapter: {
-        read: (...args: unknown[]) => scopedPluginSettingsRead(...args),
-        write: (...args: unknown[]) => scopedPluginSettingsWrite(...args),
-    },
-    resolveScopedPluginSettingsServerIdentity: (serverId: string) => (
-        resolveScopedPluginSettingsServerIdentity(serverId)
-    ),
-}));
-
-vi.mock('@/components/sessions/terminal/openAttachedSessionTerminal', async (importOriginal) => ({
-    ...(await importOriginal<typeof import('@/components/sessions/terminal/openAttachedSessionTerminal')>()),
-    useOpenAttachedSessionTerminal: () => ({
-        available: attachedSessionTerminalAvailable,
-        unavailableReason: attachedSessionTerminalUnavailableReason,
-        open: (...args: unknown[]) => openAttachedSessionTerminal(...args),
-    }),
-}));
-
-vi.mock('@/sync/sync', () => ({
-    sync: {
-        sendMessage: (...args: any[]) => sendMessage(...args),
-    },
-}));
+vi.mock('react-native', async () => (await import('@/dev/testkit/mocks/reactNative')).createReactNativeWebMock());
+vi.mock('react-native-unistyles', async () => (await import('@/dev/testkit/mocks/unistyles')).createUnistylesMock());
+vi.mock('@/text', async () => (await import('@/dev/testkit/mocks/text')).createTextModuleMock({ translate: (key) => key }));
+// The app owns errors and modal lifetime beneath Radix's DOM boundary.
+vi.mock('@/utils/web/radixCjs', async () =>
+    (await import('@/dev/testkit/mocks/radixCjs')).createRadixCjsModuleMock());
+vi.mock('expo-router', async () => (await import('@/dev/testkit/mocks/router')).createExpoRouterMock().module);
+vi.mock('@expo/vector-icons', () => ({ Ionicons: 'Ionicons' }));
 
 // Load the real owner after boundary setup so cold module evaluation is outside a test and its act lifetime.
+const account = createProviderSettingsAccountHarness();
+const homes = account.home;
+installDisconnectedServerSocketBoundary((socket) => {
+    socket.connected = true;
+    socket.timeout = vi.fn<typeof socket.timeout>(() => socket);
+    socket.emitWithAck = vi.fn<typeof socket.emitWithAck>(async (event, raw: unknown) => {
+        if (event !== SOCKET_RPC_EVENTS.CALL) return { v: 1, ok: true, admittedSessionIds: [] };
+        if (!raw || typeof raw !== 'object' || !('method' in raw) || typeof raw.method !== 'string' || !('params' in raw)) {
+            throw new Error('Malformed question daemon RPC');
+        }
+        const method = raw.method.slice(raw.method.indexOf(':') + 1);
+        if (method === RPC_METHODS.DAEMON_MERGED_CONTRIBUTION_REGISTRY_PROJECTION_DESCRIBE) {
+            daemonProjectionRequests.push(raw.params);
+            return { ok: true, result: DaemonContributionRegistryProjectionDescribeResponseSchema.parse({ protocolVersion: 1, projection: daemonProjection }) };
+        }
+        if (method === RPC_METHODS.DAEMON_PLUGIN_SETTINGS_GET) {
+            const request = DaemonPluginSettingsGetRequestSchema.parse(raw.params);
+            return { ok: true, result: DaemonPluginSettingsGetResponseSchema.parse({
+                protocolVersion: 1, pluginId: request.pluginId, scope: request.scope,
+                revision: 'revision-1', values: daemonSettingValues, redactedKeys: [],
+            }) };
+        }
+        if (method === RPC_METHODS.DAEMON_PLUGIN_SETTINGS_SET) {
+            const request = DaemonPluginSettingsSetRequestSchema.parse(raw.params);
+            daemonSettingRequests.push(request);
+            if (request.mutation.kind !== 'set') throw new Error('Expected a remembered setting value');
+            daemonSettingValues = { ...daemonSettingValues, [request.fieldId]: request.mutation.value };
+            return { ok: true, result: DaemonPluginSettingsSetResponseSchema.parse({
+                status: 'applied', snapshot: {
+                    protocolVersion: 1, pluginId: request.pluginId, scope: request.scope,
+                    revision: 'revision-2', values: daemonSettingValues, redactedKeys: [],
+                },
+            }) };
+        }
+        return { ok: false, error: 'RPC method not found', errorCode: RPC_ERROR_CODES.METHOD_NOT_FOUND };
+    });
+});
+const { storage } = await import('@/sync/domains/state/storage');
+const { AppPaneProvider } = await import('@/components/appShell/panes/AppPaneProvider');
+const { ModalProvider } = await import('@/modal/ModalProvider');
+const { WebAlertModal } = await import('@/modal/components/WebAlertModal');
+const { readSessionTerminalMode } = await import('@/components/sessions/terminal/sessionTerminalMode');
+const { loadDaemonMergedProjectionCacheEntry, clearDaemonMergedProjectionCacheForTests } = await import('@/agents/backendCatalog/loadDaemonMergedProjectionInputs');
+const { publishMachineContributionRegistryProjectionInvalidation } = await import('@/sync/ops/machineContributionRegistryProjection');
+const { getAppliedActiveServerSnapshot, isAppliedActiveServerRuntimeAvailable, publishAppliedActiveServerSnapshot } = await import('@/sync/runtime/orchestration/appliedActiveServerRuntime');
+const initialStorageState = storage.getState();
+const initialAppliedSnapshot = getAppliedActiveServerSnapshot();
+const initialAppliedRuntimeAvailable = isAppliedActiveServerRuntimeAvailable();
 const { AskUserQuestionView, projectAskUserQuestionDisplayText } = await import('./AskUserQuestionView');
 
 describe('AskUserQuestionView', () => {
     type Screen = Awaited<ReturnType<typeof renderScreen>>;
+
+    function expectNoAlert(screen: Screen) {
+        expect(screen.findAllByType(WebAlertModal)).toHaveLength(0);
+    }
+
+    function expectAlert(screen: Screen, message: string) {
+        expect(screen.findAllByType(WebAlertModal).map(node => node.props.config))
+            .toEqual([expect.objectContaining({ type: 'alert', title: 'common.error', message })]);
+        expect(screen.getTextContent()).toContain(message);
+        expect(screen.findAllHostsByTestId('web-modal-button-0')).toHaveLength(1);
+    }
+
+    afterEach(async () => {
+        standardCleanup();
+        await act(async () => {
+            await account.reset();
+            storage.setState(initialStorageState, true);
+            publishAppliedActiveServerSnapshot(initialAppliedSnapshot, initialAppliedRuntimeAvailable);
+        });
+    });
 
     function makeTool(overrides: Partial<ToolCall> = {}): ToolCall {
         return makeToolCall({
@@ -345,66 +283,51 @@ describe('AskUserQuestionView', () => {
     }
 
     function publishReviewAskUserQuestionDescriptor(allowedValues: readonly string[], scope: 'account' | 'daemon' = 'account') {
-        publishProjectedAgentUiBehaviorDescriptors({
-            machineId: 'machine-1',
-            descriptorsByAgentId: {
-                'acme.review': {
-                    kind: 'plugin.ui.v1',
-                    pluginId: 'acme.review',
-                    agentId: 'acme.review',
-                    version: 1,
-                    display: {},
-                    behavior: {
-                        askUserQuestion: {
-                            dialogs: [{
-                                dialogId: 'review_scope',
-                                settingMutation: {
-                                    settingId: { scope, localId: 'reviewScopePreference' },
-                                    allowedValues: [...allowedValues],
-                                },
-                            }],
+        daemonProjection.agentsById['acme.review']!.ui = {
+            behavior: {
+                askUserQuestion: {
+                    dialogs: [{
+                        dialogId: 'review_scope',
+                        settingMutation: {
+                            settingId: { scope, localId: 'reviewScopePreference' },
+                            allowedValues: [...allowedValues],
                         },
-                    },
-                    session: {},
-                    message: {},
-                    components: { slots: [] },
+                    }],
                 },
             },
-        });
+            session: {}, message: {}, components: { slots: [] },
+        };
     }
 
     function publishAttachedTerminalAskUserQuestionDescriptor() {
-        publishProjectedAgentUiBehaviorDescriptors({
-            machineId: 'machine-1',
-            descriptorsByAgentId: {
-                'acme.terminal': {
-                    kind: 'plugin.ui.v1',
-                    pluginId: 'acme.terminal',
-                    agentId: 'acme.terminal',
-                    version: 1,
-                    display: {},
-                    behavior: {
-                        askUserQuestion: {
-                            dialogs: [{
-                                dialogId: 'unrecognized_confirmation',
-                                terminalNotice: {
-                                    headerKey: 'tools.askUserQuestion.attachedTerminalNotice.header',
-                                    questionKey: 'tools.askUserQuestion.attachedTerminalNotice.question',
-                                },
-                                terminalSecondaryAction: {
-                                    kind: 'openAttachedTerminal',
-                                    labelKey: 'tools.askUserQuestion.attachedTerminalNotice.openTerminal',
-                                    descriptionKey: 'tools.askUserQuestion.attachedTerminalNotice.description',
-                                },
-                            }],
-                        },
+        daemonProjection.installedPackagesById['acme.terminal'] = {
+            id: 'acme.terminal', displayName: 'Terminal Agent', enabled: true,
+            source: { kind: 'local', locator: '/plugins/terminal' },
+        };
+        daemonProjection.agentsById['acme.terminal'] = {
+            id: 'acme.terminal', identity: { pluginId: 'acme.terminal', localId: 'terminal' },
+            providerOwnedEnvironmentKeys: [],
+            ui: {
+                behavior: {
+                    attachedSessionTerminal: { supported: true },
+                    askUserQuestion: {
+                        dialogs: [{
+                            dialogId: 'unrecognized_confirmation',
+                            terminalNotice: {
+                                headerKey: 'tools.askUserQuestion.attachedTerminalNotice.header',
+                                questionKey: 'tools.askUserQuestion.attachedTerminalNotice.question',
+                            },
+                            terminalSecondaryAction: {
+                                kind: 'openAttachedTerminal',
+                                labelKey: 'tools.askUserQuestion.attachedTerminalNotice.openTerminal',
+                                descriptionKey: 'tools.askUserQuestion.attachedTerminalNotice.description',
+                            },
+                        }],
                     },
-                    session: {},
-                    message: {},
-                    components: { slots: [] },
                 },
+                session: {}, message: {}, components: { slots: [] },
             },
-        });
+        };
     }
 
     function makeSuggestionsWithFreeformTool(overrides: Partial<ToolCall> = {}): ToolCall {
@@ -451,7 +374,7 @@ describe('AskUserQuestionView', () => {
     }
 
     async function fillFreeformAndSubmit(screen: Screen, answer: string) {
-        const input = screen.findByType('TextInput' as any);
+        const input = screen.findByProps({ testID: 'ask-user-question.freeform:0' });
         expect(input).toBeTruthy();
         await act(async () => {
             changeTextTestInstance(input, answer, 'ask-user-question freeform input');
@@ -463,70 +386,44 @@ describe('AskUserQuestionView', () => {
         await pressTestInstanceAsync(submit, 'tools.askUserQuestion.submit');
     }
 
-    beforeEach(() => {
+    beforeEach(async () => {
+        await account.reset();
+        daemonProjection = createQuestionDaemonProjection();
+        clearDaemonMergedProjectionCacheForTests();
+        await account.restore({ serverIdentityId: 'srv_server_a', features: createRootLayoutFeaturesResponse({ features: { terminal: { embeddedPty: { enabled: true } } } }), machines: [createMachineFixture({ id: 'machine-1', activeAt: Date.now() })] });
+        pluginSettingsRecords.clear();
+        daemonSettingRequests.length = 0;
+        daemonProjectionRequests.length = 0;
+        daemonSettingValues = {};
+        for (const pluginId of ['happier.agent.claude', 'acme.review']) {
+            pluginSettingsRecords.set(pluginId, { revision: 1, values: {} });
+            const path = `/v1/account/plugin-settings/${encodeURIComponent(pluginId)}`;
+            homes.answer(account.serverId, `GET ${path}`, { select: () => {
+                const record = pluginSettingsRecords.get(pluginId)!;
+                return { body: PluginAccountSettingsReadResponseV1Schema.parse({
+                    status: 'present', revision: record.revision, content: { t: 'plain', v: { v: 1, values: record.values } },
+                }) };
+            } });
+            homes.answer(account.serverId, `POST ${path}`, { select: (input) => {
+                const mutation = PluginAccountSettingsMutationRequestV1Schema.parse(input);
+                const record = pluginSettingsRecords.get(pluginId)!;
+                if (mutation.expectedRevision !== record.revision) return { body: PluginAccountSettingsMutationResponseV1Schema.parse({ status: 'conflict', revision: record.revision }) };
+                if (mutation.content?.t !== 'plain') throw new Error('Expected a Plain Account remembered setting');
+                record.values = { ...mutation.content.v.values };
+                record.revision += 1;
+                return { body: PluginAccountSettingsMutationResponseV1Schema.parse({ status: 'updated', revision: record.revision }) };
+            } });
+        }
         clearProjectedAgentUiBehaviorDescriptors();
-        machineProjectionRevision.current = 0;
+        publishMachineContributionRegistryProjectionInvalidation({ machineId: 'machine-1', serverId: account.serverId });
         sessionDeny.mockReset();
         sendMessage.mockReset();
         sessionAllowWithAnswers.mockReset();
-        modalAlert.mockReset();
-        openAttachedSessionTerminal.mockReset();
-        useSettingMutable.mockClear();
-        machinePluginSettingsSet.mockReset();
-        machinePluginSettingsSet.mockResolvedValue({
-            supported: true,
-            snapshot: {
-                protocolVersion: 1,
-                pluginId: 'happier.agent.claude',
-                scope: { kind: 'daemon' },
-                revision: '1',
-                values: {
-                    claudeUnifiedTerminalWorkspaceTrust: 'always_trust_happier_workspaces',
-                },
-                redactedKeys: [],
-            },
-        });
-        resolvePreferredServerIdForSessionId.mockClear();
-        getServerProfileById.mockReset();
-        getServerProfileById.mockReturnValue({ serverIdentityId: 'srv_server_a' });
-        scopedPluginSettingsRead.mockReset();
-        scopedPluginSettingsRead.mockResolvedValue({
-            status: 'ready',
-            snapshot: {
-                scope: { kind: 'account' },
-                target: {
-                    kind: 'account',
-                    serverIdentityId: 'srv_server_a',
-                },
-                revision: { kind: 'account', value: 1 },
-                values: {},
-            },
-        });
-        scopedPluginSettingsWrite.mockReset();
-        scopedPluginSettingsWrite.mockResolvedValue({
-            status: 'ready',
-            snapshot: {
-                scope: { kind: 'account' },
-                target: {
-                    kind: 'account',
-                    serverIdentityId: 'srv_server_a',
-                },
-                revision: { kind: 'account', value: 2 },
-                values: {
-                    claudeUnifiedTerminalWorkspaceTrust: 'always_trust_happier_workspaces',
-                },
-            },
-        });
-        resolveScopedPluginSettingsServerIdentity.mockReset();
-        resolveScopedPluginSettingsServerIdentity.mockReturnValue('srv_server_a');
-        attachedSessionTerminalAvailable = true;
-        attachedSessionTerminalUnavailableReason = null;
+        daemonSessionAttachSupported = true;
         supportsAnswersInPermission = true;
         activeAskUserQuestionRequestId = 'toolu_1';
         activeAskUserQuestionRequest = { tool: 'AskUserQuestion', kind: 'user_action' };
         askUserQuestionSessionState.current = null;
-        daemonMergedProjectionState.current.inputs.pluginProjectionById['acme.review']!
-            .editableSettingsGroups[0]!.scope.kind = 'account';
     });
 
     it('submits answers via permission approval without sending a follow-up user message', async () => {
@@ -781,7 +678,7 @@ describe('AskUserQuestionView', () => {
         const action = screen.findByProps({ testID: 'ask-user-question.open-attached-terminal' });
         await pressTestInstanceAsync(action, 'Open attached terminal');
 
-        expect(openAttachedSessionTerminal).toHaveBeenCalledTimes(1);
+        expect(readSessionTerminalMode('s1', account.serverId)).toBe('session_attach');
         expect(sessionAllowWithAnswers).not.toHaveBeenCalled();
         expect(screen.findAllByProps({ testID: 'ask-user-question.submit' })).toHaveLength(0);
     });
@@ -789,7 +686,7 @@ describe('AskUserQuestionView', () => {
     it('replaces an optionless terminal-notice prompt with the host notice copy', async () => {
         publishAttachedTerminalAskUserQuestionDescriptor();
         askUserQuestionSessionState.current = {
-            serverId: 'server-a',
+            serverId: account.serverId,
             metadataLayoutVersion: 1,
             ownerMetadataView: {
                 machineId: 'machine-1',
@@ -860,8 +757,7 @@ describe('AskUserQuestionView', () => {
     });
 
     it('explains when a terminal-only dialog cannot open an attached terminal', async () => {
-        attachedSessionTerminalAvailable = false;
-        attachedSessionTerminalUnavailableReason = 'cli_update_required';
+        daemonSessionAttachSupported = false;
         const screen = await renderView(makeTool({
             input: {
                 happierDialog: {
@@ -881,8 +777,7 @@ describe('AskUserQuestionView', () => {
     });
 
     it('keeps recognized choices answerable while explaining that the attached terminal is unavailable', async () => {
-        attachedSessionTerminalAvailable = false;
-        attachedSessionTerminalUnavailableReason = 'cli_update_required';
+        daemonSessionAttachSupported = false;
         const screen = await renderView(makeTool({
             input: {
                 happierDialog: { kind: 'recognized', dialogId: 'trust_folder', secondaryAction: 'open_terminal' },
@@ -928,9 +823,9 @@ describe('AskUserQuestionView', () => {
         expect(sessionAllowWithAnswers).toHaveBeenCalledWith({ id: 'toolu_1', answers: {
             'How should Claude continue?': ['trust_always'],
         } });
-        expect(scopedPluginSettingsWrite).not.toHaveBeenCalled();
-        expect(machinePluginSettingsSet).not.toHaveBeenCalled();
-        expect(useSettingMutable).not.toHaveBeenCalledWith('claudeUnifiedTerminalWorkspaceTrust');
+        expect([...pluginSettingsRecords.values()]).toEqual([{ revision: 1, values: {} }, { revision: 1, values: {} }]);
+        expect(daemonSettingRequests).toEqual([]);
+        expect(storage.getState().settings).not.toHaveProperty('claudeUnifiedTerminalWorkspaceTrust');
     });
 
     it('persists recognized workspace trust through its current qualified declaration', async () => {
@@ -939,7 +834,7 @@ describe('AskUserQuestionView', () => {
             kind: 'user_action',
         };
         askUserQuestionSessionState.current = {
-            serverId: 'server-a',
+            serverId: account.serverId,
             metadataLayoutVersion: 1,
             metadata: { machineId: 'shared-decoy-machine' },
             ownerMetadataView: {
@@ -989,36 +884,22 @@ describe('AskUserQuestionView', () => {
         // `services.settings.forScope({ kind: 'account' })`. A daemon-scoped
         // operation is refused by the daemon's exact-declaration filter, so the
         // user's answer would settle while the preference silently disappeared.
-        expect(scopedPluginSettingsRead).toHaveBeenCalledWith({
-            pluginId: 'happier.agent.claude',
-            scope: { kind: 'account' },
-            target: {
-                kind: 'account',
-                serverIdentityId: 'srv_server_a',
-            },
-            fields: [{ key: 'claudeUnifiedTerminalWorkspaceTrust', redacted: false }],
-        });
-        expect(scopedPluginSettingsWrite).toHaveBeenCalledWith({
-            pluginId: 'happier.agent.claude',
-            fieldId: 'claudeUnifiedTerminalWorkspaceTrust',
-            mutation: { kind: 'set', value: 'always_trust_happier_workspaces' },
-            expectedRevision: { kind: 'account', value: 1 },
-            scope: { kind: 'account' },
-            target: {
-                kind: 'account',
-                serverIdentityId: 'srv_server_a',
-            },
-            fields: [{ key: 'claudeUnifiedTerminalWorkspaceTrust', redacted: false }],
-        });
-        expect(machinePluginSettingsSet).not.toHaveBeenCalled();
-        expect(resolvePreferredServerIdForSessionId).not.toHaveBeenCalled();
-        expect(useSettingMutable).not.toHaveBeenCalledWith('claudeUnifiedTerminalWorkspaceTrust');
+        expect(daemonSettingRequests).toEqual([]);
+        expect(pluginSettingsRecords.get('happier.agent.claude')).toEqual({ revision: 2, values: {
+            claudeUnifiedTerminalWorkspaceTrust: 'always_trust_happier_workspaces',
+        } });
+        expect(homes.requestsFor('/v1/account/plugin-settings/happier.agent.claude').filter(request => request.input !== null)).toEqual([
+            expect.objectContaining({ serverId: account.serverId, input: {
+                expectedRevision: 1, content: { t: 'plain', v: { v: 1, values: { claudeUnifiedTerminalWorkspaceTrust: 'always_trust_happier_workspaces' } } },
+            } }),
+        ]);
+        expect(storage.getState().settings).not.toHaveProperty('claudeUnifiedTerminalWorkspaceTrust');
     });
 
     it('persists an external Agent choice through its own qualified settings declaration', async () => {
         publishReviewAskUserQuestionDescriptor(['always_include']);
         askUserQuestionSessionState.current = {
-            serverId: 'server-a',
+            serverId: account.serverId,
             metadataLayoutVersion: 1,
             ownerMetadataView: {
                 machineId: 'machine-1',
@@ -1062,28 +943,23 @@ describe('AskUserQuestionView', () => {
         expect(sessionAllowWithAnswers).toHaveBeenCalledWith({ id: 'toolu_1', answers: {
             'Remember this scope?': ['always_include'],
         } });
-        expect(scopedPluginSettingsWrite).toHaveBeenCalledWith({
-            pluginId: 'acme.review',
-            fieldId: 'reviewScopePreference',
-            mutation: { kind: 'set', value: 'always_include' },
-            expectedRevision: { kind: 'account', value: 1 },
-            scope: { kind: 'account' },
-            target: {
-                kind: 'account',
-                serverIdentityId: 'srv_server_a',
-            },
-            fields: [{ key: 'reviewScopePreference', redacted: false }],
-        });
-        expect(machinePluginSettingsSet).not.toHaveBeenCalled();
-        expect(useSettingMutable).not.toHaveBeenCalledWith('reviewScopePreference');
+        expect(daemonSettingRequests).toEqual([]);
+        expect(pluginSettingsRecords.get('acme.review')).toEqual({ revision: 2, values: {
+            reviewScopePreference: 'always_include',
+        } });
+        expect(homes.requestsFor('/v1/account/plugin-settings/acme.review').filter(request => request.input !== null)).toEqual([
+            expect.objectContaining({ serverId: account.serverId, input: {
+                expectedRevision: 1, content: { t: 'plain', v: { v: 1, values: { reviewScopePreference: 'always_include' } } },
+            } }),
+        ]);
+        expect(storage.getState().settings).not.toHaveProperty('reviewScopePreference');
     });
 
     it('uses the external Agent setting catalog scope instead of forcing an Account write', async () => {
         publishReviewAskUserQuestionDescriptor(['always_include'], 'daemon');
-        daemonMergedProjectionState.current.inputs.pluginProjectionById['acme.review']!
-            .editableSettingsGroups[0]!.scope.kind = 'daemon';
+        daemonProjection.settingsById['acme.review.settings']!.scope.kind = 'daemon';
         askUserQuestionSessionState.current = {
-            serverId: 'server-a',
+            serverId: account.serverId,
             metadataLayoutVersion: 1,
             ownerMetadataView: {
                 machineId: 'machine-1',
@@ -1101,34 +977,6 @@ describe('AskUserQuestionView', () => {
                 },
             },
         };
-        scopedPluginSettingsRead.mockResolvedValueOnce({
-            status: 'ready',
-            snapshot: {
-                scope: { kind: 'daemon' },
-                target: {
-                    kind: 'daemon',
-                    serverIdentityId: 'srv_server_a',
-                    machineId: 'machine-1',
-                    serverId: 'server-a',
-                },
-                revision: { kind: 'daemon', value: 'revision-1' },
-                values: {},
-            },
-        });
-        scopedPluginSettingsWrite.mockResolvedValueOnce({
-            status: 'ready',
-            snapshot: {
-                scope: { kind: 'daemon' },
-                target: {
-                    kind: 'daemon',
-                    serverIdentityId: 'srv_server_a',
-                    machineId: 'machine-1',
-                    serverId: 'server-a',
-                },
-                revision: { kind: 'daemon', value: 'revision-2' },
-                values: { reviewScopePreference: 'always_include' },
-            },
-        });
         sessionAllowWithAnswers.mockResolvedValueOnce(undefined);
         const screen = await renderView(makeTool({
             input: {
@@ -1153,26 +1001,19 @@ describe('AskUserQuestionView', () => {
         await chooseOptionAndSubmit(screen, 'Always include selected files');
 
         expect(sessionAllowWithAnswers).toHaveBeenCalledTimes(1);
-        expect(scopedPluginSettingsWrite).toHaveBeenCalledWith({
-            pluginId: 'acme.review',
-            fieldId: 'reviewScopePreference',
-            mutation: { kind: 'set', value: 'always_include' },
-            expectedRevision: { kind: 'daemon', value: 'revision-1' },
-            scope: { kind: 'daemon' },
-            target: {
-                kind: 'daemon',
-                serverIdentityId: 'srv_server_a',
-                machineId: 'machine-1',
-                serverId: 'server-a',
-            },
-            fields: [{ key: 'reviewScopePreference', redacted: false }],
-        });
+        expect(daemonSettingRequests).toEqual([{
+            serverIdentityId: 'srv_server_a', machineId: 'machine-1', pluginId: 'acme.review',
+            fieldId: 'reviewScopePreference', mutation: { kind: 'set', value: 'always_include' },
+            expectedRevision: 'revision-1', scope: { kind: 'daemon' },
+        }]);
+        expect(daemonSettingValues).toEqual({ reviewScopePreference: 'always_include' });
+        expect(pluginSettingsRecords.get('acme.review')).toEqual({ revision: 1, values: {} });
     });
 
     it('refuses a remembered choice when the owning Agent projection changes while approval is in flight', async () => {
         publishReviewAskUserQuestionDescriptor(['always_include']);
         askUserQuestionSessionState.current = {
-            serverId: 'server-a',
+            serverId: account.serverId,
             metadataLayoutVersion: 1,
             ownerMetadataView: {
                 machineId: 'machine-1',
@@ -1226,10 +1067,10 @@ describe('AskUserQuestionView', () => {
         // The owning Agent replaces only this dialog's allowlist while the
         // approval is in flight. The field remains current and writable, so
         // an old render closure would wrongly persist its now-disallowed
-        // choice. No rerender occurs before settlement: currentness must be
-        // established from the canonical machine projection/descriptor owner.
-        machineProjectionRevision.current += 1;
-        daemonMergedProjectionState.current.inputs.pluginProjectionV2.generation += 1;
+        // choice. The real invalidation also refreshes the subscribed hook;
+        // settlement must use the canonical projection/descriptor currentness.
+        publishMachineContributionRegistryProjectionInvalidation({ machineId: 'machine-1', serverId: account.serverId });
+        daemonProjection.generation += 1;
         publishReviewAskUserQuestionDescriptor([]);
 
         approval.resolve();
@@ -1237,8 +1078,8 @@ describe('AskUserQuestionView', () => {
             await approval.promise;
         });
 
-        expect(scopedPluginSettingsWrite).not.toHaveBeenCalled();
-        expect(machinePluginSettingsSet).not.toHaveBeenCalled();
+        expect([...pluginSettingsRecords.values()]).toEqual([{ revision: 1, values: {} }, { revision: 1, values: {} }]);
+        expect(daemonSettingRequests).toEqual([]);
     });
 
     it('persists a remembered resume policy through the same scoped plugin settings owner', async () => {
@@ -1248,7 +1089,7 @@ describe('AskUserQuestionView', () => {
             source: 'claude_unified_terminal_dialog_choice',
         };
         askUserQuestionSessionState.current = {
-            serverId: 'server-a',
+            serverId: account.serverId,
             metadataLayoutVersion: 1,
             ownerMetadataView: {
                 machineId: 'machine-1',
@@ -1293,27 +1134,14 @@ describe('AskUserQuestionView', () => {
         expect(sessionAllowWithAnswers).toHaveBeenCalledWith({ id: 'toolu_1', answers: {
             'How should Claude resume this session?': ['always_resume_from_summary'],
         } });
-        expect(scopedPluginSettingsRead).toHaveBeenCalledWith({
-            pluginId: 'happier.agent.claude',
-            scope: { kind: 'account' },
-            target: {
-                kind: 'account',
-                serverIdentityId: 'srv_server_a',
-            },
-            fields: [{ key: 'claudeUnifiedTerminalResumeChoice', redacted: false }],
-        });
-        expect(scopedPluginSettingsWrite).toHaveBeenCalledWith({
-            pluginId: 'happier.agent.claude',
-            fieldId: 'claudeUnifiedTerminalResumeChoice',
-            mutation: { kind: 'set', value: 'resume_from_summary' },
-            expectedRevision: { kind: 'account', value: 1 },
-            scope: { kind: 'account' },
-            target: {
-                kind: 'account',
-                serverIdentityId: 'srv_server_a',
-            },
-            fields: [{ key: 'claudeUnifiedTerminalResumeChoice', redacted: false }],
-        });
+        expect(pluginSettingsRecords.get('happier.agent.claude')).toEqual({ revision: 2, values: {
+            claudeUnifiedTerminalResumeChoice: 'resume_from_summary',
+        } });
+        expect(homes.requestsFor('/v1/account/plugin-settings/happier.agent.claude').filter(request => request.input !== null)).toEqual([
+            expect.objectContaining({ serverId: account.serverId, input: {
+                expectedRevision: 1, content: { t: 'plain', v: { v: 1, values: { claudeUnifiedTerminalResumeChoice: 'resume_from_summary' } } },
+            } }),
+        ]);
     });
 
     it('fails closed when workspace trust has no portable server identity', async () => {
@@ -1323,7 +1151,7 @@ describe('AskUserQuestionView', () => {
             source: 'claude_unified_terminal_dialog_choice',
         };
         askUserQuestionSessionState.current = {
-            serverId: 'server-a',
+            serverId: account.serverId,
             metadataLayoutVersion: 1,
             ownerMetadataView: {
                 machineId: 'machine-1',
@@ -1342,7 +1170,12 @@ describe('AskUserQuestionView', () => {
                 },
             },
         };
-        resolveScopedPluginSettingsServerIdentity.mockReturnValue(null);
+        // A manually saved Home can serve its machine projection while it has
+        // not published a portable identity for Account settings targets.
+        await account.reset();
+        await account.restore({ machines: [createMachineFixture({ id: 'machine-1', activeAt: Date.now() })] });
+        askUserQuestionSessionState.current = { ...askUserQuestionSessionState.current, serverId: account.serverId };
+        clearDaemonMergedProjectionCacheForTests();
         sessionAllowWithAnswers.mockResolvedValueOnce(undefined);
         const screen = await renderView(makeTool({
             input: {
@@ -1366,11 +1199,9 @@ describe('AskUserQuestionView', () => {
 
         await chooseOptionAndSubmit(screen, 'Trust and remember');
 
-        expect(scopedPluginSettingsWrite).not.toHaveBeenCalled();
-        expect(modalAlert).toHaveBeenCalledWith(
-            'common.error',
-            'Unable to persist the selected setting without an exact Account target.',
-        );
+        expect([...pluginSettingsRecords.values()]).toEqual([{ revision: 1, values: {} }, { revision: 1, values: {} }]);
+        expect(daemonSettingRequests).toEqual([]);
+        expectAlert(screen, 'Unable to persist the selected setting without an exact Account target.');
     });
 
     it('does not persist a remembered choice without the session machine and Agent identity', async () => {
@@ -1384,7 +1215,7 @@ describe('AskUserQuestionView', () => {
         // still resolve the exact session Agent descriptor before accepting a
         // candidate mutation from a tool payload.
         askUserQuestionSessionState.current = {
-            serverId: 'server-a',
+            serverId: account.serverId,
             metadataLayoutVersion: 1,
             metadata: { machineId: 'shared-decoy-machine' },
             ownerMetadataView: null,
@@ -1424,9 +1255,9 @@ describe('AskUserQuestionView', () => {
 
         await chooseOptionAndSubmit(screen, 'Trust and remember');
 
-        expect(machinePluginSettingsSet).not.toHaveBeenCalled();
-        expect(modalAlert).not.toHaveBeenCalled();
-        expect(scopedPluginSettingsWrite).not.toHaveBeenCalled();
+        expectNoAlert(screen);
+        expect([...pluginSettingsRecords.values()]).toEqual([{ revision: 1, values: {} }, { revision: 1, values: {} }]);
+        expect(daemonSettingRequests).toEqual([]);
     });
 
     it.each(['unavailable', 'applied'] as const)('keeps an accepted answer settled when its remembered preference returns %s', async (settlement) => {
@@ -1436,7 +1267,7 @@ describe('AskUserQuestionView', () => {
             source: 'claude_unified_terminal_dialog_choice',
         };
         askUserQuestionSessionState.current = {
-            serverId: 'server-a',
+            serverId: account.serverId,
             metadataLayoutVersion: 1,
             ownerMetadataView: {
                 machineId: 'machine-1',
@@ -1456,9 +1287,9 @@ describe('AskUserQuestionView', () => {
             },
         };
         sessionAllowWithAnswers.mockResolvedValueOnce(undefined);
-        scopedPluginSettingsWrite.mockResolvedValue(settlement === 'applied'
-            ? { status: 'applied', revision: { kind: 'account', value: 1 } }
-            : { status: 'unavailable', reason: 'transport' });
+        if (settlement === 'unavailable') homes.answer(account.serverId, 'POST /v1/account/plugin-settings/happier.agent.claude', {
+            status: 503, body: { error: 'plugin_account_settings_storage_unavailable' },
+        });
         const screen = await renderView(makeTool({
             input: {
                 happierDialog: { kind: 'recognized', dialogId: 'trust_folder', secondaryAction: 'open_terminal' },
@@ -1487,12 +1318,9 @@ describe('AskUserQuestionView', () => {
         expect(sessionAllowWithAnswers).toHaveBeenCalledTimes(1);
         expect(findPressableByLabel(screen, 'tools.askUserQuestion.submit')).toBeFalsy();
         if (settlement === 'applied') {
-            expect(modalAlert).not.toHaveBeenCalled();
+            expectNoAlert(screen);
         } else {
-            expect(modalAlert).toHaveBeenCalledWith(
-                'common.error',
-                'Unable to persist the selected setting.',
-            );
+            expectAlert(screen, 'Unable to persist the selected setting.');
         }
     });
 
@@ -1517,7 +1345,7 @@ describe('AskUserQuestionView', () => {
         expect(sessionAllowWithAnswers).toHaveBeenCalledWith({ id: 'toolu_reconnect', answers: { 'Pick one': ['A'] } });
         expect(sessionDeny).toHaveBeenCalledTimes(0);
         expect(sendMessage).toHaveBeenCalledTimes(0);
-        expect(modalAlert).toHaveBeenCalledTimes(0);
+        expectNoAlert(screen);
     });
 
     it('does not allow answering when no permission request id is available', async () => {
@@ -1533,7 +1361,7 @@ describe('AskUserQuestionView', () => {
         expect(sessionAllowWithAnswers).toHaveBeenCalledTimes(0);
         expect(sessionDeny).toHaveBeenCalledTimes(0);
         expect(sendMessage).toHaveBeenCalledTimes(0);
-        expect(modalAlert).toHaveBeenCalledTimes(0);
+        expectNoAlert(screen);
     });
 
     it('shows an error when permission approval fails', async () => {
@@ -1545,7 +1373,7 @@ describe('AskUserQuestionView', () => {
         expect(sessionAllowWithAnswers).toHaveBeenCalledTimes(1);
         expect(sessionDeny).toHaveBeenCalledTimes(0);
         expect(sendMessage).toHaveBeenCalledTimes(0);
-        expect(modalAlert).toHaveBeenCalledWith('common.error', 'boom');
+        expectAlert(screen, 'boom');
     });
 
     it('uses permission approval when answers-in-permission capability is unavailable but the matching request is still active', async () => {
@@ -1626,7 +1454,7 @@ describe('AskUserQuestionView', () => {
 
     it('withdraws submit when a read-only source contains a pending agent question', async () => {
         const screen = await renderWithSessionTranscriptSource(
-            React.createElement(AskUserQuestionView, makeToolViewProps(makeTool(), { sessionId: 's1' })),
+            React.createElement(AppPaneProvider, { children: React.createElement(AskUserQuestionView, makeToolViewProps(makeTool(), { sessionId: 's1' })) }),
             createTestSessionTranscriptSource({ agentState: readSessionFixture().agentState }),
         );
         expect(screen.findAllByTestId('ask-user-question.submit')).toHaveLength(0);
@@ -1671,7 +1499,7 @@ describe('AskUserQuestionView', () => {
         expect(submitBefore).toBeTruthy();
         expect(submitBefore!.props.disabled).toBe(true);
 
-        const input = screen.findByType('TextInput' as any);
+        const input = screen.findByProps({ testID: 'ask-user-question.freeform:0' });
         await act(async () => {
             changeTextTestInstance(input, 'Custom goal, with commas', 'ask-user-question freeform input');
         });

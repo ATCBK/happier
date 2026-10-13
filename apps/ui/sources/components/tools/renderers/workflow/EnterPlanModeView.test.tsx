@@ -1,16 +1,10 @@
 import React from 'react';
-import { describe, expect, it, vi } from 'vitest';
+import { describe, expect, it } from 'vitest';
 import renderer from 'react-test-renderer';
 import type { ToolCall } from "@happier-dev/session-core/messages";
 import { collectHostText, makeToolCall, makeToolViewProps } from '@/dev/testkit';
 import { renderScreen } from '@/dev/testkit';
 
-
-(globalThis as any).IS_REACT_ACT_ENVIRONMENT = true;
-
-vi.mock('../../shell/presentation/ToolSectionView', () => ({
-    ToolSectionView: ({ children }: any) => React.createElement(React.Fragment, null, children),
-}));
 
 describe('EnterPlanModeView', () => {
     function makeTool(): ToolCall {
@@ -55,6 +49,6 @@ describe('EnterPlanModeView', () => {
 
     it('renders nothing when detailLevel=title', async () => {
         const tree = await renderView('title');
-        expect(tree.findAllByType('Text' as any).length).toBe(0);
+        expect(collectHostText(tree)).toEqual([]);
     });
 });

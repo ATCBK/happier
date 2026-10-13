@@ -68,7 +68,7 @@ export function resolveToolHeaderTextPresentation(params: {
         return {
             normalizedToolName: tool.name,
             usedInferenceFallback: false,
-            title: formatMCPTitle(tool.name),
+            title: formatMCPTitle(tool.name, tool.permission?.mcpTool),
             subtitle: formatMCPSubtitle(tool.input),
             statusText: null,
         };

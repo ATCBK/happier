@@ -6,35 +6,22 @@ import { collectHostText, makeToolCall, makeToolViewProps } from '@/dev/testkit'
 import { createTestSessionTranscriptSource, renderWithSessionTranscriptSource } from '@/dev/testkit';
 import { TranscriptFindProvider } from '@/components/sessions/transcript/find/TranscriptFindContext';
 import { createTranscriptFindRowStore } from '@/components/sessions/transcript/find/transcriptFindRowStore';
-import {
-    installWorkflowRendererCommonModuleMocks,
-} from './workflowRendererTestHelpers';
+import { t } from '@/text';
+import { SubAgentView, projectSubAgentDisplayText } from './SubAgentView';
 
 
-(globalThis as any).IS_REACT_ACT_ENVIRONMENT = true;
-
-installWorkflowRendererCommonModuleMocks({
-    text: async () => {
-        const { createTextModuleMock } = await import('@/dev/testkit/mocks/text');
-        return createTextModuleMock({
-            translate: (_key: string, opts?: { count?: number; subject?: string }) => {
-                if (_key === 'tools.taskLikeSummary.createTaskWithSubject' && opts && typeof opts.subject === 'string') {
-                    return `Create task: ${opts.subject}`;
-                }
-                if (_key === 'tools.taskLikeSummary.createTask') return 'Create task';
-                if (opts && typeof opts.count === 'number') return `+ ${opts.count} more`;
-                return _key;
-            },
-        });
+vi.mock('@/text', async () => (await import('@/dev/testkit/mocks/text')).createTextModuleMock({
+    translate: (key, options) => {
+        if (key === 'tools.taskLikeSummary.createTaskWithSubject' && typeof options?.subject === 'string') {
+            return `Create task: ${options.subject}`;
+        }
+        if (key === 'tools.taskLikeSummary.createTask') return 'Create task';
+        if (typeof options?.count === 'number') return `+ ${options.count} more`;
+        return key;
     },
-});
-
-vi.mock('@expo/vector-icons', () => ({
-    Ionicons: 'Ionicons',
 }));
-
-vi.mock('../../catalog', () => ({
-    knownTools: {},
+vi.mock('react-native-enriched-markdown/lib/module/web/streamingReveal.js', () => ({
+    splitStreamingRevealTextParts: () => [],
 }));
 
 describe('SubAgentView', () => {
@@ -91,7 +78,6 @@ describe('SubAgentView', () => {
         messages: Message[],
         detailLevel?: 'title' | 'summary' | 'full',
     ) {
-        const { SubAgentView } = await import('./SubAgentView');
         let tree!: renderer.ReactTestRenderer;
         tree = (await renderWithSessionTranscriptSource(React.createElement(
                     SubAgentView,
@@ -102,7 +88,6 @@ describe('SubAgentView', () => {
 
     describe('Summary Rendering', () => {
         it('projects and reveals a background result and full sidechain text without hidden metadata', async () => {
-            const { SubAgentView, projectSubAgentDisplayText } = await import('./SubAgentView');
             const tool = makeTaskTool({ input: { prompt: 'Explore', subagent_type: 'worker', hidden: 'private needle' },
                 result: { content: [{ type: 'text', text: 'Result needle' }], hidden: 'private needle' } });
             const messages = [makeAgentTextMessage('Working needle', 1)];
@@ -138,10 +123,10 @@ describe('SubAgentView', () => {
             const tree = await renderView(taskTool, messages);
 
             const joined = collectHostText(tree).join(' ');
-            expect(joined).toContain('Read');
-            expect(joined).toContain('Write');
-            expect(joined).toContain('Edit');
-            expect(joined).not.toContain('Bash');
+            expect(joined).toContain(t('tools.names.readFile'));
+            expect(joined).toContain(t('tools.names.writeFile'));
+            expect(joined).toContain(t('tools.names.editFile'));
+            expect(joined).not.toContain(t('tools.names.terminal'));
             expect(joined).toContain('+ 1 more');
         });
 

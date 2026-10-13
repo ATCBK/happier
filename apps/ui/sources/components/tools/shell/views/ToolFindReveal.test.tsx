@@ -1,16 +1,32 @@
 import React from 'react';
 import { act } from 'react-test-renderer';
-import { describe, expect, it } from 'vitest';
+import { describe, expect, it, vi } from 'vitest';
 import { renderScreen, createTestSessionTranscriptSource, wrapWithSessionTranscriptSource, makeToolCall } from '@/dev/testkit';
-import { installToolShellCommonModuleMocks } from './ToolView.testHelpers';
+import { installDisconnectedServerSocketBoundary } from '@/dev/testkit/harness/serverAccountConnectionHarness';
 import { createTranscriptFindRowStore } from '@/components/sessions/transcript/find/transcriptFindRowStore';
 import { TranscriptFindProvider } from '@/components/sessions/transcript/find/TranscriptFindContext';
-import { ToolCodeViewWithClamp } from './ToolInlineBody';
-import { ToolView } from './ToolView';
-import { ToolTimelineRow } from './ToolTimelineRow';
-import { ToolError } from '../presentation/ToolError';
 
-installToolShellCommonModuleMocks();
+vi.mock('expo-router', async () => {
+    const { createExpoRouterMock } = await import('@/dev/testkit/mocks/router');
+    return createExpoRouterMock().module;
+});
+vi.mock('react-native', async () => {
+    const { createReactNativeWebMock } = await import('@/dev/testkit/mocks/reactNative');
+    return createReactNativeWebMock();
+});
+vi.mock('react-native-unistyles', async () => {
+    const { createUnistylesMock } = await import('@/dev/testkit/mocks/unistyles');
+    return createUnistylesMock();
+});
+vi.mock('@/text', async () => {
+    const { createTextModuleMock } = await import('@/dev/testkit/mocks/text');
+    return createTextModuleMock();
+});
+installDisconnectedServerSocketBoundary();
+const { ToolCodeViewWithClamp } = await import('./ToolInlineBody');
+const { ToolView } = await import('./ToolView');
+const { ToolTimelineRow } = await import('./ToolTimelineRow');
+const { ToolError } = await import('../presentation/ToolError');
 
 describe('Find tool owner reveal', () => {
     it('decorates the actual parsed error text and opens its height clamp for the current result', async () => {

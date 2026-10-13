@@ -2,26 +2,13 @@ import React from 'react';
 import { describe, expect, it, vi } from 'vitest';
 
 import type { ToolCall } from "@happier-dev/session-core/messages";
-import { makeToolCall, makeToolViewProps } from '@/dev/testkit';
-import { renderScreen } from '@/dev/testkit';
+import { makeToolCall, makeToolViewProps, renderScreen } from '@/dev/testkit';
 import { TranscriptFindProvider } from '@/components/sessions/transcript/find/TranscriptFindContext';
 import { createTranscriptFindRowStore } from '@/components/sessions/transcript/find/transcriptFindRowStore';
-import {
-    installWorkflowRendererCommonModuleMocks,
-} from './workflowRendererTestHelpers';
 
-
-(globalThis as any).IS_REACT_ACT_ENVIRONMENT = true;
-
-const markdownViewSpy = vi.fn();
-
-installWorkflowRendererCommonModuleMocks();
-
-vi.mock('@/components/markdown/MarkdownView', () => ({
-    MarkdownView: (props: any) => {
-        markdownViewSpy(props);
-        return React.createElement('MarkdownView', props);
-    },
+// The vendor's browser reveal adapter cannot run in the Node renderer.
+vi.mock('react-native-enriched-markdown/lib/module/web/streamingReveal.js', () => ({
+    splitStreamingRevealTextParts: () => [],
 }));
 
 describe('ReasoningView', () => {
@@ -36,53 +23,39 @@ describe('ReasoningView', () => {
 
     async function renderView(tool: ToolCall, detailLevel?: 'title' | 'summary' | 'full') {
         const { ReasoningView } = await import('./ReasoningView');
-        await renderScreen(React.createElement(
-                    ReasoningView,
-                    makeToolViewProps(tool, { sessionId: 's1', ...(detailLevel ? { detailLevel } : {}) }),
-                ));
+        return renderScreen(React.createElement(
+            ReasoningView,
+            makeToolViewProps(tool, { sessionId: 's1', ...(detailLevel ? { detailLevel } : {}) }),
+        ));
     }
 
-    it('renders tool.result.content as markdown', async () => {
-        markdownViewSpy.mockReset();
-        await renderView(makeTool({ content: 'Hello **world**' }));
-
-        expect(markdownViewSpy).toHaveBeenCalled();
-        const lastCall = markdownViewSpy.mock.calls.at(-1)?.[0];
-        expect(lastCall?.markdown).toBe('Hello **world**');
+    it('renders tool.result.content through the real markdown view', async () => {
+        const screen = await renderView(makeTool({ content: 'Hello **world**' }));
+        expect(screen.getTextContent()).toBe('Hello **world**');
     });
 
     it('truncates long reasoning by default and preserves full content when detailLevel=full', async () => {
-        markdownViewSpy.mockReset();
         const long = 'x'.repeat(2000);
         const tool = makeTool({ content: long });
-        await renderView(tool);
-        const summaryCall = markdownViewSpy.mock.calls.at(-1)?.[0];
-        expect(typeof summaryCall?.markdown).toBe('string');
-        expect(summaryCall?.markdown.length).toBeLessThan(long.length);
-        expect(summaryCall?.markdown.endsWith('…')).toBe(true);
+        const summary = await renderView(tool);
+        expect(summary.getTextContent().length).toBeLessThan(long.length);
+        expect(summary.getTextContent().endsWith('…')).toBe(true);
 
-        markdownViewSpy.mockReset();
-        await renderView(tool, 'full');
-        const fullCall = markdownViewSpy.mock.calls.at(-1)?.[0];
-        expect(fullCall?.markdown).toBe(long);
+        const full = await renderView(tool, 'full');
+        expect(full.getTextContent()).toBe(long);
     });
 
     it('supports string/text/reasoning result fallbacks and ignores malformed payloads', async () => {
-        markdownViewSpy.mockReset();
-        await renderView(makeTool('plain text result'));
-        expect(markdownViewSpy.mock.calls.at(-1)?.[0]?.markdown).toBe('plain text result');
-
-        markdownViewSpy.mockReset();
-        await renderView(makeTool({ text: 'text field' }));
-        expect(markdownViewSpy.mock.calls.at(-1)?.[0]?.markdown).toBe('text field');
-
-        markdownViewSpy.mockReset();
-        await renderView(makeTool({ reasoning: 'reasoning field' }));
-        expect(markdownViewSpy.mock.calls.at(-1)?.[0]?.markdown).toBe('reasoning field');
-
-        markdownViewSpy.mockReset();
-        await renderView(makeTool({ content: 123 }));
-        expect(markdownViewSpy).not.toHaveBeenCalled();
+        for (const [result, expected] of [
+            ['plain text result', 'plain text result'],
+            [{ text: 'text field' }, 'text field'],
+            [{ reasoning: 'reasoning field' }, 'reasoning field'],
+        ] as const) {
+            const screen = await renderView(makeTool(result));
+            expect(screen.getTextContent()).toBe(expected);
+        }
+        const malformed = await renderView(makeTool({ content: 123 }));
+        expect(malformed.getTextContent()).toBe('');
     });
 
     it('projects only rendered reasoning and reveals a match beyond the summary clamp', async () => {
@@ -95,10 +68,11 @@ describe('ReasoningView', () => {
         const store = createTranscriptFindRowStore();
         const ranges = [{ start: 1202, end: 1208, current: true }];
         store.publish(new Map([['m1', { blocks: [{ id: 'tool-reasoning', sourceRanges: ranges }] }]]));
-        markdownViewSpy.mockReset();
-        await renderScreen(<TranscriptFindProvider store={store}>
+        const screen = await renderScreen(<TranscriptFindProvider store={store}>
             <module.ReasoningView {...makeToolViewProps(tool, { messageId: 'm1' })} />
         </TranscriptFindProvider>);
-        expect(markdownViewSpy.mock.calls.at(-1)?.[0]).toMatchObject({ markdown, findSourceRanges: ranges });
+        expect(screen.getTextContent()).toContain('needle');
+        expect(screen.getTextContent()).not.toContain('…');
+        expect(screen.tree.findByTestId('find-match-current')?.props.children).toBe('needle');
     });
 });

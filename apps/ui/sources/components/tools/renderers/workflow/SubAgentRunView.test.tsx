@@ -1,17 +1,10 @@
 import * as React from 'react';
 import renderer from 'react-test-renderer';
-import { beforeAll, beforeEach, describe, expect, it, vi } from 'vitest';
+import { beforeAll, describe, expect, it, vi } from 'vitest';
 import { renderWithSessionTranscriptSource, createTestSessionTranscriptSource } from '@/dev/testkit';
 import { collectHostText } from '@/dev/testkit';
-import {
-    installWorkflowRendererCommonModuleMocks,
-    resetWorkflowRendererCommonModuleMockState,
-} from './workflowRendererTestHelpers';
 
 
-(globalThis as any).IS_REACT_ACT_ENVIRONMENT = true;
-
-const structuredResultViewPropsSpy = vi.fn();
 function renderScreen(element: React.ReactElement<React.ComponentProps<typeof import('./SubAgentRunView')['SubAgentRunView']>>) {
     return renderWithSessionTranscriptSource(element, createTestSessionTranscriptSource({
         sessionId: element.props.sessionId ?? 's1', messages: element.props.messages,
@@ -19,14 +12,11 @@ function renderScreen(element: React.ReactElement<React.ComponentProps<typeof im
     }));
 }
 
-installWorkflowRendererCommonModuleMocks();
-resetWorkflowRendererCommonModuleMockState();
-
-vi.mock('@/components/tools/renderers/system/StructuredResultView', () => ({
-    StructuredResultView: (props: any) => {
-        structuredResultViewPropsSpy(props);
-        return React.createElement('StructuredResultView');
-    },
+vi.mock('@/text', async () => (await import('@/dev/testkit/mocks/text')).createTextModuleMock({
+    translate: (key) => key,
+}));
+vi.mock('react-native-enriched-markdown/lib/module/web/streamingReveal.js', () => ({
+    splitStreamingRevealTextParts: () => [],
 }));
 
 describe('SubAgentRunView', () => {
@@ -35,10 +25,6 @@ describe('SubAgentRunView', () => {
     beforeAll(async () => {
         ({ SubAgentRunView } = await import('./SubAgentRunView'));
     }, 120_000);
-
-    beforeEach(() => {
-        structuredResultViewPropsSpy.mockReset();
-    });
 
     it('renders sidechain text messages while running (detailLevel=full)', async () => {
         let tree!: renderer.ReactTestRenderer;
@@ -142,14 +128,14 @@ describe('SubAgentRunView', () => {
 
         const text = collectHostText(tree).join('\n');
         expect(text).toContain('TICK 4');
-        expect(structuredResultViewPropsSpy).not.toHaveBeenCalled();
+        expect(text).not.toContain('Request interrupted');
     });
 
     it('still renders a reported outcome that carries an interruption marker beside it', async () => {
         // The execution-run manager reported `succeeded`, so the run is terminal however torn down
         // the parent call was. Deferring to the status owner is what keeps this from becoming a
         // second, drifting copy of that precedence rule.
-        await renderScreen(<SubAgentRunView
+        const screen = await renderScreen(<SubAgentRunView
             tool={{
                 state: 'completed',
                 input: { intent: 'delegate' },
@@ -162,7 +148,8 @@ describe('SubAgentRunView', () => {
             detailLevel="full"
         />);
 
-        expect(structuredResultViewPropsSpy).toHaveBeenCalled();
+        expect(screen.getTextContent()).toContain('Delegated output.');
+        expect(screen.getTextContent()).not.toContain('TICK 5');
     });
 
     it('renders a review digest from findingsDigest v2 shape', async () => {
@@ -228,13 +215,13 @@ describe('SubAgentRunView', () => {
                     tool={{
                         state: 'error',
                         input: { intent: 'delegate' },
-                        result: { summary: 'Timed out', status: 'failed', error: { code: 'execution_run_failed' } },
+                        result: { summary: 'Timed out', status: 'failed', error: { code: 'execution_run_failed', message: 'Execution failed while reviewing' } },
                     } as any}
                     metadata={null as any}
                     messages={[] as any}
                 />)).tree;
 
-        expect(structuredResultViewPropsSpy).toHaveBeenCalledTimes(1);
+        expect(collectHostText(tree).join(' ')).toContain('Execution failed while reviewing');
     });
 
     it('coerces error tool state to completed for structured timeout fallback', async () => {
@@ -253,8 +240,6 @@ describe('SubAgentRunView', () => {
                     messages={[] as any}
                 />)).tree;
 
-        expect(structuredResultViewPropsSpy).toHaveBeenCalledTimes(1);
-        const firstCall = structuredResultViewPropsSpy.mock.calls[0]?.[0];
-        expect(firstCall?.tool?.state).toBe('completed');
+        expect(collectHostText(tree).join(' ')).toContain('Timed out after 120000ms');
     });
 });

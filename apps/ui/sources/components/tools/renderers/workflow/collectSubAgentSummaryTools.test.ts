@@ -1,91 +1,38 @@
-import { describe, expect, it, vi } from 'vitest';
+import { describe, expect, it } from 'vitest';
 
-import type { Message } from "@happier-dev/session-core/messages";
-
-vi.mock('@/components/tools/shell/presentation/resolveToolHeaderTextPresentation', () => ({
-    resolveToolHeaderTextPresentation: () => ({
-        normalizedToolName: 'Anything',
-        usedInferenceFallback: false,
-        title: 'Fancy Tool Title',
-        subtitle: null,
-        statusText: null,
-    }),
-}));
+import { createToolCallMessageFixture, makeToolCall } from '@/dev/testkit';
+import { collectSubAgentSummaryTools } from './collectSubAgentSummaryTools';
 
 describe('collectSubAgentSummaryTools', () => {
-    it('uses resolveToolHeaderTextPresentation for tool titles', async () => {
-        const { collectSubAgentSummaryTools } = await import('./collectSubAgentSummaryTools');
-
-        const taskTool: any = {
-            name: 'Task',
-            state: 'running',
-            input: {},
-            createdAt: 10,
-            startedAt: 10,
-            completedAt: null,
-            description: null,
-            result: null,
-        };
-
-        const messages: Message[] = [
-            {
-                kind: 'tool-call',
-                id: 'm1',
-                localId: null,
+    it('renders the canonical MCP title instead of the provider wire name', () => {
+        const tool = makeToolCall({ name: 'Task', state: 'running', createdAt: 10, startedAt: 10 });
+        const message = createToolCallMessageFixture({
+            id: 'm1',
+            createdAt: 11,
+            tool: makeToolCall({
+                name: 'mcp__filesystem__read_file',
+                state: 'completed',
+                input: { path: '/repo/readme.md' },
                 createdAt: 11,
-                tool: {
-                    name: 'SomeTool',
-                    state: 'completed',
-                    input: {},
-                    createdAt: 11,
-                    startedAt: 11,
-                    completedAt: 12,
-                    description: null,
-                    result: {},
-                } as any,
-                children: [],
-            } as any,
-        ];
+            }),
+        });
 
-        const tools = collectSubAgentSummaryTools({ tool: taskTool, messages, metadata: null });
+        const tools = collectSubAgentSummaryTools({ tool, messages: [message], metadata: null });
         expect(tools).toHaveLength(1);
-        expect(tools[0]!.title).toBe('Fancy Tool Title');
+        expect(tools[0]?.title).toBe('MCP: Filesystem Read File');
     });
 
-    it('returns task tool calls sorted by createdAt (oldest first)', async () => {
-        const { collectSubAgentSummaryTools } = await import('./collectSubAgentSummaryTools');
-
-        const taskTool: any = {
-            name: 'Task',
-            state: 'running',
-            input: {},
-            createdAt: 10,
-            startedAt: 10,
-            completedAt: null,
-            description: null,
-            result: null,
-        };
-
-        const messages: Message[] = [
-            {
-                kind: 'tool-call',
-                id: 'm2',
-                localId: null,
-                createdAt: 12,
-                tool: { name: 'ToolB', state: 'completed', input: {}, createdAt: 12, startedAt: 12, completedAt: 13, description: null, result: {} } as any,
-                children: [],
-            } as any,
-            {
-                kind: 'tool-call',
-                id: 'm1',
-                localId: null,
-                createdAt: 11,
-                tool: { name: 'ToolA', state: 'completed', input: {}, createdAt: 11, startedAt: 11, completedAt: 12, description: null, result: {} } as any,
-                children: [],
-            } as any,
+    it('sorts eligible task tools oldest first and excludes earlier or nested task calls', () => {
+        const tool = makeToolCall({ name: 'Task', state: 'running', createdAt: 10, startedAt: 10 });
+        const messages = [
+            createToolCallMessageFixture({ id: 'm2', tool: makeToolCall({ name: 'ToolB', state: 'completed', createdAt: 12 }) }),
+            createToolCallMessageFixture({ id: 'early', tool: makeToolCall({ name: 'ToolEarly', state: 'completed', createdAt: 9 }) }),
+            createToolCallMessageFixture({ id: 'nested', tool: makeToolCall({ name: 'Task', state: 'running', createdAt: 13 }) }),
+            createToolCallMessageFixture({ id: 'm1', tool: makeToolCall({ name: 'ToolA', state: 'error', createdAt: 11 }) }),
         ];
 
-        const tools = collectSubAgentSummaryTools({ tool: taskTool, messages, metadata: null });
-        expect(tools.map((t) => t.tool.createdAt)).toEqual([11, 12]);
+        const tools = collectSubAgentSummaryTools({ tool, messages, metadata: null });
+        expect(tools.map((entry) => entry.tool.createdAt)).toEqual([11, 12]);
+        expect(tools.map((entry) => entry.state)).toEqual(['error', 'completed']);
     });
 });

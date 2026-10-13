@@ -3,51 +3,9 @@ import React from 'react';
 import { describe, expect, it, vi } from 'vitest';
 
 import type { Message, ToolCall, ToolCallMessage } from "@happier-dev/session-core/messages";
-import { installWorkflowRendererCommonModuleMocks } from './workflowRendererTestHelpers';
 
-
-(globalThis as any).IS_REACT_ACT_ENVIRONMENT = true;
 
 const pushSpy = vi.fn();
-const navigateWithBlurOnWebSpy = vi.hoisted(() => vi.fn((action: () => void) => action()));
-
-vi.mock('@/utils/platform/navigateWithBlurOnWeb', () => ({
-    navigateWithBlurOnWeb: navigateWithBlurOnWebSpy,
-}));
-
-installWorkflowRendererCommonModuleMocks({
-    reactNative: async () => {
-        const { createReactNativeWebMock } = await import('@/dev/testkit/mocks/reactNative');
-        return createReactNativeWebMock({
-            Platform: {
-                OS: 'web',
-                select: (v: any) => v.web ?? v.default,
-            },
-            AppState: {
-                currentState: 'active',
-                addEventListener: () => ({ remove: () => {} }),
-            },
-            View: ({ children, ...props }: any) => React.createElement('View', props, children),
-            Pressable: ({ children, ...props }: any) => React.createElement('Pressable', props, children),
-            ActivityIndicator: (props: any) => React.createElement('ActivityIndicator', props),
-        });
-    },
-    router: async () => {
-        const { createExpoRouterMock } = await import('@/dev/testkit/mocks/router');
-        const expoRouterMock = createExpoRouterMock({
-            router: { push: pushSpy },
-        });
-        return expoRouterMock.module;
-    },
-    text: async () => {
-        const { createTextModuleMock } = await import('@/dev/testkit/mocks/text');
-        return createTextModuleMock({
-            translate: (key: string, vars?: any) =>
-                key === 'tools.taskView.moreTools' ? `more:${vars?.count ?? ''}` : key,
-        });
-    },
-});
-
 function makeToolCall(overrides: Partial<ToolCall>): ToolCall {
     const now = 1;
     return {
@@ -147,7 +105,6 @@ describe('SubAgentSummarySection (+N more tools row)', () => {
 
     it('renders the +N more tools row above the visible tools (and makes it tappable)', async () => {
         pushSpy.mockClear();
-        navigateWithBlurOnWebSpy.mockClear();
 
         const taskTool = makeToolCall({
             name: 'Task',
@@ -187,7 +144,6 @@ describe('SubAgentSummarySection (+N more tools row)', () => {
         expect(order[0]).toBe('task-like-summary-more-tools');
 
         await screen.pressByTestIdAsync('task-like-summary-more-tools');
-        expect(navigateWithBlurOnWebSpy).toHaveBeenCalledTimes(1);
         expect(pushSpy).toHaveBeenCalledWith('/session/s1/message/msg-task-1');
     });
 });

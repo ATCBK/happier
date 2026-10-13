@@ -1,14 +1,8 @@
 import React from 'react';
-import { describe, expect, it, vi } from 'vitest';
+import { describe, expect, it } from 'vitest';
 import { makeToolCall, makeToolViewProps } from '@/dev/testkit';
 import { renderScreen } from '@/dev/testkit';
 
-
-(globalThis as any).IS_REACT_ACT_ENVIRONMENT = true;
-
-vi.mock('../../shell/presentation/ToolSectionView', () => ({
-    ToolSectionView: ({ children }: any) => React.createElement(React.Fragment, null, children),
-}));
 
 describe('ChangeTitleView', () => {
     it('renders the title from tool.input.title', async () => {

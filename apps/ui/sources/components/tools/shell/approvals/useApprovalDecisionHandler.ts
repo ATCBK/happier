@@ -1,7 +1,7 @@
 import * as React from 'react';
 
 import type { ActionId, ApprovalRequest } from '@happier-dev/protocol';
-import { ApprovalExecutionV1Schema } from '@happier-dev/protocol/approvals/approvalRequestV1';
+import { ApprovalExecutionV1Schema, type ApprovalExecutionV1 } from '@happier-dev/protocol/approvals/approvalRequestV1';
 import { TeamInvitationCreateResultV1Schema, TeamInvitationReissueResultV1Schema } from '@happier-dev/protocol/teams';
 
 import type { DecryptedArtifact } from '@/sync/domains/artifacts/artifactTypes';
@@ -43,9 +43,12 @@ export function getApprovalDecisionErrorMessage(error: unknown, fallbackMessage 
     if (providerCode.success && providerCode.data.startsWith('provider_')) {
         return t(presentProviderError(providerCode.data).descriptionKey);
     }
-    return error instanceof HappyError && error.code === 'present_user_required'
-        ? t('approvals.decisionAuthorityError')
-        : fallbackMessage;
+    if (error instanceof HappyError && error.code === 'present_user_required') {
+        return t('approvals.decisionAuthorityError');
+    }
+    // Retain the typed code, never opaque transport prose or private details.
+    return typeof code === 'string' && /^[a-z][a-z0-9_]*$/.test(code)
+        ? `${fallbackMessage} (${code})` : fallbackMessage;
 }
 
 type ApprovalDecisionArtifact = Pick<DecryptedArtifact, 'id' | 'header'>;
@@ -69,7 +72,8 @@ function readServerId(
     serverIdHint?: string | null,
 ): string | null {
     if (approval?.v === 2 && replayRoute) return replayRoute.serverId;
-    if (approval && requiresExactDaemonApprovalReplay(approval)) return null;
+    // The mounted Artifact Home remains usable for cancellation even when its
+    // execution origin cannot be reached. Approve/reject require replayRoute below.
     const normalizedServerIdHint = serverIdHint?.trim() ?? '';
     if (normalizedServerIdHint.length > 0) return normalizedServerIdHint;
     const headerServerId = typeof artifact.header?.serverId === 'string' ? artifact.header.serverId.trim() : '';
@@ -79,6 +83,8 @@ function readServerId(
 }
 
 export type ApprovalDecisionOptions = Readonly<{
+    /** The canonical execution receipt, distinct from recording the decision. */
+    onExecution?: (execution: ApprovalExecutionV1 | null) => void;
     /** The deciding person's reduced operands, admitted by the requested Action. */
     narrowedInput?: unknown;
     /** A resource proposal's turned-down items, as the person last saw them (plan 60 AGW-8). */
@@ -128,12 +134,14 @@ export function useApprovalDecisionHandler(
         // Portable or daemon-owned origins must resolve their immutable Home identity. A
         // present-user UI approval intentionally has no cryptographic Home identity and stays
         // on its exact mounted route instead of being misclassified as cross-device replay.
-        if (requiresResolvedReplayRoute(approval) && !replayRoute) return false;
+        if (decision !== 'cancel' && requiresResolvedReplayRoute(approval) && !replayRoute) {
+            throw new HappyError('approval_origin_unavailable', false, { code: 'approval_origin_unavailable' });
+        }
         if (
             decision === 'approve'
             && requiresExactDaemonApprovalReplay(approval)
             && (approval.v !== 2 || !approval.executionOriginV1.machineId?.trim())
-        ) return false;
+        ) throw new HappyError('approval_origin_unavailable', false, { code: 'approval_origin_unavailable' });
         const revealsCreatedToken = decision === 'approve' && approval.actionId === 'account.apiTokens.create';
         const revealsInvitation = decision === 'approve'
             && (approval.actionId === 'teams.invitations.create' || approval.actionId === 'teams.invitations.reissue');
@@ -187,6 +195,7 @@ export function useApprovalDecisionHandler(
             if (execution?.success && execution.data.ok === false && isApprovalDecisionStale(execution.data)) {
                 throw new HappyError(execution.data.error ?? 'approval_stale', false, { code: 'approval_stale' });
             }
+            options?.onExecution?.(execution?.success ? execution.data : null);
             // A storage proposal remembers what the person turned down; best effort, the decision stands.
             void recordResourceProposalDeclines(approval, decision, narrowedInput, options?.declinedItems, serverId);
             if (!revealsLiveResult || !account) return true;

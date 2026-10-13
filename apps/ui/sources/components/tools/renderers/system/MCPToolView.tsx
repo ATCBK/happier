@@ -13,6 +13,7 @@ import { readTranscriptProjectCommandCall } from '@/components/sessions/transcri
 import { ProjectCommandToolBody } from './ProjectCommandToolBody';
 import { readTranscriptMachineResourcesCall } from '@/components/sessions/transcript/references/transcriptMachineResourcesReference';
 import { MachineResourcesToolBody } from './MachineResourcesToolBody';
+import { ResolvedMcpToolIdentityV1Schema, type ResolvedMcpToolIdentityV1 } from '@happier-dev/protocol/mcp/servers/tools/mcpToolIdentityV1';
 
 
 /**
@@ -30,7 +31,9 @@ function snakeToPascalWithSpaces(str: string): string {
  * Formats MCP tool name to display title
  * Example: "mcp__linear__create_issue" -> "MCP: Linear Create Issue"
  */
-export function formatMCPTitle(toolName: string): string {
+export function formatMCPTitle(toolName: string, mcpTool?: ResolvedMcpToolIdentityV1): string {
+    const identity = ResolvedMcpToolIdentityV1Schema.safeParse(mcpTool);
+    if (identity.success) return `${identity.data.toolTitle ?? identity.data.tool} · ${identity.data.serverTitle}`;
     // Remove "mcp__" prefix
     const withoutPrefix = toolName.replace(/^mcp__/, '');
     
