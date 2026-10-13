@@ -5,17 +5,81 @@ import { createLeftBehindPass } from '../leftBehind/leftBehindPass';
 import { createMachineVitalsSampler } from '@/daemon/vitals/createMachineVitalsSampler';
 import { createMachineProcessesView } from './createMachineProcessesView';
 import { createMinuteHistoryStore } from '@/daemon/vitals/history/minuteHistoryStore';
-import { mkdtemp, rm } from 'node:fs/promises';
+import { mkdir, mkdtemp, rm } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
-import { join } from 'node:path';
+import { dirname, join } from 'node:path';
 import { createLocalServiceInventoryRegistry } from '@/daemon/local/services/inventory/registry';
 import { createLocalServiceInventoryRoutes } from '@/daemon/local/services/inventory/routes';
 import { MACHINE_WATCH_WINDOW_MS } from '@happier-dev/protocol/rpc/machineWatchWindow';
+import { MachineProcessesWatchResultV1Schema, type MachineProcessesWatchResultV1 } from '@happier-dev/protocol/machines/processes/machineProcessesV1';
+import { spawnSupervisedPluginProcess } from '@/plugins/runtime/exec/processSupervisor';
+import { once } from 'node:events';
+import { createDaemonControlApp } from '@/daemon/controlServer';
+import { writeDaemonState, clearDaemonStateForTestTeardown } from '@/persistence';
+import { configuration } from '@/configuration';
 
 // Native census and vitals I/O are system boundaries; the sampler and every domain owner are real.
 const boundary = vi.hoisted(() => ({ read: vi.fn<(input: ProcessCensusInput) => Promise<ProcessCensusSnapshot>>() }));
 vi.mock('@/processes/census/processCensus', () => ({ readProcessCensus: boundary.read }));
 afterEach(() => { vi.useRealTimers(); boundary.read.mockReset(); });
+it('discovers a real Happier launch in a parked watch before either sampling cadence and stops discovery when disposed', async () => {
+    vi.useFakeTimers(); vi.setSystemTime(1000);
+    let childPid: number | undefined;
+    boundary.read.mockImplementation(async () => ({ status: 'ok', capturedAtMs: Date.now(), logicalCpus: 2, rows: [
+        { pid: 100, ppid: 1, start: { startTimeMs: 100 }, principal: { kind: 'uid', value: '1000' }, name: 'daemon',
+            memory: { bytes: 20, kind: 'rss' }, cpuTimeUs: 0 },
+        ...(childPid === undefined ? [] : [{ pid: childPid, ppid: 100, start: { startTimeMs: 1000 },
+            principal: { kind: 'uid' as const, value: '1000' }, name: 'tool', memory: { bytes: 30, kind: 'rss' as const }, cpuTimeUs: 0 }]),
+    ] }));
+    const runtime = createProcessOwnershipRuntime({ selfPid: 100, platform: 'darwin', daemonScopeKey: '123456789abc', listRoots: () => [
+        { owner: { kind: 'happier' }, pid: 100, start: { startTimeMs: 100 }, ownerCreatedAtMs: 100, live: true },
+    ] });
+    const pass = createLeftBehindPass({ processOwnershipRuntime: runtime });
+    const sampler = createMachineVitalsSampler({ readers: { read: async () => { throw new Error('No sampler tick expected'); } },
+        historyStore: { read: async () => [], append: async () => true, prune: async () => undefined,
+            appendAlert: async () => undefined, minutes: () => [], alerts: () => [] } });
+    const view = createMachineProcessesView({ processOwnershipRuntime: runtime, leftBehind: pass, machineVitals: sampler,
+        platform: 'darwin', selfPid: 100, allProcessesVisible: () => false, requesterForOwner: () => ({ accountId: 'a' }) });
+    const app = createDaemonControlApp({ getChildren: () => [], machineId: 'm',
+        stopSession: async () => ({ status: 'not_found' }), spawnSession: async () => ({ type: 'success', sessionId: 's' }),
+        requestShutdown: () => {}, onHappySessionWebhook: () => {}, controlToken: 'private-spawn-fixture' });
+    await app.listen({ host: '127.0.0.1', port: 0 });
+    const address = app.server.address();
+    if (!address || typeof address === 'string') throw new Error('Missing fixture control port');
+    await mkdir(dirname(configuration.daemonStateFile), { recursive: true });
+    writeDaemonState({ pid: process.pid, httpPort: address.port, startedAt: Date.now(), startedWithCliVersion: 'fixture',
+        controlToken: 'private-spawn-fixture' });
+    const requester = { accountId: 'a', custodianAccountId: 'a' };
+    const initial = await view.watch({ machineId: 'm', scope: 'happier', view: 'tree' }, requester);
+    const cancellation = new AbortController();
+    let answer: MachineProcessesWatchResultV1 | undefined;
+    const parked = view.watch({ machineId: 'm', scope: 'happier', view: 'tree', since: initial.changed ? initial.answer.capturedAtMs : 0 },
+        requester, cancellation.signal).then(value => { answer = value; });
+    await vi.advanceTimersByTimeAsync(1);
+    const launched = spawnSupervisedPluginProcess({ command: process.execPath, args: ['-e', 'setInterval(() => {}, 1000)'], env: {} });
+    childPid = launched.child.pid;
+    try {
+        await once(launched.child, 'spawn');
+        await vi.waitFor(() => expect(answer?.changed).toBe(true));
+        expect(Date.now()).toBeLessThan(2000);
+        expect(answer?.changed && answer.answer.owners.flatMap(owner => owner.members).map(row => row.pid)).toContain(childPid);
+        expect(MachineProcessesWatchResultV1Schema.safeParse(answer).success).toBe(true);
+        const reads = boundary.read.mock.calls.length;
+        view.dispose();
+        const next = spawnSupervisedPluginProcess({ command: process.execPath, args: ['-e', 'process.exit(0)'], env: {} });
+        await once(next.child, 'spawn');
+        await next.handle.wait();
+        await vi.advanceTimersByTimeAsync(1);
+        expect(boundary.read.mock.calls.length).toBe(reads);
+    } finally {
+        cancellation.abort(); await parked;
+        view.dispose(); pass.dispose();
+        launched.child.kill('SIGKILL');
+        await launched.handle.wait();
+        vi.useRealTimers(); await sampler.stop();
+        await app.close(); await clearDaemonStateForTestTeardown();
+    }
+});
 it('samples only while watched, retaining CPU/history across re-arm until the shared watch window expires', async () => {
     vi.useFakeTimers(); vi.setSystemTime(1000);
     let name = 'daemon';

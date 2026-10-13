@@ -1,29 +1,31 @@
 import { afterEach, describe, expect, it, vi } from 'vitest';
-import type { ProcessCensusSnapshot } from '@/processes/census/processCensus';
 import { createProcessOwnershipRuntime } from '../ownership/processOwnershipRuntime';
 import { createLeftBehindPass } from './leftBehindPass';
+import { createGuardLeftBehindFixture, guardLeftBehindOwner } from '../../guard/actuators/leftBehind.testkit';
 
-// The native process-table read is the system boundary; ownership and lifecycle logic remain real.
-const boundary = vi.hoisted(() => ({ read: vi.fn<() => Promise<ProcessCensusSnapshot>>() }));
-vi.mock('@/processes/census/processCensus', () => ({ readProcessCensus: boundary.read }));
-const owner = { kind: 'session', sessionId: 'ended' } as const;
-const principal = { kind: 'uid', value: '1000' } as const;
+const owner = guardLeftBehindOwner;
 function setup() {
     let live = false;
-    let secondChild = false;
-    boundary.read.mockImplementation(async () => ({ status: 'ok', capturedAtMs: Date.now(), logicalCpus: 1,
-        rows: [
-            { pid: 100, ppid: 1, start: { startTimeMs: 100 }, principal, name: 'daemon', memory: null, cpuTimeUs: null },
-            { pid: 300, ppid: 1, start: { startTimeMs: 300, native: 'darwin-proc:300:0:300' }, principal,
-                name: 'child', ownerTag: 'v1.123456789abc.session.ended', memory: null, cpuTimeUs: null },
-            ...(secondChild ? [{ pid: 301, ppid: 1, start: { startTimeMs: 301, native: 'darwin-proc:301:0:301' }, principal,
-                name: 'later child', ownerTag: 'v1.123456789abc.session.ended', memory: null, cpuTimeUs: null }] : []),
-        ] }));
-    const processOwnershipRuntime = createProcessOwnershipRuntime({ selfPid: 100, platform: 'darwin', daemonScopeKey: '123456789abc',
+    let unavailable = false;
+    let nativeReads = 0;
+    const native = createGuardLeftBehindFixture();
+    const laterChild = native.rows.get(301)!;
+    native.rows.delete(301);
+    const processOwnershipRuntime = createProcessOwnershipRuntime({ selfPid: process.pid, platform: 'darwin', daemonScopeKey: '123456789abc',
+        // Only the native helper transport is substituted. The real census decoder,
+        // identity checks, ownership and confirmation all consume its canonical fixture.
+        censusDependencies: { ...native.censusDependencies, now: Date.now, execFile: async (...args) => {
+            nativeReads++;
+            if (unavailable) throw new Error('Native process table unavailable');
+            native.advance(Date.now() - native.now());
+            return native.censusDependencies.execFile!(...args);
+        } },
         listRoots: () => [{ owner, pid: 200, start: { startTimeMs: 200 }, ownerCreatedAtMs: 200, live }] });
-    return { pass: createLeftBehindPass({ processOwnershipRuntime }), resume() { live = true; }, addChild() { secondChild = true; } };
+    return { pass: createLeftBehindPass({ processOwnershipRuntime }), processOwnershipRuntime,
+        resume() { live = true; }, addChild() { native.rows.set(301, laterChild); }, fail() { unavailable = true; },
+        get nativeReads() { return nativeReads; } };
 }
-afterEach(() => { vi.useRealTimers(); boundary.read.mockReset(); });
+afterEach(() => { vi.useRealTimers(); });
 describe('owner-end and daemon-start left-behind pass', () => {
     it('automatically confirms a startup-discovered ended owner only after a fresh second read', async () => {
         vi.useFakeTimers(); vi.setSystemTime(1000);
@@ -45,11 +47,11 @@ describe('owner-end and daemon-start left-behind pass', () => {
     });
     it('reports unavailable fresh evidence instead of returning a retained confirmed list as current', async () => {
         vi.useFakeTimers(); vi.setSystemTime(1000);
-        const { pass } = setup();
+        const { pass, fail } = setup();
         await pass.firstPass(owner);
         await vi.advanceTimersByTimeAsync(60_000);
         expect(pass.confirmed()).toHaveLength(1);
-        boundary.read.mockResolvedValue({ status: 'unavailable', reason: 'read_failed' });
+        fail();
         expect(await pass.readConfirmed()).toEqual({ status: 'unavailable', reason: 'read_failed' });
         pass.dispose();
     });
@@ -68,13 +70,12 @@ describe('owner-end and daemon-start left-behind pass', () => {
     });
     it('consumes watched ownership observations without issuing a second census and preserves confirmation spacing', async () => {
         vi.useFakeTimers(); vi.setSystemTime(1000);
-        const { pass } = setup();
-        const runtime = createProcessOwnershipRuntime({ selfPid: 100, platform: 'darwin', daemonScopeKey: '123456789abc',
-            listRoots: () => [{ owner, pid: 200, start: { startTimeMs: 200 }, ownerCreatedAtMs: 200, live: false }] });
-        const observed = await runtime.readOwners({ freshness: 'fresh' });
-        const reads = boundary.read.mock.calls.length;
+        const f = setup();
+        const { pass } = f;
+        const observed = await f.processOwnershipRuntime.readOwners({ freshness: 'fresh' });
+        const reads = f.nativeReads;
         pass.observe(observed);
-        expect(boundary.read.mock.calls.length).toBe(reads);
+        expect(f.nativeReads).toBe(reads);
         expect(pass.confirmed()).toEqual([]);
         expect(vi.getTimerCount()).toBe(1);
         await vi.advanceTimersByTimeAsync(60_000);

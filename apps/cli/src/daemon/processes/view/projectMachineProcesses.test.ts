@@ -82,6 +82,19 @@ function metricOwners(read: ReturnType<typeof setup>) {
     return owners;
 }
 describe('process wire projection privacy', () => {
+    it('counts ownerless unverifiable processes without exposing private fields or inventing ownership', () => {
+        const read = setup();
+        const snapshot = { ...read.snapshot, rows: [...read.snapshot.rows, { ...read.snapshot.rows[0], pid: 70, ppid: 1,
+            start: { startTimeMs: 70 }, principal: null, name: 'private-unreadable', argv: ['private-command'], cwd: '/private/unknown' }] };
+        const current = { ...read, snapshot, rows: resolveProcessOwnership({ snapshot, roots: read.roots,
+            daemonPrincipal: snapshot.rows[0].principal, daemonScopeKey: scope, platform: 'linux' }) };
+        const answer = projectMachineProcesses(current, request, { accountId: 'owner', custodianAccountId: 'owner' }, options);
+        expect(answer).toHaveProperty('unverifiableCount', 1);
+        expect(answer.totals.happier).toMatchObject({ processCount: 5 });
+        expect(JSON.stringify(answer)).not.toMatch(/private-unreadable|private-command|\/private\/unknown/);
+        expect(MachineProcessesAnswerV1Schema.safeParse(answer).success).toBe(true);
+        expect(projectMachineProcesses(current, request, { accountId: 'guest', custodianAccountId: 'owner' }, options)).not.toHaveProperty('unverifiableCount');
+    });
     it('gives a recipient only their rows, own totals and an owner count with no private guest or daemon facts', () => {
         const answer = projectMachineProcesses(setup(), request, { accountId: 'guest', custodianAccountId: 'owner' }, options);
         expect(answer.owners.map(row => row.owner)).toEqual([{ kind: 'session', sessionId: 'guest-session' }]);

@@ -12,7 +12,7 @@ import type { createLeftBehindPass } from '../leftBehind/leftBehindPass';
 import { processOwnerKey, type HappierProcessRoot, type ProcessOwnerRef } from '../ownership/types';
 import { createProcessMetrics } from './processMetrics';
 import { decodeProcessRef } from './processRef';
-import { projectMachineProcesses, type ProcessRequester, type ProcessRequesterIdentity, type ProcessesProjectionInput, type ProcessOwnershipRead } from './projectMachineProcesses';
+import { projectMachineProcesses, type ProcessRequester, type ProcessRequesterIdentity, type ProcessesProjectionInput, type ProcessesProjectionOptions, type ProcessOwnershipRead } from './projectMachineProcesses';
 
 export type MachineProcessesViewOptions = Readonly<{
     processOwnershipRuntime: ReturnType<typeof createProcessOwnershipRuntime>;
@@ -24,6 +24,7 @@ export type MachineProcessesViewOptions = Readonly<{
     readRequesterIdentities?: () => Promise<ReadonlyMap<string, Readonly<{ accountId: string; displayName: string }>>>;
     localServiceRoutes?: Pick<LocalServiceInventoryRoutes, 'readCurrentSnapshot' | 'getSnapshot' | 'watchSnapshot'>;
     roleCatalog?: ProcessRoleCatalog;
+    readCeiling?: ProcessesProjectionOptions['readCeiling'];
 }>;
 
 /** The view consumes ownership and the Left-behind pass; it never owns another census or ownership rule. */

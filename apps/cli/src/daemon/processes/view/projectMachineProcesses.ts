@@ -27,6 +27,7 @@ export type ProcessesProjectionOptions = Readonly<{
     capturedAtMs?: number;
     ports?: NormalizedLocalServiceInventorySnapshot; roleCatalog?: ProcessRoleCatalog;
     principalName?(row: ProcessCensusRow): string;
+    readCeiling?(root: HappierProcessRoot): OwnerRowV1['ceiling'];
 }>;
 export function processTotals(rows: readonly Readonly<{ memoryBytes: number | null; cpuPercent?: number }>[]): MachineProcessesTotalsV1 {
     return { processCount: rows.length,
@@ -70,6 +71,7 @@ export function projectMachineProcesses(read: ProcessOwnershipRead, request: Pro
     const foreign: Array<{ memoryBytes: number | null; cpuPercent?: number }> = [];
     const foreignNames = new Set<string>();
     const othersWork = new Set<string>();
+    let unverifiableCount = 0;
     const history: Record<string, ProcessMetricSample[]> = {};
     for (const row of index.byPid.values()) {
         const resolved = ownership.get(row.pid);
@@ -81,6 +83,7 @@ export function projectMachineProcesses(read: ProcessOwnershipRead, request: Pro
             ...(metric?.cpuPercent === undefined ? {} : { cpuPercent: metric.cpuPercent }) };
         const ownPrincipal = compareProcessPrincipals(row.principal, principal);
         if (!resolved.owner) {
+            if (resolved.level === 'unknown') { if (custodian && !request.sessionId) unverifiableCount++; continue; }
             if (custodian && ownPrincipal === 'other') { foreign.push(facts); foreignNames.add(options.principalName?.(row) ?? row.principal!.value); }
             if (custodian && request.scope === 'all' && ownPrincipal === 'self' && resolved.level === 'not_happier') {
                 const group = appGroup(row, options.platform);
@@ -128,6 +131,13 @@ export function projectMachineProcesses(read: ProcessOwnershipRead, request: Pro
             });
             const owner: OwnerRowV1 = owners.get(ownerKey) ?? { rowId: ownerKey, owner: resolved.owner, state: stopping ? 'stopping' : 'running', members: [], totals: zero,
                 ...(displayIdentity && displayIdentity.accountId !== requester.custodianAccountId ? { requester: displayIdentity } : {}) };
+            if (!owners.has(ownerKey)) {
+                const root = read.roots.find(candidate => candidate.live && candidate.owner.kind === 'session'
+                    && processOwnerKey(candidate.owner) === ownerKey && index.byPid.has(candidate.pid)
+                    && equalProcessStart(candidate.start, index.byPid.get(candidate.pid)!.start));
+                const ceiling = root && options.readCeiling?.(root);
+                if (ceiling) owner.ceiling = ceiling;
+            }
             owner.members.push(processRow);
             owners.set(ownerKey, owner);
         }
@@ -168,6 +178,7 @@ export function projectMachineProcesses(read: ProcessOwnershipRead, request: Pro
             return { count: foreign.length, ...totals, names: [...foreignNames] };
         })() } : {}),
         ...(!custodian ? { othersWork: { count: othersWork.size } } : {}),
+        ...(custodian && !request.sessionId ? { unverifiableCount } : {}),
         totals: { happier: processTotals(ownerRows.flatMap(owner => owner.members)), leftBehind: processTotals(leftBehind) },
         ...(Object.keys(history).length ? { history } : {}) };
 }
