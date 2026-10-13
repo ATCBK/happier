@@ -2,6 +2,8 @@ import { lazyZodSchema } from '../lazyZodSchema.js';
 import { z } from 'zod';
 
 import { sanitizeBugReportUrl } from '../bugs/reports/sanitize.js';
+import { MachineVitalsSampleV1Schema } from '../machines/vitals/machineVitalsSampleV1.js';
+import { MachineResourceAttentionV1Schema } from '../machines/resources/machineResourceSummaryV1.js';
 
 const NonEmptyString = z.string().trim().min(1);
 const PublicReleaseChannelLabelSchema = lazyZodSchema(() => z.enum(['stable', 'preview', 'dev']));
@@ -27,6 +29,24 @@ const HappierServiceTargetModeSchema = lazyZodSchema(() => z.enum(['pinned', 'de
 const DoctorSnapshotAutomaticStartupTargetModeSchema = lazyZodSchema(() => z.enum(['pinned', 'default-following', 'legacy-pinned']));
 const HappierWarningSeveritySchema = lazyZodSchema(() => z.enum(['info', 'warning', 'error']));
 const NonNegativeInteger = z.number().int().nonnegative();
+
+export const DoctorDaemonSelfVitalsSchema = lazyZodSchema(() => z.object({
+  sampledAt: NonNegativeInteger,
+  eventLoopBusyFraction: z.number().min(0).max(1).nullable(),
+  rssBytes: NonNegativeInteger,
+  heapUsedBytes: NonNegativeInteger,
+  heapTotalBytes: NonNegativeInteger,
+  activeHandleCount: NonNegativeInteger.nullable(),
+  unavailableReason: z.literal('runtime_not_reported').optional(),
+}).strict());
+export type DoctorDaemonSelfVitals = z.infer<typeof DoctorDaemonSelfVitalsSchema>;
+
+export const DoctorSnapshotResourceVitalsSchema = lazyZodSchema(() => z.object({
+  sample: z.nullable(MachineVitalsSampleV1Schema),
+  attention: z.nullable(MachineResourceAttentionV1Schema),
+  self: DoctorDaemonSelfVitalsSchema,
+}).strict());
+export type DoctorSnapshotResourceVitals = z.infer<typeof DoctorSnapshotResourceVitalsSchema>;
 
 const DoctorSnapshotTransportObservationSchema = lazyZodSchema(() => z.object({
   carrier: z.enum(['https', 'iroh']).optional(),
@@ -325,6 +345,7 @@ export const DoctorSnapshotSchema = lazyZodSchema(() => z.object({
     knownAccountIds: z.array(NonEmptyString),
   }),
   daemonStatus: DoctorSnapshotDaemonStatusSchema.optional(),
+  resourceVitals: DoctorSnapshotResourceVitalsSchema.optional(),
   installations: z.object({
     happier: HappierDoctorInstallationInventorySchema.optional(),
   }).optional(),

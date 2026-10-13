@@ -8,6 +8,16 @@ import {
 } from './doctorSnapshot.js';
 
 describe('DoctorSnapshotSchema', () => {
+  it('preserves the latest daemon resource facts in the exported Doctor snapshot', () => {
+    const memory = process.memoryUsage();
+    const resourceVitals = { sample: null, attention: null, self: { sampledAt: Date.now(),
+      rssBytes: memory.rss, heapUsedBytes: memory.heapUsed, heapTotalBytes: memory.heapTotal,
+      eventLoopBusyFraction: null, activeHandleCount: null, unavailableReason: 'runtime_not_reported' } };
+    const snapshot = DoctorSnapshotSchema.parse({ capturedAt: new Date().toISOString(), accountId: null,
+      server: { activeServerId: 'local', serverUrl: 'http://localhost', publicServerUrl: 'http://localhost', webappUrl: 'http://localhost' },
+      settings: { activeServerId: 'local', servers: [], knownAccountIds: [] }, resourceVitals });
+    expect(snapshot).toHaveProperty('resourceVitals', resourceVitals);
+  });
   it('sanitizes a multiline copied diagnostic while preserving non-secret technical detail', () => {
     const sanitized = sanitizeDoctorDiagnosticText([
       'transport: connection refused on relay eu-west-1',
