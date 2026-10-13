@@ -168,7 +168,7 @@ export function useSessionInlineDrag(params: UseSessionInlineDragParams): UseSes
 
         return Gesture.Pan()
             .minDistance(ENTITY_DRAG_ACTIVATION_DISTANCE_PX)
-            .cancelsTouchesInView(false)
+            // Keep RNGH's native touch cancellation: an activated carry consumes the row press.
             .onStart(() => {
                 'worklet';
                 didEnd.value = false;

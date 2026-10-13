@@ -339,9 +339,8 @@ describe('useSessionListRowInteractions', () => {
             await hook.rerender({ ...initialInput, listItems: [...nativeItems, { ...sessionTemplate, sessionId: 's3' }] });
             await act(async () => { finishMeasurement(); await completion; });
             expect(releaseOutcome).toEqual({ status: 'applied' });
-            const rootGroupKey = buildSessionFolderGroupKey({ serverId: scope.serverId,
-                workspace: { ...workspace, serverId: scope.serverId }, folderId: null });
-            expect(setOrder.mock.calls[0]?.[0]?.[rootGroupKey]).toEqual([
+            // Project ordering belongs to the list's projected group, not a folder-root scope.
+            expect(setOrder.mock.calls[0]?.[0]?.['project-a']).toEqual([
                 sessionKey, sessionAddressKey({ serverId: scope.serverId, sessionId: 's1' }),
                 sessionAddressKey({ serverId: scope.serverId, sessionId: 's3' }),
             ]);
@@ -689,7 +688,7 @@ describe('useSessionListRowInteractions', () => {
         await hook.unmount();
     });
 
-    it('suppresses exactly one folder-focus press after a release, which writes nothing when no place admitted the row', async () => {
+    it('writes nothing after release when no place admitted the row', async () => {
         boundary.folderAssignment.mockClear();
         const folderItems: SessionListIndexItem[] = [
             listItems[0]!,
@@ -720,8 +719,6 @@ describe('useSessionListRowInteractions', () => {
             },
         });
 
-        expect(hook.getCurrent().consumeFolderFocusPressAfterDrag()).toBe(false);
-
         await act(async () => {
             hook.getCurrent().handleDragStart(sessionAddressKey({ serverId: 'server-a', sessionId: 's1' }));
             hook.getCurrent().handleTreeDropResult({
@@ -741,8 +738,6 @@ describe('useSessionListRowInteractions', () => {
             });
         });
 
-        expect(hook.getCurrent().consumeFolderFocusPressAfterDrag()).toBe(true);
-        expect(hook.getCurrent().consumeFolderFocusPressAfterDrag()).toBe(false);
         // The pointer never reached an admitted place, so the release had nothing to commit.
         expect(boundary.folderAssignment).not.toHaveBeenCalled();
 

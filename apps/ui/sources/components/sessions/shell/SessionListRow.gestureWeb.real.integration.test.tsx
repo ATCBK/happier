@@ -17,6 +17,8 @@ import { sessionAddressKey } from '@/sync/domains/session/sessionAddress';
 import { treeRowId } from './drop-resolution/treeRowId';
 import type { SessionListIndexItem } from '@/sync/domains/sessionList/sessionListIndex';
 import { useEntityDragDropRuntime } from '@/components/ui/treeDragDrop/entityDragDropHooks';
+import { installEntityDragCancellation } from '@/components/ui/treeDragDrop/entityDragCancellation';
+import { createEntityDragGestureAdapter } from '@/components/ui/treeDragDrop/entityDragGestureAdapter';
 import { SplitCanvasHost, type SplitCanvasHostControls } from '@/components/appShell/splitCanvas/components/SplitCanvasHost';
 import { resolveCompactAppDestinations } from '@/components/appShell/destinations/compactAppDestinationCatalog';
 import { createWorkspaceNavigationAdapter } from '@/components/appShell/workspace/workspaceNavigationAdapter';
@@ -217,19 +219,31 @@ describe('SessionListRow real web gesture', () => {
             left: 0, top: 0, right: 300, bottom: 80, width: 300, height: 80, x: 0, y: 0, toJSON: () => ({}),
         });
         const session = createSessionFixture({ id: 'sess_pointer', serverId: 'server_a' });
-        const onDragStart = vi.fn();
-        const onDropResult = vi.fn();
-        const onDragCancel = vi.fn();
-        const resolveDropResult = vi.fn(() => ({
-            result: { instruction: { kind: 'idle' as const }, visual: { kind: 'none' as const } },
-            geometry: { kind: 'none' as const },
-        }));
+        const runtime = useEntityDragDropRuntime();
+        const scope = { serverId: 'server_a', accountId: 'account_a' };
+        const retire = runtime.registerSource({ id: 'press-source', scope, isCurrent: () => true,
+            getItem: () => ({ kind: 'session', scope, address: { serverId: scope.serverId, sessionId: session.id } }) });
+        const stopBoundary = installEntityDragCancellation(runtime, window);
+        cancelCarry = () => { stopBoundary(); retire(); };
+        const onOpened = vi.fn();
+        let carry: ReturnType<typeof createEntityDragGestureAdapter> | undefined;
+        const onDragStart = vi.fn(() => { carry = createEntityDragGestureAdapter(runtime.begin('press-source')!); });
+        const onDropResult = vi.fn(async () => { await carry?.end(true); });
+        const onDragCancel = vi.fn(() => { carry?.cancel(); });
+        const resolveDropResult = vi.fn((event: { pointer: { x: number; y: number } | null }) => {
+            carry?.update(event.pointer);
+            return {
+                result: { instruction: { kind: 'idle' as const }, visual: { kind: 'none' as const } },
+                geometry: { kind: 'none' as const },
+            };
+        });
         container = document.createElement('div');
         document.body.append(container);
         root = createRoot(container);
         await act(async () => root?.render(
             <InjectedAuthProvider credentials={{ token: 'test-token' }}>
                 <SessionListRow session={session} rowViewModel={createSessionItemRowViewModel({ session })}
+                    onOpened={onOpened}
                     selected={false} isFirst isLast variant="default" compact={false}
                     sessionKey="sess_pointer" treeRowId="sess_pointer" groupKey="group" reorderEnabled organizeMode={false}
                     onDragStart={onDragStart} onDropResult={onDropResult} onDragCancel={onDragCancel} resolveDropResult={resolveDropResult}
@@ -256,5 +270,15 @@ describe('SessionListRow real web gesture', () => {
         expect(onDropResult).toHaveBeenCalledTimes(terminalEvent === 'pointerup' ? 1 : 0);
         expect(onDragCancel).toHaveBeenCalledTimes(terminalEvent === 'pointercancel' ? 1 : 0);
         if (terminalEvent === 'pointerup') expect(captured.has(1)).toBe(false);
+        // Real browsers synthesize click after the Pan's captured pointer release.
+        // Keep the real SessionItem Pressable in the path: the drop must not open it.
+        await act(async () => row!.dispatchEvent(new MouseEvent('click', { bubbles: true, cancelable: true, detail: 1 })));
+        expect(onOpened).not.toHaveBeenCalled();
+        await act(async () => {
+            pointer(row!, 'pointerdown', 50, 30);
+            pointer(row!, 'pointerup', 50, 30);
+            row!.dispatchEvent(new MouseEvent('click', { bubbles: true, cancelable: true, detail: 1 }));
+        });
+        expect(onOpened).toHaveBeenCalledOnce();
     });
 });

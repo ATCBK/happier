@@ -71,7 +71,6 @@ const IDLE_RESOLVED_DROP: UseSessionInlineDragResolvedDrop = Object.freeze({
     }),
     geometry: Object.freeze({ kind: 'none' }),
 });
-const POST_DRAG_FOLDER_FOCUS_PRESS_SUPPRESSION_MS = 750;
 const EMPTY_LIST_ITEMS: readonly SessionListIndexItem[] = Object.freeze([]);
 
 type SessionFolderAssignableSessionItem = Readonly<{
@@ -109,7 +108,6 @@ export function useSessionListRowInteractions(input: UseSessionListRowInteractio
     const [activeDragSnapshot, setActiveDragSnapshot] = React.useState<SessionListDragSnapshot | null>(null);
     const [nativeContextMenuSessionKey, setNativeContextMenuSessionKey] = React.useState<string | null>(null);
     const nativeListScrollInteractionActiveRef = React.useRef(false);
-    const suppressFolderFocusPressUntilRef = React.useRef(0);
 
     const activeDragSnapshotRef = React.useRef<SessionListDragSnapshot | null>(null);
     const keyboardScrollTargetRef = React.useRef<string | null>(null);
@@ -218,19 +216,6 @@ export function useSessionListRowInteractions(input: UseSessionListRowInteractio
         overlayVisible.value = 0;
         overlayKind.value = TREE_DROP_OVERLAY_KIND_NONE;
     }, [autoscrollActive, autoscrollPointerY, overlayKind, overlayVisible]);
-    const suppressNextFolderFocusPressAfterDrag = React.useCallback(() => {
-        suppressFolderFocusPressUntilRef.current = Date.now() + POST_DRAG_FOLDER_FOCUS_PRESS_SUPPRESSION_MS;
-    }, []);
-    const consumeFolderFocusPressAfterDrag = React.useCallback(() => {
-        const deadline = suppressFolderFocusPressUntilRef.current;
-        if (deadline <= 0) return false;
-        if (Date.now() > deadline) {
-            suppressFolderFocusPressUntilRef.current = 0;
-            return false;
-        }
-        suppressFolderFocusPressUntilRef.current = 0;
-        return true;
-    }, []);
 
     const registerRowContentGeometry = React.useCallback((rowId: string, ref: TreeDropMeasurableRef | null) => {
         if (!ref) return;
@@ -466,7 +451,6 @@ export function useSessionListRowInteractions(input: UseSessionListRowInteractio
     }, []);
 
     const commitTreeDropResult = React.useCallback(async (_event: UseSessionInlineDragDropResultEvent): Promise<void> => {
-        suppressNextFolderFocusPressAfterDrag();
         const carry = carryRef.current;
         const snapshot = activeDragSnapshotRef.current;
         try {
@@ -474,7 +458,7 @@ export function useSessionListRowInteractions(input: UseSessionListRowInteractio
         } finally {
             if (activeDragSnapshotRef.current === snapshot) clearDragState();
         }
-    }, [clearDragState, suppressNextFolderFocusPressAfterDrag]);
+    }, [clearDragState]);
 
     const handleDragStart = React.useCallback((sessionKey: string) => {
         let snapshot: SessionListDragSnapshot;
@@ -501,13 +485,10 @@ export function useSessionListRowInteractions(input: UseSessionListRowInteractio
 
     const handleDragUpdate = React.useCallback((_event: UseSessionInlineDragDropResultEvent) => {}, []);
     const handleDragCancel = React.useCallback((event?: UseSessionInlineDragCancelEvent) => {
-        if (event) {
-            suppressNextFolderFocusPressAfterDrag();
-        }
         carryRef.current?.cancel();
         carryRef.current = null;
         clearDragState();
-    }, [clearDragState, suppressNextFolderFocusPressAfterDrag]);
+    }, [clearDragState]);
 
     const handleTogglePinnedSessionKey = React.useCallback((sessionKey: string) => {
         if (pinnedKeySetRef.current.has(sessionKey)) {
@@ -608,7 +589,6 @@ export function useSessionListRowInteractions(input: UseSessionListRowInteractio
         applyKeyboardMove,
         prepareTreeRowSource,
         moveToFolder,
-        consumeFolderFocusPressAfterDrag,
         draggingSessionKey,
         dropOverlayShared,
         handleDragCancel,

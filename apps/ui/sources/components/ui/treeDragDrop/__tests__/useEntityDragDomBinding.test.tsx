@@ -16,6 +16,37 @@ function dragEvent(type: string, x = 50) {
 }
 
 describe('entity DOM carry boundary', () => {
+    it.each(['applied', 'refused', 'cancelled'] as const)('suppresses the pointer release activation after a %s carry without swallowing the next press', async (outcome) => {
+        const runtime = createEntityDragDropRuntime();
+        const scope = { serverId: 'home', accountId: 'account' };
+        runtime.registerSource({ id: 'source', scope, isCurrent: () => true,
+            getItem: () => ({ kind: 'destination', scope, href: '/inbox' }) });
+        runtime.registerTarget({ id: 'target', scope, acceptedKinds: ['destination'],
+            getBounds: () => ({ x: 0, y: 0, width: 100, height: 100 }),
+            resolve: () => outcome === 'refused' ? { status: 'refused', reason: { code: 'denied', message: 'Unavailable' } }
+                : { status: 'allowed', effect: { actionId: 'workspace.tabs.open', input: {}, preview: { verb: 'Open', target: 'Inbox' } } },
+            execute: async () => ({ status: 'applied' }) });
+        const node = document.createElement('button');
+        document.body.append(node);
+        let activations = 0;
+        node.addEventListener('click', () => { activations++; });
+        const stop = installEntityDragCancellation(runtime, window);
+        try {
+            node.dispatchEvent(new MouseEvent('pointerdown', { bubbles: true }));
+            const carry = runtime.begin('source')!;
+            carry.move({ x: 50, y: 50 });
+            if (outcome === 'cancelled') carry.cancel();
+            else await carry.release();
+            // Keyboard activation is unrelated to the pointer that carried the row.
+            node.dispatchEvent(new MouseEvent('click', { bubbles: true, cancelable: true, detail: 0 }));
+            expect(activations).toBe(1);
+            node.dispatchEvent(new MouseEvent('click', { bubbles: true, cancelable: true, detail: 1 }));
+            expect(activations).toBe(1);
+            node.dispatchEvent(new MouseEvent('pointerdown', { bubbles: true }));
+            node.dispatchEvent(new MouseEvent('click', { bubbles: true, cancelable: true, detail: 1 }));
+            expect(activations).toBe(2);
+        } finally { stop(); node.remove(); }
+    });
     it('keeps a refused hover alive across a transient ref detach, then applies an admitted drop', async () => {
         const runtime = createEntityDragDropRuntime();
         const scope = { serverId: 'home', accountId: 'account' };

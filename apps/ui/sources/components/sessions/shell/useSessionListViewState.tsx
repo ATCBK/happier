@@ -1700,7 +1700,6 @@ export function useSessionListViewStateFromPaneState(
 
     const handleFocusSessionFolder = React.useCallback((item: Extract<SessionListIndexItem, { type: 'header' }>) => {
         if (!item.folderId || !item.workspace) return;
-        if (rowInteractions.consumeFolderFocusPressAfterDrag()) return;
         // The persisted focus record is Home-scoped (`SessionListFocusedFolderV1Schema`), so a
         // folder whose Home is not resolved yet has nothing to focus.
         const focusServerId = item.serverId ?? item.workspace.serverId;
@@ -1710,7 +1709,7 @@ export function useSessionListViewStateFromPaneState(
             workspace: item.workspace,
             serverId: focusServerId,
         });
-    }, [rowInteractions.consumeFolderFocusPressAfterDrag, setSessionListFocusedFolderV1]);
+    }, [setSessionListFocusedFolderV1]);
 
     const handleCreateSessionFromFolder = React.useCallback((item: Extract<SessionListIndexItem, { type: 'header' }>) => {
         const target = resolveNewSessionGroupTarget(item);
