@@ -1,6 +1,7 @@
 import { MachineAcpInventoryRequestSchema, type MachineAgentInventoryItem } from '@happier-dev/protocol/capabilities/machineAgentInventory';
 import { resolveAcpPlatformFitV1 } from '@happier-dev/protocol/acp/catalog/registry/acpPlatformFitV1';
 import { listManagedAcpInstalls } from '@/agent/acp/catalog/registry/managedAgentInstalls';
+import { commandExistsOnPath } from '@happier-dev/cli-common/process';
 import { CapabilityError } from '../errors';
 import type { Capability } from '../service';
 
@@ -14,14 +15,23 @@ export function createAcpAgentInventoryCapability(input: Readonly<{
       if (!parsed.success) throw new CapabilityError('Invalid ACP inventory request', 'invalid-request');
       const accountId = context.accountId ?? input.accountId;
       if (!accountId) throw new CapabilityError('ACP inventory requires an admitted Account', 'account-unavailable');
-      const installs = await listManagedAcpInstalls({ env: input.env, accountId });
+      const installs = parsed.data.definitions.some(definition => definition.launch.kind !== 'command')
+        ? await listManagedAcpInstalls({ env: input.env, accountId }) : [];
       const items: MachineAgentInventoryItem[] = parsed.data.definitions.map(definition => {
+        if (definition.launch.kind === 'command') {
+          return { agentId: 'custom-acp', definitionId: definition.definitionId, title: definition.title,
+            installed: commandExistsOnPath(definition.launch.command, { env: input.env }), managed: false,
+            fit: resolveAcpPlatformFitV1(definition.launch, { platform: input.platform ?? process.platform, arch: input.arch ?? process.arch }),
+            version: null, latestVersion: null, update: { supported: false, command: null },
+            signIn: { status: 'unknown', loginSupport: 'unsupported' }, platform: { supported: true },
+            install: { available: false, mode: 'none', sizeBytes: null, guideUrl: null }, dependencies: [] };
+        }
         const matching = installs.filter(install => install.definitionId === definition.definitionId && install.kind === definition.launch.kind);
         const install = matching.find(install => install.version === definition.launch.version) ?? matching[0];
         const fit = resolveAcpPlatformFitV1(definition.launch, { platform: input.platform ?? process.platform, arch: input.arch ?? process.arch });
         return { agentId: 'custom-acp', definitionId: definition.definitionId, title: definition.title,
           installed: Boolean(install), version: install?.version ?? null, managed: Boolean(install), fit,
-          latestVersion: definition.launch.kind === 'command' ? null : definition.launch.version,
+          latestVersion: definition.launch.version,
           update: { supported: Boolean(install), command: null },
           signIn: { status: 'unknown', loginSupport: 'unsupported' },
           platform: fit.kind === 'cant_run' ? { supported: false, reason: 'arch' } : { supported: true },

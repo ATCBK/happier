@@ -4,6 +4,7 @@ import { join, delimiter as PATH_DELIMITER } from 'path';
 
 import { AGENTS } from '@/agent/catalog/registry';
 import { readCurrentContributionRegistry } from '@/agent/catalog/snapshot';
+import { observeCurrentAgentSessionFactory } from '@/agent/catalog/runtimeEntry';
 import type { AgentCliLaunchSpec } from '@/packagedRuntime/managedTools/agentCliLaunchSpec';
 import type { CliDetectSpec } from '@/agent/catalog/types';
 import type { CliAuthStatus } from '@/capabilities/cliAuth/types';
@@ -649,22 +650,32 @@ export async function detectCliSnapshotOnDaemonPath(data: DetectCliRequest): Pro
         ? data.requestedCliNames.filter((name): name is DetectCliName => typeof name === 'string' && Object.prototype.hasOwnProperty.call(AGENTS, name))
         : [];
     const probeTimeoutMs = resolveCliSnapshotProbeTimeoutMs(includeLoginStatus || verifyVersion);
+    const names = requestedCliNames.length > 0 ? requestedCliNames : Object.keys(AGENTS) as DetectCliName[];
+    const nativeFactories = new Map(await Promise.all(names.map(async (name) =>
+        [name, await observeCurrentAgentSessionFactory(name).catch(() => null)] as const)));
+    // Runtime readiness is a live binding fact, not a CLI installation with a TTL.
+    const observesNativeFactory = [...nativeFactories.values()].some((factory) => factory !== null);
     const cacheKey = buildCliSnapshotCacheKey({ includeLoginStatus, requestedCliNames, verifyVersion }, pathEnv);
-    const cached = data?.bypassCache ? null : cliSnapshotCache.get(cacheKey);
+    const cached = data?.bypassCache || observesNativeFactory ? null : cliSnapshotCache.get(cacheKey);
     if (!data?.bypassCache && cached?.kind === 'success' && cliSnapshotCache.isFresh(cached)) return cached.value;
 
     return await cliSnapshotCache.runDedupe(cacheKey, async () => {
         const cached2 = cliSnapshotCache.get(cacheKey);
-        if (!data?.bypassCache && cached2?.kind === 'success' && cliSnapshotCache.isFresh(cached2)) return cached2.value;
-
-    const names = requestedCliNames.length > 0
-        ? requestedCliNames
-        : Object.keys(AGENTS) as DetectCliName[];
+        if (!data?.bypassCache && !observesNativeFactory && cached2?.kind === 'success' && cliSnapshotCache.isFresh(cached2)) return cached2.value;
 
     const observations = await Promise.allSettled(
         names.map(async (name) => {
-            const [resolved, setupFacts] = await Promise.all([resolveCliPathForName(name), detectAgentSetupFacts(name)]);
+            const factory = nativeFactories.get(name);
+            const [resolved, setupFacts] = await Promise.all([
+                factory?.isCurrent() ? Promise.resolve(null) : resolveCliPathForName(name),
+                detectAgentSetupFacts(name),
+            ]);
             if (!resolved) {
+                if (factory?.isCurrent()) return [name, {
+                    available: true, installed: true, ...setupFacts,
+                    signIn: { ...setupFacts.signIn, required: factory.nativeAuthenticationRequired },
+                    update: { supported: false, command: null },
+                } satisfies DetectCliEntry] as const;
                 const entry: DetectCliEntry = { available: false, installed: false, ...setupFacts, update: { supported: false, command: null } };
                 return [name, entry] as const;
             }
@@ -767,6 +778,14 @@ export async function detectCliSnapshotOnDaemonPath(data: DetectCliRequest): Pro
             available: false,
             detectionError: { code: 'cli-detection-failed', message: 'Agent CLI detection failed' },
         } satisfies DetectCliEntry])) as Partial<Record<DetectCliName, DetectCliEntry>>;
+    // Setup and platform probes await external work; retirement during that work
+    // cannot publish the formerly admitted factory as installed or auth-optional.
+    for (const [name, factory] of nativeFactories) {
+        if (!factory || factory.isCurrent()) continue;
+        const previous = pairEntries[name];
+        if (previous) pairEntries[name] = { ...previous, available: false, installed: false,
+            signIn: { status: 'unknown', loginSupport: previous.signIn?.loginSupport ?? 'unsupported', required: true } };
+    }
 
     return {
         path: pathEnv,
@@ -779,7 +798,7 @@ export async function detectCliSnapshotOnDaemonPath(data: DetectCliRequest): Pro
     }).then((snapshot) => {
         // Incomplete observations must be retried when the loop/process recovers. They are
         // not a successful negative install fact and must not acquire the success TTL.
-        if (Object.values(snapshot.clis).some((entry) => entry.detectionError)) {
+        if (observesNativeFactory || Object.values(snapshot.clis).some((entry) => entry.detectionError)) {
             cliSnapshotCache.setError(cacheKey);
         } else {
             cliSnapshotCache.setSuccess(cacheKey, snapshot);

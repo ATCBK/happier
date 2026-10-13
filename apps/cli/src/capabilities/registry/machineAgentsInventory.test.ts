@@ -1,14 +1,34 @@
-import { mkdir, mkdtemp, rm, writeFile } from 'node:fs/promises';
+import { access, mkdir, mkdtemp, rm, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { afterEach, describe, expect, it } from 'vitest';
 import { createCapabilitiesService } from '../service';
 import { createAcpAgentInventoryCapability } from './machineAgentsInventory';
 import { managedAcpInstallId } from '@happier-dev/cli-common/agents';
+import { buildMachineAgentsDetectRequest, projectMachineAgentsDetectResponse } from '@happier-dev/protocol/capabilities/machineAgentInventory';
 
 const roots: string[] = [];
 afterEach(async () => { await Promise.all(roots.splice(0).map(root => rm(root, { recursive: true, force: true }))); });
 describe('machine ACP definition inventory', () => {
+  it('projects actual draft command existence without executing the Agent or exposing environment', async () => {
+    const home = await mkdtemp(join(tmpdir(), 'happier-acp-command-inventory-')); roots.push(home);
+    const marker = join(home, 'executed');
+    const command = join(home, process.platform === 'win32' ? 'draft.cmd' : 'draft');
+    await writeFile(command, process.platform === 'win32' ? `@echo off\necho executed > "${marker}"\n`
+      : `#!/bin/sh\nprintf executed > '${marker}'\n`, { mode: 0o755 });
+    const definitions = [
+      { definitionId: 'found', title: 'Found', launch: { kind: 'command' as const, command, args: [] } },
+      { definitionId: 'missing', title: 'Missing', launch: { kind: 'command' as const, command: join(home, 'absent'), args: [] } },
+    ];
+    const service = createCapabilitiesService({ capabilities: [createAcpAgentInventoryCapability({ accountId: 'alice', env: { HAPPIER_HOME_DIR: home } })],
+      checklists: {}, buildContext: async () => ({ cliSnapshot: null }) });
+    const response = await service.detect(buildMachineAgentsDetectRequest({ agents: [], definitions, refresh: true }));
+    expect(projectMachineAgentsDetectResponse({ agents: [], definitions, response })).toMatchObject({ items: [
+      { definitionId: 'found', installed: true, managed: false, version: null, update: { supported: false }, install: { available: false, mode: 'none' } },
+      { definitionId: 'missing', installed: false, managed: false, version: null },
+    ] });
+    await expect(access(marker)).rejects.toMatchObject({ code: 'ENOENT' });
+  });
   it('reads managed versions only for caller definitions without enumerating another Account or installing', async () => {
     const home = await mkdtemp(join(tmpdir(), 'happier-acp-inventory-')); roots.push(home);
     for (const [definitionId, title, accountId] of [['requested', 'Private installed name', 'alice'], ['requested', 'Other Account secret name', 'bob']]) {
@@ -32,7 +52,7 @@ describe('machine ACP definition inventory', () => {
     expect(JSON.stringify(response)).not.toContain('Other Account');
     expect(JSON.stringify(response)).not.toContain('foreign');
     const denied = await service.detect({ requests: [{ id: 'tool.acpAgentInventory', params: { definitions: [
-      { definitionId: 'requested', title: 'Caller title', launch: { kind: 'command', command: 'npx', args: ['should-never-install'] } },
+      { definitionId: 'requested', title: 'Caller title', launch: { kind: 'command', command: 'npx', args: ['should-never-install'], env: { SECRET: 'never-disclose' } } },
     ] } }] });
     expect(denied.results['tool.acpAgentInventory']).toMatchObject({ ok: false, error: { code: 'invalid-request' } });
   });

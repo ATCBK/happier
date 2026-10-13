@@ -1,70 +1,47 @@
-import { unexpectedProjectNativeAdapterResolution } from "@/plugins/testkit/unexpectedProjectNativeAdapterResolution";
 import { createHash } from 'node:crypto';
-import { mkdir, writeFile } from 'node:fs/promises';
+import { mkdir, readFile, writeFile } from 'node:fs/promises';
 import { join } from 'node:path';
 import { afterAll, afterEach, beforeAll, describe, expect, it, vi } from 'vitest';
 import { PluginManifestV2Schema, PluginManagedDependencyContributionV2Schema, projectMachineAgentsDetectResponse } from '@happier-dev/protocol';
-import { PLUGIN_MANIFEST as ANTIGRAVITY_MANIFEST } from '@happier-dev/plugins-antigravity/manifest';
-import { PLUGIN_MANIFEST as CODEX_MANIFEST } from '@happier-dev/plugins-codex/manifest';
-import { PLUGIN_MANIFEST as CUSTOM_ACP_MANIFEST } from '@happier-dev/plugins-custom-acp/manifest';
 
 import { createProbeTempDir, writeExecutableScript } from '@/capabilities/probes/agentModelsProbe.testkit';
 import { readCurrentContributionRegistry } from '@/agent/catalog/snapshot';
-import { createResolvedContributionRegistry } from '@/plugins/projection/registry/createResolvedContributionRegistry';
-import { projectManifestAgentContribution } from '@/plugins/projection/registry/projectManifestAgentContribution';
-import { projectBuiltInAgents } from '@/plugins/projection/registry/builtIn/agents';
-import { BUNDLED_FIRST_PARTY_AGENT_REGISTRATION_BINDINGS } from '@/plugins/projection/registry/sources/generatedBundledPlugins';
 import { pluginReloadController } from '@/plugins/runtime/reload/singleton';
-import { createManagedServicesOwner } from '@/plugins/runtime/invocation/services/managedServicesOwner';
-import { createManagedServiceProcessSupervisorHost } from '@/plugins/runtime/invocation/services/managedProcessSupervisor';
-import { createUnavailablePluginServices } from '@/plugins/runtime/invocation/services/unavailable';
-import type { ResolvedExecutablePluginRuntimeRegistry } from '@/plugins/runtime/resolveExecutablePluginRuntimeRegistry';
 import { buildCliCapabilityData } from '@/capabilities/probes/cliBase';
 import { detectCliSnapshotOnDaemonPath } from './cliSnapshot';
+import { initialMachineMetadata, refreshMachineMetadataForCurrentDaemon } from '@/daemon/machine/metadata';
+import { projectMachineAgentInventoryFromCliSnapshot } from './machineAgentInventory';
+import { MachinePublishedMetadataV1Schema, StoredMachinePublishedMetadataV1Schema } from '@happier-dev/protocol/machines/machinePublishedContentV1';
+import { createAdmittedPluginRuntimeFixture, createAuthoredAdmittedPluginRuntimeFixture } from '@/plugins/testkit/admittedRuntime';
+import { SkillRuleV1Schema } from '@happier-dev/protocol/reach/reachRuleV1';
+import { projectReachForMachinesV1 } from '@happier-dev/protocol/reach/projectReachV1';
+import { readInstalledMachineAgentIds } from '../../../../ui/sources/sync/domains/capabilities/reach/installedMachineAgents';
+
+function publishSnapshot(snapshot: Awaited<ReturnType<typeof detectCliSnapshotOnDaemonPath>>) {
+    const current = { ...initialMachineMetadata,
+        agentInventory: { checkedAt: 1, installedAgentIds: ['custom-acp', 'antigravity'] } };
+    const published = refreshMachineMetadataForCurrentDaemon(current, {
+        host: current.host, platform: current.platform, happyCliVersion: current.happyCliVersion,
+        homeDir: current.homeDir, happyHomeDir: current.happyHomeDir, happyLibDir: current.happyLibDir,
+        agentInventory: projectMachineAgentInventoryFromCliSnapshot({ snapshot, checkedAt: 2, current: current.agentInventory }),
+    });
+    return StoredMachinePublishedMetadataV1Schema.parse(MachinePublishedMetadataV1Schema.parse(published));
+}
 
 afterEach(() => vi.unstubAllEnvs());
 
 describe('machine agent inventory on the daemon', () => {
+    const runtimeFixtures: Array<Awaited<ReturnType<typeof createAdmittedPluginRuntimeFixture>>> = [];
     beforeAll(async () => {
-        const manifests = [ANTIGRAVITY_MANIFEST, CODEX_MANIFEST, CUSTOM_ACP_MANIFEST].map((manifest) => PluginManifestV2Schema.parse(manifest));
-        const agents = projectBuiltInAgents({
-            manifestAgents: manifests.flatMap((manifest) => manifest.contributes.agents.map((definition) => ({
-                ...projectManifestAgentContribution({
-                    definition, pluginId: manifest.id, provenance: 'first_party', source: { kind: 'bundled' },
-                    systemTools: manifest.contributes.systemTools,
-                }),
-                hostAccess: manifest.hostAccess,
-            }))),
-            registrationBindings: BUNDLED_FIRST_PARTY_AGENT_REGISTRATION_BINDINGS.filter((binding) => manifests.some((manifest) => binding.identity.pluginId === manifest.id)),
-        });
-        const registry = {
-            claimReleaseLessDeclarations: async () => undefined,
-            projectManagedServices: createManagedServicesOwner({
-                processSupervisorHost: createManagedServiceProcessSupervisorHost({ custodyOwner: 'daemon' }),
-                dependencies: createUnavailablePluginServices().managedServices.dependencies,
-                resolveScope: () => null,
-            }),
-            contributes: createResolvedContributionRegistry({
-                agents, activationTargets: [],
-                managedDependencies: manifests.flatMap((manifest) => manifest.contributes.managedDependencies.map((definition) => ({
-                    pluginId: manifest.id, definition, provenance: 'first_party', source: { kind: 'bundled' },
-                    manifestPath: join(process.cwd(), `../../packages/plugins/${manifest.id === ANTIGRAVITY_MANIFEST.id ? 'antigravity' : 'codex'}/src/manifest.ts`),
-                }))),
-            }),
-            hookHandlersByHookId: new Map(), agentRuntimesByAgentId: new Map(), scmHostingProvidersById: new Map(),
-            pluginDiagnosticsByPluginId: {}, activatedPluginIds: new Set<string>(),
-            activateContributionsOnDemand: async () => [], resolvePromptAssetBlocks: async () => [],
-            createAgentInvocationServices: async () => { throw new Error('No plugin invocation in this inventory fixture'); },
-            resolveCaptureSource: async () => null,
-            resolveProjectNativeAdapter: unexpectedProjectNativeAdapterResolution,
-            retireConsumers: () => {}, dispose: async () => {},
-        } satisfies ResolvedExecutablePluginRuntimeRegistry;
-        await pluginReloadController.adoptPreparedRuntimeRegistry({
-            registry, changedPluginIds: [], isDevelopmentCandidateCurrent: () => true,
-            runningSessionDisposition: 'retainRunningSessions',
-        });
+        runtimeFixtures.push(await createAdmittedPluginRuntimeFixture({
+            controller: pluginReloadController,
+            runtimeOptions: { pluginIds: ['happier.agent.antigravity', 'happier.agent.codex', 'happier.agent.custom-acp'] },
+        }));
     });
-    afterAll(async () => { await pluginReloadController.shutdown(); });
+    afterAll(async () => {
+        for (const fixture of runtimeFixtures) await fixture.lease.release();
+        for (const fixture of runtimeFixtures) await fixture.dispose();
+    });
 
     it('keeps healthy native CLI facts when a sibling Agent has no native CLI probe', async () => {
         const fixture = await createProbeTempDir('happier-agent-inventory-sibling');
@@ -76,15 +53,33 @@ describe('machine agent inventory on the daemon', () => {
             const cliPath = join(fixture.dir, process.platform === 'win32' ? 'codex.cmd' : 'codex');
             await writeExecutableScript(cliPath, process.platform === 'win32' ? '@echo off\r\necho 1.2.3\r\n' : '#!/bin/sh\necho 1.2.3\n');
             vi.stubEnv('HAPPIER_CODEX_PATH', cliPath);
-            const snapshot = await detectCliSnapshotOnDaemonPath({ includeLoginStatus: true, bypassCache: true });
+            const snapshot = await detectCliSnapshotOnDaemonPath({ requestedCliNames: ['codex', 'custom-acp', 'antigravity'],
+                includeLoginStatus: true, bypassCache: true });
             const data = buildCliCapabilityData({ request: { id: 'cli.codex' }, entry: snapshot.clis.codex });
             expect(projectMachineAgentsDetectResponse({
                 agents: [{ agentId: 'codex', title: 'Codex' }],
                 response: { protocolVersion: 1, results: { 'cli.codex': { ok: true, data } } },
             }).items).toMatchObject([{ agentId: 'codex', installed: true, version: '1.2.3' }]);
             expect(snapshot.clis['custom-acp']).toMatchObject({
-                available: false, detectionError: { code: 'cli-detection-failed' },
+                available: true, installed: true,
+                signIn: { status: 'unknown', loginSupport: 'unsupported', required: false },
             });
+            const publication = publishSnapshot(snapshot);
+            expect(publication.agentInventory).toEqual({ checkedAt: 2,
+                installedAgentIds: ['codex', 'custom-acp'] });
+            // Real detection → metadata publication → strict stored reader → exact UI install reader → reach.
+            const projection = projectReachForMachinesV1([SkillRuleV1Schema.parse({ id: 'on', skillId: 'skill',
+                target: { t: 'allMachines' }, enabled: true, createdAt: 1, updatedAt: 1 })], {
+                machines: [{ machineId: 'qa', platform: process.platform === 'win32' ? 'win32' : 'posix',
+                    agentIds: readInstalledMachineAgentIds(publication.agentInventory, undefined) }],
+            });
+            expect(projection[0]?.agents.map(({ agentId, enabled }) => ({ agentId, enabled }))).toEqual([
+                { agentId: 'codex', enabled: true }, { agentId: 'custom-acp', enabled: true },
+            ]);
+            expect(projectMachineAgentInventoryFromCliSnapshot({
+                snapshot: { ...snapshot, clis: { ...snapshot.clis, codex: { available: true } } },
+                checkedAt: 3, current: { checkedAt: 2, installedAgentIds: ['codex'] }, observedAgentIds: ['codex'],
+            }).installedAgentIds).toEqual(['codex']);
         } finally {
             await fixture.cleanup();
         }
@@ -129,6 +124,7 @@ describe('machine agent inventory on the daemon', () => {
                 install: { available: true, mode: 'vendor_recipe' },
                 signIn: { status: 'unknown', loginSupport: 'login_terminal' },
             });
+            expect(publishSnapshot(snapshot).agentInventory).toEqual({ checkedAt: 2, installedAgentIds: ['custom-acp'] });
         } finally {
             await fixture.cleanup();
         }
@@ -147,6 +143,11 @@ describe('machine agent inventory on the daemon', () => {
             await writeExecutableScript(cliPath, process.platform === 'win32' ? '@echo off\r\necho 1.2.3\r\n' : '#!/bin/sh\necho 1.2.3\n');
             vi.stubEnv('HAPPIER_CODEX_PATH', cliPath);
             const request = { requestedCliNames: ['codex'], includeLoginStatus: true };
+            // The real Codex callback probes `login status`; version success
+            // must not impersonate an authenticated external executable.
+            await writeExecutableScript(cliPath, process.platform === 'win32'
+                ? '@echo off\r\nif "%1"=="login" exit /b 1\r\necho 1.2.3\r\n'
+                : '#!/bin/sh\nif [ "$1" = "login" ]; then exit 1; fi\necho 1.2.3\n');
             const before = await detectCliSnapshotOnDaemonPath(request);
             expect(before.clis.codex).toMatchObject({ installed: true, signIn: { status: 'signedOut', loginSupport: 'login_terminal' }, dependencies: [] });
             vi.stubEnv('CODEX_API_KEY', 'fixture-key');
@@ -154,6 +155,66 @@ describe('machine agent inventory on the daemon', () => {
             expect(after.clis.codex).toMatchObject({ installed: true, signIn: { status: 'signedIn', loginSupport: 'login_terminal' }, dependencies: [] });
         } finally {
             await fixture.cleanup();
+        }
+    });
+
+    it('observes the real CLI-less Session factory and never reuses its retired readiness', async () => {
+        const fixtureRoot = new URL('../../../../../packages/tests/fixtures/plugin-platform/agent-runtime-conformance/', import.meta.url);
+        const sourceManifest = PluginManifestV2Schema.parse(JSON.parse(await readFile(new URL('.happier-plugin/plugin.json', fixtureRoot), 'utf8')));
+        const nativeManifest = { ...sourceManifest, activation: { events: [] }, hostAccess: { required: [], optional: [] },
+            contributes: { agents: sourceManifest.contributes.agents.map(({ cli: _cli, ...agent }) => agent) } };
+        const fixture = await createAuthoredAdmittedPluginRuntimeFixture({
+            controller: pluginReloadController,
+            plugins: [{ manifest: nativeManifest,
+                // An authored activation variant, not a host mock: reuse the
+                // incumbent deterministic factory without declaring native auth.
+                files: { 'daemon.mjs': `import { createRuntime } from './agent-runtime.mjs';
+export function activate(api) { api.agents.register('novel-native-agent', createRuntime, {
+  sessionRunnerFactory: { module: './agent-runtime.mjs', export: 'createRuntime', runtimeApiVersion: 1 }
+}); }`,
+                    'agent-runtime.mjs': await readFile(new URL('agent-runtime.mjs', fixtureRoot), 'utf8') } }],
+            runtimeOptions: { pluginIds: ['acme.native-runtime-proof'] },
+        });
+        runtimeFixtures.push(fixture);
+        let connectedFixture: typeof fixture | null = null;
+        try {
+            const agentId = 'acme.native-runtime-proof/novel-native-agent';
+            const request = { requestedCliNames: [agentId], includeLoginStatus: true };
+            const snapshot = await detectCliSnapshotOnDaemonPath(request);
+            expect(snapshot.clis[agentId]).toMatchObject({ available: true, installed: true,
+                signIn: { status: 'unknown', loginSupport: 'unsupported', required: false } });
+            expect(fixture.registry.agentRuntimesByAgentId.get(agentId)?.sessionRunnerFactoryBinding).toBeDefined();
+            const data = buildCliCapabilityData({ request: { id: `cli.${agentId}` }, entry: snapshot.clis[agentId] });
+            expect(projectMachineAgentsDetectResponse({ agents: [{ agentId, title: 'Native fixture' }],
+                response: { protocolVersion: 1, results: { [`cli.${agentId}`]: { ok: true, data } } },
+            }).items).toMatchObject([{ agentId, installed: true,
+                signIn: { status: 'unknown', loginSupport: 'unsupported', required: false } }]);
+            fixture.registry.retireConsumers();
+            const retired = await detectCliSnapshotOnDaemonPath(request);
+            expect(retired.clis[agentId]).not.toMatchObject({ available: true, installed: true });
+            expect(retired.clis[agentId]?.signIn?.required).not.toBe(false);
+            const absent = await detectCliSnapshotOnDaemonPath({ requestedCliNames: ['acme.absent/agent'], includeLoginStatus: true });
+            expect(absent.clis['acme.absent/agent']).not.toMatchObject({ available: true, installed: true });
+            expect(absent.clis['acme.absent/agent']?.signIn?.required).not.toBe(false);
+            // The incumbent registration actually declares connected native
+            // launch custody. No CLI does not remove that authentication fact.
+            connectedFixture = await createAuthoredAdmittedPluginRuntimeFixture({
+                controller: pluginReloadController,
+                plugins: [{ manifest: { ...sourceManifest, activation: { events: [] },
+                    contributes: { ...sourceManifest.contributes, agents: nativeManifest.contributes.agents } },
+                    files: { 'daemon.mjs': await readFile(new URL('daemon.mjs', fixtureRoot), 'utf8'),
+                        'agent-runtime.mjs': await readFile(new URL('agent-runtime.mjs', fixtureRoot), 'utf8') } }],
+                runtimeOptions: { pluginIds: [sourceManifest.id] },
+            });
+            runtimeFixtures.push(connectedFixture);
+            const connected = await detectCliSnapshotOnDaemonPath(request);
+            expect(connected.clis[agentId]).toMatchObject({ available: true, installed: true,
+                signIn: { status: 'unknown', loginSupport: 'unsupported', required: true } });
+            expect(connectedFixture.registry.agentRuntimesByAgentId.get(agentId)?.connectedAccountLaunch).toBeDefined();
+        } finally {
+            // Suite cleanup joins the owner after every retained lease drains.
+            await connectedFixture?.lease.release();
+            await fixture.lease.release();
         }
     });
 });

@@ -1,4 +1,5 @@
-import type { BackendTargetRefV1, ValueRefV1 } from '@happier-dev/protocol';
+import type { BackendTargetRefV1 } from '@happier-dev/protocol';
+import { listValueRefSecretIdsV1 } from '@happier-dev/protocol/valueRefs/valueRefV1';
 import type { AcpCatalogSnapshotV1 } from '@happier-dev/protocol/acp/catalog/catalogRowsV1';
 
 import type { AcpPermissionHandler } from '@/agent/acp/AcpBackend';
@@ -20,19 +21,6 @@ import {
 import { SavedSecretResolutionError } from '@/settings/secrets/savedSecretCatalog';
 
 import { isConfiguredAcpProbeTarget } from './isConfiguredAcpProbeTarget';
-
-function tryResolveLiteralConfiguredAcpEnvironment(
-  env: Readonly<Record<string, ValueRefV1>>,
-): Record<string, string> | null {
-  const launchEnv: Record<string, string> = {};
-  for (const [envKey, valueRef] of Object.entries(env)) {
-    if (valueRef.t !== 'literal') {
-      return null;
-    }
-    launchEnv[envKey] = valueRef.v;
-  }
-  return launchEnv;
-}
 
 const abortingPermissionHandler: AcpPermissionHandler = {
   handleToolCall: async () => ({ decision: 'abort' }),
@@ -94,43 +82,40 @@ export async function createConfiguredAcpProbeBackend(params: Readonly<{
 
   const { createConfiguredAcpBackend } = await import('@/agent/acp/catalog/configured/createConfiguredAcpBackend');
   if ((await assertCurrent()).acpCatalog !== catalog) throw new AcpCatalogUnavailableError('catalog-stale');
-  let launchEnv = tryResolveLiteralConfiguredAcpEnvironment(backend.env);
-  if (launchEnv === null) {
+  const references = Object.values(backend.env)
+    .flatMap(value => listValueRefSecretIdsV1(value).map(ref => ({ ref })));
+  if (references.length > 0) {
     if (!credentials) throw new AcpCatalogUnavailableError('credentials-unavailable');
-    const references = Object.values(backend.env)
-      .flatMap(value => value.t === 'savedSecret' ? [{ ref: value.secretId }] : []);
-    if (references.length > 0) {
-      try {
-        const refresh = () => refreshSavedSecretCatalogForOperation({
-          expectedScopeKey: scopeKey,
-          references,
-          operationContext,
-        });
-        await (operationContext
-          ? runWithServerHttpBaseUrl(operationContext.serverHttpBaseUrl, refresh)
-          : refresh());
-      } catch (error) {
-        if (!(error instanceof SavedSecretOperationAdmissionError)) throw error;
-        const field = Object.entries(backend.env)
-          .find(([, value]) => value.t === 'savedSecret' && value.secretId === error.reference)?.[0];
-        throw new SavedSecretResolutionError({
-          status: savedSecretOperationAdmissionStatus(error.reason),
-          reference: error.reference,
-          consumer: 'acp',
-          field: `env:${field ?? error.reference}`,
-        });
-      }
+    try {
+      const refresh = () => refreshSavedSecretCatalogForOperation({
+        expectedScopeKey: scopeKey,
+        references,
+        operationContext,
+      });
+      await (operationContext
+        ? runWithServerHttpBaseUrl(operationContext.serverHttpBaseUrl, refresh)
+        : refresh());
+    } catch (error) {
+      if (!(error instanceof SavedSecretOperationAdmissionError)) throw error;
+      const field = Object.entries(backend.env)
+        .find(([, value]) => listValueRefSecretIdsV1(value).includes(error.reference))?.[0];
+      throw new SavedSecretResolutionError({
+        status: savedSecretOperationAdmissionStatus(error.reason),
+        reference: error.reference,
+        consumer: 'acp',
+        field: `env:${field ?? error.reference}`,
+      });
     }
-    accountSnapshot = await assertCurrent();
-    if (accountSnapshot.acpCatalog !== catalog) throw new AcpCatalogUnavailableError('catalog-stale');
-    launchEnv = materializeConfiguredAcpEnvironment({
-      backend,
-      accountSettings: accountSnapshot.settings,
-      credentials,
-      processEnv: params.processEnv,
-      savedSecretResources: accountSnapshot.savedSecretResources,
-    });
   }
+  accountSnapshot = await assertCurrent();
+  if (accountSnapshot.acpCatalog !== catalog) throw new AcpCatalogUnavailableError('catalog-stale');
+  const launchEnv = materializeConfiguredAcpEnvironment({
+    backend,
+    accountSettings: accountSnapshot.settings,
+    credentials,
+    processEnv: params.processEnv,
+    savedSecretResources: accountSnapshot.savedSecretResources,
+  });
 
   return createConfiguredAcpBackend({
     accountId: credentials ? readAccountIdFromToken(credentials.token) ?? undefined : undefined,

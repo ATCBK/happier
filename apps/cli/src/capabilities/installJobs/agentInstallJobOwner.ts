@@ -368,7 +368,10 @@ export function createAgentInstallJobOwner(options: AgentInstallJobOwnerOptions 
     },
     start(input: DaemonAgentInstallStartRequest, account?: Readonly<{ accountId: string; catalog: AcpCatalogSnapshotV1 }>): DaemonAgentInstallStartResponse {
       const parsed = DaemonAgentInstallStartRequestSchema.safeParse(input);
-      if (!parsed.success) return { ok: false, errorCode: 'invalid_request', error: 'Invalid install request.' };
+      if (!parsed.success || parsed.data.expectedDefinitionVersion !== undefined
+        && (parsed.data.definitionId === undefined || parsed.data.intent === 'uninstall')) {
+        return { ok: false, errorCode: 'invalid_request', error: 'Invalid install request.' };
+      }
       if (shuttingDown) return { ok: false, errorCode: 'install_unavailable', error: 'The daemon is shutting down.' };
       const active = input.definitionId === undefined ? activeByAgent.get(targetKey(input)) : undefined;
       if (active?.cleanupError) return { ok: false, errorCode: 'install_unavailable', error: 'The previous install process cleanup could not be verified.' };
@@ -402,6 +405,10 @@ export function createAgentInstallJobOwner(options: AgentInstallJobOwnerOptions 
         const captured = catalog.record.definitions.find(entry => entry.id === request.definitionId);
         definition = captured && structuredClone(captured);
         if (!definition) return { ok: false, errorCode: 'install_unavailable', error: 'The configured Agent definition is unavailable.' };
+        if (request.expectedDefinitionVersion !== undefined
+          && (definition.launch.kind === 'command' || definition.launch.version !== request.expectedDefinitionVersion)) {
+          return { ok: false, errorCode: 'definition_version_changed', error: 'The configured Agent version changed after review.' };
+        }
       }
       const recentKey = targetKey(request, requestedAccountId);
       const activeKey = request.definitionId === undefined ? recentKey : JSON.stringify([recentKey,

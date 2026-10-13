@@ -63,6 +63,44 @@ function probeSnapshot(command: string, args: string[], home: string) {
 }
 
 describe('createConfiguredAcpProbeBackend', () => {
+  it('expands machine values through the canonical resolver in a credentialless probe', async () => {
+    await withTempDir('happier-configured-probe-literal-', async directory => {
+      const outputPath = join(directory, 'probe-env.json');
+      const script = writeAcpTestAgentScript({ dir: directory, fileName: 'probe-agent.mjs', source: `
+        import { writeFileSync } from 'node:fs';
+        writeFileSync(${JSON.stringify(outputPath)}, JSON.stringify({ REGION: process.env.REGION, LABEL: process.env.LABEL }));
+        let buffer = '';
+        process.stdin.on('data', chunk => {
+          buffer += chunk.toString();
+          const lines = buffer.split('\\n'); buffer = lines.pop() || '';
+          for (const line of lines) {
+            if (!line.trim()) continue;
+            const request = JSON.parse(line);
+            const result = request.method === 'initialize' ? { protocolVersion: 1, agentCapabilities: {}, authMethods: [] }
+              : request.method === 'session/new' ? { sessionId: 'literal-probe-session' } : null;
+            if (result) process.stdout.write(JSON.stringify({ jsonrpc: '2.0', id: request.id, result }) + '\\n');
+          }
+        });
+      ` });
+      const settings = accountSettingsParse({});
+      setActiveAccountSettingsSnapshot({ source: 'network', settings, settingsVersion: 1, loadedAtMs: 1,
+        settingsSecretsReadKeys: [], scopeKey, acpCatalog: { status: 'ready', revision: 1,
+          record: AcpCatalogRecordV1Schema.parse({ v: 1, definitions: [{ id: 'review-bot', name: 'review-bot', title: 'Review bot',
+            launch: { kind: 'command', command: process.execPath, args: [script] },
+            env: { REGION: { t: 'literal', v: '${PROBE_REGION}' }, LABEL: { t: 'template', template: 'Region {region}',
+              vars: { region: { t: 'literal', v: '${PROBE_REGION}' } } } }, createdAt: 1, updatedAt: 1,
+          }] }),
+        } });
+      const backend = await createConfiguredAcpProbeBackend({ agentId: 'customAcp',
+        backendTarget: { kind: 'configuredAcpBackend', backendId: 'review-bot' }, cwd: directory,
+        accountSettings: settings, processEnv: { ...process.env, PROBE_REGION: 'eu' } });
+      try {
+        expect(await backend?.startSession()).toMatchObject({ sessionId: 'literal-probe-session' });
+        expect(JSON.parse(readFileSync(outputPath, 'utf8'))).toEqual({ REGION: 'eu', LABEL: 'Region eu' });
+      } finally { await backend?.dispose(); }
+    });
+  });
+
   it('creates a literal-env configured probe from a ready facet without credentials', async () => {
     const settings = accountSettingsParse({});
     setActiveAccountSettingsSnapshot({
@@ -146,6 +184,11 @@ describe('createConfiguredAcpProbeBackend', () => {
       ` });
       const home = 'https://captured-probe-home.test';
       const { credentials, snapshot } = probeSnapshot(process.execPath, [script], home);
+      snapshot.acpCatalog.record.definitions[0]!.env = {
+        TOKEN: { t: 'template', template: 'Bearer {key}', vars: {
+          key: { t: 'savedSecret', secretId: formatSharedSavedSecretRefV1('probe-resource') },
+        } },
+      };
       const operationContext = runWithServerHttpBaseUrl(home, () => createInvocationSavedSecretOperationContextV1({ credentials, snapshot,
         serverHttpBaseUrl: home, isCurrent: async () => true }));
       const focused = { ...snapshot, scopeKey, acpCatalog: { status: 'ready' as const, revision: 99,
@@ -158,7 +201,7 @@ describe('createConfiguredAcpProbeBackend', () => {
         credentials, accountSettings: snapshot.settings, savedSecretOperationContext: operationContext });
       try {
         expect(await backend?.startSession()).toMatchObject({ sessionId: 'probe-session' });
-        expect(JSON.parse(readFileSync(join(directory, 'probe-env.json'), 'utf8'))).toEqual({ TOKEN: 'current-probe-token' });
+        expect(JSON.parse(readFileSync(join(directory, 'probe-env.json'), 'utf8'))).toEqual({ TOKEN: 'Bearer current-probe-token' });
         expect(getActiveAccountSettingsSnapshot()).toBe(incumbent);
       } finally { await backend?.dispose(); }
     });

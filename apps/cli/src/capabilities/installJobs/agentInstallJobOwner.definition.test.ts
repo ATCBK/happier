@@ -7,6 +7,7 @@ import { describe, expect, it, vi } from 'vitest';
 import { AcpBackendDefinitionV1Schema, type AcpBackendDefinitionV1 } from '@happier-dev/protocol/acp/catalog/settingsV1';
 import { CUSTOM_ACP_AGENT_CONTRIBUTION_IDENTITY_V1 } from '@happier-dev/protocol/agents/executionTargetV1';
 import type { AgentInstallJobOutcome } from '@happier-dev/protocol';
+import { DaemonAgentInstallStartResponseSchema } from '@happier-dev/protocol/daemon/agent-install-jobs';
 import type { TrackedSession } from '@/daemon/types';
 import { resolveAcpLaunch } from '@/agent/acp/catalog/configured/resolveAcpLaunch';
 import { createAgentInstallJobOwner, type AgentInstallJobOwner } from './agentInstallJobOwner';
@@ -43,6 +44,30 @@ function definition(id: string, url: string): AcpBackendDefinitionV1 {
 }
 
 describe('definition-qualified managed Agent jobs', () => {
+  it('refuses a reviewed pin that no longer matches the captured Account definition before admitting a job', async () => {
+    const current = AcpBackendDefinitionV1Schema.parse({ id: 'reviewed-agent', name: 'reviewed-agent', title: 'Reviewed Agent',
+      launch: { kind: 'npm', package: '@fixture/reviewed-agent', version: '2.0.0' }, createdAt: 1, updatedAt: 2 });
+    const owner = createAgentInstallJobOwner({ accountId: 'alice', readTrackedSessions: () => [],
+      readRegistry: () => ({ agents: [{ id: 'custom-acp', pluginId: CUSTOM_ACP_AGENT_CONTRIBUTION_IDENTITY_V1.pluginId,
+        identity: CUSTOM_ACP_AGENT_CONTRIBUTION_IDENTITY_V1 }] }),
+      readAcpCatalog: () => ({ status: 'ready', record: { v: 1, definitions: [current] }, revision: 2 }) });
+    try {
+      const request = { agentId: 'custom-acp', definitionId: current.id, expectedDefinitionVersion: '1.0.0',
+        intent: 'install', consent: { vendorRecipe: false } } as const;
+      const rejected = owner.start(request);
+      expect(rejected).toMatchObject({ ok: false, errorCode: 'definition_version_changed' });
+      expect(DaemonAgentInstallStartResponseSchema.parse(rejected)).toEqual(rejected);
+      expect(owner.list()).toEqual({ ok: true, jobs: [] });
+      // An ordinary request may still install current, but a reviewed stale pin
+      // must neither create another job nor join that newly admitted version.
+      const active = owner.start({ agentId: 'custom-acp', definitionId: current.id,
+        intent: 'install', consent: { vendorRecipe: false } });
+      expect(active.ok).toBe(true);
+      const before = owner.list();
+      expect(owner.start(request)).toMatchObject({ ok: false, errorCode: 'definition_version_changed' });
+      expect(owner.list()).toEqual(before);
+    } finally { await owner.shutdown(); }
+  });
   it('installs pinned npm definitions and records removable identity in the host workspace manifest', async () => {
     const root = await mkdtemp(join(tmpdir(), 'happier-definition-npm-job-'));
     const sessions: TrackedSession[] = [{ pid: process.pid, startedBy: 'daemon', spawnOptions: { directory: root,
@@ -65,7 +90,8 @@ describe('definition-qualified managed Agent jobs', () => {
         await mkdir(dirname(bin), { recursive: true }); await writeFile(bin, '#!/bin/sh\nexit 0\n'); await chmod(bin, 0o755);
         return { stdout: '', stderr: '' };
       } } });
-      const job = owner.start({ agentId: 'custom-acp', definitionId: definition.id, intent: 'install', consent: { vendorRecipe: false } });
+      const job = owner.start({ agentId: 'custom-acp', definitionId: definition.id, expectedDefinitionVersion: '1.2.3',
+        intent: 'install', consent: { vendorRecipe: false } });
       expect(job.ok).toBe(true); if (!job.ok) return;
       expect(await terminal(owner, job.jobId)).toEqual({ kind: 'succeeded', version: '1.2.3' });
       const ready = await resolveAcpLaunch({ accountId: 'alice', definition, env, platform: process.platform, arch: process.arch });

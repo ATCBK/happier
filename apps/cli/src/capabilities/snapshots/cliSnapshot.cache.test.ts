@@ -86,7 +86,9 @@ describe('detectCliSnapshotOnDaemonPath (cache)', () => {
   it('acquires native auth for a cold Agent in on-demand and inventory probes', async () => {
     const path = await cli('codex', 'if (process.argv.includes("--version")) process.stdout.write("1.2.3\\n"); else process.exit(0);');
     nativeRuntime ??= await createAdmittedPluginRuntimeFixture({
-      controller: pluginReloadController, runtimeOptions: { pluginIds: [] },
+      controller: pluginReloadController,
+      // Cold contribution activation still requires actual admission authority.
+      runtimeOptions: { pluginIds: ['happier.agent.codex', 'happier.agent.claude', 'happier.agent.opencode'] },
     });
     const native = await detectNativeAgentCliAuthStatus({ agentId: 'codex', resolvedPath: path });
     const inventory = await detect({ ...request('codex', true), bypassCache: true });
