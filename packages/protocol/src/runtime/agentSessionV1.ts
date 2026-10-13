@@ -19,6 +19,7 @@ import { asProtocolZod } from "../plugins/actions/internalProtocolZodAdapter.js"
 import { AgentRuntimeDiagnosticDataV1Schema } from './agentRuntimeDiagnosticV1.js';
 import { NonBlankOpaqueIdentifierSchema } from '../strings/opaqueIdentifier.js';
 import { UsageRequestAttributionSchema } from '../usage/usageAnalyticsContracts.js';
+import { McpToolLaunchPoliciesV1Schema, type McpToolLaunchPolicyV1 } from '../mcp/servers/tools/resolveMcpToolDecisionV1.js';
 
 export { AGENT_SESSION_RUNTIME_EVENT_KINDS_V1 } from './eventKindsV1.js';
 
@@ -161,11 +162,13 @@ export type AgentSessionConfigurationUpdateV1 = z.infer<
   typeof AgentSessionConfigurationSnapshotV1Schema
 > & Readonly<{
   providerBinding?: AgentSessionProviderBindingV1;
+  mcpToolPolicy?: Readonly<Record<string, McpToolLaunchPolicyV1>>;
 }>;
 export const AgentSessionConfigurationUpdateV1Schema =
   AgentRuntimeJsonValueV1Schema.pipe(
     AgentSessionConfigurationSnapshotCoreV1Schema.extend({
       providerBinding: AgentSessionProviderBindingV1Schema.optional(),
+      mcpToolPolicy: McpToolLaunchPoliciesV1Schema.optional(),
     }).strict(),
   ) as z.ZodType<AgentSessionConfigurationUpdateV1, AgentSessionConfigurationUpdateV1>;
 
@@ -363,6 +366,10 @@ const LifecycleSchemas = [
 ] as const;
 
 const OutputSchemas = [
+  lazyZodSchema(() => z.object({
+    ...TurnEventBaseShape, kind: z.literal('skill-usage'),
+    skills: z.array(z.object({ name: exactString(NAME_MAX), path: exactString(PATH_MAX).optional() }).strict()),
+  }).strict()),
   lazyZodSchema(() => z.object({
     ...TurnEventBaseShape, kind: z.literal('mcp-tool-usage'),
     window: z.object({ startMs: z.number().int().nonnegative().safe(), endMs: z.number().int().nonnegative().safe() }).strict(),

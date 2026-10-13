@@ -1,6 +1,7 @@
 import { describe, expect, it } from 'vitest';
 
 import { AGENT_SESSION_RUNTIME_LIMITS_CANDIDATE_V1 } from './agentSessionLimitsV1.js';
+import { projectMcpToolLaunchPolicyV1 } from '../mcp/servers/tools/resolveMcpToolDecisionV1.js';
 import {
   AGENT_SESSION_RUNTIME_EVENT_KINDS_V1,
   AgentLaunchEnvironmentV1Schema,
@@ -93,6 +94,29 @@ describe('Agent session VB4 open inputs', () => {
       ...update,
       providerBinding: { ...update.providerBinding, connectionId: ' invalid-id ' },
     }).success).toBe(false);
+  });
+
+  it('admits canonical MCP launch projections on updates while preserving strict snapshots and policy envelopes', () => {
+    const mcpToolPolicy = Object.fromEntries((['default', 'read-only', 'yolo'] as const).map(permissionMode => [permissionMode,
+      projectMcpToolLaunchPolicyV1({ policy: { default: 'ask', overrides: { hidden: 'off', approved: 'allow', prompted: 'ask' } },
+        snapshot: undefined, permissionMode }),
+    ]));
+    const update = { ...configuration, mcpToolPolicy };
+    expect(AgentSessionConfigurationUpdateV1Schema.parse(update)).toEqual(update);
+    expect(AgentSessionConfigurationSnapshotV1Schema.parse(configuration)).toEqual(configuration);
+    expect(AgentSessionConfigurationSnapshotV1Schema.safeParse(update).success).toBe(false);
+    expect(AgentSessionConfigurationUpdateV1Schema.parse({ ...configuration, mcpToolPolicy: {} })).toEqual({ ...configuration, mcpToolPolicy: {} });
+    const objectNames = projectMcpToolLaunchPolicyV1({ policy: { default: 'ask', overrides: JSON.parse('{"__proto__":"off","constructor":"allow"}') },
+      snapshot: undefined, permissionMode: 'default' });
+    const objectNameUpdate = { ...configuration, mcpToolPolicy: Object.fromEntries([['__proto__', objectNames], ['constructor', objectNames]]) };
+    expect(AgentSessionConfigurationUpdateV1Schema.parse(objectNameUpdate)).toEqual(objectNameUpdate);
+    for (const policy of [
+      { unlisted: 'off', tools: {} },
+      { unlisted: 'ask', tools: { read: 'allow_all' } },
+      { unlisted: 'ask', tools: {}, permissions: 'allow' },
+      { unlisted: 'ask', tools: { read: { approval: 'allow' } } },
+    ]) expect(AgentSessionConfigurationUpdateV1Schema.safeParse({ ...configuration, mcpToolPolicy: { server: policy } }).success).toBe(false);
+    expect(AgentSessionConfigurationUpdateV1Schema.safeParse({ ...update, unknownAuthority: true }).success).toBe(false);
   });
 
   it('accepts only a strict provider-session resume reference in a configuration snapshot', () => {

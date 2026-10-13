@@ -16,6 +16,7 @@ export const AGENT_SESSION_RUNTIME_EVENT_KINDS_V1 = Object.freeze([
   'message-delta',
   'tool-call',
   'mcp-tool-usage',
+  'skill-usage',
   'tool-progress',
   'tool-result',
   'transcript-message-committed',
