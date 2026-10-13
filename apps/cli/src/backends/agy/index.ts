@@ -25,7 +25,12 @@ const agyCredentialLifecycle = {
   runtimeAuthApply: { directLiveHotAuth: 'unsupported' },
 } satisfies ConnectedServiceCredentialLifecycleDescriptor;
 
-const genericEntry = createCatalogDefinedAcpEntry('agy');
+const genericEntry = createCatalogDefinedAcpEntry('agy', {
+  resolveAcpProbeLaunch: async () => {
+    const { ensureAgyAcpServerForLaunch } = await import('./acp/ensureAgyAcpServerForLaunch');
+    return ensureAgyAcpServerForLaunch({ readinessOnly: true });
+  },
+});
 
 export const agent = {
   ...genericEntry,

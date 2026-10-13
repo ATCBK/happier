@@ -4052,6 +4052,7 @@ export const de: TranslationStructure = {
             agy: { title: 'Antigravity' },
             fx: { title: "FX" },
             droid: { title: "Factory Droid" },
+            codebuddy: { title: "CodeBuddy" },
             grok: {
                 title: "Grok Build"
             },
@@ -6220,7 +6221,9 @@ export const de: TranslationStructure = {
         fxSessionId: "FX-Session-ID",
         fxSessionIdCopied: "FX-Session-ID in die Zwischenablage kopiert",
         droidSessionId: "Factory-Droid-Session-ID",
+        codebuddySessionId: "CodeBuddy-Session-ID",
         droidSessionIdCopied: "Factory-Droid-Session-ID in die Zwischenablage kopiert",
+        codebuddySessionIdCopied: "CodeBuddy-Session-ID in die Zwischenablage kopiert",
         customAcpSessionId: 'Session-ID des eigenen ACP',
         grokSessionId: "Grok-Session-ID",
         grokSessionIdCopied: "Grok-Session-ID in die Zwischenablage kopiert",
@@ -6431,6 +6434,8 @@ export const de: TranslationStructure = {
         permissionMode: {
             title: 'BERECHTIGUNGSMODUS',
             effectiveLabel: ({ label }: { label: string }) => `Effektiv: ${label}`,
+            nativeModeOverrides: ({ mode }: { mode: string }) => `Der Agent-Modus ${mode} hat Vorrang vor dieser Berechtigungseinstellung. Entferne die Modus-Auswahl, um die Berechtigungseinstellung zu verwenden.`,
+            usePermissionSetting: 'Berechtigungseinstellung verwenden',
             default: 'Standard',
             readOnly: 'Nur Lesen',
             acceptEdits: 'Änderungen annehmen',
@@ -6461,6 +6466,7 @@ export const de: TranslationStructure = {
             agy: 'Antigravity',
             fx: "FX",
             droid: "Factory Droid",
+            codebuddy: "CodeBuddy",
             customAcp: 'Eigenes ACP',
             pi: 'Pi',
             copilot: 'Copilot',
@@ -10625,6 +10631,7 @@ settingsSession: {
             agySubtitleExperimental: "Antigravity CLI (experimentell)",
             fxSubtitleExperimental: "FX CLI (experimentell)",
             droidSubtitleExperimental: "Factory Droid CLI (experimentell)",
+            codebuddySubtitleExperimental: "CodeBuddy Code CLI (experimentell)",
             customAcpSubtitleExperimental: 'Eigene ACP-CLI (experimentell)',
             grokSubtitleExperimental: "Grok Build CLI (experimentell)",
             piSubtitleExperimental: 'Pi CLI (experimentell)',
