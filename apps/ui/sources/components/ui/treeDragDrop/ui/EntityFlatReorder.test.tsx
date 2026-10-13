@@ -5,7 +5,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { Platform, StyleSheet, Text, type ScrollView } from 'react-native';
 import { AnchoredListPositionV1Schema, resolveAnchoredListMoveV1, TodoReorderInputV1Schema,
     type TodoReorderInputV1 } from '@happier-dev/protocol';
-import { renderScreen, type RenderScreenResult } from '@/dev/testkit';
+import { createDeferred, flushHookEffects, renderScreen, type RenderScreenResult } from '@/dev/testkit';
 import type { TestGestureChain } from '@/dev/testkit/mocks/gestureHandler';
 import { DropdownMenu } from '@/components/ui/forms/dropdown/DropdownMenu';
 import { useEntityDragDropRuntime } from '../entityDragDropHooks';
@@ -44,7 +44,7 @@ const screens: RenderScreenResult[] = [];
 const domRows: HTMLElement[] = [];
 function RuntimeProbe() { runtime = useEntityDragDropRuntime(); return null; }
 
-function fixture(scrollRef?: React.RefObject<ScrollView | null>) {
+function fixture(scrollRef?: React.RefObject<ScrollView | null>, acknowledgement?: Promise<void>) {
     const model = { ids: ['a', 'b', 'c'], scope, writes: [] as TodoReorderInputV1[] };
     const binding = (): EntityFlatReorderBinding => ({
         scope: model.scope, kind: 'todo', items: model.ids.map(id => ({ id, title: id })),
@@ -63,6 +63,7 @@ function fixture(scrollRef?: React.RefObject<ScrollView | null>) {
         // geometry, source/target lifecycle and gesture adapters above it remain real.
         execute: async effect => {
             model.writes.push(TodoReorderInputV1Schema.parse(effect.input));
+            if (acknowledgement) await acknowledgement;
             return { status: 'applied' };
         },
     });
@@ -126,6 +127,57 @@ afterEach(async () => {
 });
 
 describe('shared flat reorder UI binding', () => {
+    it('keeps a release press from opening the grip chooser while its pointer move waits for acknowledgement', async () => {
+        const acknowledgement = createDeferred<void>();
+        const f = fixture(undefined, acknowledgement.promise);
+        const screen = await mount(f);
+        const pan = gesture(screen, 'a');
+        try {
+            await act(async () => { pan.__handlers.onStart!({ absoluteX: 10, absoluteY: 10 }); });
+            await act(async () => { pan.__handlers.onUpdate!({ absoluteX: 10, absoluteY: 90 }); });
+            await act(async () => { pan.__handlers.onEnd!({ absoluteX: 10, absoluteY: 90 }, true); });
+            expect(runtime.getSnapshot().phase).toBe('pending');
+            await screen.pressByTestIdAsync('grip:a');
+            await flushHookEffects({ cycles: 1, frames: 1 });
+            expect(screen.root.findAllByType(DropdownMenu).every(menu => !menu.props.open)).toBe(true);
+            expect(f.model.writes).toHaveLength(1);
+            await act(async () => { acknowledgement.resolve(); });
+            expect(runtime.getSnapshot().phase).toBe('settled');
+            // A later intentional press still opens the ordinary Move chooser.
+            await screen.pressByTestIdAsync('grip:a');
+            await flushHookEffects({ cycles: 1, frames: 1 });
+            expect(screen.root.findAllByType(DropdownMenu).some(menu => menu.props.open)).toBe(true);
+        } finally { acknowledgement.resolve(); }
+    });
+
+    it('keeps repeated row drops in the foreground list over smaller underlying widget targets', async () => {
+        const f = fixture();
+        const screen = await mount(f);
+        const background = runtime.registerTarget({ id: 'underlying-home-widget', scope, acceptedKinds: ['todo'],
+            isCurrent: () => true, getBounds: () => ({ x: 0, y: 70, width: 40, height: 25 }),
+            resolve: () => ({ status: 'refused', reason: { code: 'widget_instance_changed', message: 'Layout changed' } }),
+            execute: async () => { throw new Error('The page behind the list must not receive its drop'); },
+        });
+        try {
+            for (const id of ['a', 'b']) {
+                const pan = gesture(screen, id);
+                await act(async () => { pan.__handlers.onStart!({ absoluteX: 10, absoluteY: f.model.ids.indexOf(id) * 50 + 10 }); });
+                const sourceId = runtime.getSnapshot().sourceId!;
+                expect.soft(runtime.getSourceBounds(sourceId)).toEqual({ x: 0, y: f.model.ids.indexOf(id) * 50, width: 300, height: 50 });
+                await act(async () => { pan.__handlers.onUpdate!({ absoluteX: 10, absoluteY: 90 }); });
+                expect(runtime.getSnapshot().admission).toMatchObject({ status: 'allowed', effect: { actionId: 'todos.reorder' } });
+                await act(async () => { pan.__handlers.onEnd!({ absoluteX: 10, absoluteY: 90 }, true); });
+                expect(runtime.getSnapshot()).toMatchObject({ phase: 'settled', outcome: { status: 'applied' } });
+                const committed = f.model.writes.at(-1)!;
+                f.model.ids = resolveAnchoredListMoveV1(f.model.ids, committed.sourceId, committed.position)!;
+                await screen.update(f.render());
+                await measureRows(screen, f.model.ids);
+            }
+            expect(f.model.writes.map(write => write.sourceId)).toEqual(['a', 'b']);
+            expect(f.model.ids).toEqual(['a', 'b', 'c']);
+        } finally { background(); }
+    });
+
     it('moves through a grip accessibility action and exposes the same focus target for restoration', async () => {
         const moves: string[] = [];
         let focusTarget: unknown;

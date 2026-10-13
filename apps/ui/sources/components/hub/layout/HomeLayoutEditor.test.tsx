@@ -1,4 +1,4 @@
-import type { HomeHubLayoutValue } from '@happier-dev/protocol/home';
+import { HomeHubLayoutV1Schema, type HomeHubLayoutValue } from '@happier-dev/protocol/home';
 import { captureActiveServerAccountScopeLifetime } from '@/sync/domains/scope/activeServerAccountScope';
 import * as React from 'react';
 import { act } from 'react-test-renderer';
@@ -418,6 +418,17 @@ describe('Home Customize entity reorder binding', () => {
         await act(async () => { await list().props.binding.execute(effect.effect); });
         await flushHookEffects({ cycles: 3 });
         expect(artifact.layout().order.indexOf('setup')).toBeLessThan(artifact.layout().order.indexOf('start'));
+        // Acknowledged writes do not leave the mounted editor on the first Artifact revision.
+        for (const [sectionId, anchorId] of [['start', 'setup'], ['attention', 'start']] as const) {
+            const next = list().props.binding.resolve(sectionId, { anchorId, placement: 'before' });
+            if (next.status !== 'allowed') throw new Error(`Expected the next ${sectionId} move to be admitted`);
+            await act(async () => { expect(await list().props.binding.execute(next.effect)).toEqual({ status: 'applied' }); });
+            await flushHookEffects({ cycles: 3 });
+            const stored = HomeHubLayoutV1Schema.parse(artifact.layout());
+            expect(stored.order.indexOf(sectionId)).toBeLessThan(stored.order.indexOf(anchorId));
+            expect(list().props.binding.items.map((item: { id: string }) => item.id).slice(0, 3))
+                .toEqual(stored.order.slice(0, 3));
+        }
         expect(list().props.binding.resolve('gone', { anchorId: 'start', placement: 'before' }).status).toBe('refused');
         await act(async () => storage.setState({ profileScope: null }));
         expect(list().props.binding.getItem('setup')).toBeNull();

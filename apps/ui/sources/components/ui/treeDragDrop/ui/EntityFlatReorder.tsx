@@ -233,7 +233,8 @@ function MountedFlatRow(props: React.ComponentProps<typeof EntityFlatReorderRow>
         return ownerScope !== null && entityDragScopesEqualV1(ownerScope, scope) && latest.current.binding.items.some(item => item.id === id);
     };
     useEntityDragSource(runtime, { id: sourceId, scope, isCurrent: current,
-        getItem: () => latest.current.binding.getItem(id), describe: () => ({ title: latest.current.binding.items.find(item => item.id === id)?.title ?? '' }) });
+        getItem: () => latest.current.binding.getItem(id), getBounds: () => getBounds(),
+        describe: () => ({ title: latest.current.binding.items.find(item => item.id === id)?.title ?? '' }) });
     const getBounds = () => {
         const live = readWindowBounds(rowNode.current);
         if (live) return live;
@@ -241,7 +242,8 @@ function MountedFlatRow(props: React.ComponentProps<typeof EntityFlatReorderRow>
         const row = registry.getContentGeometry().rows.find(row => row.id === id);
         return list && row ? { x: list.x + row.bounds.x, y: list.y + row.bounds.y, width: row.bounds.width, height: row.bounds.height } : null;
     };
-    useEntityDropTarget(runtime, { id: targetId, scope, acceptedKinds: [context.binding.kind], isCurrent: current, getBounds,
+    // The foreground list owns its row kind even where a smaller page target lies behind it.
+    useEntityDropTarget(runtime, { id: targetId, scope, acceptedKinds: [context.binding.kind], captureKinds: [context.binding.kind], isCurrent: current, getBounds,
         listDestinations: () => (['before', 'after'] as const).map(placement => {
             const position = { anchorId: id, placement };
             return { destination: position, label: entityReorderPreview(position, latest.current.binding.items).verb };
@@ -281,7 +283,10 @@ function MountedFlatRow(props: React.ComponentProps<typeof EntityFlatReorderRow>
             endStarted.current = false;
             const carry = runtime.begin(sourceId, 'pointer');
             adapter.current = carry ? createEntityDragGestureAdapter(carry) : null;
-            if (carry) void latest.current.measure().then(() => carry.move({ x: event.absoluteX, y: event.absoluteY }));
+            if (carry) {
+                setChooserOpen(false);
+                void latest.current.measure().then(() => carry.move({ x: event.absoluteX, y: event.absoluteY }));
+            }
         })
         .onUpdate(event => {
             const activeAdapter = adapter.current;
@@ -335,7 +340,12 @@ function MountedFlatRow(props: React.ComponentProps<typeof EntityFlatReorderRow>
         trigger={({ toggle }) => <GestureDetector gesture={handleGesture}><EntityDragGripTrigger testID={testID}
             accessibilityLabel={t('entityDragDrop.organize.grip', { item: context.binding.items.find(item => item.id === id)?.title ?? '' })}
             accessibilityHint={t('entityDragDrop.keyboard.hintsA11y')}
-            onPress={toggle} onKeyDown={onKeyDown} expanded={chooserOpen}
+            onPress={() => {
+                // A release can also reach the press boundary. The drag owner's
+                // carry/acknowledgement still owns that interaction until settled.
+                const phase = runtime.getSnapshot().phase;
+                if (phase !== 'carrying' && phase !== 'pending') toggle();
+            }} onKeyDown={onKeyDown} expanded={chooserOpen}
             active={active.active} density={context.pointerInteraction ? 'pointer' : 'touch'} /></GestureDetector>} />;
     const moveBy = (delta: number) => {
         const ids = latest.current.binding.items.map(item => item.id);
