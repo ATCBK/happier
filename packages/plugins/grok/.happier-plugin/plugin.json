@@ -33,11 +33,53 @@
               }
             ]
           },
+          "skills": {
+            "delivery": "none",
+            "liveReload": "unsupported",
+            "nativeDisable": "unsupported",
+            "nativeRoots": {
+              "project": [
+                [
+                  ".grok",
+                  "skills"
+                ],
+                [
+                  ".agents",
+                  "skills"
+                ],
+                [
+                  ".claude",
+                  "skills"
+                ],
+                [
+                  ".cursor",
+                  "skills"
+                ]
+              ],
+              "user": [
+                [
+                  ".grok",
+                  "skills"
+                ],
+                [
+                  ".claude",
+                  "skills"
+                ],
+                [
+                  ".cursor",
+                  "skills"
+                ]
+              ]
+            }
+          },
           "tools": {
             "delivery": "native_mcp"
           }
         },
         "catalog": {
+          "acpRegistryIds": [
+            "grok-build"
+          ],
           "vendorResume": {
             "support": "supported"
           }
@@ -161,6 +203,7 @@
     "projectNativeAdapters": [],
     "promptAssets": [],
     "providers": [],
+    "registrySources": [],
     "requestInterceptors": [],
     "resources": [],
     "roles": [],

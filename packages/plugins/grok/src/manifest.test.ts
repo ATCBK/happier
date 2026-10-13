@@ -18,6 +18,13 @@ describe('Grok plugin manifest', () => {
     expect(PLUGIN_MANIFEST.contributes.agents[0]).toMatchObject({
       id: 'grok', runtime: { kind: 'custom' }, primary: 'sessions',
       capabilities: {
+        skills: {
+          delivery: 'none', nativeDisable: 'unsupported', liveReload: 'unsupported',
+          nativeRoots: {
+            user: [['.grok', 'skills'], ['.claude', 'skills'], ['.cursor', 'skills']],
+            project: [['.grok', 'skills'], ['.agents', 'skills'], ['.claude', 'skills'], ['.cursor', 'skills']],
+          },
+        },
         sessions: {
           open: ['create', 'resume', 'fork'],
           delivery: ['newTurn', 'steer', 'followUp'],

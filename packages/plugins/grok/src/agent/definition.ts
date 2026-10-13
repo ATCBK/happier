@@ -3,6 +3,7 @@ const GROK_AGENT_ID = 'grok';
 // IMPORTANT: this must stay JSON-serializable (data-only).
 export const AGENT_DEFINITION = Object.freeze({
   id: GROK_AGENT_ID,
+  acpRegistryIds: ['grok-build'] as const,
   core: {
     id: GROK_AGENT_ID,
     cliSubcommand: 'grok',

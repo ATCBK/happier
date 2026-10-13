@@ -37,10 +37,17 @@ export const { manifest: PLUGIN_MANIFEST, activate } = definePlugin({
         runtime: { kind: 'custom' },
         primary: 'sessions',
         catalog: {
+          acpRegistryIds: [...AGENT_DEFINITION.acpRegistryIds],
           vendorResume: { support: AGENT_DEFINITION.core.resume.vendorResume },
         },
         capabilities: projectAgentCapabilitiesV2FromDefinition(AGENT_DEFINITION.core, {
-          skills: { delivery: 'none', nativeDisable: 'unsupported', liveReload: 'unsupported' },
+          skills: {
+            delivery: 'none', nativeDisable: 'unsupported', liveReload: 'unsupported',
+            nativeRoots: {
+              user: [['.grok', 'skills'], ['.claude', 'skills'], ['.cursor', 'skills']],
+              project: [['.grok', 'skills'], ['.agents', 'skills'], ['.claude', 'skills'], ['.cursor', 'skills']],
+            },
+          },
           sessions: {
             open: ['create', 'resume'],
             delivery: ['newTurn', 'steer', 'followUp'],
