@@ -41,10 +41,27 @@ export const { manifest: PLUGIN_MANIFEST, activate } = definePlugin({
       runtime: openAiConnectedAccountRuntime,
     },
   },
+  ui: {
+    translations: [
+      { locale: 'en', messages: { 'settingsVoice.realtimeProviders.openai.description': "Uses your OpenAI account or API key" } },
+      { locale: 'ru', messages: { 'settingsVoice.realtimeProviders.openai.description': "Использует ваш аккаунт OpenAI или API-ключ" } },
+      { locale: 'pl', messages: { 'settingsVoice.realtimeProviders.openai.description': "Korzysta z Twojego konta OpenAI lub klucza API" } },
+      { locale: 'es', messages: { 'settingsVoice.realtimeProviders.openai.description': "Usa tu cuenta de OpenAI o tu clave API" } },
+      { locale: 'fr', messages: { 'settingsVoice.realtimeProviders.openai.description': "Utilise ton compte OpenAI ou ta clé API" } },
+      { locale: 'it', messages: { 'settingsVoice.realtimeProviders.openai.description': "Usa il tuo account OpenAI o la tua chiave API" } },
+      { locale: 'pt', messages: { 'settingsVoice.realtimeProviders.openai.description': "Usa a tua conta OpenAI ou chave API" } },
+      { locale: 'ca', messages: { 'settingsVoice.realtimeProviders.openai.description': "Fa servir el teu compte d’OpenAI o la teva clau API" } },
+      { locale: 'de', messages: { 'settingsVoice.realtimeProviders.openai.description': "Nutzt dein OpenAI-Konto oder deinen API-Schlüssel" } },
+      { locale: 'zh-Hans', messages: { 'settingsVoice.realtimeProviders.openai.description': "使用你的 OpenAI 账户或 API 密钥" } },
+      { locale: 'zh-Hant', messages: { 'settingsVoice.realtimeProviders.openai.description': "使用你的 OpenAI 帳戶或 API 金鑰" } },
+      { locale: 'ja', messages: { 'settingsVoice.realtimeProviders.openai.description': "OpenAIアカウントまたはAPIキーを使用" } },
+    ],
+  },
   voiceProviders: {
     [OPENAI_VOICE_PROVIDER_CONTRIBUTION_ID]: {
       declaration: {
       title: 'OpenAI Realtime Voice',
+      description: { key: 'settingsVoice.realtimeProviders.openai.description', fallback: 'Uses your OpenAI account or API key' },
       mark: { kind: 'connected_service', serviceId: 'openai' },
       kind: 'conversation',
       roles: ['conversation_stt', 'conversation_tts', 'realtime_conversation', 'turn_control'],
