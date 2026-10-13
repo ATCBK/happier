@@ -1,4 +1,5 @@
-import type { AgentInstallJob, AgentInstallJobConsent, AgentInstallJobEvent, AgentInstallJobIntent } from '@happier-dev/protocol/daemon/agent-install-jobs';
+import type { AgentInstallJob, AgentInstallJobConsent, AgentInstallJobEvent, AgentInstallJobIntent, DaemonAgentInstallStartRequest } from '@happier-dev/protocol/daemon/agent-install-jobs';
+import { buildMachineAgentInventoryKey } from '@happier-dev/protocol/capabilities';
 
 import { MACHINE_RPC_POLL_INTERVAL_MS } from '@/sync/ops/machineRpcPollInterval';
 import { serverAccountScopedResourceKey, type ServerAccountScope, type ServerAccountScopeLifetime } from '@/sync/domains/scope/serverAccountScope';
@@ -8,8 +9,9 @@ import type { MachineAgentJob, MachineAgentJobStep } from '../machineAgentTypes'
 import { AgentInstallJobRpcError, cancelAgentInstallJobRpc, listAgentInstallJobsRpc, readAgentInstallJobRpc, startAgentInstallJobRpc } from './api';
 
 export type MachineAgentInstallJobTarget = ServerAccountScope & Readonly<{ machineId: string }>;
-export type AgentInstallJobTarget = MachineAgentInstallJobTarget & Readonly<{ agentId: string }>;
-export type AgentInstallJobStartOptions = Readonly<{ consent: AgentInstallJobConsent; force?: boolean }>;
+export type AgentInstallJobTarget = MachineAgentInstallJobTarget & Readonly<{ agentId: string; definitionId?: string }>;
+export type AgentInstallJobStartOptions = Readonly<{ consent: AgentInstallJobConsent; force?: boolean;
+    expectedDefinitionVersion?: DaemonAgentInstallStartRequest['expectedDefinitionVersion'] }>;
 
 type JobRecord = { job: MachineAgentJob; cursor: number; hydrated: boolean; polling: boolean; timer?: ReturnType<typeof setTimeout> };
 type MachineJobs = { target: MachineAgentInstallJobTarget; controller: AbortController; jobs: ReadonlyMap<string, MachineAgentJob>; records: Map<string, JobRecord>; listeners: Set<() => void>; agentListeners: Map<string, Set<() => void>>; loading?: Promise<void>; starts: Map<string, Promise<MachineAgentJob>> };
@@ -60,14 +62,15 @@ function machine(target: MachineAgentInstallJobTarget): MachineJobs {
 
 function publish(target: AgentInstallJobTarget, job: MachineAgentJob | null): void {
     const state = machine(target);
-    const previous = state.jobs.get(target.agentId);
-    if (previous === job || (!job && !state.jobs.has(target.agentId))) return;
+    const targetKey = buildMachineAgentInventoryKey(target);
+    const previous = state.jobs.get(targetKey);
+    if (previous === job || (!job && !state.jobs.has(targetKey))) return;
     const jobs = new Map(state.jobs);
-    if (job) jobs.set(target.agentId, job);
-    else jobs.delete(target.agentId);
+    if (job) jobs.set(targetKey, job);
+    else jobs.delete(targetKey);
     state.jobs = jobs;
     machineAgentInventoryStore.publishJobs(inventoryKey(target), jobs);
-    for (const listener of state.agentListeners.get(target.agentId) ?? []) listener();
+    for (const listener of state.agentListeners.get(targetKey) ?? []) listener();
     for (const listener of state.listeners) listener();
     if (job?.outcome?.kind === 'succeeded' && (previous?.jobId !== job.jobId || previous.outcome?.kind !== 'succeeded')) {
         const lifetime = accountLifetime(state);
@@ -80,7 +83,7 @@ function publish(target: AgentInstallJobTarget, job: MachineAgentJob | null): vo
 }
 
 export function readAgentInstallJob(target: AgentInstallJobTarget): MachineAgentJob | null {
-    return machine(target).jobs.get(target.agentId) ?? null;
+    return machine(target).jobs.get(buildMachineAgentInventoryKey(target)) ?? null;
 }
 
 export function readMachineAgentInstallJobs(target: MachineAgentInstallJobTarget): ReadonlyMap<string, MachineAgentJob> {
@@ -89,15 +92,16 @@ export function readMachineAgentInstallJobs(target: MachineAgentInstallJobTarget
 
 export function subscribeAgentInstallJob(target: AgentInstallJobTarget, listener: () => void): () => void {
     const state = machine(target);
-    let listeners = state.agentListeners.get(target.agentId);
+    const targetKey = buildMachineAgentInventoryKey(target);
+    let listeners = state.agentListeners.get(targetKey);
     if (!listeners) {
         listeners = new Set();
-        state.agentListeners.set(target.agentId, listeners);
+        state.agentListeners.set(targetKey, listeners);
     }
     listeners.add(listener);
     return () => {
         listeners.delete(listener);
-        if (listeners.size === 0) state.agentListeners.delete(target.agentId);
+        if (listeners.size === 0) state.agentListeners.delete(targetKey);
     };
 }
 
@@ -140,14 +144,15 @@ function applyEvents(job: MachineAgentJob, events: readonly AgentInstallJobEvent
 
 async function poll(target: AgentInstallJobTarget, record: JobRecord): Promise<void> {
     const state = machine(target);
-    if (state.controller.signal.aborted || record.polling || record.job.outcome || state.records.get(target.agentId) !== record) return;
+    const targetKey = buildMachineAgentInventoryKey(target);
+    if (state.controller.signal.aborted || record.polling || record.job.outcome || state.records.get(targetKey) !== record) return;
     record.polling = true;
     try {
         const response = await readAgentInstallJobRpc({ ...target, signal: state.controller.signal }, { jobId: record.job.jobId, cursor: record.cursor });
-        if (state.controller.signal.aborted || state.records.get(target.agentId) !== record) return;
+        if (state.controller.signal.aborted || state.records.get(targetKey) !== record) return;
         if (!response.ok) {
             if (response.errorCode === 'job_not_found') {
-                state.records.delete(target.agentId);
+                state.records.delete(targetKey);
                 try {
                     // The initial discovery may have supplied the now-pruned job. Finish it
                     // before a fresh list so recovery cannot rejoin that stale snapshot.
@@ -157,10 +162,10 @@ async function poll(target: AgentInstallJobTarget, record: JobRecord): Promise<v
                 } catch (error) {
                     // Discovery can lose the connection too. Keep the last projection and
                     // retry through the same poll owner rather than declaring an outcome.
-                    if (!state.controller.signal.aborted && !state.records.has(target.agentId)) state.records.set(target.agentId, record);
+                    if (!state.controller.signal.aborted && !state.records.has(targetKey)) state.records.set(targetKey, record);
                     throw error;
                 }
-                if (!state.records.has(target.agentId)) publish(target, null);
+                if (!state.records.has(targetKey)) publish(target, null);
                 return;
             }
             throw new AgentInstallJobRpcError(response.errorCode, response.error);
@@ -177,7 +182,7 @@ async function poll(target: AgentInstallJobTarget, record: JobRecord): Promise<v
     } finally {
         record.polling = false;
     }
-    if (!state.controller.signal.aborted && state.records.get(target.agentId) === record && !record.job.outcome) {
+    if (!state.controller.signal.aborted && state.records.get(targetKey) === record && !record.job.outcome) {
         record.timer = setTimeout(() => { void poll(target, record); }, MACHINE_RPC_POLL_INTERVAL_MS);
     }
 }
@@ -192,23 +197,25 @@ export function ensureMachineAgentInstallJobs(target: MachineAgentInstallJobTarg
         if (!response.ok) throw new AgentInstallJobRpcError(response.errorCode, response.error);
         const latest = new Map<string, AgentInstallJob>();
         for (const wire of response.jobs) {
-            const candidate = latest.get(wire.agentId);
-            // The daemon admits one active job per agent. Historical timestamps can
+            const targetKey = buildMachineAgentInventoryKey(wire);
+            const candidate = latest.get(targetKey);
+            // Active work is selected per Agent/definition target. Historical timestamps can
             // precede a clock correction, so active work takes priority over history.
             if (!candidate || (candidate.done && !wire.done) || (candidate.done === wire.done && candidate.startedAt < wire.startedAt)) {
-                latest.set(wire.agentId, wire);
+                latest.set(targetKey, wire);
             }
         }
         for (const wire of latest.values()) {
-            const previous = state.records.get(wire.agentId);
+            const targetKey = buildMachineAgentInventoryKey(wire);
+            const previous = state.records.get(targetKey);
             // A start response names the admitted job even when an older list arrives later.
             if (previous && !previous.hydrated && previous.job.jobId !== wire.jobId) continue;
             if (previous?.job.jobId === wire.jobId && previous.hydrated) continue;
             if (wire.done && previous && previous.job.jobId !== wire.jobId && previous.job.startedAtMs > wire.startedAt) continue;
             if (previous?.timer) clearTimeout(previous.timer);
             const record: JobRecord = { job: fromWire(wire), cursor: 0, hydrated: true, polling: false };
-            state.records.set(wire.agentId, record);
-            const agentTarget = { ...target, agentId: wire.agentId };
+            state.records.set(targetKey, record);
+            const agentTarget = { ...target, agentId: wire.agentId, definitionId: wire.definitionId };
             publish(agentTarget, record.job);
             if (!wire.done) void poll(agentTarget, record);
         }
@@ -218,20 +225,25 @@ export function ensureMachineAgentInstallJobs(target: MachineAgentInstallJobTarg
 
 export function startAgentInstallJob(target: AgentInstallJobTarget, intent: AgentInstallJobIntent, options: AgentInstallJobStartOptions): Promise<MachineAgentJob> {
     const state = machine(target);
-    const starting = state.starts.get(target.agentId);
+    const targetKey = buildMachineAgentInventoryKey(target);
+    // A definition's pin can change while its earlier start RPC is pending.
+    // The daemon owns joins under the captured Account/definition/version.
+    const shareAdmission = target.definitionId === undefined;
+    const starting = shareAdmission ? state.starts.get(targetKey) : undefined;
     if (starting) return starting;
     const promise = (async () => {
-        const response = await startAgentInstallJobRpc({ ...target, signal: state.controller.signal }, { agentId: target.agentId, intent, ...options });
+        const response = await startAgentInstallJobRpc({ ...target, signal: state.controller.signal }, { agentId: target.agentId,
+            ...(target.definitionId === undefined ? {} : { definitionId: target.definitionId }), intent, ...options });
         requireCurrent(state);
         if (!response.ok) throw new AgentInstallJobRpcError(response.errorCode, response.error);
-        if (state.records.get(target.agentId)?.job.jobId !== response.jobId) {
-            const previous = state.records.get(target.agentId);
+        if (state.records.get(targetKey)?.job.jobId !== response.jobId) {
+            const previous = state.records.get(targetKey);
             if (previous?.timer) clearTimeout(previous.timer);
             const record: JobRecord = { job: { jobId: response.jobId, intent, startedAtMs: Date.now(), steps: [], logLine: null, outcome: null }, cursor: 0, hydrated: false, polling: false };
-            state.records.set(target.agentId, record);
+            state.records.set(targetKey, record);
             publish(target, record.job);
         }
-        const record = state.records.get(target.agentId);
+        const record = state.records.get(targetKey);
         if (!record) throw new AgentInstallJobRpcError('job_not_found');
         // Native admission is already acknowledged. Discovery must not turn that
         // acknowledgement into a failed start if the Account retires while reading.
@@ -239,20 +251,21 @@ export function startAgentInstallJob(target: AgentInstallJobTarget, intent: Agen
             // Fetch daemon-owned timing/steps before polling, sharing any mount-time list request.
             try { await ensureMachineAgentInstallJobs(target); } catch { /* Read still resumes the admitted job. */ }
             if (state.controller.signal.aborted) return;
-            const current = state.records.get(target.agentId);
+            const current = state.records.get(targetKey);
             if (current) void poll(target, current);
         })();
         return record.job;
-    })().finally(() => { state.starts.delete(target.agentId); });
-    state.starts.set(target.agentId, promise);
+    })().finally(() => { if (shareAdmission) state.starts.delete(targetKey); });
+    if (shareAdmission) state.starts.set(targetKey, promise);
     return promise;
 }
 
 export async function cancelAgentInstallJob(target: AgentInstallJobTarget): Promise<void> {
     const state = machine(target);
-    const record = state.records.get(target.agentId);
+    const targetKey = buildMachineAgentInventoryKey(target);
+    const record = state.records.get(targetKey);
     if (!record) {
-        if (state.jobs.has(target.agentId)) throw new AgentInstallJobRpcError('job_not_found');
+        if (state.jobs.has(targetKey)) throw new AgentInstallJobRpcError('job_not_found');
         return;
     }
     if (record.job.outcome) return;

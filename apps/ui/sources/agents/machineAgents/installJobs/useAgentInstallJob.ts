@@ -8,9 +8,9 @@ import type { AgentInstallJobIntent } from '@happier-dev/protocol/daemon/agent-i
 import { useServerCredentialAccountScopeBinding } from '@/sync/domains/scope/useServerCredentialAccountScopes';
 import { AgentInstallJobRpcError } from './api';
 
-export function useAgentInstallJob({ serverId, machineId, agentId }: Omit<AgentInstallJobTarget, 'accountId'>) {
+export function useAgentInstallJob({ serverId, machineId, agentId, definitionId }: Omit<AgentInstallJobTarget, 'accountId'>) {
     const { binding } = useServerCredentialAccountScopeBinding(serverId);
-    const target = React.useMemo(() => binding?.isCurrent() ? { ...binding.scope, machineId, agentId } : null, [binding, machineId, agentId]);
+    const target = React.useMemo(() => binding?.isCurrent() ? { ...binding.scope, machineId, agentId, definitionId } : null, [binding, machineId, agentId, definitionId]);
     const subscribe = React.useCallback((listener: () => void) => target ? subscribeAgentInstallJob(target, listener) : () => {}, [target]);
     const read = React.useCallback(() => target && binding?.isCurrent() ? readAgentInstallJob(target) : null, [binding, target]);
     const job = React.useSyncExternalStore(subscribe, read, read);

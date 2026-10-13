@@ -10,7 +10,7 @@ export function resolveMachineAgentState(input: Pick<MachineAgent, 'installed' |
     requireSignedIn?: boolean;
     /** Selected Provider authorization and compatibility, when that route is used. */
     credentialRouteReady?: boolean;
-    /** False only when the admitted Provider replaces the Agent's authentication. */
+    /** Selected credential purposes override optional native authentication. */
     authenticationRequired?: boolean;
 }>): MachineAgentState {
     if (input.job?.outcome === null) return 'installing';
@@ -20,7 +20,8 @@ export function resolveMachineAgentState(input: Pick<MachineAgent, 'installed' |
     if (!input.platform.supported) return 'unsupported';
     if (!input.installed || input.dependencies.some((dependency) => !dependency.installed)) return 'notInstalled';
     if (input.credentialRouteReady === false) return 'unknown';
-    if (input.authenticationRequired !== false) {
+    const authenticationRequired = input.authenticationRequired ?? input.signIn.native?.required !== false;
+    if (authenticationRequired) {
         if (input.signIn.status === 'signedOut') return 'needsSignIn';
         if (input.requireSignedIn && input.signIn.status !== 'signedIn') return 'unknown';
     }

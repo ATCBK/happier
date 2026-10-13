@@ -31,6 +31,7 @@ export type MergedProviderProjectionEntry = Readonly<{
     catalogAgentId?: AgentId | null;
     iconAgentId?: AgentId | null;
     cli?: PluginAgentCliMetadata | null;
+    acpRegistryIds?: readonly string[] | null;
     connectedAccounts?: readonly PluginProjectedAgentConnectedAccountPurposeV2[] | null;
     /**
      * The Agent's own UI-behavior descriptor as projected by the daemon. It

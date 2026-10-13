@@ -3,11 +3,44 @@ import { projectMachineAgent, projectMachineAgentForCredential, reconcileMachine
 import type { MachineAgent } from './machineAgentTypes';
 
 describe('machine agent projection', () => {
+    it('admits explicitly optional native authentication without relaxing selected credentials or missing facts', () => {
+        const serviceId = 'acme.agent/account';
+        const signIn = { status: 'unknown' as const, loginSupport: 'unsupported' as const, required: false };
+        const facts = { agentId: 'acme.agent', title: 'Local helper', installed: true, version: null, latestVersion: null,
+            update: { supported: false, command: null }, signIn, platform: { supported: true as const },
+            install: { available: false, mode: 'none' as const, sizeBytes: null, guideUrl: null }, dependencies: [] };
+        const input = { agentId: facts.agentId, title: facts.title, checking: false, stale: false, job: null,
+            connectedServices: [], facts };
+        const agent = projectMachineAgent(input);
+        expect(projectMachineAgentForCredential(agent, { credentialBindings: null })).toMatchObject({ state: 'ready',
+            signIn: { status: 'unknown', via: null, nativeLogin: 'unsupported', native: signIn } });
+        expect(projectMachineAgentForCredential(projectMachineAgent({ ...input,
+            facts: { ...facts, signIn: { status: 'unknown', loginSupport: 'unsupported' } },
+        }), { credentialBindings: null })?.state).toBe('unknown');
+        expect(projectMachineAgentForCredential(projectMachineAgent({ ...input,
+            facts: { ...facts, signIn: { ...signIn, required: true } },
+        }), { credentialBindings: null })?.state).toBe('unknown');
+        const credentialBindings = { v: 2 as const, bindingsByServiceId: { [serviceId]: {
+            source: 'connected' as const, selection: 'profile' as const, profileId: 'expired',
+        } } };
+        expect(projectMachineAgentForCredential(agent, { credentialBindings })?.state).toBe('unknown');
+        const withAccount = projectMachineAgent({ ...input, connectedServices: [{ serviceId, title: 'Account',
+            connected: true, healthy: false, profileLabel: 'Expired', profiles: [
+                { profileId: 'expired', healthy: false, profileLabel: 'Expired' },
+            ] }] });
+        expect(projectMachineAgentForCredential(withAccount, { credentialBindings })?.state).toBe('needsSignIn');
+        expect(projectMachineAgentForCredential(agent, { credentialBindings: null, providerRoute: {
+            ready: false, suppressedConnectedServiceIds: [],
+        } })?.state).toBe('unknown');
+        expect(projectMachineAgentForCredential(projectMachineAgent({ ...input, facts: null }), { credentialBindings: null })?.state).toBe('unknown');
+        expect(projectMachineAgentForCredential({ ...agent, installed: false }, { credentialBindings: null })?.state).toBe('notInstalled');
+        expect(projectMachineAgent({ ...input, facts: { ...facts, signIn: { ...signIn, status: 'signedOut' } } }).state).toBe('ready');
+    });
     it('uses only an admitted Provider route to suppress its replaced native authentication', () => {
         const serviceId = 'happier.agent.claude/claude-subscription';
         const agent = projectMachineAgent({ agentId: 'claude', title: 'Claude', checking: false, stale: false, job: null,
             connectedServices: [{ serviceId, title: 'Claude subscription', connected: false, healthy: false, profileLabel: null, profiles: [] }],
-            facts: { agentId: 'claude', title: 'Claude', installed: true, version: '1', latestVersion: '1', update: null,
+            facts: { agentId: 'claude', title: 'Claude', installed: true, version: '1', latestVersion: '1', update: { supported: false, command: null },
                 signIn: { status: 'signedOut', loginSupport: 'login_terminal' }, platform: { supported: true },
                 install: { available: false, mode: 'manual', sizeBytes: null, guideUrl: null }, dependencies: [] } });
         const providerRoute = { ready: true, suppressedConnectedServiceIds: ['claude-subscription', 'anthropic'] };

@@ -93,7 +93,9 @@ type ProjectionSummarySubscription = Readonly<{
 const PROJECTION_SUMMARY_SUBSCRIPTIONS = new Map<string, ProjectionSummarySubscription>();
 
 export type DaemonMergedProjectionSummary = Readonly<{
-    inputs: Pick<DaemonMergedProjectionInputs, 'mergedBackendProjectionById' | 'mergedProviderProjectionById'> | null;
+    inputs: (Pick<DaemonMergedProjectionInputs, 'mergedBackendProjectionById' | 'mergedProviderProjectionById'> & Readonly<{
+        agentDeclarationsById: PluginProjectionV2['agentsById'] | null;
+    }>) | null;
     current: boolean;
 }>;
 const EMPTY_PROJECTION_SUMMARY: DaemonMergedProjectionSummary = Object.freeze({ inputs: null, current: false });
@@ -116,6 +118,7 @@ export function readDaemonMergedProjectionSummary(params: Readonly<{
         const inputs = Object.freeze({
             mergedBackendProjectionById: entry.inputs.mergedBackendProjectionById,
             mergedProviderProjectionById: entry.inputs.mergedProviderProjectionById,
+            agentDeclarationsById: entry.inputs.pluginProjectionV2?.agentsById ?? null,
         });
         summaries = Object.freeze({ current: Object.freeze({ inputs, current: true }), stale: Object.freeze({ inputs, current: false }) });
         PROJECTION_SUMMARIES.set(entry, summaries);

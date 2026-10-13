@@ -1,8 +1,14 @@
 import { describe, expect, it } from 'vitest';
 
 import { resolveAgentCatalogProjection } from './agentCatalogProjection';
+import { resolveBuiltInAgentForRegistryId } from '@/agents/registry/resolveBuiltInAgentForRegistryId';
 
 describe('bundled Agent declarations without a machine projection', () => {
+    it('resolves registry overlap from the generated cold declaration without a daemon', () => {
+        const entry = resolveAgentCatalogProjection('claude', { enabledAgentIds: [] });
+        expect(entry.acpRegistryIds).toEqual(['claude-acp']);
+        expect(resolveBuiltInAgentForRegistryId([entry], 'claude-acp')).toBe(entry);
+    });
     it('exposes admitted identity and qualified account purposes without asserting a runtime generation', () => {
         const entry = resolveAgentCatalogProjection('claude', { enabledAgentIds: [] });
 

@@ -1,5 +1,5 @@
 import { t } from '@/text';
-import type { MachineAgentJob, MachineAgentJobFailureCode } from '../machineAgentTypes';
+import type { MachineAgentJob } from '../machineAgentTypes';
 import { AgentInstallJobRpcError } from './api';
 
 /** Transport and lookup failures do not establish an installer outcome. */
@@ -17,15 +17,20 @@ export function presentAgentInstallJobRpcFailure(error: unknown): Readonly<{ cod
     return { code, title: t('agentInstallJob.failed'), body: t('agentInstallJob.failedBody') };
 }
 
+/** Display uncertainty is not a daemon installer outcome. */
+export type AgentInstallJobFailurePresentationInput =
+    | Extract<NonNullable<MachineAgentJob['outcome']>, { kind: 'failed' }>
+    | Readonly<{ kind: 'failed'; code: 'unknown'; stepId: null; message: null; guideUrl?: never }>;
+
 export type AgentInstallJobFailurePresentation = Readonly<{
-    code: MachineAgentJobFailureCode;
+    code: AgentInstallJobFailurePresentationInput['code'];
     title: string;
     body: string;
     recovery: Readonly<{ kind: 'retry' | 'guide' | 'chooseAgent' | 'reconnect'; label: string; guideUrl?: string }>;
 }>;
 
 export function presentAgentInstallJobFailure(
-    failure: Extract<NonNullable<MachineAgentJob['outcome']>, { kind: 'failed' }>,
+    failure: AgentInstallJobFailurePresentationInput,
 ): AgentInstallJobFailurePresentation {
     const copy = (() => {
         switch (failure.code) {
@@ -37,13 +42,11 @@ export function presentAgentInstallJobFailure(
             case 'verification_failed': return { title: t('agentInstallJob.verificationFailed'), body: t('agentInstallJob.verificationBody'), kind: 'retry' } as const;
             case 'timeout': return { title: t('agentInstallJob.timeout'), body: t('agentInstallJob.timeoutBody'), kind: 'retry' } as const;
             case 'cancelled': return { title: t('agentInstallJob.cancelled'), body: t('agentInstallJob.cancelledBody'), kind: 'retry' } as const;
-            case 'machine_unreachable': return { title: t('agentInstallJob.machineUnreachable'), body: t('agentInstallJob.unreachableBody'), kind: 'reconnect' } as const;
             default: return { title: t('agentInstallJob.failed'), body: t('agentInstallJob.failedBody'), kind: 'retry' } as const;
         }
     })();
     const kind = copy.kind === 'guide' && !failure.guideUrl ? 'chooseAgent' : copy.kind;
     const label = kind === 'guide' ? t('agentInstallJob.openGuide')
-        : kind === 'chooseAgent' ? t('agentInstallJob.chooseAgent')
-            : kind === 'reconnect' ? t('agentInstallJob.reconnect') : t('agentInstallJob.retry');
+        : kind === 'chooseAgent' ? t('agentInstallJob.chooseAgent') : t('agentInstallJob.retry');
     return { code: failure.code, title: copy.title, body: copy.body, recovery: { kind, label, ...(kind === 'guide' ? { guideUrl: failure.guideUrl } : {}) } };
 }

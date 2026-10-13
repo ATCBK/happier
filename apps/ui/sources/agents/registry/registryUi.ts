@@ -39,7 +39,7 @@ export type AgentUiConfig = Readonly<{
 
 export const CANONICAL_AGENTS_UI = BUNDLED_CANONICAL_AGENTS_UI;
 
-export const AGENTS_UI: Readonly<Record<CanonicalAgentId, AgentUiConfig>> = Object.freeze({
+export const AGENTS_UI: Readonly<Partial<Record<CanonicalAgentId, AgentUiConfig>>> = Object.freeze({
     ...CANONICAL_AGENTS_UI,
 });
 

@@ -8,6 +8,8 @@ import { MACHINE_RPC_POLL_INTERVAL_MS } from '@/sync/ops/machineRpcPollInterval'
 import { machineAgentInventoryStore } from '../machineAgentInventoryStore';
 import { serverAccountScopedResourceKey } from '@/sync/domains/scope/serverAccountScope';
 import type { MachineAgentInventoryItem } from '@happier-dev/protocol/capabilities';
+import { buildMachineAgentInventoryKey, MachineAgentInventoryItemSchema } from '@happier-dev/protocol/capabilities';
+import { AgentInstallJobSchema, DaemonAgentInstallCancelRequestSchema, DaemonAgentInstallReadRequestSchema, DaemonAgentInstallStartRequestSchema } from '@happier-dev/protocol/daemon/agent-install-jobs';
 import { upsertServerProfile } from '@/sync/domains/server/serverProfiles';
 import { createMachineFixture } from '@/dev/testkit/fixtures/machineFixtures';
 import { storage } from '@/sync/domains/state/storageStore';
@@ -30,7 +32,7 @@ vi.mock('@/sync/runtime/orchestration/serverScopedRpc/serverScopedMachineRpc', a
 });
 
 import { useAgentInstallJob } from './useAgentInstallJob';
-import { cancelAgentInstallJob, ensureMachineAgentInstallJobs, readAgentInstallJob, startAgentInstallJob, subscribeAgentInstallJob, waitForAgentInstallJob } from './installJobStore';
+import { cancelAgentInstallJob, ensureMachineAgentInstallJobs, readAgentInstallJob, readMachineAgentInstallJobs, startAgentInstallJob, subscribeAgentInstallJob, waitForAgentInstallJob } from './installJobStore';
 
 function wireJob(agentId: string, jobId: string) {
     return {
@@ -48,6 +50,100 @@ afterEach(() => {
 });
 
 describe('agent install job owner', () => {
+    it('sends each definition-qualified admission to the daemon so a changed pin cannot join an older pending request', async () => {
+        const target = { serverId: 'store-definition-pin', accountId: 'store-account', machineId: 'machine',
+            agentId: 'custom-acp', definitionId: 'registry-definition' };
+        const olderAdmission = createDeferred<void>();
+        const reachedOlderAdmission = createDeferred<void>();
+        // The daemon is the genuine boundary owning the captured Account catalog pin.
+        let daemonPin = '1.0.0';
+        boundary.rpc.mockImplementation(async ({ method, payload }: { method: string; payload: unknown }) => {
+            if (method.endsWith('.start')) {
+                expect(DaemonAgentInstallStartRequestSchema.parse(payload).definitionId).toBe(target.definitionId);
+                const capturedPin = daemonPin;
+                if (capturedPin === '1.0.0') { reachedOlderAdmission.resolve(); await olderAdmission.promise; }
+                return { ok: true, jobId: `job-pin-${capturedPin}` };
+            }
+            if (method.endsWith('.list')) return { ok: true, jobs: [] };
+            return { ok: true, steps: [], progress: [], events: [], nextCursor: 1, done: true,
+                outcome: { kind: 'failed', code: 'install_failed', stepId: 'cli', message: 'Fixture install stopped' } };
+        });
+        const first = startAgentInstallJob(target, 'install', { consent: { vendorRecipe: false } });
+        await reachedOlderAdmission.promise;
+        daemonPin = '2.0.0';
+        const second = startAgentInstallJob(target, 'install', { consent: { vendorRecipe: false } });
+        expect.soft(second).not.toBe(first);
+        olderAdmission.resolve();
+        expect((await Promise.all([first, second])).map(job => job.jobId)).toEqual(['job-pin-1.0.0', 'job-pin-2.0.0']);
+    });
+    it('keeps two configured definitions distinct through admission, hydration, hooks and cancellation', async () => {
+        vi.useFakeTimers();
+        const server = await upsertServerProfile({ serverUrl: 'https://definition-install-jobs.example.test' });
+        const a = { serverId: server.id, accountId: 'store-account', machineId: 'definitions-machine', agentId: 'custom-acp', definitionId: 'definition-a' };
+        const b = { ...a, definitionId: 'definition-b' };
+        const key = serverAccountScopedResourceKey(a, 'machine-agents', a.machineId);
+        const facts = [a, b].map(target => MachineAgentInventoryItemSchema.parse({
+            agentId: target.agentId, definitionId: target.definitionId, title: target.definitionId,
+            installed: false, version: null, latestVersion: null, update: { supported: false, command: null },
+            signIn: { status: 'unknown', loginSupport: 'login_terminal' }, platform: { supported: true },
+            install: { available: true, mode: 'managed', sizeBytes: null, guideUrl: null }, dependencies: [],
+        }));
+        machineAgentInventoryStore.publish(key, { status: 'ready', items: facts, lastCheckedAt: 1 });
+        const admission = createDeferred<void>();
+        const hydration = createDeferred<unknown>();
+        const cancelled = new Set<string>();
+        boundary.rpc.mockImplementation(async ({ method, payload }: { method: string; payload: unknown }) => {
+            if (method.endsWith('.start')) {
+                const request = DaemonAgentInstallStartRequestSchema.parse(payload);
+                await admission.promise;
+                return { ok: true, jobId: `job-${request.definitionId ?? 'missing-definition'}` };
+            }
+            if (method.endsWith('.list')) return hydration.promise;
+            if (method.endsWith('.cancel')) {
+                cancelled.add(DaemonAgentInstallCancelRequestSchema.parse(payload).jobId);
+                return { ok: true };
+            }
+            const request = DaemonAgentInstallReadRequestSchema.parse(payload);
+            return { ok: true, steps: [], progress: [], events: [{ t: 'progress', stepId: 'cli',
+                bytesDone: request.jobId === 'job-definition-a' ? 4 : 8, bytesTotal: 10 }], nextCursor: 1,
+                done: cancelled.has(request.jobId), outcome: cancelled.has(request.jobId)
+                    ? { kind: 'failed', code: 'cancelled', stepId: 'cli', message: 'Cancelled' } : null };
+        });
+        const discovering = ensureMachineAgentInstallJobs(a);
+        const first = startAgentInstallJob(a, 'install', { consent: { vendorRecipe: false } });
+        const second = startAgentInstallJob(b, 'install', { consent: { vendorRecipe: false } });
+        expect.soft(second).not.toBe(first);
+        admission.resolve();
+        expect.soft((await Promise.all([first, second])).map(job => job.jobId)).toEqual(['job-definition-a', 'job-definition-b']);
+        hydration.resolve({ ok: true, jobs: [a, b].map(target => AgentInstallJobSchema.parse({
+            ...wireJob(target.agentId, `job-${target.definitionId}`), definitionId: target.definitionId,
+        })) });
+        await discovering;
+        await act(async () => {});
+        expect.soft(readAgentInstallJob(a)).toMatchObject({ jobId: 'job-definition-a', startedAtMs: 100, steps: [{ bytesDone: 4 }] });
+        expect.soft(readAgentInstallJob(b)).toMatchObject({ jobId: 'job-definition-b', startedAtMs: 100, steps: [{ bytesDone: 8 }] });
+        expect.soft(new Set(readMachineAgentInstallJobs(a).keys())).toEqual(new Set([buildMachineAgentInventoryKey(a), buildMachineAgentInventoryKey(b)]));
+        const aHook = await renderHook(() => useAgentInstallJob(a));
+        const bHook = await renderHook(() => useAgentInstallJob(b));
+        expect.soft(aHook.getCurrent().job?.jobId).toBe('job-definition-a');
+        expect.soft(bHook.getCurrent().job?.jobId).toBe('job-definition-b');
+        const bJob = readAgentInstallJob(b);
+        const bInventory = machineAgentInventoryStore.read(key).agents[1];
+        const bNotified = vi.fn();
+        const unsubscribe = subscribeAgentInstallJob(b, bNotified);
+        await act(async () => { await cancelAgentInstallJob(a); });
+        expect.soft(cancelled).toEqual(new Set(['job-definition-a']));
+        expect.soft(aHook.getCurrent().job?.outcome).toMatchObject({ kind: 'failed', code: 'cancelled' });
+        expect.soft(bHook.getCurrent().job).toBe(bJob);
+        expect.soft(machineAgentInventoryStore.read(key).agents[1]).toBe(bInventory);
+        expect.soft(machineAgentInventoryStore.read(key).agents[0]?.job?.outcome).toMatchObject({ code: 'cancelled' });
+        expect.soft(bNotified).not.toHaveBeenCalled();
+        unsubscribe();
+        await act(async () => {
+            for (const listener of boundary.credentialListeners) listener({ serverId: server.id,
+                serverUrl: 'https://definition-install-jobs.example.test', kind: 'credentials_removed' });
+        });
+    });
     it('retains the native acknowledgement when Account retirement interrupts initial hydration', async () => {
         const target = { serverId: 'store-ack-retirement', accountId: 'store-account', machineId: 'machine', agentId: 'codex' };
         const hydration = createDeferred<unknown>();

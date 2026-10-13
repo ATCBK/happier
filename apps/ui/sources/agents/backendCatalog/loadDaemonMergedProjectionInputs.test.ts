@@ -31,7 +31,7 @@ await loadSyncSingletonForTests();
 ({ getMachineContributionRegistryProjectionRevision, publishMachineContributionRegistryProjectionInvalidation } = await import('@/sync/ops/machineContributionRegistryProjectionRevision'));
 ({ clearDaemonMergedProjectionCacheForTests } = await import('./loadDaemonMergedProjectionInputs'));
 const { retireActiveServerAccountScopeLifetime } = await import('@/sync/domains/scope/activeServerAccountScope');
-afterAll(() => { network.dispose(); });
+afterAll(() => network.dispose());
 
 const projectionDescribeMock = vi.hoisted(() => vi.fn());
 const homeIds = new Map<string, string>();
@@ -392,7 +392,7 @@ describe('loadDaemonMergedProjectionCacheEntry', () => {
             await expect(read(sameAccount.lifetime)).resolves.toMatchObject({ kind: 'ready' });
             expect(projectionDescribeMock).toHaveBeenCalledTimes(1);
 
-            network.setAccount('https://server-1', 'account-b');
+            await network.setAccount('https://server-1', 'account-b');
             await expect(read(nextAccount.lifetime)).resolves.toMatchObject({
                 kind: 'ready', inputs: { pluginProjectionV2: { generation: 8 } },
             });
@@ -521,7 +521,7 @@ describe('loadDaemonMergedProjectionCacheEntry', () => {
             accountLifetime: reader.lifetime,
         }));
         await vi.waitFor(() => expect(pending).toHaveLength(1));
-        network.setAccount('https://server-1', 'account-b');
+        await network.setAccount('https://server-1', 'account-b');
         const successorRead = loadDaemonMergedProjectionCacheEntry({
             machineId: 'machine-1',
             serverId: 'server-1',
@@ -594,7 +594,7 @@ describe('loadDaemonMergedProjectionCacheEntry', () => {
     });
 
     describe('retained admission custody around a machine answer', () => {
-        beforeEach(() => { network.setAccount('https://server-1', 'account-default'); });
+        beforeEach(async () => { await network.setAccount('https://server-1', 'account-default'); });
         const CUSTODY_TARGET = {
             pluginId: 'acme.preview',
             occurrenceId: 'target-generation-a',

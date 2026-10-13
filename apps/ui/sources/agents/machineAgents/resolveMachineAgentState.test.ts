@@ -33,8 +33,8 @@ describe('machine agent readiness', () => {
     it('projects the install executor lifecycle', () => {
         const job: MachineAgent['job'] = { jobId: 'job', intent: 'install', startedAtMs: 1, steps: [], logLine: null, outcome: null };
         expect(resolveMachineAgentState({ ...facts, installed: false, job })).toBe('installing');
-        expect(resolveMachineAgentState({ ...facts, job: { ...job, outcome: { kind: 'failed', code: 'download_failed', stepId: 'cli', message: null } } })).toBe('failed');
-        const cancelled = { ...job, outcome: { kind: 'failed' as const, code: 'cancelled' as const, stepId: null, message: null } };
+        expect(resolveMachineAgentState({ ...facts, job: { ...job, outcome: { kind: 'failed', code: 'download_failed', stepId: 'cli', message: 'Download failed' } } })).toBe('failed');
+        const cancelled = { ...job, outcome: { kind: 'failed' as const, code: 'cancelled' as const, stepId: 'cli', message: 'Cancelled' } };
         expect(resolveMachineAgentState({ ...facts, installed: false, job: cancelled })).toBe('notInstalled');
         expect(resolveMachineAgentState({ ...facts, job: { ...cancelled, intent: 'update' } })).toBe('ready');
         expect(resolveMachineAgentState({ ...facts, latestVersion: '2.0.0', job: { ...cancelled, intent: 'update' } })).toBe('updateAvailable');

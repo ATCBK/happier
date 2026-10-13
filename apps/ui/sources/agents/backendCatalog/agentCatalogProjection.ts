@@ -63,6 +63,8 @@ export type ResolvedAgentCatalogEntry = Readonly<{
     authPlugin: AgentLocalAuthPlugin | null;
     /** Exact public CLI declaration; bundled facts do not grant execution. */
     cli?: PluginAgentCliMetadata | null;
+    /** Exact data-only registry identities; no executable selection authority. */
+    acpRegistryIds?: readonly string[];
     cliAuthBackgroundCheckSafe: boolean;
     /** Exact Agent-owned Account purposes, available from bundled declarations when cold. */
     connectedAccounts: readonly PluginProjectedAgentConnectedAccountPurposeV2[];
@@ -447,6 +449,7 @@ export function resolveAgentCatalogProjection(agentId: string, params: Readonly<
         behavior: behaviorProjection?.behavior ?? null,
         authPlugin: resolveAgentLocalAuthPlugin(normalizedProviderId, behaviorProviderId, mergedProviderProjection, isBuiltIn),
         cli: mergedProviderProjection?.cli ?? declaration?.cli ?? null,
+        acpRegistryIds: mergedProviderProjection?.acpRegistryIds ?? declaration?.acpRegistryIds ?? [],
         cliAuthBackgroundCheckSafe: resolveCliAuthBackgroundCheckSafe(normalizedProviderId, mergedProviderProjection),
         connectedAccounts: mergedProviderProjection?.connectedAccounts ?? declaration?.connectedAccounts.map((purpose) => ({
             ...purpose,

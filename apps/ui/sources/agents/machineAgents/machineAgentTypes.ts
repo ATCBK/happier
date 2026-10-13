@@ -10,10 +10,11 @@
 
 import type { AgentId } from '@happier-dev/agents';
 import type { MachineAgentInventoryItem, MachineAgentInventoryUnavailable } from '@happier-dev/protocol/capabilities';
+import type { AgentInstallJobFailureCode, AgentInstallJobIntent, AgentInstallJobOutcome } from '@happier-dev/protocol/daemon/agent-install-jobs';
 
 /** The one state a surface shows for an agent on a machine (first match wins, see the resolver). */
 export type MachineAgentState =
-    /** Installed and signed in (natively or through a healthy connected account). */
+    /** Installed with required authentication satisfied, or explicitly not required. */
     | 'ready'
     /** Installed, but neither the agent's own probe nor a connected account says it can sign in. */
     | 'needsSignIn'
@@ -93,30 +94,16 @@ export type MachineAgentJobStep = Readonly<{
     bytesTotal: number | null;
 }>;
 
-export type MachineAgentJobFailureCode =
-    | 'consent_required'
-    | 'unsupported_platform'
-    | 'install_not_available'
-    | 'download_failed'
-    | 'verification_failed'
-    | 'timeout'
-    | 'cancelled'
-    | 'install_failed'
-    | 'update_not_available'
-    | 'machine_unreachable'
-    | 'unknown';
+export type MachineAgentJobFailureCode = AgentInstallJobFailureCode;
 
 export type MachineAgentJob = Readonly<{
     jobId: string;
-    intent: 'install' | 'update';
+    intent: AgentInstallJobIntent;
     startedAtMs: number;
     steps: readonly MachineAgentJobStep[];
     /** The last short log line (a file name and byte count), when the daemon reports one. */
     logLine: string | null;
-    outcome:
-        | null
-        | Readonly<{ kind: 'succeeded'; version: string | null }>
-        | Readonly<{ kind: 'failed'; code: MachineAgentJobFailureCode; stepId: string | null; message: string | null; guideUrl?: string }>;
+    outcome: AgentInstallJobOutcome | null;
 }>;
 
 export type MachineAgent = Readonly<{

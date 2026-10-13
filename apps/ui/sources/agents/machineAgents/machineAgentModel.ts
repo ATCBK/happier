@@ -67,7 +67,7 @@ export function projectMachineAgentForCredential(agent: MachineAgent | null | un
         .map(resolveQualifiedConnectedAccountServiceKey).filter((key): key is string => key !== null));
     // Suppression must cover the Agent's actual accepted authentication services,
     // not merely a same-named service belonging to another plugin.
-    const authenticationRequired = agent.signIn.connectedServices.length === 0
+    const authenticationRequired = (agent.signIn.native?.required !== false && agent.signIn.connectedServices.length === 0)
         || agent.signIn.connectedServices.some(service => !suppressedServiceIds.has(service.serviceId))
         || Object.keys(selection.credentialBindings?.bindingsByServiceId ?? {}).some(serviceId => !suppressedServiceIds.has(serviceId));
     const signIn = resolveMachineAgentSignIn({
