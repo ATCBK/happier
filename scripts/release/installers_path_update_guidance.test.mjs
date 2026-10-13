@@ -359,6 +359,8 @@ printf '%s' '${releaseJson}'
     PATH: `${binDir}:/usr/bin:/bin:/usr/sbin:/sbin`,
     HAPPIER_PRODUCT: 'cli',
     HAPPIER_BIN_DIR: outBinDir,
+    HAPPIER_INSTALL_DIR: '',
+    HAPPIER_HOME_DIR: '',
     HAPPIER_NONINTERACTIVE: '1',
     HAPPIER_GITHUB_TOKEN: '',
     GITHUB_TOKEN: '',
