@@ -116,7 +116,7 @@ import type {
   ReviewCommentHostActionCandidate,
   ReviewCommentHostActionMaterializationResult,
 } from '@/agent/executionRuns/profiles/review/hostActionMaterializer';
-import { createExecutionRunCodedError, readExecutionRunErrorCode } from './errors';
+import { createExecutionRunCodedError, readExecutionRunErrorCode, markExecutionRunStartPreparationFailure } from './errors';
 import type { ResolvedCliEngineRegistry } from '@/agent/runtime/registry/engineRegistryTypes';
 import type {
   ExecutionRunHostRunScopeBinding,
@@ -1813,7 +1813,9 @@ export class ExecutionRunHostBridge implements ExecutionRunHostBridgeContract {
   async start(params: ExecutionRunManagerStartParams): Promise<ExecutionRunStartResult> {
     await this.recoverRetainedRuns();
     this.ensurePermissionResponseTargetHandlerRegistered();
-    const resolution = await this.resolveExecutionRunProfileCatalog();
+    const resolution = await this.resolveExecutionRunProfileCatalog().catch((error: unknown) => {
+      throw markExecutionRunStartPreparationFailure(error, 'execution_run_contribution_snapshot_unavailable');
+    });
     const runtimeSnapshot = this.bindExecutionRunRuntimeSnapshot(resolution);
     try {
       params = { ...params, roleSessionMetadata: this.sessionInteractionHost?.session.getMetadataSnapshot() };
@@ -1831,7 +1833,9 @@ export class ExecutionRunHostBridge implements ExecutionRunHostBridgeContract {
         params,
         params.cwd ?? this.cwd,
         resolution.profileCatalog,
-      );
+      ).catch((error: unknown) => {
+        throw markExecutionRunStartPreparationFailure(error, 'execution_run_profile_preparation_failed');
+      });
       if (params.reviewNarration) {
         const input = preparedParams.intentInput && typeof preparedParams.intentInput === 'object' && !Array.isArray(preparedParams.intentInput)
           ? preparedParams.intentInput as Readonly<Record<string, unknown>> : {};

@@ -1,5 +1,20 @@
 import { sanitizeConnectedServiceRuntimeFailureClassification } from '@/daemon/connectedServices/runtimeAuth/sanitizeConnectedServiceRuntimeFailureClassification';
 import type { ConnectedServiceRuntimeFailureClassification } from '@/daemon/connectedServices/runtimeAuth/types';
+import { readRpcErrorCode } from '@happier-dev/protocol/rpcErrors';
+import { withExecutionRunStartFailureDetails } from '@happier-dev/protocol/execution/runs/responseSchemas';
+
+/** Preparation precedes fresh Run creation; carry a content-free RPC refusal. */
+export function markExecutionRunStartPreparationFailure(
+  error: unknown,
+  fallbackCode: 'execution_run_contribution_snapshot_unavailable' | 'execution_run_profile_preparation_failed',
+): Error {
+  const failure = error instanceof Error ? error : new Error(fallbackCode);
+  const details = 'details' in failure ? failure.details : undefined;
+  return Object.assign(failure, {
+    rpcErrorCode: readRpcErrorCode(error) ?? readExecutionRunErrorCode(error) ?? fallbackCode,
+    details: withExecutionRunStartFailureDetails(details, 'noRunCreated'),
+  });
+}
 
 /** Provider evidence that the initial input was definitively refused before work. */
 export class ExecutionRunRejectedStartError extends Error {

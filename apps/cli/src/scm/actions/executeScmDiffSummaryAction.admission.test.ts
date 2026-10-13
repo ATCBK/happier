@@ -1,9 +1,15 @@
 import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it, vi } from 'vitest';
 import { readFile, rm, writeFile } from 'node:fs/promises';
 import { join } from 'node:path';
+import { createServer } from 'node:http';
+import { Server } from 'socket.io';
 import { getAgentStaticModels } from '@happier-dev/agents';
-import { getActionSpec, ExecutionRunStartRequestSchema, ExecutionRunStartResponseSchema, ExecutionRunScmDiffSummaryInputV1Schema, ScmComparisonSchema, PluginManifestV2Schema,
+import { getActionSpec, ExecutionRunStartRequestSchema, ExecutionRunScmDiffSummaryInputV1Schema, ScmComparisonSchema, PluginManifestV2Schema,
+    createActionExecutor,
     type ActionExecuteResult, type BackendTargetRefV2, type ScmDiffSummaryGenerateInput } from '@happier-dev/protocol';
+import { SOCKET_RPC_EVENTS, type SocketRpcRequestPayload } from '@happier-dev/protocol/socketRpc';
+import { buildBackendTargetKeyV2 } from '@happier-dev/protocol/backends/targets/backendTargetRefV2';
+import { ScmComparisonCaptureOutputSchema, ScmDiffSummaryGenerateOutputSchema } from '@happier-dev/protocol/scm/diffSummary';
 
 import { createLocalScmRepositoryFixture } from '@/scm/contracts/scmBackendContractFixtures';
 import { gitCheckpointAdapter, resolveGitCheckpointBackendContext } from '@/scm/checkpoints/gitCheckpointAdapter';
@@ -21,6 +27,12 @@ import { VoiceAgentManager } from '@/agent/voice/agent/VoiceAgentManager';
 import { executeScmDiffSummaryAction } from './executeScmDiffSummaryAction';
 import { registerExecutionRunHandlers } from '@/rpc/handlers/executionRuns';
 import { createEncryptedRpcTestClient } from '@/rpc/handlers/encryptedRpc.testkit';
+import { RpcHandlerManager } from '@/api/rpc/RpcHandlerManager';
+import { registerScmHandlers } from '@/rpc/handlers/scm';
+import { createCliActionDeps } from '@/session/actions/createCliActionDeps';
+import { callSessionRpc } from '@/session/transport/rpc/sessionRpc';
+import { configuration, reloadConfiguration } from '@/configuration';
+import { updateSettings } from '@/persistence';
 import { createAuthoredAdmittedPluginRuntimeFixture } from '@/plugins/testkit/admittedRuntime';
 import { createPluginManifestV2Fixture } from '@/plugins/testkit/manifestV2Fixture';
 import { pluginReloadController } from '@/plugins/runtime/reload/singleton';
@@ -29,13 +41,13 @@ import { createPluginTestkit } from '@happier-dev/plugin-sdk/testing';
 import { CLAUDE_PLUGIN } from '@happier-dev/plugins-claude/manifest';
 import { createExecutionRunHostBackendFromConversationRuntime,
     type AgentRuntime, type AgentExecutionRunConversationEventV1, type AgentSessionSendRequest } from '@happier-dev/plugin-sdk/agents/runtime';
-import { captureScmComparison } from '@/scm/comparisons/captureScmComparison';
 import type { ExecutionRunHostBridge } from '@/agent/runtime/bridges/executionRun/ExecutionRunHostBridge';
-import { createMutableApiSessionClientFixture } from '@/testkit/backends/sessionFixtures';
+import { createMutableApiSessionClientFixture, createSessionRecordFixture } from '@/testkit/backends/sessionFixtures';
 import type { ExecutionRunAdmittedPendingInputV1 } from '@/api/session/client/transport/sessionClientInteractionApi';
 import { UserMessageSchema } from '@/api/types';
 import { ProviderEnforcedPermissionHandler } from '@/agent/permissions/providerEnforced/handler';
 import type { DurableProviderInputAcceptanceV1 } from '@/agent/runtime/session/input/providerInputOutcome';
+import { ExecutionRunStartFailureDetailsV1Schema } from '@happier-dev/protocol/execution/runs/responseSchemas';
 
 // This Session's daemon is a separate process. Keep its admission parser real.
 vi.mock('@/daemon/controlHttp', async (importOriginal) => {
@@ -59,6 +71,7 @@ describe('SCM generation through real host admission', () => {
     });
     afterEach(async () => {
         vi.unstubAllEnvs();
+        reloadConfiguration();
         await Promise.all(directories.splice(0).map(path => rm(path, { recursive: true, force: true })));
     });
 
@@ -147,136 +160,239 @@ describe('SCM generation through real host admission', () => {
             try { await admitted?.dispose(); } finally { await realRegistrations?.dispose(); }
         }, 0);
 
-        it('admits session-bound pending generation through the registered Run RPC and publishes all requested outputs', async () => {
+        it('admits session-bound pending generation through the registered Run RPC and publishes all requested outputs (admits machine-custodian capture)', async () => {
             const fixture = createLocalScmRepositoryFixture({ executable: 'git', repoMode: '.git', prefix: 'scm-session-rpc-' });
             directories.push(fixture.rootPath);
             await writeFile(join(fixture.rootPath, fixture.trackedPath), 'Pending change\n');
-            const sessionId = 'session-rpc-generation';
+            const sessionId = 'c111111111111111111111111';
             const modelId = getAgentStaticModels('claude', { catalogOnly: true }).find(model => model.id.includes('haiku'))?.id;
             if (!modelId) throw new Error('Native structured model fixture is unavailable');
             let manager: ExecutionRunHostBridge | undefined;
             let observedModel: string | undefined;
-            const captured = await captureScmComparison({ cwd: fixture.rootPath, source: { kind: 'workingTree' }, sessionId });
-            const aliases = captured.comparison.inventory.files.flatMap(file => file.occurrences.map(change => change.alias));
-            const createNativeConversation = () => {
-                const listeners = new Set<(event: AgentExecutionRunConversationEventV1) => void>();
-                const emit = (event: AgentExecutionRunConversationEventV1) => {
-                    for (const listener of listeners) listener(event);
-                };
-                return {
-                    watch(listener: (event: AgentExecutionRunConversationEventV1) => void) {
-                        listeners.add(listener); emit({ kind: 'provider-session-id', providerSessionId: 'native-model-fixture' });
-                        return { dispose() { listeners.delete(listener); } }; },
-                    async send(input: AgentSessionSendRequest) {
-                        const turnId = input.delivery.turnId;
-                        emit({ kind: 'input-accepted', inputIds: input.inputIds, delivery: input.delivery });
-                        emit({ kind: 'turn-start', turnId, startedBy: 'host' });
-                        emit({ kind: 'message-delta', turnId, channel: 'assistant', text: JSON.stringify({
-                            summaryMarkdown: 'Pending summary.', walkthrough: { title: 'Pending changes', intro: '',
-                                stops: [{ id: 'stop', title: 'Change', explanationMarkdown: 'Pending edit.', changeRefs: aliases }], otherChangeRefs: [] },
-                            commitPlan: { groups: [{ id: 'group', message: 'fix: pending edit', rationale: 'Pending change.', changeRefs: aliases }], leftOutChangeRefs: [] },
-                        }) });
-                        emit({ kind: 'turn-complete', turnId });
-                        return { status: 'admitted' as const };
-                    },
-                    async cancel({ turnId }: { turnId: string }) { emit({ kind: 'turn-cancelled', turnId, cause: 'user' }); return { status: 'requested' as const, turnId }; },
-                    async dispose() { listeners.clear(); },
-                };
-            };
-            nativeRuntime = { sessions: {
-                async open(request) {
-                    // Attached Runs retain the actual parent Session's identity.
-                    expect(request.sessionId).toBe(sessionId);
-                    observedModel = request.configuration?.model.value ?? undefined;
-                    const conversation = createNativeConversation();
-                    let sequence = 0;
-                    return { ...conversation,
-                        async updateConfiguration() { throw new Error('Generation must retain its admitted model configuration'); },
-                        watch(listener) {
-                            return conversation.watch(event => listener({ ...event, sequence: ++sequence,
-                                sessionId: request.sessionId, emittedAtMs: event.emittedAtMs ?? Date.now() }));
-                        } };
-                },
-                executionRunContextV1: { async open(request) {
-                    if (request.kind === 'fork') throw new Error('Unexpected fork');
-                    return await createExecutionRunHostBackendFromConversationRuntime({ request,
-                        openConversation: async () => createNativeConversation() });
-                } },
-            } };
-            const pendingInputs = new Map<string, ExecutionRunAdmittedPendingInputV1[]>();
-            const durableAcceptance = new Map<string, DurableProviderInputAcceptanceV1>();
-            // Pending custody is the parent Session's network/persistence boundary.
-            // Its real retained consumer, delivery, native codec and publisher run below.
-            const session = createMutableApiSessionClientFixture({ sessionId, overrides: {
-                enqueueSessionUserMessageWithDisposition: async input => {
-                    if (input.recipient?.kind !== 'execution_run') throw new Error('Expected exact Run recipient');
-                    const inputs = pendingInputs.get(input.recipient.runId) ?? [];
-                    inputs.push({ ...UserMessageSchema.parse({ role: 'user', content: { type: 'text', text: input.text }, localId: input.localId }),
-                        authorAccountId: null, inputAdmissionReceipt: null, pendingProviderAction: 'send' });
-                    pendingInputs.set(input.recipient.runId, inputs);
-                    session.updateMetadata(previous => previous);
-                    return { status: 'accepted', localId: input.localId };
-                },
-                bindExecutionRunPendingInput: binding => {
-                    const onPendingUpdate = () => binding.wake?.();
-                    session.on('metadata-updated', onPendingUpdate);
-                    return {
-                        getMetadataSnapshot: session.getMetadataSnapshot,
-                        waitForMetadataUpdate: session.waitForMetadataUpdate,
-                        shouldAttemptPendingMaterialization: () => (pendingInputs.get(binding.recipient.runId)?.length ?? 0) > 0,
-                        reconcilePendingProviderInputCustodyBeforeMaterialization: async () => true,
-                        materializeNextPendingMessageSafely: async () => {
-                            const input = pendingInputs.get(binding.recipient.runId)?.shift();
-                            if (!input) return { type: 'no_pending' };
-                            durableAcceptance.set(input.localId!, 'unknown');
-                            if (!binding.consume(input)) throw new Error('Retained Run refused its admitted input');
-                            return { type: 'materialized', localId: input.localId!, seq: null, content: null };
-                        },
-                        observeProviderInputSettlement: async outcome => {
-                            if (outcome.kind === 'accepted') durableAcceptance.set(outcome.localId, 'accepted');
-                            if (outcome.kind === 'rejected_before_effect') durableAcceptance.set(outcome.localId, 'not_accepted');
-                            return true;
-                        },
-                        readDurableProviderInputAcceptanceV1: async localId => durableAcceptance.get(localId) ?? 'unknown',
-                        dispose: () => { session.off('metadata-updated', onPendingUpdate); },
-                    };
-                },
-            } });
-            const client = createEncryptedRpcTestClient({ scopePrefix: sessionId,
-                registerHandlers: rpc => registerExecutionRunHandlers(rpc, { sessionId, cwd: fixture.rootPath,
-                    parentProvider: 'claude', sendAcp: async () => {},
-                    sessionInteractionHost: { machineId: 'fixture-machine',
-                        readAppliedChildSelection: () => ({ status: 'applied', backendTarget,
-                            modelId, connectedServices: null }),
-                        session,
-                        permissionHandler: new ProviderEnforcedPermissionHandler(session, { logPrefix: '[SCM generation seam]' }) },
-                    onManagerCreated: created => { manager = created; } }) });
-            const responses: unknown[] = [];
+            const machineId = 'fixture-machine';
+            const token = 'scm-generation-fixture';
+            const http = createServer((request, response) => {
+                const path = new URL(request.url ?? '/', 'http://fixture.test').pathname;
+                const data = path === `/v2/sessions/${sessionId}`
+                    ? { session: createSessionRecordFixture({ id: sessionId, active: true, encryptionMode: 'plain', machineId,
+                        metadata: JSON.stringify({ path: fixture.rootPath }), share: null }) }
+                    : path === '/v1/account/encryption/currentness'
+                        ? { mode: 'plain', version: 1, signingKeyFingerprint: null, contentKeyFingerprint: null, updatedAt: 1 }
+                        : undefined;
+                response.writeHead(data ? 200 : 404, { 'content-type': 'application/json' });
+                response.end(JSON.stringify(data ?? { error: 'not_found' }));
+            });
+            const sockets = new Server(http, { path: '/v1/updates/' });
             try {
-                const output = await executeScmDiffSummaryAction({ request: { cwd: fixture.rootPath, source: { kind: 'workingTree' }, comparisonId: captured.comparison.id,
-                    modelSelector: { modelId }, outputs: ['summary', 'walkthrough', 'commitPlan'] }, sessionId,
-                    backendTarget, executeCanonicalAction: async (actionId, input) => {
+                await new Promise<void>(resolve => http.listen(0, '127.0.0.1', resolve));
+                const address = http.address();
+                if (!address || typeof address === 'string') throw new Error('SCM transport fixture did not listen');
+                const serverUrl = `http://127.0.0.1:${address.port}`;
+                vi.stubEnv('HAPPIER_ACTIVE_SERVER_ID', configuration.activeServerId);
+                vi.stubEnv('HAPPIER_SERVER_URL', serverUrl);
+                reloadConfiguration();
+                await updateSettings(settings => ({ ...settings,
+                    machineIdByServerId: { ...settings.machineIdByServerId, [configuration.activeServerId]: machineId } }));
+                const machineExecutor = createActionExecutor(createCliActionDeps({ token, credentials: { token, encryption: null },
+                    sessionId: '', mode: 'plain', ctx: null, serverHttpBaseUrl: serverUrl,
+                    scmFilesystemAccessPolicy: { kind: 'restrictedRoots', roots: [fixture.rootPath] },
+                    machineActionDirectTargetTransport: { machineId, invoke: async method => {
+                        if (method !== 'capabilities.detect') throw new Error(`Unexpected Machine transport method: ${method}`);
+                        return { protocolVersion: 1, results: { 'tool.executionRuns': { ok: true, data: {
+                        available: true, protocolVersion: 2, features: { startAndWait: true, exactInputResults: true, runScopedAgentBindings: true },
+                        } } } };
+                    } },
+                }));
+                const machine = createEncryptedRpcTestClient({ scopePrefix: machineId, callerAuthority: 'machine_custodian',
+                    registerHandlers: rpc => registerScmHandlers(rpc, fixture.rootPath, { machineId,
+                        accessPolicy: { kind: 'restrictedRoots', roots: [fixture.rootPath] }, actionExecutor: machineExecutor }) });
+                const capture = ScmComparisonCaptureOutputSchema.parse(await machine.call('scm.diffSummary.capture', {
+                    cwd: fixture.rootPath, source: { kind: 'workingTree' }, sessionId,
+                }));
+                if (!capture.success) throw new Error('Machine-custodian capture refused the Session scope');
+                const captured = { comparison: capture.comparison };
+                const aliases = captured.comparison.inventory.files.flatMap(file => file.occurrences.map(change => change.alias));
+                const createNativeConversation = () => {
+                    const listeners = new Set<(event: AgentExecutionRunConversationEventV1) => void>();
+                    const emit = (event: AgentExecutionRunConversationEventV1) => {
+                        for (const listener of listeners) listener(event);
+                    };
+                    return {
+                        watch(listener: (event: AgentExecutionRunConversationEventV1) => void) {
+                            listeners.add(listener); emit({ kind: 'provider-session-id', providerSessionId: 'native-model-fixture' });
+                            return { dispose() { listeners.delete(listener); } }; },
+                        async send(input: AgentSessionSendRequest) {
+                            const turnId = input.delivery.turnId;
+                            emit({ kind: 'input-accepted', inputIds: input.inputIds, delivery: input.delivery });
+                            emit({ kind: 'turn-start', turnId, startedBy: 'host' });
+                            emit({ kind: 'message-delta', turnId, channel: 'assistant', text: JSON.stringify({
+                                walkthrough: { title: 'Pending changes', intro: '',
+                                    stops: [{ id: 'stop', title: 'Change', explanationMarkdown: 'Pending edit.', changeRefs: aliases }], otherChangeRefs: [] },
+                                commitPlan: { groups: [{ id: 'group', message: 'fix: pending edit', rationale: 'Pending change.', changeRefs: aliases }], leftOutChangeRefs: [] },
+                            }) });
+                            emit({ kind: 'turn-complete', turnId });
+                            return { status: 'admitted' as const };
+                        },
+                        async cancel({ turnId }: { turnId: string }) { emit({ kind: 'turn-cancelled', turnId, cause: 'user' }); return { status: 'requested' as const, turnId }; },
+                        async dispose() { listeners.clear(); },
+                    };
+                };
+                nativeRuntime = { sessions: {
+                    async open(request) {
+                        // Attached Runs retain the actual parent Session's identity.
+                        expect(request.sessionId).toBe(sessionId);
+                        observedModel = request.configuration?.model.value ?? undefined;
+                        const conversation = createNativeConversation();
+                        let sequence = 0;
+                        return { ...conversation,
+                            async updateConfiguration() { throw new Error('Generation must retain its admitted model configuration'); },
+                            watch(listener) {
+                                return conversation.watch(event => listener({ ...event, sequence: ++sequence,
+                                    sessionId: request.sessionId, emittedAtMs: event.emittedAtMs ?? Date.now() }));
+                            } };
+                    },
+                    executionRunContextV1: { async open(request) {
+                        if (request.kind === 'fork') throw new Error('Unexpected fork');
+                        return await createExecutionRunHostBackendFromConversationRuntime({ request,
+                            openConversation: async () => createNativeConversation() });
+                    } },
+                } };
+                const pendingInputs = new Map<string, ExecutionRunAdmittedPendingInputV1[]>();
+                const durableAcceptance = new Map<string, DurableProviderInputAcceptanceV1>();
+                // Pending custody is the parent Session's network/persistence boundary.
+                // Its real retained consumer, delivery, native codec and publisher run below.
+                const session = createMutableApiSessionClientFixture({ sessionId, overrides: {
+                    enqueueSessionUserMessageWithDisposition: async input => {
+                        if (input.recipient?.kind !== 'execution_run') throw new Error('Expected exact Run recipient');
+                        const inputs = pendingInputs.get(input.recipient.runId) ?? [];
+                        inputs.push({ ...UserMessageSchema.parse({ role: 'user', content: { type: 'text', text: input.text }, localId: input.localId }),
+                            authorAccountId: null, inputAdmissionReceipt: null, pendingProviderAction: 'send' });
+                        pendingInputs.set(input.recipient.runId, inputs);
+                        session.updateMetadata(previous => previous);
+                        return { status: 'accepted', localId: input.localId };
+                    },
+                    bindExecutionRunPendingInput: binding => {
+                        const onPendingUpdate = () => binding.wake?.();
+                        session.on('metadata-updated', onPendingUpdate);
+                        return {
+                            getMetadataSnapshot: session.getMetadataSnapshot,
+                            waitForMetadataUpdate: session.waitForMetadataUpdate,
+                            shouldAttemptPendingMaterialization: () => (pendingInputs.get(binding.recipient.runId)?.length ?? 0) > 0,
+                            reconcilePendingProviderInputCustodyBeforeMaterialization: async () => true,
+                            materializeNextPendingMessageSafely: async () => {
+                                const input = pendingInputs.get(binding.recipient.runId)?.shift();
+                                if (!input) return { type: 'no_pending' };
+                                durableAcceptance.set(input.localId!, 'unknown');
+                                if (!binding.consume(input)) throw new Error('Retained Run refused its admitted input');
+                                return { type: 'materialized', localId: input.localId!, seq: null, content: null };
+                            },
+                            observeProviderInputSettlement: async outcome => {
+                                if (outcome.kind === 'accepted') durableAcceptance.set(outcome.localId, 'accepted');
+                                if (outcome.kind === 'rejected_before_effect') durableAcceptance.set(outcome.localId, 'not_accepted');
+                                return true;
+                            },
+                            readDurableProviderInputAcceptanceV1: async localId => durableAcceptance.get(localId) ?? 'unknown',
+                            dispose: () => { session.off('metadata-updated', onPendingUpdate); },
+                        };
+                    },
+                } });
+                const rpc = new RpcHandlerManager({ scopePrefix: sessionId, encryptionMode: 'plain', logger: () => {} });
+                registerExecutionRunHandlers(rpc, { sessionId, cwd: fixture.rootPath,
+                        parentProvider: 'claude', sendAcp: async () => {},
+                        sessionInteractionHost: { machineId: 'fixture-machine',
+                            readAppliedChildSelection: () => ({ status: 'applied', backendTarget,
+                                modelId, connectedServices: null }),
+                            session,
+                            permissionHandler: new ProviderEnforcedPermissionHandler(session, { logPrefix: '[SCM generation seam]' }) },
+                        onManagerCreated: created => { manager = created; } });
+                let assertBeforeStart: ((input: unknown) => Promise<void>) | undefined;
+                const responses: unknown[] = [];
+                const transportFailures: unknown[] = [];
+                sockets.on('connection', socket => socket.on(SOCKET_RPC_EVENTS.CALL,
+                    (payload: SocketRpcRequestPayload, acknowledge: (result: unknown) => void) => {
+                        void (async () => {
+                            if (payload.method === `${sessionId}:execution.run.start` && assertBeforeStart) {
+                                const check = assertBeforeStart;
+                                assertBeforeStart = undefined;
+                                await check(payload.params);
+                            }
+                            return rpc.handleRequest({ method: payload.method, params: payload.params,
+                                requestId: payload.requestId, callerAuthority: 'present_user' });
+                        })().then(result => { responses.push(result); acknowledge({ ok: true, result }); }, error => {
+                            transportFailures.push(error instanceof Error ? error.message : error);
+                            acknowledge({ ok: false, error: 'fixture_rpc_failed' });
+                        });
+                    }));
+                const client = { call: <TResponse, TRequest>(method: string, request: TRequest) =>
+                    callSessionRpc({ token, sessionId, mode: 'plain', method, request }) as Promise<TResponse> };
+                try {
+                    // Real profile preparation refuses unavailable saved evidence
+                    // before a Run exists. Its typed cause must survive the RPC.
+                    const unavailable = await client.call<unknown, unknown>('execution.run.start',
+                        ExecutionRunStartRequestSchema.parse({
+                            intent: 'scm_diff_summary', kind: 'scm_diff_summary.v1', backendTarget, modelId,
+                            permissionMode: 'read_only', retentionPolicy: 'resumable', runClass: 'long_lived', ioMode: 'streaming',
+                            intentInput: { cwd: fixture.rootPath, source: { kind: 'workingTree' }, sessionId,
+                                comparisonId: captured.comparison.id, resultId: '00000000-0000-0000-0000-000000000000', expectedRevision: 0,
+                                outputs: ['walkthrough', 'commitPlan'] },
+                        }));
+                    expect(unavailable).toMatchObject({ ok: false, errorCode: 'DIFF_UNAVAILABLE', error: 'DIFF_UNAVAILABLE',
+                        details: { executionRunStart: { v: 1, runCreation: 'noRunCreated' } } });
+                    if (!unavailable || typeof unavailable !== 'object' || !('details' in unavailable)) {
+                        throw new Error('Run refusal must carry its canonical start evidence');
+                    }
+                    expect(ExecutionRunStartFailureDetailsV1Schema.parse(unavailable.details).executionRunStart.runCreation).toBe('noRunCreated');
+                    expect(manager?.listPublic()).toEqual([]);
+                    // Refusal neighbors still reach the real Session transport. The
+                    // positive path below starts at the Machine's registered SCM ingress.
+                    const assertRunRefusals = async (input: unknown) => {
+                        const actionId = 'execution.run.start';
                         const method = getActionSpec(actionId).bindings?.rpcMethod;
                         if (!method) throw new Error('Canonical Run Action RPC binding is unavailable');
-                        const response = await client.call<unknown, unknown>(method,
-                            ExecutionRunStartRequestSchema.parse(input));
-                        responses.push(response);
-                        const parsed = ExecutionRunStartResponseSchema.safeParse(response);
-                        return parsed.success ? { ok: true, result: parsed.data } : { ok: false, error: JSON.stringify(response) };
-                    } });
-                expect(output, JSON.stringify(responses)).toMatchObject({ success: true, runId: expect.any(String) });
-                if (!output.success || !output.runId || !output.inputId || !output.resultId || !manager) {
-                    throw new Error('Generation did not return exact retained Run input custody');
-                }
-                const turn = await manager.waitForInputTurn(output.runId, output.inputId);
-                expect(turn, JSON.stringify({ run: manager.getPublic(output.runId), observedModel })).toMatchObject({ turn: { state: 'completed' } });
-                // Exact input completion precedes the host's asynchronous saved-result publication.
-                await vi.waitFor(async () => expect(await scmDiffSummaryResultStore.read({ cwd: fixture.rootPath, sessionId,
-                    resultId: output.resultId })).toMatchObject({ success: true, result: { output: { outputs: {
-                        summary: { state: 'complete' }, walkthrough: { state: 'complete' }, commitPlan: { state: 'complete' },
-                    } } } }));
-                expect(observedModel).toBe(modelId);
-            } finally { await manager?.dispose(); await session.close(); }
+                        const startRequest = ExecutionRunStartRequestSchema.parse(input);
+                        const intentInput = ExecutionRunScmDiffSummaryInputV1Schema.parse(startRequest.intentInput);
+                        if (intentInput.expectedRevision === undefined) throw new Error('Generation must bind its saved revision');
+                        if (!intentInput.resultId) throw new Error('Machine generation must save its result before Run admission');
+                        expect(await scmDiffSummaryResultStore.readStoredScope({ cwd: fixture.rootPath, sessionId,
+                            resultId: intentInput.resultId })).toEqual({ cwd: fixture.rootPath, sessionId });
+                        const stale = await client.call<unknown, unknown>(method, { ...startRequest,
+                            intentInput: { ...intentInput, expectedRevision: intentInput.expectedRevision + 1 } });
+                        expect(stale).toMatchObject({ ok: false, errorCode: 'execution_run_profile_preparation_failed',
+                            error: 'execution_run_profile_preparation_failed',
+                            details: { executionRunStart: { v: 1, runCreation: 'noRunCreated' } } });
+                        expect(manager?.listPublic()).toEqual([]);
+                        const unsupported = await client.call<unknown, unknown>(method, { ...startRequest,
+                            modelId: 'freeform-not-in-native-catalog' });
+                        expect(unsupported).toMatchObject({ ok: false, errorCode: 'model_structured_output_unsupported',
+                            error: 'model_structured_output_unsupported',
+                            details: { executionRunStart: { v: 1, runCreation: 'noRunCreated' } } });
+                        expect(manager?.listPublic()).toEqual([]);
+                    };
+                    // The machine owner creates the saved result before invoking
+                    // the Session's Run. Observe only that genuine network boundary.
+                    assertBeforeStart = assertRunRefusals;
+                    const output = ScmDiffSummaryGenerateOutputSchema.parse(await machine.call('scm.diffSummary.generate', {
+                        cwd: fixture.rootPath, source: { kind: 'workingTree' }, comparisonId: captured.comparison.id, sessionId,
+                        modelSelector: { modelId, backendTargetKey: buildBackendTargetKeyV2(backendTarget) },
+                        outputs: ['walkthrough', 'commitPlan'],
+                    }));
+                    expect(output, JSON.stringify({ responses, transportFailures, outputs: output.outputs })).toMatchObject({ success: true, runId: expect.any(String) });
+                    expect(output.comparison).toEqual(capture.comparison);
+                    if (!output.success || !output.runId || !output.inputId || !output.resultId || !manager) {
+                        throw new Error('Generation did not return exact retained Run input custody');
+                    }
+                    const turn = await manager.waitForInputTurn(output.runId, output.inputId);
+                    expect(turn, JSON.stringify({ run: manager.getPublic(output.runId), observedModel })).toMatchObject({ turn: { state: 'completed' } });
+                    // Exact input completion precedes the host's asynchronous saved-result publication.
+                    await vi.waitFor(async () => expect(await scmDiffSummaryResultStore.read({ cwd: fixture.rootPath, sessionId,
+                        resultId: output.resultId })).toMatchObject({ success: true, result: { output: { outputs: {
+                            walkthrough: { state: 'complete' }, commitPlan: { state: 'complete' },
+                        } } } }));
+                    expect(observedModel).toBe(modelId);
+                } finally { await manager?.dispose(); await session.close(); }
+            } finally {
+                await new Promise<void>((resolve, reject) => sockets.close(error => error ? reject(error) : resolve()));
+            }
         });
     });
 

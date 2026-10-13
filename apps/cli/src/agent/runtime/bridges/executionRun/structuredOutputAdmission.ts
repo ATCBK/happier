@@ -36,8 +36,10 @@ export async function assertExecutionRunStructuredOutputModelAllowed(params: Mod
   const modelId = params.teamCredentialModel?.modelId ?? params.modelSelection?.modelId ?? params.modelId ?? 'default';
   const support = (await readExecutionRunOfferedModel(params))?.capabilities?.structuredOutput ?? 'unknown';
   if (support !== 'supported') {
+    const code = 'model_structured_output_unsupported';
     throw Object.assign(new Error('The selected model does not establish structured JSON output support.'), {
-      code: 'model_structured_output_unsupported',
+      code,
+      rpcErrorCode: code,
       details: { modelId, structuredOutput: support },
     });
   }

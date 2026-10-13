@@ -9,6 +9,8 @@ import { ExecutionRunTurnStreamCancelRequestSchema, ExecutionRunTurnStreamStartR
 import { ExecutionRunTurnStreamReadRequestSchema } from '@happier-dev/protocol/execution/runs/runPrimitives';
 import { normalizeExecutionRunWaitTimeoutMs, waitForExecutionRunTerminal } from '@happier-dev/protocol/execution/runs/waitForTerminal';
 import { ProviderErrorCodeV1Schema } from '@happier-dev/protocol/providers/errors';
+import { ScmDiffSummaryErrorCodeSchema } from '@happier-dev/protocol/scm/diffSummary';
+import { readRpcErrorCode } from '@happier-dev/protocol/rpcErrors';
 import type { ActionExecutorDeps, ActionExecutorContext, ActionExecuteResult, PluginPermissionGrantRequestActionInputV1, RuntimeActionIdV1, SessionInputCausalPermissionAuthorityV1, RequiredSessionTeamCredentialV1 } from '@happier-dev/protocol';
 import { isRuntimeActionIdV1 } from '@happier-dev/protocol/actions/actionIds';
 import { isAgentStartActionV1 } from '@happier-dev/protocol/actions/executor/agentStartAdmission';
@@ -580,6 +582,17 @@ export function createExecutionRunRpcActionDeps(params: ExecutionRunRpcActionDep
         }, runCreation);
       }
       const transportCode = ExecutionRunTransportErrorCodeSchema.safeParse(code);
+      const scmErrorCode = ScmDiffSummaryErrorCodeSchema.safeParse(code);
+      const refusalCode = scmErrorCode.success ? scmErrorCode.data
+        : transportCode.success ? undefined : readRpcErrorCode(error);
+      if (refusalCode) {
+        return classifyFailure({
+          ok: false,
+          error: refusalCode,
+          errorCode: refusalCode,
+          ...(rawDetails !== undefined ? { details: rawDetails } : {}),
+        }, runCreation);
+      }
       return classifyFailure({
         ok: false,
         error: error instanceof Error ? error.message : 'Execution failed',
