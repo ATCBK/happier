@@ -1,11 +1,11 @@
-import { mkdtemp, rm, unlink } from 'node:fs/promises';
+import { mkdir, mkdtemp, readFile, rm, unlink, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { describe, expect, it } from 'vitest';
 
 import { createVoiceDiagnosticsController } from './controller';
-import { createVoiceDiagnosticStore, VoiceDiagnosticCleanupError } from './store';
-import type { VoiceDiagnosticArtifact, VoiceDiagnosticStoreInspection } from './store';
+import { createVoiceDiagnosticStore } from './store';
+import { createDiagnosticsControllerWithRemovalFailure } from './controller.testkit';
 
 const enabledSettings = Object.freeze({
   v: 1 as const,
@@ -77,29 +77,8 @@ describe('voice diagnostics controller capture authorization', () => {
   it('keeps speech capture non-fatal while latching a retryable cleanup failure', async () => {
     const home = await mkdtemp(join(tmpdir(), 'voice-diagnostics-controller-'));
     try {
-      let inspection: VoiceDiagnosticStoreInspection = { artifacts: [], ownedEntryCount: 1, cleanupRequired: true };
-      const fakeStore = {
-        root: join(home, 'voice', 'diagnostics', 'v1'),
-        backupPolicy: { status: 'best_effort' as const, storage: 'private_cache' as const, mechanism: 'cachedir_tag' as const, automaticSync: 'not_implemented' as const },
-        capture: async (): Promise<VoiceDiagnosticArtifact | null> => {
-          throw new VoiceDiagnosticCleanupError(new Error('simulated_cleanup_failure'));
-        },
-        captureFile: async (): Promise<VoiceDiagnosticArtifact | null> => {
-          throw new VoiceDiagnosticCleanupError(new Error('simulated_cleanup_failure'));
-        },
-        inspect: async () => inspection,
-        list: async () => inspection.artifacts,
-        prune: async () => {},
-        deleteAll: async () => { inspection = { artifacts: [], ownedEntryCount: 0, cleanupRequired: false }; },
-        resolveArtifactForExport: async () => null,
-      };
-      const createController = createVoiceDiagnosticsController as (input: {
-        happyHomeDir: string;
-        createStore: () => typeof fakeStore;
-      }) => ReturnType<typeof createVoiceDiagnosticsController>;
-      const controller = createController({ happyHomeDir: home, createStore: () => fakeStore });
+      const { controller, recoverRemoval } = await createDiagnosticsControllerWithRemovalFailure({ happyHomeDir: home });
       await controller.configure(enabledSettings);
-
       await expect(controller.capture({
         direction: 'stt_input', format: 'webm', bytes: Buffer.from('private'), durationMs: null,
         sessionId: 'session', providerId: 'provider', attemptId: 'attempt',
@@ -113,6 +92,7 @@ describe('voice diagnostics controller capture authorization', () => {
         },
       });
 
+      recoverRemoval();
       await controller.deleteAll();
       await expect(controller.status()).resolves.toMatchObject({
         health: { captureFailure: false, cleanup: { status: 'healthy', ownedEntryCount: 0 } },
@@ -309,40 +289,14 @@ describe('voice diagnostics controller capture authorization', () => {
   it('preserves a capture failure through a later cleanup obligation and its recovery', async () => {
     const home = await mkdtemp(join(tmpdir(), 'voice-diagnostics-controller-'));
     try {
-      let captureFails = true;
-      let inspection: VoiceDiagnosticStoreInspection = { artifacts: [], ownedEntryCount: 0, cleanupRequired: false };
-      const artifact: VoiceDiagnosticArtifact = {
-        id: 'abcdef12-dead-beef',
-        createdAtMs: 1,
-        direction: 'stt_input',
-        format: 'webm',
-        durationMs: null,
-        byteLength: 7,
-        audioPath: join(home, 'audio.webm'),
-        metadataPath: join(home, 'audio.json'),
-      };
-      const fakeStore = {
-        root: join(home, 'voice', 'diagnostics', 'v1'),
-        backupPolicy: { status: 'best_effort' as const, storage: 'private_cache' as const, mechanism: 'cachedir_tag' as const, automaticSync: 'not_implemented' as const },
-        capture: async () => {
-          if (captureFails) throw new Error('simulated_capture_failure');
-          return artifact;
-        },
-        captureFile: async (): Promise<VoiceDiagnosticArtifact | null> => {
-          if (captureFails) throw new Error('simulated_capture_failure');
-          return artifact;
-        },
-        inspect: async () => inspection,
-        list: async () => inspection.artifacts,
-        prune: async () => {},
-        deleteAll: async () => { inspection = { artifacts: [], ownedEntryCount: 0, cleanupRequired: false }; },
-        resolveArtifactForExport: async () => null,
-      };
-      const createController = createVoiceDiagnosticsController as (input: {
-        happyHomeDir: string;
-        createStore: () => typeof fakeStore;
-      }) => ReturnType<typeof createVoiceDiagnosticsController>;
-      const controller = createController({ happyHomeDir: home, createStore: () => fakeStore });
+      let diskHasHeadroom = false;
+      const controller = createVoiceDiagnosticsController({
+        happyHomeDir: home,
+        createStore: (policy) => createVoiceDiagnosticStore({
+          happyHomeDir: home, policy,
+          statfs: async () => ({ bavail: diskHasHeadroom ? 1_000_000_000 : 0, bsize: 1 }),
+        }),
+      });
       await controller.configure(enabledSettings);
       const capture = {
         direction: 'stt_input', format: 'webm', bytes: Buffer.from('private'), durationMs: null,
@@ -351,7 +305,7 @@ describe('voice diagnostics controller capture authorization', () => {
       } as const;
 
       await expect(controller.capture(capture)).resolves.toBeNull();
-      inspection = { artifacts: [], ownedEntryCount: 1, cleanupRequired: true };
+      await writeFile(join(controller.root, 'deadbeef.wav'), Buffer.from('owned orphan'));
       await expect(controller.status()).resolves.toMatchObject({
         health: {
           captureFailure: true,
@@ -361,18 +315,19 @@ describe('voice diagnostics controller capture authorization', () => {
 
       await controller.deleteAll();
       await expect(controller.status()).resolves.toMatchObject({
-        health: {
-          captureFailure: true,
-          cleanup: { status: 'healthy', ownedEntryCount: 0 },
-        },
+        health: { captureFailure: true, cleanup: { status: 'healthy', ownedEntryCount: 0 } },
       });
 
-      captureFails = false;
-      await expect(controller.capture(capture)).resolves.toEqual(artifact);
+      diskHasHeadroom = true;
+      const artifact = await controller.capture(capture);
+      expect(artifact).not.toBeNull();
+      expect(await readFile(artifact!.audioPath)).toEqual(Buffer.from('private'));
       await expect(controller.status()).resolves.toMatchObject({
+        artifacts: [expect.objectContaining({ id: artifact!.id, byteLength: 7 })],
         health: {
           captureFailure: false,
-          cleanup: { status: 'healthy', ownedEntryCount: 0 },
+          // A real committed artifact owns its audio AND metadata, unlike the copied store.
+          cleanup: { status: 'healthy', ownedEntryCount: 2 },
         },
       });
     } finally {
@@ -383,43 +338,26 @@ describe('voice diagnostics controller capture authorization', () => {
   it('preserves a capture failure through catalog unreadability and recovery in either order', async () => {
     const home = await mkdtemp(join(tmpdir(), 'voice-diagnostics-controller-'));
     try {
-      let captureFails = true;
+      let diskHasHeadroom = false;
       let catalogReadable = true;
-      const artifact: VoiceDiagnosticArtifact = {
-        id: 'abcdef12-dead-beef',
-        createdAtMs: 1,
-        direction: 'stt_input',
-        format: 'webm',
-        durationMs: null,
-        byteLength: 7,
-        audioPath: join(home, 'audio.webm'),
-        metadataPath: join(home, 'audio.json'),
-      };
-      const fakeStore = {
-        root: join(home, 'voice', 'diagnostics', 'v1'),
-        backupPolicy: { status: 'best_effort' as const, storage: 'private_cache' as const, mechanism: 'cachedir_tag' as const, automaticSync: 'not_implemented' as const },
-        capture: async () => {
-          if (captureFails) throw new Error('simulated_capture_failure');
-          return artifact;
-        },
-        captureFile: async (): Promise<VoiceDiagnosticArtifact | null> => {
-          if (captureFails) throw new Error('simulated_capture_failure');
-          return artifact;
-        },
-        inspect: async (): Promise<VoiceDiagnosticStoreInspection> => {
-          if (!catalogReadable) throw new Error('simulated_catalog_unreadable');
-          return { artifacts: [], ownedEntryCount: 0, cleanupRequired: false };
-        },
-        list: async () => [],
-        prune: async () => {},
-        deleteAll: async () => {},
-        resolveArtifactForExport: async () => null,
-      };
-      const createController = createVoiceDiagnosticsController as (input: {
-        happyHomeDir: string;
-        createStore: () => typeof fakeStore;
-      }) => ReturnType<typeof createVoiceDiagnosticsController>;
-      const controller = createController({ happyHomeDir: home, createStore: () => fakeStore });
+      let successfulReadsBeforeLosingAccess: number | null = null;
+      const controller = createVoiceDiagnosticsController({
+        happyHomeDir: home,
+        createStore: (policy) => createVoiceDiagnosticStore({
+          happyHomeDir: home, policy,
+          statfs: async () => ({ bavail: diskHasHeadroom ? 1_000_000_000 : 0, bsize: 1 }),
+          // The genuine OS read retains its overloads; only access failure is controlled.
+          readArtifactFile: (async (...args: Parameters<typeof readFile>) => {
+            if (!catalogReadable) throw Object.assign(new Error('simulated_catalog_unreadable'), { code: 'EACCES' });
+            const bytes = await readFile(...args);
+            if (successfulReadsBeforeLosingAccess !== null) {
+              successfulReadsBeforeLosingAccess -= 1;
+              if (successfulReadsBeforeLosingAccess === 0) catalogReadable = false;
+            }
+            return bytes;
+          }) as typeof readFile,
+        }),
+      });
       await controller.configure(enabledSettings);
       const capture = {
         direction: 'stt_input', format: 'webm', bytes: Buffer.from('private'), durationMs: null,
@@ -428,6 +366,7 @@ describe('voice diagnostics controller capture authorization', () => {
       } as const;
 
       await expect(controller.capture(capture)).resolves.toBeNull();
+      await writeFile(join(controller.root, 'deadbeef.json'), '{}');
       catalogReadable = false;
       await expect(controller.status()).resolves.toMatchObject({
         health: {
@@ -439,15 +378,16 @@ describe('voice diagnostics controller capture authorization', () => {
       catalogReadable = true;
       await controller.configure(enabledSettings);
       await expect(controller.status()).resolves.toMatchObject({
-        health: {
-          captureFailure: true,
-          cleanup: { status: 'healthy', ownedEntryCount: 0 },
-        },
+        health: { captureFailure: true, cleanup: { status: 'healthy', ownedEntryCount: 0 } },
       });
 
-      captureFails = false;
-      catalogReadable = false;
-      await expect(controller.capture(capture)).resolves.toEqual(artifact);
+      diskHasHeadroom = true;
+      // The actual store's post-commit prune and return read both succeed;
+      // access is then lost before the controller's separate health inspection.
+      successfulReadsBeforeLosingAccess = 2;
+      const artifact = await controller.capture(capture);
+      expect(artifact).not.toBeNull();
+      expect(await readFile(artifact!.audioPath)).toEqual(Buffer.from('private'));
       await expect(controller.status()).resolves.toMatchObject({
         health: {
           captureFailure: false,
@@ -462,22 +402,21 @@ describe('voice diagnostics controller capture authorization', () => {
   it('keeps an unreadable owned catalog visible as a cleanup obligation across status reloads', async () => {
     const home = await mkdtemp(join(tmpdir(), 'voice-diagnostics-controller-'));
     try {
-      const fakeStore = {
-        root: join(home, 'voice', 'diagnostics', 'v1'),
-        backupPolicy: { status: 'best_effort' as const, storage: 'private_cache' as const, mechanism: 'cachedir_tag' as const, automaticSync: 'not_implemented' as const },
-        capture: async () => null,
-        captureFile: async (): Promise<VoiceDiagnosticArtifact | null> => null,
-        inspect: async (): Promise<VoiceDiagnosticStoreInspection> => { throw new Error('simulated_catalog_unreadable'); },
-        list: async () => [],
-        prune: async () => {},
-        deleteAll: async () => { throw new Error('simulated_delete_failure'); },
-        resolveArtifactForExport: async () => null,
-      };
-      const createController = createVoiceDiagnosticsController as (input: {
-        happyHomeDir: string;
-        createStore: () => typeof fakeStore;
-      }) => ReturnType<typeof createVoiceDiagnosticsController>;
-      const controller = createController({ happyHomeDir: home, createStore: () => fakeStore });
+      const controller = createVoiceDiagnosticsController({
+        happyHomeDir: home,
+        createStore: (policy) => createVoiceDiagnosticStore({
+          happyHomeDir: home, policy,
+          // Preserve the native read API, with an actual owned metadata file behind its failure.
+          readArtifactFile: (async () => {
+            throw Object.assign(new Error('simulated_catalog_unreadable'), { code: 'EACCES' });
+          }) as typeof readFile,
+          removeFile: async () => {
+            throw Object.assign(new Error('simulated_delete_failure'), { code: 'EPERM' });
+          },
+        }),
+      });
+      await mkdir(controller.root, { recursive: true });
+      await writeFile(join(controller.root, 'deadbeef.json'), '{}');
 
       await expect(controller.status()).resolves.toMatchObject({
         artifacts: [],
@@ -497,4 +436,5 @@ describe('voice diagnostics controller capture authorization', () => {
       await rm(home, { recursive: true, force: true });
     }
   });
+
 });
