@@ -6740,6 +6740,11 @@ export async function resolveExecutablePluginRuntimeRegistry(
                 const target = resolveExactActivationTarget(
                     verifiedBinding.pluginId,
                 );
+                const sourceAuthority = target
+                    ? resolveCommittedActivationSource(target, {
+                        recordActivatedManifestAuthority: false,
+                    })?.sourceAuthority
+                    : undefined;
                 const declaredAgent = target?.manifest.contributes.agents.find(
                     (candidate) => candidate.id === verifiedBinding.localAgentId,
                 );
@@ -6751,6 +6756,11 @@ export async function resolveExecutablePluginRuntimeRegistry(
                         verifiedBinding.sourceCustody,
                     )
                     || !target
+                    || sourceAuthority?.kind !== 'development'
+                    || !pluginSourceCustodyEqual(
+                        resolvePluginSourceCustody(sourceAuthority),
+                        verifiedBinding.sourceCustody,
+                    )
                     || target.manifest.version !== verifiedBinding.pluginVersion
                     || !declaredAgent
                 ) {
@@ -6759,7 +6769,7 @@ export async function resolveExecutablePluginRuntimeRegistry(
                 return Object.freeze({
                     binding: verifiedBinding,
                     sourceKind: 'development' as const,
-                    rootPath: dirname(dirname(target.manifestPath)),
+                    rootPath: sourceAuthority.canonicalRoot,
                     cacheIdentity: currentOccurrenceId,
                     assertStillAvailable: async () => {
                         const latestCustody = readCurrentPluginSourceCustody(
