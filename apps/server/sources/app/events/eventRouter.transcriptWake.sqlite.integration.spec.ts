@@ -3,6 +3,8 @@ import { performance } from 'node:perf_hooks';
 import { Server } from 'socket.io';
 import { io as connect } from 'socket.io-client';
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
+import { UpdateContainerSchema } from '@happier-dev/protocol/updates';
+import { SessionMessagesPageV1Schema } from '@happier-dev/protocol';
 
 import { db } from '@/storage/db';
 import { inTx } from '@/storage/inTx';
@@ -126,6 +128,11 @@ describe('committed transcript socket wake (SQLite)', () => {
                 publishToSocketMs: observed === null ? null : observed - emitted, writerHeld: true }));
             expect(observed, 'Session fanout must not queue behind the next SQLite writer').not.toBeNull();
             expect(received).toHaveLength(1);
+            // Parse the actual fanout producer bytes with the sync follower's consumer.
+            expect(UpdateContainerSchema.parse(received[0]).body).toMatchObject({
+                t: 'new-message', sid: session.id, message: { id: result.message.id, seq: result.message.seq,
+                    content: { t: 'plain', v: { role: 'agent', content: { type: 'text', text: 'wake' } } } },
+            });
         } finally {
             releaseWriter?.();
             await writer;
@@ -165,7 +172,7 @@ describe('committed transcript socket wake (SQLite)', () => {
                 console.info('WAKE_TIMING', JSON.stringify({ pageReadMs: observed === null ? null : performance.now() - started, writerHeld: true }));
                 expect(observed, 'Transcript page reads must not queue behind the next SQLite writer').not.toBeNull();
                 expect(observed!.statusCode).toBe(200);
-                expect(observed!.json().messages).toMatchObject([{ id: result.message.id, seq: result.message.seq,
+                expect(SessionMessagesPageV1Schema.parse(observed!.json()).messages).toMatchObject([{ id: result.message.id, seq: result.message.seq,
                     accountActor: { accountId: owner.id } }]);
             } finally {
                 clearTimeout(budgetTimer);
