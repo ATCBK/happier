@@ -358,6 +358,10 @@ const SessionCockpitSurfaceScreenContent = React.memo((props: SessionCockpitSurf
     const switchSurface = React.useCallback((surface: SessionMobileSurface) => {
         surfaceNavigationRef.current?.switchSurface(surface);
     }, []);
+    const requestCloseDetails = React.useCallback(() => {
+        closeDetails();
+        surfaceNavigationRef.current?.returnToPreviousSurface();
+    }, [closeDetails]);
     const openMobileCompanion = React.useCallback(() => {
         switchSurface('companion');
     }, [switchSurface]);
@@ -851,6 +855,7 @@ const SessionCockpitSurfaceScreenContent = React.memo((props: SessionCockpitSurf
                 scopeId={props.scopeId}
                 presentation={props.safeAreaPadding === false ? 'screen' : undefined}
                 showHeaderActions={false}
+                onRequestClose={requestCloseDetails}
                 resolveBoardPrimaryHost={resolveBoardPrimaryHost}
             />
         </View>,

@@ -76,7 +76,7 @@ export function SessionCapturedScmReviewDetailsView(props: SessionScmReviewDetai
     return <WorkspaceScmReviewBody
         activeReviewFile={activeReviewFile}
         comparison={comparison} view={view} scopeLabel={scopeLabel} scopeOptions={scopeOptions}
-        onSelectComparison={selectComparison} onSelectView={selectView} onClose={pane.closeDetails}
+        onSelectComparison={selectComparison} onSelectView={selectView} onClose={props.onRequestClose ?? pane.closeDetails}
         fileCount={fileCount} rootPath={captured.comparison?.repository.rootPath}
         changeCount={captured.comparison?.inventory.files.reduce((sum, file) => sum + file.occurrences.length, 0)}
         reading={reading} modelLabel={walkthrough?.producer?.modelId} marksAvailable={marksAvailable}

@@ -57,7 +57,8 @@ export type PluginSurfaceDestinationOpenResolution<
      * destinations; only their incumbent container owners differ.
      */
     placement: TDestination;
-    authority: PluginSurfaceLaunchAuthority;
+    /** Input-less App page navigation can precede execution-origin selection. */
+    authority: PluginSurfaceLaunchAuthority | null;
 }>;
 
 export type PluginSurfaceDestinationOpenResult<
@@ -300,7 +301,13 @@ export function resolvePluginSurfaceDestinationOpen(input: Omit<
         accountLifetime: input.accountLifetime ?? null,
         scoped: input.scopedLaunchFacts,
     });
-    if (!authority) {
+    // An installed App page is a route even before Administration selects its
+    // producer. Match ordinary catalog navigation without granting execution
+    // or launch-input custody; every other container still needs that authority.
+    const routeOnly = placement.binding.container === 'appPage'
+        && input.request.input === undefined
+        && input.accountLifetime?.isCurrent() === true;
+    if (!authority && !routeOnly) {
         return unavailable('plugin_surface_open_origin_unavailable');
     }
     return Object.freeze({
@@ -628,7 +635,8 @@ export function stagePluginSurfacePaneLaunch(input: Readonly<{
     const container = input.resolution.placement.binding.container;
     const targetKind = input.resolution.placement.binding.targetKind;
     if (
-        (container !== 'rightPane' && container !== 'rightSidebarTab' && container !== 'bottomPane')
+        !input.resolution.authority
+        || (container !== 'rightPane' && container !== 'rightSidebarTab' && container !== 'bottomPane')
         || (targetKind !== 'app' && targetKind !== 'session' && targetKind !== 'project')
         || !hasExactInstanceShape(input.resolution.placement, input.resolution.request.instanceKey)
     ) {

@@ -468,6 +468,7 @@ export function createSessionDetailsSurfaceRenderers(
                     scopeId={options.scopeId}
                     active={input.active}
                     target={readSessionScmReviewTarget(input.tab.resource)}
+                    onRequestClose={options.requestClose}
                 />
             ),
         },

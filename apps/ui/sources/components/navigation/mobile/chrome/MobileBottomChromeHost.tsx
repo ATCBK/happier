@@ -44,6 +44,7 @@ import {
 } from '@/components/workspaceCockpit/session/sessionCockpitState';
 import { normalizeProjectPage, resolveProjectCockpitRouteFromPathname, resolveProjectRoutePathForSurface } from '@/components/workspaceCockpit/project/projectCockpitState';
 import { useSessionTerminalAvailability } from '@/components/sessions/terminal/useSessionTerminalAvailability';
+import { parseSessionPaneUrlState, serializeSessionPaneUrlState } from '@/components/sessions/panes/url/sessionPaneUrlState';
 
 import { MainAppTabBar } from './bars/MainAppTabBar';
 import { ProjectCockpitTabBar } from './bars/ProjectCockpitTabBar';
@@ -175,6 +176,9 @@ export const MobileBottomChromeHost = React.memo(function MobileBottomChromeHost
     const cockpitRegistration = useSessionCockpitChromeRegistration();
     const dismissingSessionId = useSessionCockpitDismissingSessionId();
     const explicitMobileSurfaceHint = normalizeRouteParam(params.mobileSurface);
+    const paneRouteQuery = React.useMemo(() => serializeSessionPaneUrlState(
+        parseSessionPaneUrlState(params) ?? {},
+    ), [params]);
     const sessionLastMobileSurfaceBySessionId = React.useMemo(() => (
         routeSessionId && sessionLastMobileSurface
             ? { [routeSessionId]: sessionLastMobileSurface }
@@ -252,11 +256,15 @@ export const MobileBottomChromeHost = React.memo(function MobileBottomChromeHost
         }
 
         persistSessionSurface(sessionId, surface);
-        router.replace(resolveSessionRoutePathForSurface(sessionId, surface, { serverId: routeServerId }));
+        router.replace(resolveSessionRoutePathForSurface(sessionId, surface, {
+            serverId: routeServerId,
+            query: surface === 'tabs' ? paneRouteQuery : undefined,
+        }));
     }, [
         cockpitRegistration,
         explicitMobileSurfaceHint,
         pathname,
+        paneRouteQuery,
         persistSessionSurface,
         routeServerId,
         router,
@@ -303,11 +311,13 @@ export const MobileBottomChromeHost = React.memo(function MobileBottomChromeHost
         }
         router.replace(resolveSessionRoutePathForSurface(next.sessionId, next.surface, {
             serverId: routeServerId,
+            query: next.surface === 'tabs' ? paneRouteQuery : undefined,
         }));
     }, [
         cockpitRegistration,
         explicitMobileSurfaceHint,
         pathname,
+        paneRouteQuery,
         routeServerId,
         routeSessionId,
         router,

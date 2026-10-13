@@ -15,6 +15,7 @@ const pathListeners = vi.hoisted(() => ({
     listeners: new Set<() => void>(),
 }));
 const searchParamsState = vi.hoisted(() => ({
+    pane: {} as Record<string, string | string[] | undefined>,
     mobileSurface: undefined as string | string[] | undefined,
     worktreeId: undefined as string | string[] | undefined,
     activeRootPath: undefined as string | string[] | undefined,
@@ -97,6 +98,7 @@ const platformState = vi.hoisted(() => ({
 const expoRouterMock = createExpoRouterMock({
     pathname: () => pathState.pathname,
     params: () => ({
+        ...searchParamsState.pane,
         mobileSurface: searchParamsState.mobileSurface,
         worktreeId: searchParamsState.worktreeId,
         activeRootPath: searchParamsState.activeRootPath,
@@ -451,6 +453,7 @@ describe('MobileBottomChromeHost', () => {
         searchParamsState.activeRootPath = undefined;
         searchParamsState.serverId = undefined;
         searchParamsState.sourceSurface = undefined;
+        searchParamsState.pane = {};
         keyboardHeightState.value = 0;
         gestureHandlerState.gestures = [];
         cockpitRegistrationState.dismissingSessionId = null;
@@ -1025,6 +1028,47 @@ describe('MobileBottomChromeHost', () => {
 
         expect(screen.tree.findByType('SessionCockpitTabBar' as never).props.activeSurface).toBe('chat');
         expect(routerState.replace).toHaveBeenCalledWith('/session/session-1?mobileSurface=chat');
+    });
+
+    it.each(['navigator', 'press'] as const)('preserves the exact comparison when %s presents phone Details', async (trigger) => {
+        const { createSessionScmReviewDetailsTab } = await import('@/components/sessions/panes/details/sessionDetailsTabBuilders');
+        const { buildActiveDetailsRouteParams, parseSessionPaneUrlState } = await import('@/components/sessions/panes/url/sessionPaneUrlState');
+        const tab = createSessionScmReviewDetailsTab({
+            comparison: { kind: 'workingTree', comparisonId: 'pending-comparison' },
+            view: 'walkthrough',
+            explain: true,
+            evidenceSessionId: 'evidence-session',
+        });
+        searchParamsState.pane = buildActiveDetailsRouteParams([tab], tab.key);
+        searchParamsState.serverId = 'home-a';
+        pathState.pathname = '/session/session-1';
+        settingsState.mobileWorkspaceExperienceV1 = 'cockpit';
+        deviceTypeState.value = 'desktop';
+        cockpitRegistrationState.registration = {
+            sessionId: 'session-1', activeSurface: 'chat', terminalTabAvailable: true,
+            openDetailsTabCount: 1, switchSurface: vi.fn(),
+        };
+        const { MobileBottomChromeHost } = await import('./MobileBottomChromeHost');
+        const screen = await renderScreen(<MobileBottomChromeHost />);
+        await act(async () => {
+            deviceTypeState.value = 'phone';
+            if (trigger === 'navigator') {
+                cockpitRegistrationState.registration = { ...cockpitRegistrationState.registration!, activeSurface: 'tabs' };
+                notifyCockpitRegistrationListeners();
+            }
+            screen.tree.update(<MobileBottomChromeHost newSessionRendersFloatingComposer />);
+        });
+        if (trigger === 'press') {
+            await act(async () => screen.tree.findByType('SessionCockpitTabBar' as never).props.onSurfacePress('tabs'));
+        }
+        const href = String(routerState.replace.mock.calls.at(-1)?.[0]);
+        const url = new URL(href, 'https://happier.test');
+        expect(url.pathname).toBe('/session/session-1/details');
+        expect(url.searchParams.get('serverId')).toBe('home-a');
+        expect(parseSessionPaneUrlState(Object.fromEntries(url.searchParams))).toEqual({
+            details: { kind: 'scmReview', comparison: { kind: 'workingTree', comparisonId: 'pending-comparison' },
+                view: 'walkthrough', explain: true, evidenceSessionId: 'evidence-session' },
+        });
     });
 
     it('keeps session cockpit chrome mounted when a tab press has incidental vertical movement', async () => {

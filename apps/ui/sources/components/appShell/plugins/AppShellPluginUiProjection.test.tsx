@@ -31,6 +31,7 @@ import {
     useAppShellPluginUiProjection,
 } from './AppShellPluginUiProjection';
 import { selectPluginSurfacePlacementsForBinding } from '@/sync/domains/plugins/ui/surfacePlacementSelectors';
+import { selectPluginAppPagePlacements } from './pluginAppPages';
 import { readPluginUiContributionOrigin } from '@/sync/domains/plugins/ui/projectionUnion';
 import {
     getQualifiedConnectedServiceRegistryEntry,
@@ -314,6 +315,8 @@ function createLiveMachine(machineId: string): Machine {
 function installSelectedAppScopePluginFixture(input: Readonly<{
     machineId: string;
     pluginId: string;
+    replicaMachineIds?: readonly string[];
+    selectOrigin?: boolean;
     artifacts?: readonly AppScopeArtifactFixture[];
     accountId?: string;
 }>): PluginMachineMaterializationExecutionOriginV1 {
@@ -354,7 +357,7 @@ function installSelectedAppScopePluginFixture(input: Readonly<{
             voice: { ...previous.settings.voice, executionMachine: storageState.voiceExecutionMachine },
             machineAdministrationSelectionsV1: {
                 v: 1,
-                pluginExecutionOriginsByPluginId: { [input.pluginId]: origin },
+                pluginExecutionOriginsByPluginId: input.selectOrigin === false ? {} : { [input.pluginId]: origin },
             },
         },
     });
@@ -373,6 +376,9 @@ function installSelectedAppScopePluginFixture(input: Readonly<{
         trustState: 'trusted',
         observedAt: 1,
     };
+    const materializations = [materialization, ...(input.replicaMachineIds ?? []).map(machineId => ({
+        ...materialization, machineId, materializationId: `${machineId}:${input.pluginId}:install`,
+    }))];
     const snapshot: PluginAccountAvailabilitySnapshot = {
         availabilityCursor: 1,
         intentReads: [{
@@ -413,12 +419,12 @@ function installSelectedAppScopePluginFixture(input: Readonly<{
                 uiArtifacts: [],
             },
         }],
-        materializations: [materialization],
-        snapshots: [{
-            serverIdentityId: materialization.serverIdentityId,
-            machineId: materialization.machineId,
-            materializations: [materialization],
-        }],
+        materializations,
+        snapshots: materializations.map(candidate => ({
+            serverIdentityId: candidate.serverIdentityId,
+            machineId: candidate.machineId,
+            materializations: [candidate],
+        })),
     };
     // Retire the incumbent before publishing its successor's Availability;
     // the real mounted Account hook clears the incumbent projection on retire.
@@ -589,6 +595,7 @@ function pluginUiProjectionWithAppTab(input: Readonly<{
     pluginId: string;
     localId?: string;
     origin?: PluginMachineMaterializationExecutionOriginV1;
+    container?: 'rightSidebarTab' | 'appPage';
 }>): PluginProjectionV2 {
     const localId = input.localId ?? 'panel';
     const id = `surfacePlacement:${input.pluginId}:${localId}`;
@@ -596,7 +603,7 @@ function pluginUiProjectionWithAppTab(input: Readonly<{
         pluginId: input.pluginId,
         destinationId: localId,
         rendererId: 'inspector',
-        container: 'rightSidebarTab',
+        container: input.container ?? 'rightSidebarTab',
         target: { kind: 'app' },
     });
     if (!binding) {
@@ -994,6 +1001,96 @@ describe('AppShellPluginUiProjectionProvider', () => {
         await screen.unmount();
     });
 
+
+    it('opens Browse from a recovered Session resolver through the mounted App page owner', async () => {
+        storageState.machines = [{ id: 'machine-1', active: true, activeAt: Date.now(), metadata: { host: 'local' } }];
+        const pluginId = 'acme.recovered-browse';
+        const origin = installSelectedAppScopePluginFixture({ machineId: 'machine-1', pluginId });
+        const pending = createDeferred<SupportedMachineContributionRegistryProjectionDescribeResult>();
+        projectionDescribeSpy.mockReturnValue(pending.promise);
+        const { AppShellPluginUiProjectionProvider } = await import('./AppShellPluginUiProjection');
+        const { AppPaneProvider } = await import('@/components/appShell/panes/AppPaneProvider');
+        const { usePluginSurfaceDestinationNavigationBinding, usePluginSurfaceDestinationNavigationBindingForScope } = await import(
+            '@/components/plugins/surfaces/pluginSurfaceDestinationNavigation'
+        );
+        const { router } = await import('expo-router');
+        const push = vi.spyOn(router, 'push').mockImplementation(() => {});
+        const session: { binding: ReturnType<typeof usePluginSurfaceDestinationNavigationBinding> } = { binding: null };
+        function SessionResolver() {
+            const enclosing = usePluginSurfaceDestinationNavigationBinding();
+            const projection = useAppShellPluginUiProjection();
+            session.binding = usePluginSurfaceDestinationNavigationBindingForScope({
+                targetKind: 'session', placements: selectPluginAppPagePlacements(projection.pluginUiProjection),
+                accountLifetime: captureActiveServerAccountScopeLifetime(),
+                scopedLaunchFacts: { serverId: storageState.activeServer.serverId, machineId: 'machine-1', interactionEnabled: true },
+                enclosingOpenSurface: enclosing?.openSurface,
+            });
+            return null;
+        }
+        const screen = await renderScreen(<AppPaneProvider><AppShellPluginUiProjectionProvider>
+            <SessionResolver />
+        </AppShellPluginUiProjectionProvider></AppPaneProvider>);
+        await flushHookEffects({ cycles: 2 });
+        const retainedBinding = session.binding;
+        expect(retainedBinding).not.toBeNull();
+        await expect(retainedBinding!.openSurface({ destination: { pluginId, localId: 'triage' } })).resolves.toMatchObject({ ok: false });
+        pending.resolve({ supported: true, projection: pluginUiProjectionWithAppTab({ generation: 3, pluginId, localId: 'triage', origin, container: 'appPage' }) });
+        await flushHookEffects({ cycles: 5 });
+        await act(async () => {
+            await expect(retainedBinding!.openSurface({ destination: { pluginId, localId: 'triage' } })).resolves.toEqual({ ok: true });
+        });
+        expect(push).toHaveBeenCalledWith(`/plugins/${pluginId}/triage`);
+        await screen.unmount();
+    });
+
+    it('opens native Browse through the mounted App page registration with equivalent unselected replicas', async () => {
+        const pluginId = 'happier.triage';
+        storageState.machines = ['machine-1', 'machine-2'].map(id => ({ id, active: true, activeAt: Date.now(), metadata: { host: id } }));
+        const origin = installSelectedAppScopePluginFixture({ machineId: 'machine-1', pluginId,
+            replicaMachineIds: ['machine-2'], selectOrigin: false });
+        projectionDescribeSpy.mockImplementation(async (machineId) => ({ supported: true,
+            projection: pluginUiProjectionWithAppTab({ generation: 3, pluginId, localId: 'triage', container: 'appPage',
+                origin: { serverIdentityId: origin.serverIdentityId,
+                    materializationRef: { pluginId, machineId, materializationId: `${machineId}:${pluginId}:install` } } }),
+        }));
+        const { AppShellPluginUiProjectionProvider } = await import('./AppShellPluginUiProjection');
+        const { AppPaneProvider } = await import('@/components/appShell/panes/AppPaneProvider');
+        const { usePluginSurfaceDestinationNavigationBinding, usePluginSurfaceDestinationNavigationBindingForScope } = await import(
+            '@/components/plugins/surfaces/pluginSurfaceDestinationNavigation'
+        );
+        const { createPluginSurfaceOpenSurfaceHandler } = await import('@/components/plugins/surfaces/openPluginSurface');
+        const { router } = await import('expo-router');
+        const push = vi.spyOn(router, 'push').mockImplementation(() => {});
+        const session: { binding: ReturnType<typeof usePluginSurfaceDestinationNavigationBinding> } = { binding: null };
+        let browsePlacements: ReturnType<typeof selectPluginAppPagePlacements> = [];
+        function SessionResolver() {
+            const enclosing = usePluginSurfaceDestinationNavigationBinding();
+            const projection = useAppShellPluginUiProjection();
+            browsePlacements = selectPluginAppPagePlacements(projection.pluginUiProjection);
+            session.binding = usePluginSurfaceDestinationNavigationBindingForScope({
+                targetKind: 'session', placements: browsePlacements,
+                accountLifetime: captureActiveServerAccountScopeLifetime(), enclosingOpenSurface: enclosing?.openSurface,
+            });
+            return null;
+        }
+        const screen = await renderScreen(<AppPaneProvider><AppShellPluginUiProjectionProvider>
+            <SessionResolver />
+        </AppShellPluginUiProjectionProvider></AppPaneProvider>);
+        await flushHookEffects({ cycles: 10 });
+        expect(session.binding).not.toBeNull();
+        expect(browsePlacements).toHaveLength(1);
+        expect(readPluginUiContributionOrigin(browsePlacements[0])).toBeNull();
+        const host = createPluginSurfaceOpenSurfaceHandler(session.binding!.openSurface);
+        await act(async () => {
+            await expect(host({ version: 1, requestId: 'native-browse', method: 'openSurface',
+                surface: { pluginId, contributionId: 'session-entries', surfaceId: 'session-entries',
+                    placement: 'rightSidebarSurface', platform: 'web', channel: 'internal', resourceScope: [], diagnostics: [] },
+                payload: { destination: { pluginId, localId: 'triage' } },
+            })).resolves.toBeNull();
+        });
+        expect(push).toHaveBeenCalledWith('/plugins/happier.triage/triage');
+        await screen.unmount();
+    });
 
     it('installs an explicit loading lifecycle for the current server before the first projection settles', async () => {
         storageState.machines = [{

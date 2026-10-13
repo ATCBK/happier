@@ -118,6 +118,8 @@ export type SessionScmReviewDetailsViewProps = Readonly<{
   serverId?: string | null;
   scopeId: string;
   active?: boolean;
+  /** The containing Details surface owns fullscreen Back and pane closing. */
+  onRequestClose?: () => void;
   /** The comparison and view this destination shows (from its tab or link); absent keeps the default. */
   target?: SessionScmReviewTarget;
 }>;
@@ -1054,7 +1056,7 @@ const SessionWorkingScmReviewDetailsView = React.memo(
         scopeOptions={scopeOptions}
         onSelectComparison={selectComparison}
         onSelectView={selectView}
-        onClose={pane.closeDetails}
+        onClose={props.onRequestClose ?? pane.closeDetails}
         rootPath={effectiveSnapshot?.repo.rootPath}
         reading={filesReading}
         modelLabel={walkthroughAnalysis?.producer?.modelId}

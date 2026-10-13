@@ -466,7 +466,9 @@ function openResolvedPluginAppPage(input: Readonly<{
         input: request.input,
         ...(request.instanceKey === undefined ? {} : { instanceKey: request.instanceKey }),
     });
-    if (!staged) {
+    // A route with no launch value has the same selection contract as catalog
+    // navigation. Real payloads remain bound to the exact current producer.
+    if (!staged && request.input !== undefined) {
         return {
             ok: false,
             code: 'unavailable',

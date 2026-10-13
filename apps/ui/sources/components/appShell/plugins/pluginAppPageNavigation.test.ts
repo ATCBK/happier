@@ -10,10 +10,15 @@ import type { ActiveServerAccountScopeLifetime } from '@/sync/domains/scope/acti
 import type { PluginUiSurfacePlacementProjection } from '@/sync/domains/plugins/ui/projection';
 import type { PluginUiContributionOriginV1 } from '@/sync/domains/plugins/ui/projectionUnion';
 
-import { resolvePluginAppPages } from './pluginAppPages';
+import { resolvePluginAppPages, selectPluginAppPagePlacements } from './pluginAppPages';
+import { EMPTY_PLUGIN_UI_PROJECTION } from '@/sync/domains/plugins/ui/projection';
+import { unionPluginUiProjections } from '@/sync/domains/plugins/ui/projectionUnion';
+import { createPluginSurfaceDestinationNavigationBinding } from '@/components/plugins/surfaces/pluginSurfaceDestinationNavigation';
+import { createPluginSurfaceOpenSurfaceHandler } from '@/components/plugins/surfaces/openPluginSurface';
 import {
     createPluginAppPageLaunchInputStore,
     createPluginAppPageOpenSurfaceHandler,
+    createPluginAppPageDestinationHandler,
     resolvePluginAppPageLaunchAuthorities,
     type PluginAppPageLaunchOpen,
 } from './pluginAppPageNavigation';
@@ -217,6 +222,54 @@ function authorityWithAccountLifetime(
 }
 
 describe('plugin app page host navigation (EU-5b)', () => {
+    it('opens Browse through the native Session handoff and registered App page before a replica is selected', async () => {
+        const pluginId = 'happier.triage';
+        const localId = 'triage';
+        const accountLifetime: ActiveServerAccountScopeLifetime = {
+            scope: { serverId: 'server-1', accountId: 'account-1' },
+            isCurrent: () => true,
+            onRetire: () => ({ dispose() {} }),
+        };
+        const union = unionPluginUiProjections(['machine-1', 'machine-2'].map(machineId => {
+            const origin = pageExecutionOrigin({ pluginId, machineId, materializationId: `install-${machineId}` });
+            const placement = createPagePlacement({ pluginId, descriptorId: localId,
+                occurrenceId: `occurrence-${machineId}`, ...origin });
+            return { machineId, serverId: 'server-1', phase: 'current' as const, interactionEnabled: true,
+                projection: { ...EMPTY_PLUGIN_UI_PROJECTION,
+                    surfacePlacementsById: { [placement.id]: placement } } };
+        }));
+        const placements = selectPluginAppPagePlacements(union.pluginUiProjection);
+        expect(placements).toHaveLength(1);
+        expect(placements[0].hostOrigin).toBeNull();
+        expect(placements[0].availability.state).toBe('available');
+        const pages = resolvePluginAppPages({ placements });
+        const authorities = resolvePluginAppPageLaunchAuthorities({ pages, accountLifetime });
+        const store = createPluginAppPageLaunchInputStore();
+        const routes: string[] = [];
+        const app = createPluginSurfaceDestinationNavigationBinding({ targetKind: 'app', placements, accountLifetime });
+        const unregister = app.registerOwner({ container: 'appPage', handler: createPluginAppPageDestinationHandler({
+            pages, navigate: route => routes.push(route), stageLaunchInput: open => {
+                const authority = authorities.get(open.pageId);
+                return authority ? store.stage({ ...open, authority }) : false;
+            },
+        }) });
+        const session = createPluginSurfaceDestinationNavigationBinding({ targetKind: 'session', placements,
+            accountLifetime, enclosingOpenSurface: app.openSurface });
+        const host = createPluginSurfaceOpenSurfaceHandler(session.openSurface);
+        const request = { version: 1 as const, requestId: 'browse-native', method: 'openSurface' as const,
+            surface: { pluginId, contributionId: 'session-entries', surfaceId: 'session-entries',
+                placement: 'rightSidebarSurface' as const, platform: 'web' as const, channel: 'internal' as const,
+                resourceScope: [], diagnostics: [] }, payload: { destination: { pluginId, localId } } };
+        await expect(host(request)).resolves.toBeNull();
+        expect(routes).toEqual(['/plugins/happier.triage/triage']);
+        // An actual launch value still needs the exact selected producer.
+        await expect(host({ ...request, payload: { ...request.payload, input: { issue: 42 } } }))
+            .resolves.toMatchObject({ code: 'unavailable', diagnostics: ['plugin_surface_open_origin_unavailable'] });
+        expect(routes).toHaveLength(1);
+        unregister();
+        await expect(host(request)).resolves.toMatchObject({ code: 'unavailable' });
+        expect(routes).toHaveLength(1);
+    });
     it('pushes the generated route for the exact qualified destination', async () => {
         const { navigate, open } = createHandler();
 
@@ -309,7 +362,7 @@ describe('plugin app page host navigation (EU-5b)', () => {
         expect(staged).toEqual([]);
     });
 
-    it('does not navigate when the page scope cannot prove the exact selected contribution origin', async () => {
+    it('does not deliver input when the page scope cannot prove the exact selected contribution origin', async () => {
         const navigate = vi.fn();
         const open = createPluginAppPageOpenSurfaceHandler({
             pages,
@@ -320,7 +373,7 @@ describe('plugin app page host navigation (EU-5b)', () => {
             stageLaunchInput: () => false,
         });
 
-        expect(await open({ destination: { pluginId: NOTES_PLUGIN_ID, localId: 'notes' } })).toEqual({
+        expect(await open({ destination: { pluginId: NOTES_PLUGIN_ID, localId: 'notes' }, input: { noteId: 'a' } })).toEqual({
             ok: false,
             code: 'unavailable',
             reason: 'plugin_surface_open_origin_unavailable',
