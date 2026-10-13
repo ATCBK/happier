@@ -97,6 +97,19 @@ describe('callMachineRpc', () => {
     expect(axiosGet).not.toHaveBeenCalled();
   });
 
+  it('keeps a typed pre-execution refusal distinct from an uncertain submission', async () => {
+    const machineKey = new Uint8Array(32).fill(3);
+    const credentials = { token: 'account-token',
+      encryption: { type: 'dataKey' as const, publicKey: machineKey, machineKey } };
+    socket.emit.mockImplementation((_event, _payload, callback) => callback({
+      ok: false, error: 'Forbidden', errorCode: RPC_ERROR_CODES.FORBIDDEN,
+    }));
+    const error = await callMachineRpc({ credentials, machineId: 'machine-session',
+      method: 'spawn-happy-session', request: {}, timeoutMs: 100 }).catch((error: unknown) => error);
+    expect(error).toMatchObject({ rpcErrorCode: RPC_ERROR_CODES.FORBIDDEN });
+    expect(readRpcRequestDisposition(error)).toBe('notSent');
+  });
+
   it('rejects promptly and cleans up when the socket disconnects before acknowledgement', async () => {
     const machineKey = new Uint8Array(32).fill(3);
     const credentials = {
