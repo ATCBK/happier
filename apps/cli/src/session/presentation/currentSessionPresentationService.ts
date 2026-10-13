@@ -43,12 +43,30 @@ const RETIRED_OWNER_PURGE_RETRY_BACKOFF_FAILURE_CAP = 3;
 const RETIRED_OWNER_PURGE_RETRY_MIN_DELAY_MS = 250;
 const RETIRED_OWNER_PURGE_RETRY_MAX_DELAY_MS = 1_000;
 
-function diagnostic(code: string, message: string) {
-  return Object.freeze({ code, severity: 'error' as const, message });
+type PresentationNotCurrentDetails = Readonly<{
+  stage: 'before_publication';
+  reason: 'client_not_bound';
+  hostNonce: string;
+  revision: number;
+}> | Readonly<{
+  stage: 'client_acknowledgement';
+  reason: 'client_not_current';
+  hostNonce: string;
+  revision: number;
+  clientId: string;
+  commandId: string;
+}>;
+
+function diagnostic(code: string, message: string, details?: PresentationNotCurrentDetails) {
+  return Object.freeze({ code, severity: 'error' as const, message, ...(details ? { details } : {}) });
 }
 
-function unavailable(message: string, code = 'current_session_presentation_unavailable'): HostSessionPresentationStatefulResult {
-  return Object.freeze({ status: 'unavailable', diagnostic: diagnostic(code, message) });
+function unavailable(
+  message: string,
+  code = 'current_session_presentation_unavailable',
+  details?: PresentationNotCurrentDetails,
+): HostSessionPresentationStatefulResult {
+  return Object.freeze({ status: 'unavailable', diagnostic: diagnostic(code, message, details) });
 }
 
 function conflict(message: string, code = 'current_session_presentation_conflict'): HostSessionPresentationStatefulResult {
@@ -71,7 +89,12 @@ export function projectCurrentSessionPresentationActionResult(
   }
   if ('diagnostic' in result) {
     const errorCode = result.diagnostic.code;
-    return { ok: false, errorCode, error: errorCode };
+    return {
+      ok: false,
+      errorCode,
+      error: errorCode,
+      ...(result.diagnostic.details === undefined ? {} : { details: result.diagnostic.details }),
+    };
   }
   return result;
 }
@@ -157,13 +180,17 @@ function mapPresentationIntentResult(
   hostNonce: string,
   revision: number,
   result: CurrentSessionPresentationIntentResultV1,
+  commandId: string,
+  clientId: string,
 ): HostSessionPresentationOneShotResult {
   switch (result.status) {
     case 'applied':
     case 'unchanged':
       return Object.freeze({ status: result.status, revision: formatRevision(hostNonce, revision) });
     case 'notCurrent':
-      return unavailable('The bound client is no longer presenting this Session', 'current_session_presentation_not_current');
+      return unavailable('The bound client is no longer presenting this Session', 'current_session_presentation_not_current', {
+        stage: 'client_acknowledgement', reason: 'client_not_current', hostNonce, revision, clientId, commandId,
+      });
     case 'invalidTarget':
       return unavailable('The requested presentation target is unavailable', 'current_session_presentation_invalid_target');
     case 'unavailable':
@@ -613,6 +640,7 @@ export function createCurrentSessionPresentationService(params: Readonly<{
     if (!client) return unavailable(
       'No current Session UI is mounted',
       'current_session_presentation_not_current',
+      { stage: 'before_publication', reason: 'client_not_bound', hostNonce, revision },
     );
     if (!client.binding.focused) return conflict('The target Session UI is not focused');
     if (pendingCommands.size > 0) return unavailable('Another current-session presentation is awaiting the client');
@@ -657,7 +685,7 @@ export function createCurrentSessionPresentationService(params: Readonly<{
     if (!ack) return outcomeUnknown('The command was published, but the client acknowledgement was not observed');
     const result = CurrentSessionPresentationIntentResultV1Schema.safeParse(ack.result);
     return result.success
-      ? mapPresentationIntentResult(hostNonce, publishedRevision, result.data)
+      ? mapPresentationIntentResult(hostNonce, publishedRevision, result.data, operationId, client.binding.clientId)
       : unavailable('The client returned a result for a different presentation operation');
   };
 

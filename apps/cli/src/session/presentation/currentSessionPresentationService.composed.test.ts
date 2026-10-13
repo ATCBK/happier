@@ -22,6 +22,9 @@ import { SecretBoxEncryption } from '../../../../ui/sources/sync/encryption/encr
 import { EncryptionCache } from '../../../../ui/sources/sync/encryption/encryptionCache';
 import { applyCurrentSessionPresentationCommand } from '../../../../ui/sources/components/sessions/presentation/applyCurrentSessionPresentationCommand';
 import { createCurrentSessionPresentationService } from './currentSessionPresentationService';
+import { registerCurrentSessionUiBinding } from './currentSessionUiBindings';
+import { createCliActionDeps } from '@/session/actions/createCliActionDeps';
+import { ActionExecuteFailureSchema } from '@happier-dev/protocol/actions/actionExecutionResult';
 
 const boundary = vi.hoisted(() => ({ io: vi.fn(), fetch: vi.fn(), patch: vi.fn() }));
 vi.mock('socket.io-client', () => ({ io: boundary.io }));
@@ -84,7 +87,28 @@ describe('current-session presentation publication composition', () => {
     clients.add(client);
     const controller = new AbortController();
     controllers.add(controller);
-    createCurrentSessionPresentationService({ session: client, signal: controller.signal, isCurrent: () => true });
+    const presentation = createCurrentSessionPresentationService({ session: client, signal: controller.signal, isCurrent: () => true });
+    registerCurrentSessionUiBinding({
+      sessionId: session.id,
+      service: {
+        interactions: { request: async () => { throw new Error('This presentation recipe does not request an interaction'); } },
+        presentation,
+      },
+      signal: controller.signal,
+      isCurrent: () => true,
+    });
+    const deps = createCliActionDeps({ token: 'owner-token', sessionId: session.id, mode: 'plain', ctx: null });
+    const apply = (operationId: string) => deps.currentSessionPresentationApply!({
+      input: { intent: { kind: 'viewer.open', source: 'computer' } },
+      context: { surface: 'agent', defaultSessionId: session.id, actionRequestId: operationId },
+    });
+    expect(ActionExecuteFailureSchema.parse(await apply('unbound-agent-call'))).toMatchObject({
+      ok: false,
+      errorCode: 'current_session_presentation_not_current',
+      details: {
+        stage: 'before_publication', reason: 'client_not_bound', hostNonce: expect.any(String), revision: 0,
+      },
+    });
     const origin = { kind: SOCKET_RPC_AUTHORIZATION_CONTEXT_KINDS.CURRENT_SESSION_PRESENTATION_ORIGIN,
       sessionId: session.id, accountId: 'owner-account', connectionId: 'viewer-socket' } as const;
     const call = (method: string, params: unknown) => client.rpcHandlerManager.handleRequest({
@@ -97,9 +121,9 @@ describe('current-session presentation publication composition', () => {
     if (bound.status !== 'bound') throw new Error('Viewer did not bind');
     expect(parsePlainSessionAgentState(stored.agentState)).toHaveProperty(CURRENT_SESSION_PRESENTATION_AGENT_STATE_KEY);
 
-    const pending = call(CURRENT_SESSION_PRESENTATION_APPLY_RPC_METHOD, { intent: { kind: 'viewer.open', source: 'computer' } });
+    const pending = apply('agent-computer-open');
     await vi.waitFor(() => expect(JSON.parse(stored.agentState ?? '{}')[CURRENT_SESSION_PRESENTATION_AGENT_STATE_KEY]?.command)
-      .toMatchObject({ kind: 'presentation.apply', clientId: 'viewer-client', intent: { kind: 'viewer.open', source: 'computer' } }));
+      .toMatchObject({ id: 'agent-computer-open', kind: 'presentation.apply', clientId: 'viewer-client', intent: { kind: 'viewer.open', source: 'computer' } }));
     const hydrated = parsePlainSessionAgentState(stored.agentState);
     const state = CurrentSessionPresentationStateV1Schema.parse(hydrated[CURRENT_SESSION_PRESENTATION_AGENT_STATE_KEY]);
     const { [CURRENT_SESSION_PRESENTATION_AGENT_STATE_KEY]: omittedPresentation, ...withoutPresentation } = hydrated;
@@ -135,5 +159,37 @@ describe('current-session presentation publication composition', () => {
     expect(CurrentSessionPresentationStateV1Schema.parse(
       parsePlainSessionAgentState(stored.agentState)[CURRENT_SESSION_PRESENTATION_AGENT_STATE_KEY],
     ).command).toBeUndefined();
+
+    const uiPending = call(CURRENT_SESSION_PRESENTATION_APPLY_RPC_METHOD, { intent: { kind: 'viewer.open', source: 'computer' } });
+    await vi.waitFor(() => expect(JSON.parse(stored.agentState ?? '{}')[CURRENT_SESSION_PRESENTATION_AGENT_STATE_KEY]?.command?.kind)
+      .toBe('presentation.apply'));
+    const uiState = CurrentSessionPresentationStateV1Schema.parse(
+      parsePlainSessionAgentState(stored.agentState)[CURRENT_SESSION_PRESENTATION_AGENT_STATE_KEY],
+    );
+    const uiApplication = applyCurrentSessionPresentationCommand({
+      state: uiState, hostNonce: bound.hostNonce, clientId: 'viewer-client', isCurrentSession: true,
+      notify: () => {}, composer: null, presentation: { apply: () => ({ status: 'applied' }) },
+    });
+    expect(await call(CURRENT_SESSION_PRESENTATION_ACK_RPC_METHOD, uiApplication!.ack)).toEqual({ status: 'accepted' });
+    expect(await uiPending).toEqual({ status: 'applied', revision: `${bound.hostNonce}:${uiState.revision}` });
+
+    const notCurrent = apply('agent-no-longer-current');
+    await vi.waitFor(() => expect(JSON.parse(stored.agentState ?? '{}')[CURRENT_SESSION_PRESENTATION_AGENT_STATE_KEY]?.command?.id)
+      .toBe('agent-no-longer-current'));
+    const rejectedState = CurrentSessionPresentationStateV1Schema.parse(
+      parsePlainSessionAgentState(stored.agentState)[CURRENT_SESSION_PRESENTATION_AGENT_STATE_KEY],
+    );
+    const rejection = applyCurrentSessionPresentationCommand({
+      state: rejectedState, hostNonce: bound.hostNonce, clientId: 'viewer-client', isCurrentSession: false,
+      notify: () => {}, composer: null,
+    });
+    expect(await call(CURRENT_SESSION_PRESENTATION_ACK_RPC_METHOD, rejection!.ack)).toEqual({ status: 'accepted' });
+    expect(ActionExecuteFailureSchema.parse(await notCurrent)).toMatchObject({
+      ok: false, errorCode: 'current_session_presentation_not_current',
+      details: {
+        stage: 'client_acknowledgement', reason: 'client_not_current', hostNonce: bound.hostNonce,
+        revision: rejectedState.revision, clientId: 'viewer-client', commandId: 'agent-no-longer-current',
+      },
+    });
   });
 });
