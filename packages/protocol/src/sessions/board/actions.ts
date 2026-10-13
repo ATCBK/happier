@@ -819,6 +819,52 @@ function recordsEqualAfterSchemaParse(schema: z.ZodTypeAny, left: unknown, right
     && JSON.stringify(parsedLeft.data) === JSON.stringify(parsedRight.data);
 }
 
+/** Compare caller operands on the same host-reviewed basis used by Board admission. */
+export function isSessionBoardActionInputCorrespondingV1(
+  actionId: SessionBoardActionIdV1,
+  input: unknown,
+  admittedInput: unknown,
+): boolean {
+  let expectedInput = input;
+  if (actionId === 'session.board.item.upsert') {
+    const invoked = SessionBoardItemUpsertInputV1Schema.safeParse(input);
+    const admitted = SessionBoardItemUpsertInputV1Schema.safeParse(admittedInput);
+    if (!admitted.success) return false;
+    const reviewedVisual = admitted.data.reviewedVisual;
+    // Admission adds review facts, not caller operands. A caller who did not
+    // supply them is compared on the same host-reviewed basis; copied-source
+    // custody and any caller-supplied review facts still require exact equality.
+    if (invoked.success && 'item' in invoked.data && invoked.data.reviewedVisual === undefined
+      && reviewedVisual !== undefined && reviewedVisual.copySource === undefined) {
+      const authored = SessionSurfaceItemV1Schema.safeParse(invoked.data.item);
+      const capabilities = authored.success ? readSessionVisualCapabilitiesV1(authored.data) : null;
+      if (authored.success && capabilities) {
+        const effective = invoked.data.expectedItemRevision === null && reviewedVisual.networkSetting === 'off'
+          ? { ...capabilities, network: 'none' as const, networkOrigins: [] } : capabilities;
+        let materialized: SessionBoardAuthoredItemUpsertV1 = {
+          ...invoked.data, item: persistSessionVisualEffectivePolicyV1(authored.data, effective), reviewedVisual,
+        };
+        if (materialized.expectedItemRevision === null && materialized.item.source.kind === 'widget'
+          && materialized.placement && materialized.placement.width === undefined && 'item' in admitted.data
+          && admitted.data.placement?.width !== undefined) {
+          // Absent width requests the definition's complete default footprint,
+          // not an independent height. Explicit width+height remains exact.
+          const size = resolveSessionBoardWidgetSizeV1(admitted.data.placement.width, admitted.data.item.height);
+          const definition = materialized.item.source.instance.definition;
+          const inlineDefault = definition.kind === 'inline'
+            ? resolveWidgetSizeChoicesV1('sessionBoard', definition.definition.sizeDeclaration).defaultSize : undefined;
+          if (!size || definition.kind === 'inline' && size !== inlineDefault) return false;
+          const rectangle = materializeSessionBoardWidgetCreationFootprintV1(materialized, size);
+          if (!rectangle) return false;
+          materialized = rectangle;
+        }
+        expectedInput = materialized;
+      }
+    }
+  }
+  return recordsEqualAfterSchemaParse(SESSION_BOARD_ACTION_INPUT_SCHEMAS_V1[actionId], admittedInput, expectedInput);
+}
+
 function parseBoardFailure(
   actionId: SessionBoardActionIdV1,
   input: unknown,
@@ -900,43 +946,7 @@ function parseBoardFailure(
       || options.expectedSessionId === undefined
       || parsed.data.recovery.sessionId !== options.expectedSessionId
     ) return { success: false };
-    let expectedInput = input;
-    if (parsed.data.recovery.actionId === 'session.board.item.upsert') {
-      const invoked = SessionBoardItemUpsertInputV1Schema.safeParse(input);
-      const reviewedVisual = parsed.data.recovery.intent.reviewedVisual;
-      // Admission adds review facts, not caller operands. A caller who did not
-      // supply them is compared on the same host-reviewed basis; copied-source
-      // custody and any caller-supplied review facts still require exact equality.
-      if (invoked.success && 'item' in invoked.data && invoked.data.reviewedVisual === undefined
-        && reviewedVisual !== undefined && reviewedVisual.copySource === undefined) {
-        const authored = SessionSurfaceItemV1Schema.safeParse(invoked.data.item);
-        const capabilities = authored.success ? readSessionVisualCapabilitiesV1(authored.data) : null;
-        if (authored.success && capabilities) {
-          const effective = invoked.data.expectedItemRevision === null && reviewedVisual.networkSetting === 'off'
-            ? { ...capabilities, network: 'none' as const, networkOrigins: [] } : capabilities;
-          let materialized: SessionBoardAuthoredItemUpsertV1 = {
-            ...invoked.data, item: persistSessionVisualEffectivePolicyV1(authored.data, effective), reviewedVisual,
-          };
-          const recovered = parsed.data.recovery.intent;
-          if (materialized.expectedItemRevision === null && materialized.item.source.kind === 'widget'
-            && materialized.placement && materialized.placement.width === undefined && 'item' in recovered
-            && recovered.placement?.width !== undefined) {
-            // Absent width requests the definition's complete default footprint,
-            // not an independent height. Explicit width+height remains exact.
-            const size = resolveSessionBoardWidgetSizeV1(recovered.placement.width, recovered.item.height);
-            const definition = materialized.item.source.instance.definition;
-            const inlineDefault = definition.kind === 'inline'
-              ? resolveWidgetSizeChoicesV1('sessionBoard', definition.definition.sizeDeclaration).defaultSize : undefined;
-            if (!size || definition.kind === 'inline' && size !== inlineDefault) return { success: false };
-            const rectangle = materializeSessionBoardWidgetCreationFootprintV1(materialized, size);
-            if (!rectangle) return { success: false };
-            materialized = rectangle;
-          }
-          expectedInput = materialized;
-        }
-      }
-    }
-    if (!recordsEqualAfterSchemaParse(SESSION_BOARD_ACTION_INPUT_SCHEMAS_V1[actionId], parsed.data.recovery.intent, expectedInput)) {
+    if (!isSessionBoardActionInputCorrespondingV1(actionId, input, parsed.data.recovery.intent)) {
       return { success: false };
     }
     return { success: true, kind: 'failure', data: { ok: false, errorCode, error: errorCode, details: parsed.data } };

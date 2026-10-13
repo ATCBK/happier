@@ -16,6 +16,9 @@ import {
     createActionApprovalContinuation,
     createHomeActionApprovalContinuation,
 } from './actionApprovalContinuation';
+import { createActionExecutor } from '@happier-dev/protocol/actions/actionExecutor';
+import { SessionBoardItemUpsertInputV1Schema, SessionBoardMutationActionResultV1Schema } from '@happier-dev/protocol/sessions/board/actions';
+import { createActionExecutorBoundaryFixture } from '@/dev/testkit';
 
 const actionId = 'teams.identity.connections.test.start' as const;
 const actionInput = {
@@ -140,6 +143,55 @@ function failedArtifact(overrides?: Readonly<{
 }
 
 describe('createHomeActionApprovalContinuation', () => {
+    it('consumes host-reviewed Board admission while keeping authored operands and caller review facts exact', async () => {
+        const boardActionId = 'session.board.item.upsert' as const;
+        const input = { sessionId: 'session-1', itemId: 'note-1', expectedItemRevision: null,
+            placement: { tabId: 'overview', tabTitle: 'Overview', width: 'medium' },
+            item: { v: 1, title: 'Shipping', frame: 'card', height: { mode: 'auto', fallback: 'regular' },
+                source: { kind: 'declarative', document: { version: 1, root: { kind: 'markdown', text: 'Keep this note' } } } },
+        } as const;
+        let recordedInput: unknown;
+        const executor = createActionExecutor(createActionExecutorBoundaryFixture({
+            approvalsCreate: async ({ request }) => { recordedInput = request.actionArgs; return { artifactId: 'approval-1' }; },
+        }));
+        expect(await executor.execute(boardActionId, input, { surface: 'ui', authority: 'present_user', serverId: 'home-1',
+            runtimeAccountId: 'account-1', actionRequestId: 'request-1' })).toMatchObject({ ok: true, result: { kind: 'approval_request_created' } });
+        const admitted = SessionBoardItemUpsertInputV1Schema.parse(recordedInput);
+        expect(admitted.reviewedVisual).toBeDefined();
+        const result = SessionBoardMutationActionResultV1Schema.parse({ v: 1, serverId: 'home-1', sessionId: 'session-1',
+            result: { operation: 'upsert_item', itemId: 'note-1', outcome: 'created',
+                itemRevision: 'ssr1.AAAACHN5c3JlY18xAAAAAQ', layoutRevision: 'ssr1.AAAACHN5c3JlY18xAAAAAQ' },
+            destination: { tabId: 'overview', width: 'medium' },
+        });
+        const artifact = executedArtifact({ actionId: boardActionId, actionArgs: admitted, result });
+        for (const expectedInput of [input, admitted]) {
+            const onSucceeded = vi.fn();
+            const onFailed = vi.fn();
+            await createActionApprovalContinuation({ artifactId: 'approval-1', actionId: boardActionId,
+                scope: { serverId: 'home-1', accountId: 'account-1' }, expectedInput, onSucceeded, onFailed }).onExecuted(artifact);
+            expect(onSucceeded).toHaveBeenCalledWith(result);
+            expect(onFailed).not.toHaveBeenCalled();
+        }
+        for (const expectedInput of [
+            { ...input, itemId: 'other-note' },
+            { ...input, sessionId: 'other-session' },
+            { ...input, item: { ...input.item, title: 'Other note' } },
+            { ...input, item: { ...input.item, source: { kind: 'declarative', document: { version: 1, root: { kind: 'markdown', text: 'Other body' } } } } },
+            { ...input, expectedItemRevision: 'ssr1.AAAACHN5c3JlY18xAAAAAQ' },
+            { ...input, placement: { ...input.placement, width: 'wide' } },
+            { ...admitted, reviewedVisual: { ...admitted.reviewedVisual, recordRevision: 'ssr1.AAAACHN5c3JlY18xAAAAAQ' } },
+            { ...admitted, reviewedVisual: { ...admitted.reviewedVisual, copySource: {
+                serverId: 'home-1', sessionId: 'source-session', itemId: 'source', expectedItemRevision: 'ssr1.AAAACHN5c3JlY18xAAAAAQ',
+            } } },
+        ]) {
+            const onSucceeded = vi.fn();
+            const onFailed = vi.fn();
+            await createActionApprovalContinuation({ artifactId: 'approval-1', actionId: boardActionId,
+                scope: { serverId: 'home-1', accountId: 'account-1' }, expectedInput, onSucceeded, onFailed }).onExecuted(artifact);
+            expect(onSucceeded).not.toHaveBeenCalled();
+            expect(onFailed).toHaveBeenCalledWith('approval_binding_mismatch');
+        }
+    });
     it('reports an executed preset refusal without invoking the success continuation', async () => {
         const onSucceeded = vi.fn();
         const onFailed = vi.fn();

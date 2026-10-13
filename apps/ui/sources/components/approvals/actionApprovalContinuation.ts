@@ -9,6 +9,8 @@ import type { ApprovalExecutionOriginV1, ApprovalRequestV2 } from '@happier-dev/
 import type { HomeDomainActionIdV1 } from '@happier-dev/protocol/actions/homeDomainActionFamily';
 import { createCanonicalJsonSigningInput } from '@happier-dev/protocol/crypto/canonicalJson';
 import { projectNativeJsonValueForTransport } from '@happier-dev/protocol/json/strictJsonValue';
+import { SessionBoardActionIdV1Schema } from '@happier-dev/protocol/sessions/board/actionIds';
+import { isSessionBoardActionInputCorrespondingV1 } from '@happier-dev/protocol/sessions/board/actions';
 
 import type { DecryptedArtifact } from '@/sync/domains/artifacts/artifactTypes';
 import type { ServerAccountScope } from '@/sync/domains/scope/serverAccountScope';
@@ -314,11 +316,17 @@ function inspectActionApprovalRequest<TActionId extends ActionId>(input: Readonl
             actionArgs: request.actionArgs,
             ...(request.preview !== undefined ? { preview: request.preview } : {}),
         }));
-        if (
-            input.expectedInputCanonical === null
-            || recordedInput === null
-            || recordedInput !== input.expectedInputCanonical
-        ) return { kind: 'binding_mismatch' };
+        if (input.expectedInputCanonical === null || recordedInput === null) return { kind: 'binding_mismatch' };
+        if (recordedInput !== input.expectedInputCanonical) {
+            const boardAction = SessionBoardActionIdV1Schema.safeParse(input.actionId);
+            // Board admission captures host review facts before approval. Reuse
+            // its exact operand correspondence, as acknowledgement recovery does.
+            if (!boardAction.success || !isSessionBoardActionInputCorrespondingV1(
+                boardAction.data,
+                JSON.parse(input.expectedInputCanonical),
+                JSON.parse(recordedInput),
+            )) return { kind: 'binding_mismatch' };
+        }
     }
     return { kind: 'matched', request };
 }
