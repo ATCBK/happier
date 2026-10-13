@@ -1,0 +1,12 @@
+{
+  "extends": "./tsconfig.json",
+  "compilerOptions": {
+    "lib": ["es2022", "esnext.asynciterable", "dom"],
+    "tsBuildInfoFile": "node_modules/.cache/tsc/server.publicViewer.typecheck.tsbuildinfo"
+  },
+  "include": [
+    "sources/app/api/routes/share/publicShareViewerBrowser.ts",
+    "sources/app/api/routes/share/publicShareViewerClient.test.ts"
+  ],
+  "exclude": []
+}

@@ -5,6 +5,7 @@ import { dirname, resolve } from 'node:path';
 
 import { resolveVitestFeatureTestExcludeGlobs } from '../../scripts/testing/featureTestGating';
 import { serverWorkspacePackageSourcesPlugin } from './vitestWorkspacePackageResolution';
+import { workspacePackageSourcesPlugin as cliWorkspacePackageSourcesPlugin } from '../cli/scripts/vitestWorkspacePackageResolution';
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
 const homeIrohRealIntegrationTest = 'sources/app/iroh/homeIrohEndpoint.real.integration.test.ts';
@@ -44,6 +45,9 @@ export default defineConfig({
   // for each importer, so server, UI, and CLI `@/` aliases remain separate owners.
   plugins: [
     serverWorkspacePackageSourcesPlugin,
+    // Composed Action/approval specs consume the CLI's production wiring; use
+    // its manifest-derived source closure instead of externalizing stale dist.
+    cliWorkspacePackageSourcesPlugin,
     tsconfigPaths({
       projects: [
         // Test import resolution includes composed specs; production compilation

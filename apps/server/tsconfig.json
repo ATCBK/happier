@@ -82,6 +82,15 @@
     "scripts/serverConfig/**/*"
   ],
   "exclude": [
-    "**/*.composed.*"
+    "**/*.composed.*",
+    // This actively maintained composition fixture also imports CLI source.
+    "sources/app/api/routes/actions/externalActionExecutionAuthorization.sqlite.integration.spec.ts",
+    // Browser code and its unit fixture are checked by tsconfig.publicViewer.json.
+    "sources/app/api/routes/share/artifactHtmlViewer.ts",
+    "sources/app/api/routes/share/publicDeclarativeViewer.ts",
+    "sources/app/api/routes/share/publicShareViewerBrowser.ts",
+    "sources/app/api/routes/share/publicShareViewerClient.ts",
+    "sources/app/api/routes/share/publicShareViewerClient.test.ts",
+    "sources/app/api/routes/share/publicSessionVisuals.ts"
   ]
 }

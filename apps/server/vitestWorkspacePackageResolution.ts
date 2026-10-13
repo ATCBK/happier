@@ -44,6 +44,10 @@ export const serverWorkspacePackageSourcesPlugin = createWorkspacePackageSources
         packageSourceRoot: resolve(repoRoot, 'packages', 'protocol', 'src'),
     },
     {
+        packageName: '@happier-dev/sync-client',
+        packageSourceRoot: resolve(repoRoot, 'packages', 'sync-client', 'src'),
+    },
+    {
         packageName: '@happier-dev/session-core',
         packageSourceRoot: resolve(repoRoot, 'packages', 'session-core', 'src'),
     },
