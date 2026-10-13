@@ -127,7 +127,7 @@ export function ProviderModelManagerPage(props: Readonly<{
     // draft, a pending action), so the recycler re-renders only the segments whose rows changed.
     const modelSegments = React.useMemo((): readonly PageRow[] => {
         if (!listing) return [];
-        if (options.length === 0) {
+        if (options.length === 0 && (!grouped || filteredSections.length === 0)) {
             return [{
                 key: 'models:empty',
                 render: () => (

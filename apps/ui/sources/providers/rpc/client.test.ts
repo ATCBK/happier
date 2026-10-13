@@ -20,6 +20,10 @@ import {
 import { createCustomProviderDraft, buildCustomProviderTemplate } from '@/providers/authoring/state';
 import { createProviderErrorV1 } from '@happier-dev/protocol';
 import { RPC_ERROR_CODES } from '@happier-dev/protocol/rpc';
+import { DaemonProviderModelProjectionRequestV1Schema } from '@happier-dev/protocol/rpc';
+import { projectAccountProviderModelsV1 } from '@happier-dev/protocol/providers/catalog/accountModelProjectionV1';
+import { DEFAULT_PROVIDER_CONNECTIONS_CATALOG_V1, ProviderConnectionsCatalogV1Schema } from '@happier-dev/protocol/providers/connections/connectionRowsV1';
+import { readAccountAgentProviderRequirements } from '@/providers/catalog/accountProviderDeclarations';
 
 function createReviewedMapping() {
     const template = buildCustomProviderTemplate({
@@ -378,15 +382,38 @@ describe('provider settings RPC client', () => {
         }));
     });
 
-    it('requests the canonical machine-and-agent model projection', async () => {
-        machineRpcWithServerScope.mockResolvedValueOnce({
-            status: 'success', agentTargetKey: 'agent:happier.agent.codex/codex', groups: [],
+    it('consumes the real Account projection without collapsing same-name models or rejecting retained off-source rows', async () => {
+        const agentTargetKey = 'agent:happier.agent.codex/codex';
+        const template = buildCustomProviderTemplate({ ...createCustomProviderDraft('openai-responses'),
+            name: 'Same provider', baseUrl: 'https://models.example.test/v1', requiresApiKey: false, catalog: 'manual' });
+        const catalog = ProviderConnectionsCatalogV1Schema.parse({ ...DEFAULT_PROVIDER_CONNECTIONS_CATALOG_V1,
+            connections: ['a', 'b'].map(id => ({ v: 1, id: `pc_${id}`, source: { kind: 'custom', template },
+                role: 'named', displayName: `Work ${id}`, displayNameMode: 'custom', revision: 1, createdAt: 1, updatedAt: 1 })),
+            manualModelsByConnectionId: Object.fromEntries(['a', 'b'].map(id => [`pc_${id}`, [{ id: 'same-model', name: 'Same model', addedAt: 1 }]])),
+            modelPickerVisibilityByConnectionId: { pc_a: false },
         });
-        await describeProviderModels({ machineId: 'machine-a', serverId: 'server-a', agentTargetKey: 'agent:happier.agent.codex/codex' });
+        const currentSelection = { agentTargetKey, providerConnectionId: 'pc_a', modelId: 'same-model' };
+        const agent = readAccountAgentProviderRequirements(agentTargetKey);
+        expect(agent).not.toBeNull();
+        const projection = projectAccountProviderModelsV1({ catalog, definitions: [], agent,
+            request: { agentTargetKey, currentSelection } });
+        machineRpcWithServerScope.mockImplementationOnce(async (request: { payload: unknown }) =>
+            projectAccountProviderModelsV1({ catalog, definitions: [], agent,
+                request: DaemonProviderModelProjectionRequestV1Schema.parse(request.payload) }));
+        const consumed = await describeProviderModels({ machineId: 'machine-a', serverId: 'server-a', agentTargetKey, currentSelection });
+        expect(consumed).toMatchObject({ status: 'success', hiddenSources: [{ connectionId: 'pc_a', modelCount: 0 }],
+            groups: [
+                { connectionId: 'pc_a', connectionName: 'Work a', rows: [{ ref: currentSelection }] },
+                { connectionId: 'pc_b', connectionName: 'Work b', rows: [{ ref: { ...currentSelection, providerConnectionId: 'pc_b' } }] },
+            ] });
         expect(machineRpcWithServerScope).toHaveBeenCalledWith(expect.objectContaining({
+            machineId: 'machine-a', serverId: 'server-a',
             method: 'daemon.providers.model.projection',
-            payload: { machineId: 'machine-a', agentTargetKey: 'agent:happier.agent.codex/codex' },
+            payload: { machineId: 'machine-a', agentTargetKey, currentSelection },
         }));
+        machineRpcWithServerScope.mockResolvedValueOnce({ ...projection, rawSecret: 'must-not-enter-the-picker' });
+        await expect(describeProviderModels({ machineId: 'machine-a', serverId: 'server-a', agentTargetKey, currentSelection }))
+            .rejects.toMatchObject({ code: 'provider_rpc_response_invalid' });
     });
 
     it('requests a connection catalog without reconstructing it in the UI', async () => {

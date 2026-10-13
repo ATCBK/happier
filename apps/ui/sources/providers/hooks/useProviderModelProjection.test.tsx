@@ -105,10 +105,11 @@ describe('useProviderModelProjection', () => {
         expect(projectionRequests[0]?.serverId).toBe(serverId);
         const refreshFromAccountA = rendered.getCurrent().refresh;
 
-        await act(async () => {
-            await account.restore({ accountId: 'account-b', waivedActions: ['providers.models.refresh'] });
-            await rendered.rerender();
-        });
+        // Staging another Home intentionally leaves A's runtime applied. A
+        // warm Account replacement therefore uses the serialized switch owner,
+        // rather than cold restore on an already-initialized Sync instance.
+        await account.restore({ accountId: 'account-b', activation: 'switch', waivedActions: ['providers.models.refresh'] });
+        await rendered.rerender();
         await waitForHomeGovernance(() => expect(rendered.getCurrent().data?.groups).toMatchObject([
             { connectionId: 'pc_account_b' },
         ]));

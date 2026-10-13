@@ -28,6 +28,13 @@ type PendingMutationState = Readonly<{
     countByKey: ReadonlyMap<string, number>;
 }>;
 
+const DECLINED_APPROVAL_CODES: ReadonlySet<string> = new Set(['approval_rejected', 'approval_canceled']);
+
+function isDeclinedApproval(caught: unknown): boolean {
+    const code = typeof caught === 'object' && caught !== null ? (caught as { code?: unknown }).code : undefined;
+    return typeof code === 'string' && DECLINED_APPROVAL_CODES.has(code);
+}
+
 /**
  * Every Provider connection write. A modal, confirmation, or prompt can sit
  * between the render that built a request and the moment it runs, so the
@@ -185,6 +192,8 @@ export function useProviderConnectionMutation(input: Readonly<{
                     result = await scope.mutate({ serverId: target?.serverId ?? scope.serverId, request: parsedRequest });
                 } catch (caught) {
                     if (!isCurrentScope()) return null;
+                    // A rejected or canceled approval is the person's own decision: nothing ran, nothing failed.
+                    if (isDeclinedApproval(caught)) return null;
                     const nextError = providerErrorFromRpcFailure(caught, errorContext);
                     if (nextError.code === 'provider_rpc_mutation_outcome_unknown') {
                         try {

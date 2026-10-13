@@ -8,7 +8,7 @@ import { standardCleanup } from '@/dev/testkit/cleanup/standardCleanup';
 import { flushHookEffects } from '@/dev/testkit/hooks/flushHookEffects';
 import { DEFAULT_PROVIDER_CONNECTIONS_CATALOG_V1,
     ProviderConnectionsCatalogV1Schema } from '@happier-dev/protocol/providers/connections/connectionRowsV1';
-import { createProviderSettingsAccountHarness, installProviderConnectionsCatalogHttpBoundary } from '@/dev/testkit/harness/providerSettingsHarness';
+import { createProviderSettingsAccountHarness, createProviderConnectionViewFixture, installProviderConnectionsCatalogHttpBoundary } from '@/dev/testkit/harness/providerSettingsHarness';
 import { loadSyncSingletonForTests } from '@/dev/testkit/harness/syncSingletonLoader';
 import { buildCustomProviderTemplate, createCustomProviderDraft } from '@/providers/authoring/state';
 
@@ -26,6 +26,7 @@ const { mutateProviderConnection } = await import('@/providers/actions/client');
 const { useProviderActionClient } = await import('@/providers/actions/useProviderActionClient');
 const { useActionApprovalContinuation } = await import('@/components/approvals/useActionApprovalContinuation');
 const { useServerCredentialAccountScopeResolution } = await import('@/sync/domains/scope/useServerCredentialAccountScopes');
+const { useProviderConnectionModelsSection } = await import('@/components/settings/providers/models/useProviderConnectionModelsSection');
 
 beforeEach(async () => {
     standardCleanup(); await scopedAccount.reset(); installHomeGovernanceBoundaries(harness);
@@ -51,6 +52,30 @@ function installWritableCatalog(serverId: string, respondAfter?: PromiseLike<voi
 }
 
 describe('Provider mutation deferred approval', () => {
+    it('projects a manual-model approval from the real Models page hook and keeps its draft after rejection', async () => {
+        const { serverId } = await scopedAccount.restore({ accountId: 'account-model-review', catalog: connectionCatalog(), machines: [] });
+        const catalog = installWritableCatalog(serverId);
+        await harness.requireUiApproval(serverId, 'providers.models.manual.add');
+        const resolveCurrentTarget = () => null;
+        const connection = createProviderConnectionViewFixture({ connectionId: 'pc_a', probeCapability: 'none' });
+        const hook = await renderHook(() => useProviderConnectionModelsSection({ connectionId: 'pc_a', connection,
+            enabled: true, machineId: null, serverId, resolveCurrentTarget }));
+        await waitForHomeGovernance(() => expect(hook.getCurrent().initialLoading).toBe(false));
+        await act(async () => { hook.getCurrent().onManualModelTextChange('manual-review-model'); });
+        await act(async () => { hook.getCurrent().onAddManualModels(); });
+        await waitForHomeGovernance(() => expect(harness.artifacts(serverId).list()).toHaveLength(1));
+        const artifactId = harness.artifacts(serverId).list()[0]!.id;
+        // This public page projection must retain the client/continuation's exact Review destination.
+        expect(hook.getCurrent()).toMatchObject({ pendingApproval: { artifactId,
+            href: `/inbox/approvals/${artifactId}?serverId=${encodeURIComponent(serverId)}` } });
+        expect(catalog.writes).toBe(0);
+        await decideApprovalAsInbox(serverId, artifactId, 'reject');
+        await waitForHomeGovernance(() => expect(hook.getCurrent().savingManualModels).toBe(false));
+        expect(hook.getCurrent()).toMatchObject({ pendingApproval: null, manualModelText: 'manual-review-model' });
+        expect(catalog.writes).toBe(0);
+        expect(machineRpc).not.toHaveBeenCalled();
+    });
+
     it.each(['saved probe', 'draft probe', 'legacy preparation'] as const)(
         'keeps %s approval in place and settles rejection without a machine effect', async kind => {
             const { serverId } = await scopedAccount.restore({ accountId: 'account-a', catalog: connectionCatalog() });
@@ -208,6 +233,23 @@ describe('Provider mutation deferred approval', () => {
         expect(catalog.catalog.connections).toEqual([]);
         expect(catalog.writes).toBe(1);
         expect(machineRpc).not.toHaveBeenCalled();
+    });
+
+    it('settles a rejected approval as the person\'s decision, not a failure to present', async () => {
+        const { serverId } = await scopedAccount.restore({ accountId: 'account-a', catalog: connectionCatalog(), machines: [] });
+        const catalog = installWritableCatalog(serverId);
+        await harness.requireUiApproval(serverId, 'providers.connections.delete');
+        const resolveTarget = () => ({ machineId: 'machine-a', serverId });
+        const hook = await renderHook(() => useProviderConnectionMutation({ serverId, resolveTarget, refresh: async () => {} }));
+        let execution: ReturnType<ReturnType<typeof useProviderConnectionMutation>['run']> | undefined;
+        await act(async () => { execution = hook.getCurrent().run({ action: 'delete', connectionId: 'pc_a' }); });
+        await waitForHomeGovernance(() => expect(harness.artifacts(serverId).list()).toHaveLength(1));
+        const artifactId = harness.artifacts(serverId).list()[0]!.id;
+        await expect(decideApprovalAsInbox(serverId, artifactId, 'reject')).resolves.toMatchObject({ ok: true });
+        await act(async () => { await expect(execution).resolves.toBeNull(); });
+        expect(hook.getCurrent().error).toBeNull();
+        expect(hook.getCurrent().isPending('delete:pc_a')).toBe(false);
+        expect(catalog.writes).toBe(0);
     });
 
     it('keeps approval in place and consumes its typed terminal result without replaying the mutation', async () => {

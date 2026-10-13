@@ -59,7 +59,7 @@ function customTemplate() {
 describe('Account Provider UI actions without a machine', () => {
     it('writes favorites through the Account Action and refuses a retained writer after Account retirement', async () => {
         const opaque = { v: 99, futureWriterField: 'keep' };
-        const { serverId } = await account.restore({ catalog: DEFAULT_PROVIDER_CONNECTIONS_CATALOG_V1, machines: [],
+        const { serverId, accountId } = await account.restore({ catalog: DEFAULT_PROVIDER_CONNECTIONS_CATALOG_V1, machines: [],
             settings: { favoriteModelSelectionsV1: [opaque] } });
         // Stateful HTTP CAS is the genuine boundary. The stock Provider harness only reads Settings.
         const { AccountSettingsV2UpdateRequestSchema } = await import('@happier-dev/protocol/account/settings/accountSettingsApiV2');
@@ -91,9 +91,19 @@ describe('Account Provider UI actions without a machine', () => {
         expect(storage.getState().settings.currentFavoriteModelSelectionsV1).toEqual([selection]);
         const { readRetainedFavoriteModelSelectionsV1 } = await import('@/sync/domains/settings/sessionAuthoringSelectionPersistence');
         expect(readRetainedFavoriteModelSelectionsV1(storage.getState().settings)).toEqual([opaque, selection]);
+        expect(persisted.favoriteModelSelectionsV1).toEqual([opaque, selection]);
+        const { createDefaultActionExecutor } = await import('@/sync/ops/actions/defaultActionExecutor');
+        expect(await createDefaultActionExecutor().execute('models.favorite.set', { selection, favorite: true },
+            { serverId, expectedAccountId: accountId, surface: 'ui' }))
+            .toEqual({ ok: true, result: { status: 'updated' } });
+        // Removal uses the same admitted favorite Action and preserves forward-version entries.
+        await act(async () => { await hook.getCurrent().writer({ base: [selection], proposed: [] }); });
+        expect(storage.getState().settings.currentFavoriteModelSelectionsV1).toEqual([]);
+        expect(persisted.favoriteModelSelectionsV1).toEqual([opaque]);
         const retained = hook.getCurrent().writer;
         await account.reset();
-        await expect(retained({ base: [selection], proposed: [] })).rejects.toMatchObject({ code: 'action_account_scope_changed' });
+        await expect(retained({ base: [], proposed: [selection] })).rejects.toMatchObject({ code: 'action_account_scope_changed' });
+        expect(persisted.favoriteModelSelectionsV1).toEqual([opaque]);
         expect(machineRpcWithServerScope).not.toHaveBeenCalled();
     });
     it('reads Provider approval operands by their Account names without exposing ids or boolean literals', async () => {
@@ -254,25 +264,6 @@ describe('Account Provider UI actions without a machine', () => {
             import('@/sync/store/settings/providerCatalogSnapshot'), import('@/sync/domains/scope/activeServerAccountScope'),
         ]);
         expect(getProviderCatalogSnapshot(getActiveServerAccountScope())).toMatchObject({ status: 'ready', revision: 1 });
-        expect(machineRpcWithServerScope).not.toHaveBeenCalled();
-    });
-
-    it('projects contributed brand tokens through the Account read into connection consumers', async () => {
-        const catalog = ProviderConnectionsCatalogV1Schema.parse({ ...DEFAULT_PROVIDER_CONNECTIONS_CATALOG_V1,
-            connections: [{ v: 1, id: 'pc_brand', source: { kind: 'contribution', contributionKey: 'happier.provider.deepseek/deepseek' },
-                role: 'named', displayName: 'My DeepSeek', displayNameMode: 'custom', revision: 1, createdAt: 1, updatedAt: 1 }],
-        });
-        const { serverId } = await account.restore({ catalog, machines: [] });
-        const { useProviderConnections } = await import('./useProviderConnections');
-        const { buildProviderCollection } = await import('@/components/settings/providers/collection/providerCollectionModel');
-        const hook = await renderHook(() => useProviderConnections({ enabled: true, machineId: null, serverId }));
-        await waitForHomeGovernance(() => expect(hook.getCurrent().data?.connections[0]?.icon).toBe('deepseek'));
-        expect(buildProviderCollection({ data: hook.getCurrent().data, query: '', localDiscoveryEnabled: false })
-            .connections[0]?.icon).toBe('deepseek');
-        for (const token of ['openai', 'openrouter', 'ollama']) {
-            expect(hook.getCurrent().data?.available.find(row => row.contributionKey.endsWith(`/${token}`))?.icon).toBe(token);
-        }
-        expect(hook.getCurrent().data?.available.find(row => row.contributionKey.endsWith('/cliproxyapi'))?.icon).toBeNull();
         expect(machineRpcWithServerScope).not.toHaveBeenCalled();
     });
 

@@ -1,5 +1,6 @@
 import * as React from 'react';
 import { createProviderErrorV1 } from '@happier-dev/protocol/providers/errors';
+import { buildApprovalHref } from '@/components/approvals/approvalNavigation';
 
 import { useActionApprovalContinuation } from '@/components/approvals/useActionApprovalContinuation';
 import { useServerCredentialAccountScopeStates } from '@/sync/domains/scope/useServerCredentialAccountScopes';
@@ -13,7 +14,7 @@ const onExecuted = () => {};
 
 /** The Inbox page of one queued Provider approval, on the Home that holds it. */
 export function providerApprovalHref(artifactId: string, transportServerId: string): string {
-    return `/inbox/approvals/${encodeURIComponent(artifactId)}?serverId=${encodeURIComponent(transportServerId)}`;
+    return buildApprovalHref(artifactId, transportServerId);
 }
 
 /** The approval a Provider request from this client is waiting for: what to reopen, and where. */

@@ -20,6 +20,8 @@ describe('provider connection presentation', () => {
         expect(presentProviderConnection(base).title).toBe('Acme');
         expect(presentProviderConnection({ ...base, role: 'named', displayName: 'Work' }).subtitle)
             .toContain('Acme');
+        expect(providerModelConnectionTitle({ providerName: 'OpenRouter', connectionName: 'Old display name',
+            connectionRole: 'default', connectionDisplayNameMode: 'automatic' })).toBe('OpenRouter');
     });
 
     it('keeps a custom source identity once while distinguishing separately named connections', () => {
@@ -27,8 +29,12 @@ describe('provider connection presentation', () => {
         expect(presentProviderConnection(custom)).toMatchObject({ title: 'Acme', subtitle: '' });
         expect(providerModelConnectionTitle({ providerName: 'Acme', connectionName: 'Acme',
             connectionRole: 'named', connectionDisplayNameMode: 'custom' })).toBe('Acme');
+        expect(providerModelConnectionTitle({ providerName: 'QA custom live', connectionName: ' qa custom live ',
+            connectionRole: 'named', connectionDisplayNameMode: 'custom' })).toBe('QA custom live');
         expect(providerModelConnectionTitle({ providerName: 'Acme', connectionName: 'Work',
             connectionRole: 'named', connectionDisplayNameMode: 'custom' })).toBe('Acme · Work');
+        expect(providerModelConnectionTitle({ providerName: 'OpenRouter', connectionName: 'Work',
+            connectionRole: 'named', connectionDisplayNameMode: 'custom' })).toBe('OpenRouter · Work');
         expect(presentProviderConnection({ ...custom, displayName: 'Work' })).toMatchObject({ title: 'Work', subtitle: 'Acme' });
     });
 
