@@ -8,7 +8,8 @@ import type {
     SessionSurfaceItemV1,
 } from '@happier-dev/protocol/sessions/board';
 
-import { usePaneHeaderSlotContent } from '@/components/appShell/panes/paneHeaderSlot';
+import { PaneHeaderLineView } from '@/components/appShell/panes/PaneHeader';
+import { usePaneHeaderSlotContent, type PaneHeaderLine } from '@/components/appShell/panes/paneHeaderSlot';
 import { IconButton } from '@/components/ui/buttons/IconButton';
 import { RoundButton } from '@/components/ui/buttons/RoundButton';
 import { SurfaceCard } from '@/components/ui/cards/SurfaceCard';
@@ -120,6 +121,13 @@ const stylesheet = StyleSheet.create((theme) => ({
     },
     viewsStrip: {
         flex: 1,
+        minWidth: 0,
+    },
+    // The Details tab's Board line sits on the views strip's own inset.
+    viewsLine: {
+        paddingHorizontal: theme.space.s12,
+        paddingTop: theme.space.s4,
+        paddingBottom: theme.space.s6,
         minWidth: 0,
     },
     viewsActions: {
@@ -738,13 +746,19 @@ export function SessionBoardSurface(props: SessionBoardSurfaceProps): React.Reac
         ? snapshot.itemsById.size
         : null;
     const headerIconColor = theme.colors.text.secondary;
-    const headerLine = React.useMemo(() => (!headerHost || !snapshotPresent ? null : {
+    // The same line serves the pane header (sidebar, phone) and, in the Details tab, which has no pane
+    // header, the left of the views row (lab cwidgets WB).
+    const boardLine = React.useMemo<PaneHeaderLine | null>(() => (!snapshotPresent ? null : {
         leading: <Icon name="users" size={13} color={headerIconColor} />,
         segments: [
             t('sessionBoard.sidebar.sharedWithEveryone'),
             ...(widgetCount === null ? [] : [t('sessionBoard.sidebar.widgetCount', { count: widgetCount })]),
         ],
-    }), [headerHost, headerIconColor, snapshotPresent, widgetCount]);
+    }), [headerIconColor, snapshotPresent, widgetCount]);
+    const headerLine = headerHost ? boardLine : null;
+    const inlineLine = props.host === 'details' || props.host === 'focusedDetails' ? boardLine : null;
+    // The views strip draws itself only for several views or a lone view being renamed; the line takes its place otherwise.
+    const stripVisible = (snapshot?.views.length ?? 0) > 1 || renamingViewId !== null;
     const onOpenBoardDetails = props.onOpenBoardDetails;
     // What the Add popover offers beyond the controller's intents: this Session's exact projection
     // (for the live previews) and the Board's one current-Session candidate list.
@@ -1181,12 +1195,14 @@ export function SessionBoardSurface(props: SessionBoardSurfaceProps): React.Reac
             ) : null}
             {props.header}
             {mutationControls ? <MutationRecoveryNotice controller={controller} testID={testID} /> : null}
+            {inlineLine && stripVisible ? <View style={styles.viewsLine}><PaneHeaderLineView line={inlineLine} testID={`${testID}-line`} /></View> : null}
             <View
                 style={styles.viewsRow}
                 ref={viewStripDrag.ref}
                 onLayout={(event) => { viewsRowY.current = event.nativeEvent.layout.y; viewStripDrag.onLayout(event); }}
             >
                 <View style={styles.viewsStrip}>
+                    {inlineLine && !stripVisible ? <View style={styles.viewsLine}><PaneHeaderLineView line={inlineLine} testID={`${testID}-line`} /></View> : null}
                     <SessionBoardViewStrip
                         views={snapshot.views}
                         activeViewId={controller.activeViewId}

@@ -25,6 +25,45 @@ function isToneSegment(segment: PaneHeaderLineSegment): boolean {
     return typeof segment !== 'string' && 'tone' in segment;
 }
 
+/**
+ * The pane header's live line (a leading mark, then real nouns joined by " · "). One owner for the
+ * band's line and for any host that states the same facts inline, such as the Session Board tab.
+ */
+export const PaneHeaderLineView = React.memo(function PaneHeaderLineView(props: Readonly<{
+    line: PaneHeaderLine | null;
+    large?: boolean;
+    testID?: string;
+    /** An inline affordance belonging to the final fact (copying its identifier). */
+    lineEnd?: React.ReactNode;
+    /** View controls aligned with the facts. */
+    lineTrailing?: React.ReactNode;
+}>) {
+    const styles = stylesheet;
+    const { line, large } = props;
+    const testID = props.testID ?? 'pane-header';
+    return (
+        <View style={[styles.line, large ? styles.largeLine : null]}>
+            {line?.leading ? <View style={[styles.lineLeading, line.segments.length === 0 ? styles.leadingOnly : null]}>{line.leading}</View> : null}
+            {line && line.segments.length > 0 ? <Text testID={`${testID}.subtitle`} numberOfLines={1} style={[styles.subtitle, large ? styles.largeSubtitle : null]}>
+                {line.segments.map((segment, index) => (
+                    <React.Fragment key={index}>
+                        {index > 0 ? (isToneSegment(segment) && isToneSegment(line.segments[index - 1]!) ? ' ' : ' · ') : null}
+                        {typeof segment === 'string'
+                            ? segment
+                            : 'tone' in segment
+                                ? <Text style={segment.tone === 'added' ? styles.added : styles.removed}>{segment.text}</Text>
+                                : 'attention' in segment
+                                    ? <Text style={styles.attention}>{segment.text}</Text>
+                                    : <Text style={styles.emphasis}>{segment.text}</Text>}
+                    </React.Fragment>
+                ))}
+            </Text> : null}
+            {props.lineEnd}
+            {props.lineTrailing ? <View style={styles.lineTrailing}>{props.lineTrailing}</View> : null}
+        </View>
+    );
+});
+
 /** What a pane says about itself at the top: a title, an optional subtitle, optional actions. */
 export type PaneHeaderContent = Readonly<{
     title: string;
@@ -95,25 +134,13 @@ export const PaneHeader = React.memo(function PaneHeader(props: PaneHeaderProps)
                 )}
                 </View> : null}
                 {(line && (line.segments.length > 0 || line.leading)) || props.lineTrailing ? (
-                    <View style={[styles.line, large ? styles.largeLine : null]}>
-                        {line?.leading ? <View style={[styles.lineLeading, line.segments.length === 0 ? styles.leadingOnly : null]}>{line.leading}</View> : null}
-                        {line && line.segments.length > 0 ? <Text testID={`${testID}.subtitle`} numberOfLines={1} style={[styles.subtitle, large ? styles.largeSubtitle : null]}>
-                            {line.segments.map((segment, index) => (
-                                <React.Fragment key={index}>
-                                    {index > 0 ? (isToneSegment(segment) && isToneSegment(line.segments[index - 1]!) ? ' ' : ' · ') : null}
-                                    {typeof segment === 'string'
-                                        ? segment
-                                        : 'tone' in segment
-                                            ? <Text style={segment.tone === 'added' ? styles.added : styles.removed}>{segment.text}</Text>
-                                            : 'attention' in segment
-                                                ? <Text style={styles.attention}>{segment.text}</Text>
-                                                : <Text style={styles.emphasis}>{segment.text}</Text>}
-                                </React.Fragment>
-                            ))}
-                        </Text> : null}
-                        {props.lineEnd}
-                        {props.lineTrailing ? <View style={styles.lineTrailing}>{props.lineTrailing}</View> : null}
-                    </View>
+                    <PaneHeaderLineView
+                        line={line}
+                        large={large}
+                        testID={testID}
+                        lineEnd={props.lineEnd}
+                        lineTrailing={props.lineTrailing}
+                    />
                 ) : null}
             </View>
             {props.actions ? <View style={styles.actions}>{props.actions}</View> : null}

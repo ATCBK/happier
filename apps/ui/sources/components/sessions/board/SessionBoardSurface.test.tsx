@@ -824,6 +824,19 @@ describe('SessionBoardSurface', () => {
         expect(openBoard).toHaveBeenCalledOnce();
     });
 
+    it('says who sees the Board and how much is on it on the Details tab itself, which has no pane header', async () => {
+        const screen = await renderScreen(
+            <Harness snapshot={snapshot({ layout: POPULATED, items: [{ itemId: 'note-1', item: note('Plan') }] })} />,
+        );
+
+        const textOf = (node: unknown): string => typeof node === 'string' ? node
+            : Array.isArray(node) ? node.map(textOf).join('')
+            : node && typeof node === 'object' && 'props' in node ? textOf((node as { props: { children?: unknown } }).props.children) : '';
+        expect(textOf(screen.findByTestId('session-board-line.subtitle')?.props.children)).toBe(
+            `${t('sessionBoard.sidebar.sharedWithEveryone')} · ${t('sessionBoard.sidebar.widgetCount', { count: 1 })}`,
+        );
+    });
+
     it('opens a tapped sidebar card on the Details board and keeps Companion membership out of its header', async () => {
         const openItem = vi.fn();
         const screen = await renderScreen(
