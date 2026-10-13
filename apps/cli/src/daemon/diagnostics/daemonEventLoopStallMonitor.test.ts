@@ -3,6 +3,22 @@ import { describe, expect, it, vi } from 'vitest';
 import { createDaemonEventLoopStallMonitor } from './daemonEventLoopStallMonitor';
 
 describe('createDaemonEventLoopStallMonitor', () => {
+  it('projects current process memory and real event-loop busy share from the existing owner', () => {
+    const monitor = createDaemonEventLoopStallMonitor({ getActiveRpcOperations: () => [], warn: () => {},
+      setIntervalFn: () => ({}), clearIntervalFn: () => {} });
+    monitor.start();
+    try {
+      const until = performance.now() + 20;
+      while (performance.now() < until) { /* Real event-loop work at the runtime boundary. */ }
+      const self = monitor.snapshot();
+      expect(self.rssBytes).toBeGreaterThan(0);
+      expect(self.heapUsedBytes).toBeGreaterThan(0);
+      expect(self.heapTotalBytes).toBeGreaterThanOrEqual(self.heapUsedBytes);
+      expect(self.eventLoopBusyFraction).toBeGreaterThan(0);
+      expect(self.eventLoopBusyFraction).toBeLessThanOrEqual(1);
+      expect(self.activeHandleCount).toBeGreaterThanOrEqual(0);
+    } finally { monitor.stop(); }
+  });
   it('emits a bounded safe warning when timer overshoot reaches the serious-stall threshold', () => {
     let nowMs = 10_000;
     const samples: Array<() => void> = [];
