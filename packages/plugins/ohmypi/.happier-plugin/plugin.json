@@ -22,6 +22,62 @@
               "fork"
             ]
           },
+          "skills": {
+            "delivery": "none",
+            "liveReload": "unsupported",
+            "nativeDisable": "unsupported",
+            "nativeRoots": {
+              "project": [
+                [
+                  ".omp",
+                  "skills"
+                ],
+                [
+                  ".claude",
+                  "skills"
+                ],
+                [
+                  ".codex",
+                  "skills"
+                ],
+                [
+                  ".agent",
+                  "skills"
+                ],
+                [
+                  ".agents",
+                  "skills"
+                ],
+                [
+                  ".github",
+                  "skills"
+                ]
+              ],
+              "user": [
+                [
+                  ".omp",
+                  "agent",
+                  "skills"
+                ],
+                [
+                  ".claude",
+                  "skills"
+                ],
+                [
+                  ".codex",
+                  "skills"
+                ],
+                [
+                  ".agent",
+                  "skills"
+                ],
+                [
+                  ".agents",
+                  "skills"
+                ]
+              ]
+            }
+          },
           "surfaces": [
             "externalSessions"
           ],
@@ -285,6 +341,7 @@
     "projectNativeAdapters": [],
     "promptAssets": [],
     "providers": [],
+    "registrySources": [],
     "requestInterceptors": [],
     "resources": [],
     "roles": [],

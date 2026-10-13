@@ -47,6 +47,13 @@ describe('OhMyPi plugin manifest', () => {
         credentialKinds: ['token'],
       }],
       capabilities: {
+        skills: {
+          delivery: 'none', nativeDisable: 'unsupported', liveReload: 'unsupported',
+          nativeRoots: {
+            user: [['.omp', 'agent', 'skills'], ['.claude', 'skills'], ['.codex', 'skills'], ['.agent', 'skills'], ['.agents', 'skills']],
+            project: [['.omp', 'skills'], ['.claude', 'skills'], ['.codex', 'skills'], ['.agent', 'skills'], ['.agents', 'skills'], ['.github', 'skills']],
+          },
+        },
         surfaces: ['externalSessions'],
         sessions: {
           executionRunContext: { versions: [1] },

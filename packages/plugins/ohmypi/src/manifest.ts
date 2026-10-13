@@ -105,7 +105,13 @@ export const OH_MY_PI_PLUGIN = definePlugin({
           credentialKinds: [...credentialKinds],
         })),
         capabilities: projectAgentCapabilitiesV2FromDefinition(AGENT_DEFINITION.core, {
-          skills: { delivery: 'none', nativeDisable: 'unsupported', liveReload: 'unsupported' },
+          skills: {
+            delivery: 'none', nativeDisable: 'unsupported', liveReload: 'unsupported',
+            nativeRoots: {
+              user: [['.omp', 'agent', 'skills'], ['.claude', 'skills'], ['.codex', 'skills'], ['.agent', 'skills'], ['.agents', 'skills']],
+              project: [['.omp', 'skills'], ['.claude', 'skills'], ['.codex', 'skills'], ['.agent', 'skills'], ['.agents', 'skills'], ['.github', 'skills']],
+            },
+          },
           surfaces: ['externalSessions'],
           sessions: {
             open: ['create', 'resume'],
