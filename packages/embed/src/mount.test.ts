@@ -1,6 +1,12 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { mountHappierSession } from './index.js';
 import type { EmbedOptions } from './index.js';
+import { MessageChannel as NativeMessageChannel } from 'node:worker_threads';
+import {
+  EmbedCredentialResultEnvelopeV1Schema, EmbedFrameToHostEnvelopeV1Schema,
+  EmbedHostToFrameEnvelopeV1Schema, EmbedReadyV1Schema,
+  type EmbedConfigureV1, type EmbedInitV1, type EmbedOpenV1,
+} from '@happier-dev/protocol/embed';
 
 // jsdom has no transferable MessageChannel. Only this browser transport is faked;
 // parsing, lifecycle, requested target and credential arbitration stay real.
@@ -63,6 +69,87 @@ describe('embed host', () => {
     vi.stubGlobal('MessageChannel', class { port1 = new Port(); port2 = new Port(); constructor() { channels.push(this); } });
   });
   afterEach(() => { document.body.replaceChildren(); vi.unstubAllGlobals(); vi.useRealTimers(); });
+  it('composes the public mount with the real guest over transferred ports and strict producer-consumer schemas', async () => {
+    // This composed fixture crosses workspace source roots at runtime, as the
+    // server/SDK composed harness does. Keep the package typecheck rooted here;
+    // this test-only view describes only the real guest operations it consumes.
+    const guestModulePath = '../../../apps/ui/sources/embed/bridge/embedBridgeGuest.ts';
+    const { startEmbedBridgeGuest } = await import(guestModulePath) as {
+      startEmbedBridgeGuest(input: unknown): {
+        readonly parentOrigin: string | null;
+        publishState(state: unknown): void;
+        publishSessionCreated(sessionId: string): void;
+        requestCredential(request: unknown): Promise<unknown>;
+        dispose(): void;
+      };
+    };
+    const nativeChannels: NativeMessageChannel[] = [];
+    const wire: unknown[] = [];
+    vi.stubGlobal('MessageChannel', class {
+      constructor() {
+        const channel = new NativeMessageChannel();
+        nativeChannels.push(channel);
+        for (const port of [channel.port1, channel.port2]) {
+          const send = port.postMessage.bind(port);
+          vi.spyOn(port, 'postMessage').mockImplementation((value) => { wire.push(value); send(value); });
+        }
+        return channel;
+      }
+    });
+    const m = mount('A');
+    let deliver: ((event: MessageEvent) => void) | undefined;
+    const initialized: unknown[] = [];
+    const opened: unknown[] = [];
+    const configured: unknown[] = [];
+    // jsdom does not transfer ports between windows. Adapt only that browser
+    // boundary; both bridge owners and the asynchronous native ports stay real.
+    const parent = {
+      postMessage(value: unknown) {
+        const ready = EmbedReadyV1Schema.parse(value);
+        queueMicrotask(() => m.ready({}, ready));
+      },
+    };
+    m.post.mockImplementation((value, _origin, transfer) => {
+      const envelope = EmbedHostToFrameEnvelopeV1Schema.parse(value);
+      queueMicrotask(() => deliver?.({ data: envelope, source: parent, origin: 'https://crm.acme.dev',
+        ports: transfer } as unknown as MessageEvent));
+    });
+    const guest = startEmbedBridgeGuest({ identity: m.identity, embedPublicKey: publicKey,
+      window: { parent, addEventListener: (_type: 'message', listener: (event: MessageEvent) => void) => { deliver = listener; },
+        removeEventListener: () => { deliver = undefined; } },
+      events: { onInit: (init: EmbedInitV1) => initialized.push(init), onOpen: (open: EmbedOpenV1) => opened.push(open),
+        onConfigure: (configure: EmbedConfigureV1) => configured.push(configure) },
+    });
+    try {
+      await vi.waitFor(() => expect(initialized).toEqual([{ kind: 'init', identity: m.identity, sessionId: 'A', credential }]));
+      expect(guest.parentOrigin).toBe('https://crm.acme.dev');
+      guest.publishState({ sessionId: 'A', phase: 'ready', activity: 'working' });
+      await vi.waitFor(() => expect(m.container.querySelector('[role="status"]')).toBeNull());
+      expect(m.onStateChange).toHaveBeenLastCalledWith({ sessionId: 'A', phase: 'ready', activity: 'working' });
+      m.handle.update({ ui: { attachments: false }, style: { radius: 'soft' } });
+      m.handle.open('B');
+      await vi.waitFor(() => {
+        expect(configured).toEqual([{ kind: 'configure', ui: { attachments: false }, style: { v: 1, radius: 'soft' } }]);
+        expect(opened).toEqual([{ kind: 'open', sessionId: 'B' }]);
+      });
+      const renewed = { ...credential, token: 'hap_v1_renewed' };
+      m.getCredential.mockResolvedValueOnce(renewed);
+      await expect(guest.requestCredential({ sessionId: 'B', embedPublicKey: publicKey, reason: 'open' }))
+        .resolves.toEqual({ kind: 'credential', credential: renewed });
+      guest.publishSessionCreated('B');
+      await vi.waitFor(() => expect(m.onSessionCreated).toHaveBeenCalledWith({ sessionId: 'B' }));
+      expect(wire.length).toBeGreaterThan(0);
+      for (const envelope of wire) {
+        const value = envelope as { kind?: string; direction?: string };
+        if (value.kind === 'result') expect(EmbedCredentialResultEnvelopeV1Schema.safeParse(envelope).success).toBe(true);
+        else if (value.direction === 'hostToFrame') expect(EmbedHostToFrameEnvelopeV1Schema.safeParse(envelope).success).toBe(true);
+        else expect(EmbedFrameToHostEnvelopeV1Schema.safeParse(envelope).success).toBe(true);
+      }
+    } finally {
+      guest.dispose(); m.handle.destroy();
+      for (const channel of nativeChannels) { channel.port1.close(); channel.port2.close(); }
+    }
+  });
   it('opens a titled, sandboxed new-chat frame without navigating its parent', () => {
     const container = document.createElement('div');
     document.body.append(container);
