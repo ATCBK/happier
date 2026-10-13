@@ -33,6 +33,8 @@ type diskWindowsDirectory struct {
 	buffer []byte
 }
 
+func diskReadLocalSnapshotCount(context.Context, string) *int64 { return nil }
+
 type diskWindowsStandardInfo struct {
 	AllocationSize int64
 	EndOfFile      int64

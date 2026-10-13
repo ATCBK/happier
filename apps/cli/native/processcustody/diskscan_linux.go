@@ -23,6 +23,8 @@ type diskLinuxDirectory struct {
 
 func diskNormalizePath(path string) string { return filepath.Clean(path) }
 
+func diskReadLocalSnapshotCount(context.Context, string) *int64 { return nil }
+
 func diskLinuxMetadata(stat unix.Stat_t, fsType int64) diskMetadata {
 	kind := "other"
 	switch stat.Mode & unix.S_IFMT {

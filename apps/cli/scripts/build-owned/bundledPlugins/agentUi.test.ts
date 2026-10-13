@@ -47,9 +47,11 @@ describe('bundled Agent exclusion projections', () => {
         const parsed = ingestPluginManifestV2(locator ? readBundledPluginManifest(locator) : undefined);
         if (!parsed.ok) throw new Error(JSON.stringify(parsed.diagnostics));
         // Like ohMyPi/ohmypi, a retained UI routing id is not the manifest local id.
-        const manifest = { ...parsed.manifest, contributes: { ...parsed.manifest.contributes,
-            agents: [{ ...parsed.manifest.contributes.agents![0]!, id: 'native-qwen' }],
-        } };
+        const withRegistryIdentity = ingestPluginManifestV2({ ...parsed.manifest, contributes: { ...parsed.manifest.contributes,
+            agents: [{ ...parsed.manifest.contributes.agents![0]!, id: 'native-qwen', catalog: { acpRegistryIds: ['qwen-code'] } }],
+        } });
+        if (!withRegistryIdentity.ok) throw new Error(JSON.stringify(withRegistryIdentity.diagnostics));
+        const manifest = withRegistryIdentity.manifest;
         const pluginPackages: readonly BundledPluginPackage[] = [{
             pluginPackageId: 'qwen', pluginId: manifest.id, packageName: '@happier-dev/plugins-qwen',
             packageVersion: '0.0.0', agentId: 'qwen', manifest,
@@ -57,6 +59,7 @@ describe('bundled Agent exclusion projections', () => {
         const ui = renderUiBundledPluginEntriesTs({ packageNames: pluginPackages.map(entry => entry.packageName), pluginPackages });
         expect(emittedMapKeys(ui, 'BUNDLED_CANONICAL_AGENT_DECLARATIONS')).toEqual(['qwen']);
         expect(ui).toContain('"identity":{"pluginId":"happier.agent.qwen","localId":"native-qwen"}');
+        expect(ui).toContain('"acpRegistryIds":["qwen-code"]');
     });
 
     it('publishes Provider definitions and Agent requirements as admitted data without executable adapters', () => {

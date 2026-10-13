@@ -9,6 +9,7 @@ import (
 	"fmt"
 	"io"
 	"os"
+	"os/exec"
 	"path/filepath"
 	"runtime"
 	"strconv"
@@ -18,6 +19,41 @@ import (
 
 	"golang.org/x/sys/unix"
 )
+
+// tmutil's read-only public list reports local Time Machine snapshots, not bytes.
+// A failed/unknown observation remains absent instead of claiming measured zero.
+func diskReadLocalSnapshotCount(ctx context.Context, root string) *int64 {
+	var fs unix.Statfs_t
+	if unix.Statfs(root, &fs) != nil || unix.ByteSliceToString(fs.Fstypename[:]) != "apfs" {
+		return nil
+	}
+	mount := unix.ByteSliceToString(fs.Mntonname[:])
+	output, err := exec.CommandContext(ctx, "/usr/bin/tmutil", "listlocalsnapshots", mount).Output()
+	if err != nil {
+		return nil
+	}
+	return diskDarwinLocalSnapshotCount(string(output), mount)
+}
+
+func diskDarwinLocalSnapshotCount(output, mount string) *int64 {
+	lines := strings.Split(strings.TrimSpace(output), "\n")
+	if len(lines) == 0 || strings.TrimSpace(lines[0]) != "Snapshots for disk "+mount+":" {
+		return nil
+	}
+	names := make(map[string]bool)
+	for _, line := range lines[1:] {
+		name := strings.TrimSpace(line)
+		if name == "" {
+			continue
+		}
+		if !strings.HasPrefix(name, "com.apple.TimeMachine.") || strings.ContainsAny(name, " \t\r") {
+			return nil
+		}
+		names[name] = true
+	}
+	count := int64(len(names))
+	return &count
+}
 
 // Darwin's packed getattrlist ABI is defined by bsd/sys/attr.h and
 // bsd/vfs/vfs_attrlist.c. x/sys exports the syscall numbers and Syscall6, which

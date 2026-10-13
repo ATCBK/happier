@@ -23,6 +23,7 @@ describe('bundled generator preparation process boundary', () => {
       copy('apps/cli/scripts');
       copy('apps/cli/src');
       copy('apps/cli/tsconfig.json');
+      copy('apps/cli/tsconfig.runtime.json');
       for (const name of sourceWorkspaces) {
         copy(`packages/${name}/package.json`);
         copy(`packages/${name}/src`);

@@ -13,11 +13,83 @@ import (
 	"os/exec"
 	"path/filepath"
 	"reflect"
+	"strings"
 	"testing"
 	"time"
 
 	"golang.org/x/sys/unix"
 )
+
+func TestDiskDarwinSnapshotCountInScanSummary(t *testing.T) {
+	root := diskDarwinFixtureRoot(t)
+	var fs unix.Statfs_t
+	if err := unix.Statfs(root, &fs); err != nil {
+		t.Fatal(err)
+	}
+	if unix.ByteSliceToString(fs.Fstypename[:]) != "apfs" {
+		t.Skip("requires APFS")
+	}
+	mount := unix.ByteSliceToString(fs.Mntonname[:])
+	output, err := exec.Command("/usr/bin/tmutil", "listlocalsnapshots", mount).Output()
+	if err != nil {
+		t.Fatal(err)
+	}
+	lines := strings.Split(strings.TrimSpace(string(output)), "\n")
+	if len(lines) == 0 || lines[0] != "Snapshots for disk "+mount+":" {
+		t.Fatalf("unexpected tmutil response: %s", output)
+	}
+	expected := len(lines) - 1
+	scratch, err := filepath.EvalSymlinks(t.TempDir())
+	if err != nil {
+		t.Fatal(err)
+	}
+	request, err := json.Marshal(diskScanRequest{Root: root, ScratchDirectory: scratch})
+	if err != nil {
+		t.Fatal(err)
+	}
+	var records bytes.Buffer
+	if err := diskScanCommand(nil, bytes.NewReader(append(request, '\n')), &records); err != nil {
+		t.Fatal(err)
+	}
+	decoder := json.NewDecoder(&records)
+	for decoder.More() {
+		var record map[string]any
+		if err := decoder.Decode(&record); err != nil {
+			t.Fatal(err)
+		}
+		if record["type"] == "summary" {
+			if record["apfsLocalSnapshotCount"] != float64(expected) {
+				t.Fatalf("snapshot count: got %v, want %d", record["apfsLocalSnapshotCount"], expected)
+			}
+			return
+		}
+	}
+	t.Fatal("no scan summary")
+}
+
+func TestDiskDarwinLocalSnapshotCountUnknownAndObserved(t *testing.T) {
+	for _, test := range []struct {
+		output string
+		count  *int64
+	}{
+		{"Snapshots for disk /:\n", diskInt64Pointer(0)},
+		{"Snapshots for disk /:\ncom.apple.TimeMachine.2026-10-13-100001.local\ncom.apple.TimeMachine.2026-10-13-110001.local\n", diskInt64Pointer(2)},
+		{"Snapshots for disk /:\ncom.apple.TimeMachine.2026-10-13-100001.local\ncom.apple.TimeMachine.2026-10-13-100001.local\n", diskInt64Pointer(1)},
+		{"Snapshots for disk /other:\n", nil},
+		{"", nil},
+		{"Snapshots for disk /:\nPermission denied\n", nil},
+	} {
+		actual := diskDarwinLocalSnapshotCount(test.output, "/")
+		if (actual == nil) != (test.count == nil) || actual != nil && *actual != *test.count {
+			t.Fatalf("output %q: got %v, want %v", test.output, actual, test.count)
+		}
+	}
+	ctx, cancel := context.WithCancel(context.Background())
+	cancel()
+	if diskReadLocalSnapshotCount(ctx, diskDarwinFixtureRoot(t)) != nil {
+		t.Fatal("cancelled probe invented a count")
+	}
+}
 
 func TestDiskDarwinBlockedPackageResumesAtomically(t *testing.T) {
 	root := diskDarwinFixtureRoot(t)

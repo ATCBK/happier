@@ -32,7 +32,7 @@ import { BUNDLED_AGENT_DEFINITIONS_BY_ID } from '../../../../packages/agents/src
 import { AGENT_IDS, BUNDLED_AGENT_CONTRIBUTION_IDENTITIES } from '../../../../packages/agents/src/generated/agentIds';
 import { collectBundledAgentContributionIdentities, importPluginAuthorRuntimeModules, main, runRuntimeConsumedAgentFactsPrivatePhase } from './generateBundledPluginEntries.ts';
 import { renderAgentIdsTs } from './bundledPlugins/agentFacts.ts';
-import { BUNDLED_FIRST_PARTY_PLUGIN_LOCATORS } from '../../src/plugins/projection/registry/sources/generatedBundledPluginManifests';
+import { BUNDLED_FIRST_PARTY_PLUGIN_LOCATORS, BUNDLED_FIRST_PARTY_PLUGIN_METADATA } from '../../src/plugins/projection/registry/sources/generatedBundledPluginManifests';
 import { readBundledPluginManifest } from '../../src/plugins/projection/registry/builtIn/locators';
 import { collectBuiltInLegacyConnectedAccountCompatibility } from './generateBundledPluginEntries.ts';
 import { ConnectedServiceIdSchema } from '../../../../packages/protocol/src/connect/connectedServiceBindings.ts';
@@ -43,6 +43,12 @@ import { renderCliBundledAgentRegistrationBindingsTs } from './bundledPlugins/re
 const generatorSource = readFileSync(new URL('./generateBundledPluginEntries.ts', import.meta.url), 'utf8');
 const registryRendererSource = readFileSync(new URL('./bundledPlugins/registry.ts', import.meta.url), 'utf8');
 const voiceRendererSource = readFileSync(new URL('./bundledPlugins/voice.ts', import.meta.url), 'utf8');
+const authoredAgentManifests = await importPluginAuthorRuntimeModules(sourceImport =>
+  Promise.all(BUNDLED_FIRST_PARTY_PLUGIN_METADATA.filter(entry => entry.agentId).map(async metadata => ({
+    metadata,
+    authored: await sourceImport(new URL(`../../../../packages/plugins/${metadata.pluginPackageId}/src/manifest.ts`, import.meta.url).href,
+      import.meta.url) as Readonly<{ PLUGIN_MANIFEST: unknown }>,
+  }))));
 
 function sourceBetween(startMarker: string, endMarker: string, source = generatorSource): string {
   const start = source.indexOf(startMarker);
@@ -52,6 +58,22 @@ function sourceBetween(startMarker: string, endMarker: string, source = generato
   }
   return source.slice(start, end);
 }
+
+describe('bundled Agent skill delivery coverage', () => {
+  it('requires every authored session_dir declaration to run the public skill contract kit', async () => {
+    for (const { metadata, authored } of authoredAgentManifests) {
+      const ingestion = ingestPluginManifestV2(authored.PLUGIN_MANIFEST);
+      if (!ingestion.ok) throw new Error(`${metadata.pluginId}: ${JSON.stringify(ingestion.diagnostics)}`);
+      for (const agent of ingestion.manifest.contributes.agents ?? []) {
+        if (!('skills' in agent.capabilities) || agent.capabilities.skills?.delivery !== 'session_dir') continue;
+        const contractPath = new URL(`../../../../packages/plugins/${metadata.pluginPackageId}/src/agent/skillDelivery.contract.test.ts`, import.meta.url);
+        expect(existsSync(contractPath), `${metadata.pluginId}/${agent.id} declares session_dir without a skill contract`).toBe(true);
+        expect(readFileSync(contractPath, 'utf8'), `${metadata.pluginId}/${agent.id} must invoke the canonical kit`)
+          .toMatch(/\brunAgentSkillDeliveryContract\s*\(/u);
+      }
+    }
+  });
+});
 
 describe('built-in legacy Connected Account compatibility', () => {
   async function readAntigravityPackage(): Promise<BundledPluginPackage> {

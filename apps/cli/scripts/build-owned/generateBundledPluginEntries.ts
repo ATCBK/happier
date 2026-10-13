@@ -1325,7 +1325,11 @@ function projectNativeAgentCliDefinitionFacts(
   const cli = readNativeAgentCliMetadata(manifest, definition.id);
   // The manifest owns native executable/auth metadata. Catalog-driven Agents
   // legitimately omit it; shared facts must not retain an authored CLI fallback.
-  const { cli: _authoredCli, ...sharedDefinition } = definition;
+  const { cli: _authoredCli, ...definitionWithoutCli } = definition;
+  const agent = readManifestContributionArray(manifest, 'agents').find(entry => isJsonObject(entry) && entry.id === definition.id);
+  const skills = isJsonObject(agent) ? readJsonObjectProperty(readJsonObjectProperty(agent, 'capabilities') ?? {}, 'skills') : null;
+  const core = readJsonObjectProperty(definitionWithoutCli, 'core');
+  const sharedDefinition = core ? { ...definitionWithoutCli, core: { ...core, ...(skills ? { skills } : {}) } } : definitionWithoutCli;
   if (!cli) {
     return sharedDefinition;
   }

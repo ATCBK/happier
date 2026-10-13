@@ -529,7 +529,7 @@ export function renderUiBundledPluginEntriesTs(params: Readonly<{
   }
   lines.push('});');
   lines.push('');
-  lines.push('export const BUNDLED_CANONICAL_AGENTS_CORE: Readonly<Record<CanonicalAgentId, AgentCoreConfig>> = Object.freeze({');
+  lines.push('export const BUNDLED_CANONICAL_AGENTS_CORE: Readonly<Partial<Record<CanonicalAgentId, AgentCoreConfig>>> = Object.freeze({');
   for (const agentId of AGENT_UI_PROJECTION_ORDER) {
     const valueName = selectedProjectionSourcesByAgentId.get(agentId)?.coreConst;
     if (!valueName) {
@@ -538,9 +538,9 @@ export function renderUiBundledPluginEntriesTs(params: Readonly<{
     }
     lines.push(`    ${agentId}: ${valueName},`);
   }
-  lines.push('} satisfies Readonly<Record<CanonicalAgentId, AgentCoreConfig>>);');
+  lines.push('} satisfies Readonly<Partial<Record<CanonicalAgentId, AgentCoreConfig>>>);');
   lines.push('');
-  lines.push('export const BUNDLED_CANONICAL_AGENTS_UI: Readonly<Record<CanonicalAgentId, AgentUiConfig>> = Object.freeze({');
+  lines.push('export const BUNDLED_CANONICAL_AGENTS_UI: Readonly<Partial<Record<CanonicalAgentId, AgentUiConfig>>> = Object.freeze({');
   for (const agentId of AGENT_UI_PROJECTION_ORDER) {
     const valueName = selectedProjectionSourcesByAgentId.get(agentId)?.uiConst;
     if (!valueName) {
@@ -549,12 +549,13 @@ export function renderUiBundledPluginEntriesTs(params: Readonly<{
     }
     lines.push(`    ${agentId}: ${valueName},`);
   }
-  lines.push('} satisfies Readonly<Record<CanonicalAgentId, AgentUiConfig>>);');
+  lines.push('} satisfies Readonly<Partial<Record<CanonicalAgentId, AgentUiConfig>>>);');
   lines.push('');
   lines.push('/** Admitted bundled declarations only; no installed version, runtime generation or activation authority. */');
   lines.push('export type BundledAgentDeclaration = Readonly<{');
   lines.push('    identity: PluginContributionIdentityV1;');
   lines.push('    cli: PluginAgentCliMetadata | null;');
+  lines.push('    acpRegistryIds?: readonly string[];');
   lines.push('    connectedAccounts: NonNullable<PluginAgentContributionV2[\'connectedAccounts\']>;');
   lines.push('    accountSettings: readonly PluginSettingsContributionV2[];');
   lines.push('    providerRequirements: PluginAgentContributionV2[\'providerRequirements\'] | null;');
@@ -571,6 +572,7 @@ export function renderUiBundledPluginEntriesTs(params: Readonly<{
     const declaration = {
       identity,
       cli: agent.cli ?? null,
+      acpRegistryIds: agent.catalog?.acpRegistryIds ?? [],
       connectedAccounts: agent.connectedAccounts ?? [],
       accountSettings,
       providerRequirements: agent.providerRequirements ?? null,

@@ -1,5 +1,7 @@
 import assert from 'node:assert/strict';
 import test from 'node:test';
+import { tmpdir } from 'node:os';
+import { join } from 'node:path';
 
 import {
   createWorkspaceSyncRealIntegrationPlan,
@@ -126,6 +128,7 @@ test('plans the relay-fixture build plus local and remote source-built workspace
 });
 
 test('builds once and runs all real specs with source binaries and one stable relay addon', () => {
+  const temporaryRoot = process.platform === 'darwin' ? '/tmp' : tmpdir();
   const calls = [];
   const accessed = [];
   const copied = [];
@@ -134,7 +137,10 @@ test('builds once and runs all real specs with source binaries and one stable re
     env: { ...binaries, EXISTING_VALUE: 'preserved' },
     accessSyncImpl: (path) => accessed.push(path),
     execYarnImpl: (args, options) => calls.push({ args, options }),
-    makeTempDirImpl: () => '/tmp/happier-workspace-sync-real-stable',
+    makeTempDirImpl: (prefix) => {
+      assert.equal(prefix, join(temporaryRoot, 'happier-workspace-sync-real-'));
+      return '/tmp/happier-workspace-sync-real-stable';
+    },
     copyFileImpl: (source, destination) => copied.push({ source, destination }),
     removeDirImpl: (directory) => removed.push(directory),
   });
@@ -218,9 +224,9 @@ test('builds once and runs all real specs with source binaries and one stable re
     calls[7].options.env.HAPPIER_TEST_IROH_NODE_ADDON_PATH,
     '/tmp/happier-workspace-sync-real-stable/addon.node',
   );
-  assert.equal(calls[6].options.env.TMPDIR, '/tmp');
-  assert.equal(calls[6].options.env.TMP, '/tmp');
-  assert.equal(calls[6].options.env.TEMP, '/tmp');
+  assert.equal(calls[6].options.env.TMPDIR, temporaryRoot);
+  assert.equal(calls[6].options.env.TMP, temporaryRoot);
+  assert.equal(calls[6].options.env.TEMP, temporaryRoot);
   assert.deepEqual(accessed.slice(0, 4), Object.values(binaries));
   assert.equal(accessed.length, 5);
   assert.equal(copied.length, 1);

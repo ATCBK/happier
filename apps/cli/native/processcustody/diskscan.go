@@ -330,17 +330,18 @@ type diskProgress struct {
 	StuckSinceMs int64    `json:"stuckSinceMs,omitempty"`
 }
 type diskSummary struct {
-	V                  int              `json:"v"`
-	Type               string           `json:"type"`
-	Termination        string           `json:"termination"`
-	Unreadable         []diskIssue      `json:"unreadable"`
-	UnreadableCounts   map[string]int64 `json:"unreadableCounts"`
-	Skipped            []diskIssue      `json:"skipped"`
-	BackendByDirCounts map[string]int64 `json:"backendByDirCounts"`
-	AllocatedBytes     int64            `json:"allocatedBytes"`
-	Items              int64            `json:"items"`
-	PendingFrontier    []string         `json:"pendingFrontier"`
-	StreamedFrontier   bool             `json:"streamedFrontier,omitempty"`
+	V                      int              `json:"v"`
+	Type                   string           `json:"type"`
+	Termination            string           `json:"termination"`
+	Unreadable             []diskIssue      `json:"unreadable"`
+	UnreadableCounts       map[string]int64 `json:"unreadableCounts"`
+	Skipped                []diskIssue      `json:"skipped"`
+	BackendByDirCounts     map[string]int64 `json:"backendByDirCounts"`
+	AllocatedBytes         int64            `json:"allocatedBytes"`
+	Items                  int64            `json:"items"`
+	PendingFrontier        []string         `json:"pendingFrontier"`
+	StreamedFrontier       bool             `json:"streamedFrontier,omitempty"`
+	APFSLocalSnapshotCount *int64           `json:"apfsLocalSnapshotCount,omitempty"`
 }
 type diskObservation struct {
 	path           string
@@ -608,7 +609,13 @@ func diskScanCommand(args []string, input io.Reader, output io.Writer) error {
 		}
 		return err
 	}
-	err = diskScanStream(ctx, control, request, func(record any) error { return encoder.Encode(record) })
+	err = diskScanStream(ctx, control, request, func(record any) error {
+		if summary, ok := record.(diskSummary); ok && ctx.Err() == nil {
+			summary.APFSLocalSnapshotCount = diskReadLocalSnapshotCount(ctx, request.Root)
+			record = summary
+		}
+		return encoder.Encode(record)
+	})
 	return err
 }
 
