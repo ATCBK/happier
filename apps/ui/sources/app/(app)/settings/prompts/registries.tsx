@@ -3,7 +3,7 @@ import { PromptRegistriesScreen } from '@/components/settings/prompts/registries
 import { useFeatureEnabled } from '@/hooks/server/useFeatureEnabled';
 
 export const WorkspaceRouteBody = React.memo(function PromptRegistriesRoute() {
-    const enabled = useFeatureEnabled('prompts.skills.registries');
+    const enabled = useFeatureEnabled('prompts.library');
 
     if (!enabled) {
         return null;

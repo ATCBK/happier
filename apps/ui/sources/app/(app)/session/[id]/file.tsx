@@ -18,7 +18,7 @@ import { useHydrateSessionForRoute } from '@/hooks/session/useHydrateSessionForR
 import { isSessionRouteHydrationAvailable, isSessionRouteHydrationMissing } from '@/sync/domains/session/sessionRouteHydrationState';
 import { ActivitySpinner } from '@/components/ui/feedback/ActivitySpinner';
 import { createSessionPaneScopeId } from '@/components/sessions/panes/sessionPaneScopeId';
-import { useDestinationPaneScopeId } from '@/components/appShell/workspace/DestinationInstanceHost';
+import { useDestinationPaneScopeId, useDestinationPageTitle } from '@/components/appShell/workspace/DestinationInstanceHost';
 
 export function FileScreen() {
     const router = useRouter();
@@ -33,6 +33,7 @@ export function FileScreen() {
     const sessionHydrated = isSessionRouteHydrationAvailable(routeHydrationState);
     const decodedFilePath = decodeSessionFilePathParam(params.path as string);
     const filePath = isSafeWorkspaceRelativePath(decodedFilePath) ? decodedFilePath.trim() : '';
+    useDestinationPageTitle(filePath.split('/').at(-1));
     const isUnsafeFilePath = Boolean(decodedFilePath) && !filePath;
     const deepLinkAnchor = React.useMemo(
         () => parseSessionFileDeepLinkAnchor(params as Record<string, string | string[] | undefined>),

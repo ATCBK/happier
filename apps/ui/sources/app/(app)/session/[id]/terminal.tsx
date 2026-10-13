@@ -23,9 +23,12 @@ import { useSessionTerminalAvailability } from '@/components/sessions/terminal/u
 import { SessionFullscreenPaneSafeAreaView } from '@/components/sessions/panes/SessionFullscreenPaneSafeAreaView';
 import { ActivitySpinner } from '@/components/ui/feedback/ActivitySpinner';
 import { createSessionPaneScopeId } from '@/components/sessions/panes/sessionPaneScopeId';
-import { useDestinationPaneScopeId } from '@/components/appShell/workspace/DestinationInstanceHost';
+import { useDestinationPaneScopeId, useDestinationPageTitle } from '@/components/appShell/workspace/DestinationInstanceHost';
+import { getRightSidebarBuiltinTab } from '@/components/appShell/rightSidebar/rightSidebarTabRegistry';
+import { t } from '@/text';
 
 export function TerminalScreenRoute() {
+    useDestinationPageTitle(t(getRightSidebarBuiltinTab('terminal').labelKey));
     const router = useRouter();
     const navigation = useNavigation();
     const isFocused = useIsFocused();

@@ -21,11 +21,13 @@ import { useUnistyles } from 'react-native-unistyles';
 import { Text } from '@/components/ui/text/Text';
 import { readSessionOwnerMetadataView } from '@/sync/domains/session/readSessionOwnerMetadataView';
 import { Icon } from '@/components/ui/icons/Icon';
+import { useDestinationPageTitle } from '@/components/appShell/workspace/DestinationInstanceHost';
 
 
 const LOG_TAIL_MAX_BYTES = 200_000;
 
 export function SessionLogScreen() {
+    useDestinationPageTitle(t('sessionLog.title'));
     const { theme } = useUnistyles();
     const params = useLocalSearchParams<{ id?: string | string[]; serverId?: string | string[] }>();
     const routeScope = React.useMemo(() => createSessionRouteServerScope(params as Record<string, unknown>), [params]);
@@ -100,7 +102,7 @@ export function SessionLogScreen() {
         return (
             <View style={{ flex: 1, alignItems: 'center', justifyContent: 'center' }}>
                 <Icon name="hourglass" size={48} color={theme.colors.text.secondary} />
-                <Text style={{ color: theme.colors.text.secondary, fontSize: 17, marginTop: 16, ...Typography.default('semiBold') }}>
+                <Text style={{ color: theme.colors.text.secondary, ...Typography.variant('heading'), marginTop: theme.space.s16,  }}>
                     {t('common.loading')}
                 </Text>
             </View>
@@ -111,10 +113,10 @@ export function SessionLogScreen() {
         return (
             <View style={{ flex: 1, alignItems: 'center', justifyContent: 'center' }}>
                 <Icon name="trash" size={48} color={theme.colors.text.secondary} />
-                <Text style={{ color: theme.colors.text.primary, fontSize: 20, marginTop: 16, ...Typography.default('semiBold') }}>
+                <Text style={{ color: theme.colors.text.primary, ...Typography.variant('title'), marginTop: theme.space.s16,  }}>
                     {t('errors.sessionDeleted')}
                 </Text>
-                <Text style={{ color: theme.colors.text.secondary, fontSize: 15, marginTop: 8, textAlign: 'center', paddingHorizontal: 32, ...Typography.default() }}>
+                <Text style={{ color: theme.colors.text.secondary, fontSize: 15, marginTop: theme.space.s8, textAlign: 'center', paddingHorizontal: theme.space.s32, ...Typography.default() }}>
                     {t('errors.sessionDeletedDescription')}
                 </Text>
             </View>
@@ -161,7 +163,7 @@ export function SessionLogScreen() {
             ) : null}
 
             <ItemGroup title={truncated ? t('sessionLog.tailTitleTruncated') : t('sessionLog.tailTitle')}>
-                <View style={{ marginHorizontal: 16, marginBottom: 12 }}>
+                <View style={{ marginHorizontal: theme.space.s16, marginBottom: theme.space.s12 }}>
                     <CodeView
                         code={tailText.length > 0 ? tailText : t('sessionLog.noOutputYet')}
                         language="text"

@@ -1015,7 +1015,7 @@ function SessionInfoContent({ session, sessionServerId, sourceMachineIdForHandof
                 {sessionInfoSections.map(({ section, policy }) => (
                     <View
                         key={section.id}
-                        style={{ maxWidth: layout.maxWidth, alignSelf: 'center', width: '100%', paddingHorizontal: 16, marginBottom: 8 }}
+                        style={{ maxWidth: layout.maxWidth, alignSelf: 'center', width: '100%', paddingHorizontal: theme.space.s16, marginBottom: theme.space.s8 }}
                     >
                         <PluginInlineSurfaceHost
                             placement={section.placement}
@@ -1448,7 +1448,7 @@ function SessionInfoContent({ session, sessionServerId, sourceMachineIdForHandof
                                     onPress={handleToggleAgentStateJson}
                                 />
                                 {expandedRawJsonSection === 'agentState' && expandedRawJsonCode && (
-                                    <View style={{ marginHorizontal: 16, marginBottom: 12 }}>
+                                    <View style={{ marginHorizontal: theme.space.s16, marginBottom: theme.space.s12 }}>
                                         <CodeView
                                             code={expandedRawJsonCode}
                                             language="json"
@@ -1464,7 +1464,7 @@ function SessionInfoContent({ session, sessionServerId, sourceMachineIdForHandof
                                     onPress={handleToggleMetadataJson}
                                 />
                                 {expandedRawJsonSection === 'metadata' && expandedRawJsonCode && (
-                                    <View style={{ marginHorizontal: 16, marginBottom: 12 }}>
+                                    <View style={{ marginHorizontal: theme.space.s16, marginBottom: theme.space.s12 }}>
                                         <CodeView
                                             code={expandedRawJsonCode}
                                             language="json"
@@ -1480,7 +1480,7 @@ function SessionInfoContent({ session, sessionServerId, sourceMachineIdForHandof
                                     onPress={handleToggleSessionStatusJson}
                                 />
                                 {expandedRawJsonSection === 'sessionStatus' && expandedRawJsonCode && (
-                                    <View style={{ marginHorizontal: 16, marginBottom: 12 }}>
+                                    <View style={{ marginHorizontal: theme.space.s16, marginBottom: theme.space.s12 }}>
                                         <CodeView
                                             code={expandedRawJsonCode}
                                             language="json"
@@ -1494,7 +1494,7 @@ function SessionInfoContent({ session, sessionServerId, sourceMachineIdForHandof
                             onPress={handleToggleSessionJson}
                         />
                         {expandedRawJsonSection === 'session' && expandedRawJsonCode && (
-                            <View style={{ marginHorizontal: 16, marginBottom: 12 }}>
+                            <View style={{ marginHorizontal: theme.space.s16, marginBottom: theme.space.s12 }}>
                                 <CodeView
                                     code={expandedRawJsonCode}
                                     language="json"
@@ -1603,7 +1603,7 @@ export const WorkspaceRouteBody = () => {
         return (
             <View testID="session-info-screen" style={{ flex: 1, alignItems: 'center', justifyContent: 'center' }}>
                 <Icon name="hourglass" size={48} color={theme.colors.text.secondary} />
-                <Text style={{ color: theme.colors.text.secondary, fontSize: 17, marginTop: 16, ...Typography.default('semiBold') }}>{t('common.loading')}</Text>
+                <Text style={{ color: theme.colors.text.secondary, ...Typography.variant('heading'), marginTop: theme.space.s16,  }}>{t('common.loading')}</Text>
             </View>
         );
     }
@@ -1613,8 +1613,8 @@ export const WorkspaceRouteBody = () => {
         return (
             <View testID="session-info-screen" style={{ flex: 1, alignItems: 'center', justifyContent: 'center' }}>
                 <Icon name="trash" size={48} color={theme.colors.text.secondary} />
-                <Text style={{ color: theme.colors.text.primary, fontSize: 20, marginTop: 16, ...Typography.default('semiBold') }}>{t('errors.sessionDeleted')}</Text>
-                <Text style={{ color: theme.colors.text.secondary, fontSize: 15, marginTop: 8, textAlign: 'center', paddingHorizontal: 32, ...Typography.default() }}>{t('errors.sessionDeletedDescription')}</Text>
+                <Text style={{ color: theme.colors.text.primary, ...Typography.variant('title'), marginTop: theme.space.s16,  }}>{t('errors.sessionDeleted')}</Text>
+                <Text style={{ color: theme.colors.text.secondary, fontSize: 15, marginTop: theme.space.s8, textAlign: 'center', paddingHorizontal: theme.space.s32, ...Typography.default() }}>{t('errors.sessionDeletedDescription')}</Text>
             </View>
         );
     }
@@ -1636,30 +1636,27 @@ const infoStyles = StyleSheet.create((theme) => ({
     status: {
         flexDirection: 'row',
         alignItems: 'center',
-        gap: 6,
-        marginTop: 4,
+        gap: theme.space.s6,
+        marginTop: theme.space.s4,
     },
     statusText: {
-        ...Typography.default('medium'),
-        fontSize: 13,
+        ...Typography.variant('body', 'medium'),
     },
     leaveActions: {
         flexDirection: 'row',
         flexWrap: 'wrap',
         alignItems: 'center',
-        gap: 8,
+        gap: theme.space.s8,
     },
     // Pushes "Delete" to the far edge when the row fits, apart from the recoverable actions.
     leaveSpacer: {
         flexGrow: 1,
     },
     footnote: {
-        ...Typography.default('regular'),
-        fontSize: 12,
-        lineHeight: 16,
+        ...Typography.variant('meta'),
         color: theme.colors.text.tertiary,
-        marginTop: 10,
-        marginHorizontal: 2,
+        marginTop: theme.space.s10,
+        marginHorizontal: theme.space.s2,
     },
 }));
 

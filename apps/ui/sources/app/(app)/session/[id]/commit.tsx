@@ -15,7 +15,7 @@ import { useHydrateSessionForRoute } from '@/hooks/session/useHydrateSessionForR
 import { isSessionRouteHydrationAvailable, isSessionRouteHydrationMissing } from '@/sync/domains/session/sessionRouteHydrationState';
 import { ActivitySpinner } from '@/components/ui/feedback/ActivitySpinner';
 import { createSessionPaneScopeId } from '@/components/sessions/panes/sessionPaneScopeId';
-import { useDestinationPaneScopeId } from '@/components/appShell/workspace/DestinationInstanceHost';
+import { useDestinationPaneScopeId, useDestinationPageTitle } from '@/components/appShell/workspace/DestinationInstanceHost';
 
 function decodeSha(value: string): string {
     try {
@@ -41,6 +41,7 @@ export function CommitScreen() {
     // Commit refs cannot contain whitespace; accept accidental "oneline" strings by taking the first token.
     const shaRaw = decodeSha(shaParam || '').trim();
     const sha = shaRaw.split(/\s+/)[0] ?? '';
+    useDestinationPageTitle(sha.slice(0, 7));
 
     const multiPaneEnabled = useLocalSetting('uiMultiPanePanelsEnabled');
     const deviceType = useDeviceType();

@@ -7,6 +7,8 @@ import { useIsFocused } from '@/components/appShell/workspace/destinationRoute';
 import { SessionsList } from '@/components/sessions/shell/SessionsList';
 import { resolveFocusedSessionListSurfaceOwnership } from '@/components/sessions/shell/surface/sessionListSurfaceOwnership';
 import { SessionListLayoutIntentProvider } from '@/hooks/session/sessionListLayoutIntent';
+import { useDestinationPageTitle } from '@/components/appShell/workspace/DestinationInstanceHost';
+import { t } from '@/text';
 
 const stylesheet = StyleSheet.create(() => ({
     root: {
@@ -25,6 +27,7 @@ const RECENT_SESSIONS_PATHNAME = '/session/recent';
  * Session-list, query or settings request is made by opening the link.
  */
 export function LegacyRecentSessionsRoute() {
+    useDestinationPageTitle(t('settingsSession.sessionList.layoutRecentActivityTitle'));
     const isFocused = useIsFocused();
     const surfaceOwnership = resolveFocusedSessionListSurfaceOwnership(isFocused);
     const styles = stylesheet;

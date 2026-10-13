@@ -58,7 +58,7 @@ export function SessionRunDetailsScreen() {
             }}
             testID="session-run-details-refresh"
             hitSlop={10}
-            style={({ pressed }) => ({ padding: 4, opacity: pressed ? motionTokens.press.opacity : 1 })}
+            style={({ pressed }) => ({ padding: theme.space.s4, opacity: pressed ? motionTokens.press.opacity : 1 })}
         >
             <Icon name="arrow-clockwise" size={20} color={headerTint} />
         </Pressable>
@@ -75,7 +75,7 @@ export function SessionRunDetailsScreen() {
             })}
             testID="session-run-details-back"
             hitSlop={10}
-            style={({ pressed }) => ({ padding: 4, opacity: pressed ? motionTokens.press.opacity : 1 })}
+            style={({ pressed }) => ({ padding: theme.space.s4, opacity: pressed ? motionTokens.press.opacity : 1 })}
         >
             <Icon name="arrow-left" size={20} color={headerTint} />
         </Pressable>

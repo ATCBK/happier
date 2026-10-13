@@ -7,6 +7,9 @@ import { useMessage, useResolvedSessionMessageRouteId, useSession, useSessionTra
 import { sync } from '@/sync/sync';
 import { Deferred } from "@/components/ui/forms/Deferred";
 import { ToolHeader } from '@/components/tools/shell/presentation/ToolHeader';
+import { resolveToolHeaderTextPresentation } from '@/components/tools/shell/presentation/resolveToolHeaderTextPresentation';
+import { normalizeToolCallForRendering } from '@happier-dev/session-core/tools';
+import { useDestinationPageTitle } from '@/components/appShell/workspace/DestinationInstanceHost';
 import { ToolStatusIndicator } from '@/components/tools/shell/presentation/ToolStatusIndicator';
 import { useUnistyles } from 'react-native-unistyles';
 import { t } from '@/text';
@@ -91,6 +94,8 @@ function SessionMessageRouteLoaded(props: { sessionId: string; messageId: string
     const [messageBackfillComplete, setMessageBackfillComplete] = React.useState(false);
 
     const tool = message?.kind === 'tool-call' ? message.tool : null;
+    useDestinationPageTitle(tool ? resolveToolHeaderTextPresentation({ tool: normalizeToolCallForRendering(tool), metadata: null }).title
+        : message ? t('common.message') : null);
     const toolHeaderTitle = React.useCallback(() => {
         return tool ? <ToolHeader tool={tool} /> : null;
     }, [tool]);

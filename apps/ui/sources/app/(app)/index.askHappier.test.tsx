@@ -34,7 +34,7 @@ let home: Awaited<ReturnType<typeof createPlainArtifactHomeFixture>> | undefined
 afterEach(async () => {
     await standardCleanup();
     clearPendingSetupIntent();
-    home?.dispose(); home = undefined;
+    await home?.dispose(); home = undefined;
     resetSessionDraftRepositoryForTests();
     navigation.push.mockReset(); navigation.replace.mockReset();
 });

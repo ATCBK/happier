@@ -44,7 +44,10 @@ export default function Restore() {
     const hasExactTargetRequest = targetServerId.length > 0
         || targetServerUrl.length > 0
         || expectedAccountId.length > 0;
-    const resolvedTarget = targetServerId && targetServerUrl && expectedAccountId
+    // A QR can name the Home before this device knows its Account. Account-bound
+    // token repair still requires the captured Account as well as the Home.
+    const requiresAccountTarget = isApiTokenCreateResumeReturnPath(returnTo);
+    const resolvedTarget = targetServerId && targetServerUrl && (!requiresAccountTarget || expectedAccountId)
         ? resolveHomeAuthenticationTarget({ kind: 'saved_profile', profileRef: targetServerId })
         : null;
     const exactTarget = resolvedTarget
@@ -70,14 +73,18 @@ export default function Restore() {
             <>
                 {hasExactTargetRequest ? exactTarget ? (
                     <SecretKeyLoginForm
-                        target={{ ...exactTarget, expectedAccountId, requireKeyChallengeV2: true }}
+                        target={{ ...exactTarget, ...(expectedAccountId ? { expectedAccountId } : {}),
+                            requireKeyChallengeV2: Boolean(expectedAccountId) }}
                         onAuthenticated={async () => {
                             const switched = await setActiveServerAndSwitch({
                                 serverId: exactTarget.serverId,
                                 scope: 'device',
                                 refreshAuth: auth.refreshFromActiveServer,
                             });
-                            if (switched !== 'blocked' && completedReturnTo) router.replace(completedReturnTo);
+                            if (switched !== 'blocked') {
+                                if (completedReturnTo) router.replace(completedReturnTo);
+                                else router.dismissTo('/');
+                            }
                         }}
                     />
                 ) : (

@@ -1,13 +1,12 @@
 import * as React from 'react';
-import { useLocalSearchParams } from '@/components/appShell/workspace/destinationRoute';
 
-import { SkillBundleEditorScreen } from '@/components/settings/prompts/skills/SkillBundleEditorScreen';
+import { Redirect, useLocalSearchParams } from '@/components/appShell/workspace/destinationRoute';
+import { SKILLS_COLLECTION_ROUTE, skillHref } from '@/components/settings/skills/skillsCollectionModel';
 
-export function EditSkillBundlePage() {
-  const { id, serverId } = useLocalSearchParams<{ id: string; serverId?: string }>();
-  if (!id) return null;
-  return <SkillBundleEditorScreen artifactId={id} serverId={serverId} />;
-}
+/** A 0.2 skill route: its skill on the Skills page, where export and files live too (P6 §4.9). Removal: when 0.2 links stop being a supported direction. */
+export const WorkspaceRouteBody = React.memo(function LegacySkillRoute() {
+    const { id } = useLocalSearchParams<{ id?: string }>();
+    return <Redirect href={(id ? skillHref(id) : SKILLS_COLLECTION_ROUTE) as never} />;
+});
 import { WorkspaceRouteEntry } from '@/components/appShell/workspace/createWorkspaceRouteEntry';
-export { EditSkillBundlePage as WorkspaceRouteBody };
-export default function RouteEntry() { return <WorkspaceRouteEntry Body={EditSkillBundlePage} />; }
+export default function RouteEntry() { return <WorkspaceRouteEntry Body={WorkspaceRouteBody} />; }

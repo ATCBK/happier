@@ -43,7 +43,7 @@ export function SessionRemotePermissionGrantsScreen() {
 
     const screenOptions = React.useMemo(() => ({
         headerShown: true,
-        headerTitle: t('sessionRemotePermissionGrants.title'),
+        title: t('sessionRemotePermissionGrants.title'),
     }), []);
 
     if (!sessionId || isSessionRouteHydrationMissing(routeHydrationState)) {

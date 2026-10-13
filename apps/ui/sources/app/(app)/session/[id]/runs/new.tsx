@@ -81,7 +81,7 @@ export function SessionNewRunScreen() {
 
     const screenOptions = React.useMemo(() => ({
         headerShown: true,
-        headerTitle: initialIntent
+        title: initialIntent
             ? t(`executionRuns.newRun.intents.${initialIntent}` as const)
             : t('session.subagents.panel.newAgentConversation'),
         headerBackTitle: t('common.back'),
@@ -91,7 +91,7 @@ export function SessionNewRunScreen() {
 
     if (hasIntentParam && initialIntent === null) {
         return (
-            <View style={{ flex: 1, padding: 16, backgroundColor: theme.colors.background?.canvas ?? theme.colors.surface.base }}>
+            <View style={{ flex: 1, padding: theme.space.s16, backgroundColor: theme.colors.background?.canvas ?? theme.colors.surface.base }}>
                 <Stack.Screen options={screenOptions} />
                 <Text style={{ color: theme.colors.text.secondary }}>{t('errors.invalidFormat')}</Text>
             </View>
@@ -104,9 +104,9 @@ export function SessionNewRunScreen() {
             <ConstrainedScreenContent
                 style={{
                     flex: 1,
-                    paddingHorizontal: 16,
-                    paddingVertical: 16,
-                    gap: 16,
+                    paddingHorizontal: theme.space.s16,
+                    paddingVertical: theme.space.s16,
+                    gap: theme.space.s16,
                 }}
             >
                 {unavailable ? (

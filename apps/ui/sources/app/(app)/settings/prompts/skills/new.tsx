@@ -1,10 +1,11 @@
-import { SkillBundleEditorScreen } from '@/components/settings/prompts/skills/SkillBundleEditorScreen';
-import { useLocalSearchParams } from '@/components/appShell/workspace/destinationRoute';
+import * as React from 'react';
 
-export function NewSkillBundlePage() {
-  const { serverId } = useLocalSearchParams<{ serverId?: string }>();
-  return <SkillBundleEditorScreen artifactId={null} serverId={serverId} />;
-}
+import { Redirect } from '@/components/appShell/workspace/destinationRoute';
+import { SKILLS_NEW_ROUTE } from '@/components/settings/skills/skillsCollectionModel';
+
+/** 0.2's new-skill route (P6 §4.9). Removal: when 0.2 links stop being a supported direction. */
+export const WorkspaceRouteBody = React.memo(function LegacyNewSkillRoute() {
+    return <Redirect href={SKILLS_NEW_ROUTE as never} />;
+});
 import { WorkspaceRouteEntry } from '@/components/appShell/workspace/createWorkspaceRouteEntry';
-export { NewSkillBundlePage as WorkspaceRouteBody };
-export default function RouteEntry() { return <WorkspaceRouteEntry Body={NewSkillBundlePage} />; }
+export default function RouteEntry() { return <WorkspaceRouteEntry Body={WorkspaceRouteBody} />; }

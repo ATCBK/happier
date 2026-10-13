@@ -45,7 +45,7 @@ export function SessionFollowScreen() {
     if (!sessionId || !serverId) return <SessionInvalidLinkFallback />;
     const address = { serverId, sessionId };
     const followingHeader = (
-        <Stack.Screen options={{ headerShown: true, headerTitle: t('session.follow.editor.title') }} />
+        <Stack.Screen options={{ headerShown: true, title: t('session.follow.editor.title') }} />
     );
     if (followingDecision?.state === 'disabled' || followingDecision?.state === 'unsupported') {
         return <>

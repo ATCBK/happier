@@ -18,6 +18,7 @@ import { HappyError } from '@/utils/errors/errors';
 import { RequireFriendsIdentityForFriends } from '@/components/friends/RequireFriendsIdentityForFriends';
 import { Text, TextInput } from '@/components/ui/text/Text';
 import { ActivitySpinner } from '@/components/ui/feedback/ActivitySpinner';
+import { useDestinationPageTitle } from '@/components/appShell/workspace/DestinationInstanceHost';
 
 type KeyboardAwareItemListProps = ScrollViewProps & Readonly<{
     children?: React.ReactNode;
@@ -34,6 +35,7 @@ const FriendsSearchKeyboardAwareItemList = React.forwardRef<ScrollView, Keyboard
 );
 
 export function SearchFriendsScreen() {
+    useDestinationPageTitle(t('friends.addFriend'));
     const { theme } = useUnistyles();
     const enabled = useRequireFriendsEnabled();
     const { credentials } = useAuth();

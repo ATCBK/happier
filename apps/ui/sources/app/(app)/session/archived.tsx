@@ -6,6 +6,8 @@ import { useIsFocused } from '@/components/appShell/workspace/destinationRoute';
 
 import { SessionsList } from '@/components/sessions/shell/SessionsList';
 import { resolveFocusedSessionListSurfaceOwnership } from '@/components/sessions/shell/surface/sessionListSurfaceOwnership';
+import { useDestinationPageTitle } from '@/components/appShell/workspace/DestinationInstanceHost';
+import { t } from '@/text';
 
 const stylesheet = StyleSheet.create(() => ({
     root: {
@@ -24,6 +26,7 @@ const ARCHIVED_SESSIONS_PATHNAME = '/session/archived';
  * cursor, request lifecycle, grouping or row presentation of its own.
  */
 export function ArchivedSessionsScreen() {
+    useDestinationPageTitle(t('sessionInfo.archivedSessions'));
     const isFocused = useIsFocused();
     const surfaceOwnership = resolveFocusedSessionListSurfaceOwnership(isFocused);
     const styles = stylesheet;
