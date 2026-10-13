@@ -483,6 +483,14 @@ const promptLibraryUxRefinementTranslationExtension = {
 
 const sessionHandoffTranslationExtensions = {
   ru: {
+    transferSessionData: {
+      title: "Перенести данные сессии",
+      subtitle: "Копирует историю разговора этой сессии на другой компьютер. Отключите, если она уже там.",
+      checking: "Проверка поддержки на обоих компьютерах…",
+      updateRequired: "Обновите Happier на обоих компьютерах, чтобы отключить эту опцию.",
+      sessionMissing: "На целевом компьютере нет истории этой сессии. Включите «Перенести данные сессии» и повторите попытку.",
+      workspaceRequiresTransfer: "Включите «Перенести данные сессии», чтобы копировать или синхронизировать файлы рабочего пространства.",
+    },
     activeWarning: {
       title: 'Этот сеанс все еще запущен на этом устройстве',
       message: 'Перед передачей на выбранное устройство Happier остановит этот сеанс на текущем устройстве.',
@@ -2435,6 +2443,19 @@ export const ru: TranslationStructure = {
   },
 
   connectedServices: {
+    importAccounts: {
+        unknownResult: "Результат импорта неизвестен. Обновите список аккаунтов и проверьте этот профиль перед повторной попыткой.",
+        title: "Импортировать существующий вход",
+        failed: "Не удалось импортировать вход. Проверьте вход на выбранном компьютере и повторите попытку.",
+        actionDescription: "Скопировать вход с одного из ваших компьютеров",
+        description: "Скопируйте вход в зашифрованный профиль. Общие токены обновления могут меняться, и локальное приложение может запросить повторный вход.",
+        unsupported: "Импорт недоступен. Выберите другой компьютер или обновите его CLI.",
+        credentialsUnavailable: "Нет пригодного входа. Войдите в локальное приложение и повторите попытку.",
+        profileConflict: "Профиль принадлежит другому аккаунту или изменился при импорте. Выберите новое имя.",
+        reauthorizationRequired: "Снова войдите в локальное приложение и повторите попытку.",
+        imported: "Вход импортирован",
+        refreshFailed: "Вход импортирован, но список аккаунтов не обновился. Откройте подключённые сервисы снова.",
+    },
       subscription: {
           title: "Подписка",
           currentPeriod: "Текущий период",
@@ -2464,6 +2485,7 @@ export const ru: TranslationStructure = {
       openai: "Ключ API OpenAI",
       anthropic: "Ключ API Anthropic",
       gemini: "Gemini от Google",
+      antigravity: 'Google Antigravity',
       github: "GitHub",
     },
     title: "Подключённые сервисы",
@@ -2570,7 +2592,6 @@ export const ru: TranslationStructure = {
       },
     },
     quota: {
-      refreshing: "Обновление использования…",
       loading: "Загрузка…",
       error: ({ message }: { message: string }) => `Ошибка: ${message}`,
       lastUpdated: ({ time }: { time: string }) => `Обновлено: ${time}`,
@@ -2617,6 +2638,21 @@ export const ru: TranslationStructure = {
       resets: {
         use: "Применить",
         available: "Сброс доступен",
+        remainingCount: ({ count }: { count: number }) => `Сохранённые сбросы: ${count}`,
+        appliesTo: ({ limits }: { limits: string }) => `Применяется к: ${limits}`,
+        fiveHourLimit: "Лимит на 5 часов",
+        weeklyLimit: "Недельный лимит",
+        unavailableReasons: {
+          paused: "Приостановлено",
+          cooldown: "Ожидание окончания паузы",
+          ineligible: "Не соответствует условиям",
+          not_selected: "Не выбрано",
+          provider_unavailable: "Провайдер недоступен",
+          not_started: "Ещё не началось",
+          expired: "Срок истёк",
+          consumed: "Уже использовано",
+          unknown: "Сейчас недоступно",
+        },
         rowLabel: ({ date, countdown }: { date: string; countdown: string }) => `Истекает ${date} · ${countdown}`,
         now: "сейчас",
         inDays: ({ days }: { days: number }) => `через ${days}д`,
@@ -2638,6 +2674,12 @@ export const ru: TranslationStructure = {
       pasteRedirectUrlPromptBody:
         "После завершения OAuth скопируйте итоговый URL редиректа из адресной строки браузера и вставьте его сюда.",
       providerOverrides: {
+        antigravity: {
+          connectWebDescription: "Следующий шаг: войдите через Google. Antigravity покажет код авторизации для копирования.",
+          pasteRedirectUrlPromptBody: "1) Войдите через Google. 2) Скопируйте код авторизации с antigravity.google. 3) Вставьте его ниже, оставив это окно входа открытым.",
+          pasteRedirectUrlPlaceholder: "Вставьте код авторизации Antigravity",
+          pasteRedirectUrlTitle: "Вставить код авторизации",
+        },
         claudeSubscription: {
           connectWebDescription:
             "Следующий шаг: войдите на открывшейся странице. Claude может показать строку кода вместо автоматического редиректа.",
@@ -2820,6 +2862,7 @@ export const ru: TranslationStructure = {
       addOauthProfileDeviceTitle: "Добавить через аутентификацию устройства",
       addOauthProfileDeviceSubtitle: "Рекомендуется для web/удалённых сред",
       addOauthProfilePasteTitle: "Добавить через вставку редиректа",
+      signInWithGoogle: 'Войти через Google',
       addOauthProfilePasteSubtitle: "Ручной поток копирования/вставки URL редиректа",
       addOauthProfileBrowserTitle: "Добавить через встроенный браузер",
       addOauthProfileBrowserSubtitle: "Используйте встроенный браузер, если поддерживается",
@@ -2864,6 +2907,7 @@ export const ru: TranslationStructure = {
       errors: {
         credentialReferencedByGroup: "Эта учетная запись все еще используется пулом аккаунтов. Удалите ее из пула и повторите попытку.",
         credentialNotFound: "Эта подключенная учетная запись уже удалена.",
+        serviceUnsupportedServer: 'Этот ретранслятор не поддерживает данный подключённый сервис. Обновите ретранслятор, чтобы подключить его.',
         credentialRequestFailed: "Запрос подключенной учетной записи не удался. Обновите подключенные сервисы и повторите попытку.",
         groupRequestFailed: "Запрос пула аккаунтов не удался. Обновите подключенные сервисы и повторите попытку.",
         generationConflict: "Этот пул аккаунтов изменился до завершения действия. Обновите подключенные сервисы и повторите попытку.",
@@ -10293,6 +10337,7 @@ settingsSession: {
     blockedTitle: 'Настройка остановлена',
     blockedStatusFallback: 'Настройку не удалось завершить. Ваша учётная запись и сессии не затронуты.',
     blockedServiceConflictStatus: 'Сначала нужно разобраться с другой фоновой службой на этом компьютере. Она осталась как была — откройте «Подробности», чтобы увидеть, с какой.',
+    blockedServiceManagerUnavailableStatus: 'Happier не может настроить фоновую службу на этом компьютере. Откройте «Подробности» для получения помощи или продолжайте работать на других машинах.',
     blockedConsentDeclinedStatus: 'Настройка остановлена. Фоновая служба, которая уже была здесь, осталась ровно такой же.',
     blockedAccountKeptStatus: 'Настройка остановлена. Этот компьютер остаётся подключён к аккаунту, в который он вошёл.',
     blockedAccountChangedStatus: 'Во время настройки этот компьютер вошёл в другой аккаунт, поэтому настройка остановилась до сопряжения. Попробуйте ещё раз.',
@@ -10595,6 +10640,7 @@ settingsSession: {
     providerStateSharingDegraded: "Совместное использование состояния провайдера применено частично",
     connectedServiceRuntimeAuthRecoveryRecovered: "Аутентификация провайдера восстановлена",
     connectedServiceRuntimeAuthRecoveryCancelled: "Восстановление аутентификации провайдера отменено",
+        connectedServiceRuntimeAuthRecoveryStopped: "Восстановление провайдера остановлено; автоматических повторов не будет",
     runtimeConfigOutcomeAppliesBeforeNextMessage: "Применится перед вашим следующим сообщением",
     runtimeConfigOutcomeQueuedUntilReady: "В очереди до готовности",
     runtimeConfigOutcomeAlreadySet: "Уже установлено",

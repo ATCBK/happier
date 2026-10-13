@@ -2276,6 +2276,19 @@ export const de: TranslationStructure = {
     },
 
     connectedServices: {
+        importAccounts: {
+            unknownResult: "Das Ergebnis des Imports ist unbekannt. Aktualisiere die Kontoliste und prüfe dieses Profil vor einem neuen Versuch.",
+            title: "Vorhandene Anmeldung importieren",
+            failed: "Die Anmeldung konnte nicht importiert werden. Prüfe die Anmeldung auf dem gewählten Rechner und versuche es erneut.",
+            actionDescription: "Eine Anmeldung von einem deiner Rechner kopieren",
+            description: "Kopiere die Anmeldung in dieses verschlüsselte Profil. Gemeinsame Aktualisierungstoken können wechseln; die lokale App kann eine erneute Anmeldung verlangen.",
+            unsupported: "Import nicht verfügbar. Wähle einen anderen Rechner oder aktualisiere dessen CLI.",
+            credentialsUnavailable: "Keine nutzbare Anmeldung gefunden. Melde dich in der lokalen App an und versuche es erneut.",
+            profileConflict: "Das Profil gehört zu einem anderen Konto oder wurde beim Import geändert. Wähle einen neuen Namen.",
+            reauthorizationRequired: "Melde dich erneut in der lokalen App an und versuche es nochmals.",
+            imported: "Anmeldung importiert",
+            refreshFailed: "Die Anmeldung wurde importiert, aber die Kontoliste wurde nicht aktualisiert. Öffne die verbundenen Dienste erneut.",
+        },
         subscription: {
             title: "Abonnement",
             currentPeriod: "Aktueller Zeitraum",
@@ -2305,6 +2318,7 @@ export const de: TranslationStructure = {
             openai: 'OpenAI-API-Key',
             anthropic: 'Anthropic-API-Key',
             gemini: 'Google Gemini',
+            antigravity: 'Google Antigravity',
             github: 'GitHub',
         },
         title: 'Verbundene Dienste',
@@ -2498,7 +2512,6 @@ export const de: TranslationStructure = {
             },
         },
         quota: {
-            refreshing: 'Nutzung wird aktualisiert…',
             loading: 'Wird geladen…',
             error: ({ message }: { message: string }) => `Fehler: ${message}`,
             lastUpdated: ({ time }: { time: string }) => `Zuletzt aktualisiert: ${time}`,
@@ -2540,6 +2553,21 @@ export const de: TranslationStructure = {
             resets: {
                 use: 'Verwenden',
                 available: 'Reset verfügbar',
+                remainingCount: ({ count }: { count: number }) => `Gespeicherte Resets: ${count}`,
+                appliesTo: ({ limits }: { limits: string }) => `Gilt für: ${limits}`,
+                fiveHourLimit: "5-Stunden-Limit",
+                weeklyLimit: "Wochenlimit",
+                unavailableReasons: {
+                    paused: "Pausiert",
+                    cooldown: "Wartezeit läuft",
+                    ineligible: "Nicht berechtigt",
+                    not_selected: "Nicht ausgewählt",
+                    provider_unavailable: "Anbieter nicht verfügbar",
+                    not_started: "Noch nicht gestartet",
+                    expired: "Abgelaufen",
+                    consumed: "Bereits verwendet",
+                    unknown: "Derzeit nicht verfügbar",
+                },
                 rowLabel: ({ date, countdown }: { date: string; countdown: string }) => `Läuft ab ${date} · ${countdown}`,
                 now: 'jetzt',
                 inDays: ({ days }: { days: number }) => `in ${days}T`,
@@ -2561,6 +2589,12 @@ export const de: TranslationStructure = {
             pasteRedirectUrlPromptBody:
                 '1) Melde dich auf der Seite an, die sich öffnet. 2) Kopier die finale URL aus der Adressleiste deines Browsers. 3) Füg sie unten ein.',
             providerOverrides: {
+                antigravity: {
+                    connectWebDescription: "Nächster Schritt: Melde dich mit Google an. Antigravity zeigt einen Autorisierungscode zum Kopieren.",
+                    pasteRedirectUrlPromptBody: "1) Melde dich mit Google an. 2) Kopiere den auf antigravity.google angezeigten Autorisierungscode. 3) Füge ihn unten ein und lasse diese Anmeldung geöffnet.",
+                    pasteRedirectUrlPlaceholder: "Antigravity-Autorisierungscode einfügen",
+                    pasteRedirectUrlTitle: "Autorisierungscode einfügen",
+                },
                 claudeSubscription: {
                     connectWebDescription:
                         'Nächster Schritt: Melde dich auf der Seite an, die sich öffnet. Claude zeigt womöglich eine Code-Zeichenfolge an, statt automatisch weiterzuleiten.',
@@ -2642,6 +2676,7 @@ export const de: TranslationStructure = {
             addOauthProfileDeviceTitle: 'Über Geräte-Auth hinzufügen',
             addOauthProfileDeviceSubtitle: 'Empfohlen für Web- und Headless-Abläufe',
             addOauthProfilePasteTitle: 'Über eingefügte Redirect-URL hinzufügen',
+            signInWithGoogle: 'Mit Google anmelden',
             addOauthProfilePasteSubtitle: 'Manueller Ablauf mit kopierter Redirect-URL',
             addOauthProfileBrowserTitle: 'Über In-App-Browser hinzufügen',
             addOauthProfileBrowserSubtitle: 'Wo unterstützt einen eingebetteten Browser nutzen',
@@ -2685,6 +2720,7 @@ export const de: TranslationStructure = {
             errors: {
                 credentialReferencedByGroup: 'Dieses Konto wird noch von einem Konto-Pool genutzt. Entferne es aus dem Pool und versuch es dann noch einmal.',
                 credentialNotFound: 'Dieses verbundene Konto wurde bereits entfernt.',
+                serviceUnsupportedServer: 'Dieser Relay unterstützt diesen verbundenen Dienst nicht. Aktualisiere den Relay, um ihn zu verbinden.',
                 credentialRequestFailed: 'Die Anfrage zum verbundenen Konto ist fehlgeschlagen. Aktualisiere die verbundenen Dienste und versuch es noch einmal.',
                 groupRequestFailed: 'Die Anfrage zum Konto-Pool ist fehlgeschlagen. Aktualisiere die verbundenen Dienste und versuch es noch einmal.',
                 generationConflict: 'Dieser Konto-Pool hat sich vor dem Abschluss der Aktion geändert. Aktualisiere die verbundenen Dienste und versuch es noch einmal.',
@@ -4837,6 +4873,14 @@ export const de: TranslationStructure = {
     },
 
     sessionHandoff: {
+        transferSessionData: {
+          title: "Sitzungsdaten übertragen",
+          subtitle: "Kopiert den Gesprächsverlauf dieser Sitzung auf den anderen Rechner. Ausschalten, wenn er dort bereits vorhanden ist.",
+          checking: "Unterstützung auf beiden Rechnern wird geprüft…",
+          updateRequired: "Aktualisiere Happier auf beiden Rechnern, um dies auszuschalten.",
+          sessionMissing: "Der Gesprächsverlauf dieser Sitzung ist auf dem Zielrechner nicht vorhanden. Aktiviere „Sitzungsdaten übertragen“ und versuche es erneut.",
+          workspaceRequiresTransfer: "Aktiviere „Sitzungsdaten übertragen“, um Workspace-Dateien zu kopieren oder zu synchronisieren.",
+        },
         activeWarning: {
             title: 'Diese Session läuft hier noch',
             message: 'Beim Übergeben wird diese Session auf diesem Rechner gestoppt, bevor sie auf den gewählten Rechner wandert.',
@@ -9760,6 +9804,7 @@ settingsSession: {
         blockedTitle: 'Einrichtung angehalten',
         blockedStatusFallback: 'Die Einrichtung konnte nicht abgeschlossen werden. Dein Konto und deine Sitzungen bleiben unverändert.',
         blockedServiceConflictStatus: 'Ein anderer Hintergrunddienst auf diesem Computer muss zuerst geklärt werden. Er blieb, wie er war – öffne Details, um zu sehen, welcher.',
+        blockedServiceManagerUnavailableStatus: 'Happier kann den Hintergrunddienst auf diesem Computer nicht einrichten. Öffne Details für Hilfe oder nutze deine anderen Computer weiter.',
         blockedConsentDeclinedStatus: 'Die Einrichtung wurde gestoppt. Der bereits vorhandene Hintergrunddienst blieb genau so, wie er war.',
         blockedAccountKeptStatus: 'Die Einrichtung wurde gestoppt. Dieser Computer bleibt mit dem Konto verbunden, mit dem er angemeldet ist.',
         blockedAccountChangedStatus: 'Dieser Computer hat sich während der Einrichtung bei einem anderen Konto angemeldet, daher wurde die Einrichtung vor dem Koppeln gestoppt. Versuch es noch einmal.',
@@ -10036,6 +10081,7 @@ settingsSession: {
         providerStateSharingDegraded: 'Teilen des Provider-Zustands teilweise angewendet',
         connectedServiceRuntimeAuthRecoveryRecovered: 'Provider-Authentifizierung wiederhergestellt',
         connectedServiceRuntimeAuthRecoveryCancelled: 'Wiederherstellung der Provider-Authentifizierung abgebrochen',
+        connectedServiceRuntimeAuthRecoveryStopped: "Provider-Wiederherstellung beendet; kein automatischer neuer Versuch",
         runtimeConfigOutcomeAppliesBeforeNextMessage: 'Gilt ab deiner nächsten Nachricht',
         runtimeConfigOutcomeQueuedUntilReady: 'Eingereiht, bis bereit',
         runtimeConfigOutcomeAlreadySet: 'Schon gesetzt',
