@@ -40,6 +40,7 @@ import {
 } from './sessionHttpCompat';
 import {
   buildSessionOwnerMetadataUnavailableShell,
+  isSessionAgentStateVisible,
   projectSessionLayout1LockedOwnerVisibility,
   projectSessionLayout1OwnerMetadata,
   readSessionLayout1OwnerMetadata,
@@ -698,8 +699,10 @@ export async function fetchAndApplySessionById(params: Readonly<{
           ?? Promise.resolve(null)
         )
       : sessionEncryption!.decryptMetadata(row.metadataVersion, row.metadata, metadataDecryptOptions);
-  const agentStatePromise = metadataLayoutVersion === 1
-    && ownerMetadataRead?.kind !== 'owner'
+  const agentStatePromise = !isSessionAgentStateVisible({
+    metadataLayoutVersion, access,
+    ownerMetadataAvailable: ownerMetadataRead?.kind === 'owner', contentAvailability,
+  })
       ? Promise.resolve(null)
       : encryptionMode === 'plain'
         ? Promise.resolve(parsePlainSessionAgentState(row.agentState ?? null))

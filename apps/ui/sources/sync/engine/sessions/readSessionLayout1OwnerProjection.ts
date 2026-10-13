@@ -2,13 +2,31 @@ import { openSessionOwnerMetadataEnvelopeV1 } from '@happier-dev/protocol/sessio
 import { projectSessionOwnerCompatibilityViewV1, validateSessionOwnerMetadataEnvelopeForAccountModeV1, type SessionOwnerMetadataEnvelopeV1, type SessionOwnerMetadataV1, type SessionSharedMetadataV1 } from '@happier-dev/protocol/sessions/metadata/sessionMetadataSchemasV1';
 import type { AccountEncryptionCurrentnessResponse } from '@happier-dev/protocol/account/encryptionMode';
 
-import type { NormalizedSessionAccessProjection } from './normalizeSessionAccessProjection';
+import { isSessionAccessOwner, type NormalizedSessionAccessProjection } from './normalizeSessionAccessProjection';
 import { ComposerOptionsInputV1Schema, projectComposerOptionsInputV1, type ComposerOptionsInputV1 } from '@happier-dev/protocol/embed';
 
 import type { AuthCredentials } from '@/auth/storage/tokenStorage';
 import { MetadataSchema, type Metadata } from '@happier-dev/session-core/state';
 import { resolveAccountScopedCryptoMaterialFromCredentials } from '@/sync/domains/connectedServices/resolveAccountScopedCryptoMaterialFromCredentials';
-import type { SessionContentAvailability } from '@/sync/domains/session/encryptedContentAvailability';
+import { isSessionContentReadable, type SessionContentAvailability } from '@/sync/domains/session/encryptedContentAvailability';
+import { readSessionMetadataLayoutVersion } from './parsePlainSessionPayload';
+
+/** Full AgentState is owner-private in layout 1, including presentation commands. */
+export function isSessionAgentStateVisible(params: Readonly<{
+    metadataLayoutVersion?: unknown;
+    access?: NormalizedSessionAccessProjection | null;
+    accessLevel?: unknown;
+    /** Established by the owner-envelope reader or its retained opened projection. */
+    ownerMetadataAvailable: boolean;
+    contentAvailability: SessionContentAvailability | null;
+}>): boolean {
+    const layout = readSessionMetadataLayoutVersion(params.metadataLayoutVersion);
+    if (layout === 0) return true;
+    return layout === 1
+        && isSessionAccessOwner(params.access, params.accessLevel)
+        && params.ownerMetadataAvailable
+        && isSessionContentReadable(params.contentAvailability);
+}
 
 /** One safe outcome when the layout-1 owner view cannot be opened or projected. */
 export function buildSessionOwnerMetadataUnavailableShell<T extends Readonly<{

@@ -12,7 +12,9 @@ import {
     type SessionListRenderableSession,
 } from '@/sync/domains/session/listing/sessionListRenderable';
 import { buildSessionListRenderableMetadataComparison } from '@/sync/domains/session/listing/sessionListRenderableMetadataComparison';
-import { isSessionListRenderableOwnerProjection } from '@/sync/domains/session/listing/sessionListRenderableSessionProjection';
+import { isSessionListRenderableOwnerProjection, readSessionListRenderableOwnerMetadataView } from '@/sync/domains/session/listing/sessionListRenderableSessionProjection';
+import { readSessionOwnerMetadataView } from '@/sync/domains/session/readSessionOwnerMetadataView';
+import { isSessionAgentStateVisible } from './readSessionLayout1OwnerProjection';
 
 import { storage } from '@/sync/domains/state/storage';
 import { readExternalSessionStorageState } from './sessionHttpCompat';
@@ -26,7 +28,7 @@ import {
     type Encryption,
     type EncryptionGenerationScopeAuthority,
 } from '@/sync/encryption/encryption';
-import { deriveSessionContentAvailability } from '@/sync/domains/session/encryptedContentAvailability';
+import { deriveSessionContentAvailability, readSessionContentAvailability } from '@/sync/domains/session/encryptedContentAvailability';
 import {
     createSessionDataKeyHydrationPlan,
     hydrateSessionDataKeys,
@@ -642,15 +644,30 @@ export async function buildUpdatedSessionFromSocketUpdate(params: {
             && metadataRevisionAdvances
         : false;
     const hasStatePayload = hydrateMetadata || hydrateAgentState;
+    const agentStateVisibility = {
+        metadataLayoutVersion: nextMetadataLayoutVersion,
+        access: projectionSession.access,
+        accessLevel: projectionSession.accessLevel,
+        ownerMetadataAvailable: storedMetadataLayoutVersion === nextMetadataLayoutVersion
+            && readSessionOwnerMetadataView(projectionSession) !== null,
+    };
     const shouldBatchDecryptState = Boolean(
         hydrateMetadata
         && hydrateAgentState
         && encryptionMode === 'e2ee'
         && nextMetadataLayoutVersion !== 1
+        && isSessionAgentStateVisible({ ...agentStateVisibility,
+            contentAvailability: readSessionContentAvailability(projectionSession) })
         && sessionEncryption?.decryptSessionSnapshotState,
     );
     let metadataAuthenticationFailed = false;
     const metadataDecryptOptions = { onAuthenticationFailure: () => { metadataAuthenticationFailed = true; } };
+    const readUpdatedContentAvailability = () => hydrateMetadata
+        ? deriveSessionContentAvailability({
+            hydrationState: encryptionMode === 'plain' ? 'not_required' : 'ready',
+            contentAuthenticationFailed: metadataAuthenticationFailed,
+        })
+        : readSessionContentAvailability(projectionSession);
     const resolveUpdatedState = async (): Promise<{
         agentState: AgentState | null;
         metadata: Metadata | null;
@@ -671,14 +688,6 @@ export async function buildUpdatedSessionFromSocketUpdate(params: {
                 agentState: decryptedState.agentState,
             };
         }
-
-        const agentStatePromise = nextMetadataLayoutVersion === 1
-            ? Promise.resolve(null)
-            : updateBody.agentState && hydrateAgentState
-            ? encryptionMode === 'plain'
-                ? Promise.resolve(parsePlainSessionAgentState(updateBody.agentState.value))
-                : sessionEncryption!.decryptAgentState(updateBody.agentState.version, updateBody.agentState.value)
-            : Promise.resolve(session.agentState);
 
         const metadataPromise = updateBody.metadata && hydrateMetadata
             ? encryptionMode === 'plain'
@@ -705,10 +714,25 @@ export async function buildUpdatedSessionFromSocketUpdate(params: {
                     ))
             : Promise.resolve(session.metadata);
 
+        const readUpdatedAgentState = () => !isSessionAgentStateVisible({
+            ...agentStateVisibility, contentAvailability: readUpdatedContentAvailability(),
+        })
+            ? Promise.resolve(null)
+            : updateBody.agentState && hydrateAgentState
+                ? encryptionMode === 'plain'
+                    ? Promise.resolve(parsePlainSessionAgentState(updateBody.agentState.value))
+                    : sessionEncryption!.decryptAgentState(updateBody.agentState.version, updateBody.agentState.value)
+                : Promise.resolve(session.agentState);
+        // A newly authenticated shared tuple can recover an opened owner. Resolve
+        // that current content fact before deciding whether to open its private state.
+        const agentStatePromise = nextMetadataLayoutVersion === 1
+            ? metadataPromise.then(readUpdatedAgentState)
+            : readUpdatedAgentState();
+
         const [agentState, metadata] = await Promise.all([agentStatePromise, metadataPromise]);
         return { agentState, metadata };
     };
-    const { agentState, metadata } = hasStatePayload
+    const { agentState: openedAgentState, metadata } = hasStatePayload
         ? await syncPerformanceTelemetry.measureAsync(
             'sync.sessions.socket.updateSession.decryptState',
             {
@@ -721,6 +745,9 @@ export async function buildUpdatedSessionFromSocketUpdate(params: {
             resolveUpdatedState,
         )
         : await resolveUpdatedState();
+    const agentState = !metadataAuthenticationFailed && isSessionAgentStateVisible({
+        ...agentStateVisibility, contentAvailability: readUpdatedContentAvailability(),
+    }) ? openedAgentState : null;
     const mergedMetadata = nextMetadataLayoutVersion === 1
         ? metadata
         : preserveSessionRuntimeLocalMetadata(session.metadata, metadata);
@@ -728,10 +755,7 @@ export async function buildUpdatedSessionFromSocketUpdate(params: {
     const nextSession: Session = {
         ...projectionSession,
         ...(hydrateMetadata ? {
-            encryptedContentAvailability: deriveSessionContentAvailability({
-                hydrationState: encryptionMode === 'plain' ? 'not_required' : 'ready',
-                contentAuthenticationFailed: metadataAuthenticationFailed,
-            }),
+            encryptedContentAvailability: readUpdatedContentAvailability(),
         } : {}),
         metadataLayoutVersion: hydrateMetadata
             ? nextMetadataLayoutVersion
@@ -823,7 +847,20 @@ export async function buildUpdatedSessionListRenderablePatchFromSocketUpdate(par
     const parsedAgentState =
         !updateBody.agentState || !hydrateAgentState
             ? undefined
-            : nextMetadataLayoutVersion === 1
+            : !isSessionAgentStateVisible({
+                metadataLayoutVersion: nextMetadataLayoutVersion,
+                access: renderable.access,
+                accessLevel: renderable.accessLevel,
+                ownerMetadataAvailable: storedMetadataLayoutVersion === nextMetadataLayoutVersion
+                    && renderable.metadataUnavailable !== true
+                    && readSessionListRenderableOwnerMetadataView(renderable) !== null,
+                contentAvailability: hydrateMetadata
+                    ? deriveSessionContentAvailability({
+                        hydrationState: sessionEncryption ? 'ready' : 'not_required',
+                        contentAuthenticationFailed: metadataAuthenticationFailed,
+                    })
+                    : readSessionContentAvailability(renderable),
+            })
                 ? null
             : sessionEncryption
                 ? await sessionEncryption.decryptAgentState(updateBody.agentState.version, updateBody.agentState.value)

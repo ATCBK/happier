@@ -1,11 +1,15 @@
 import { afterEach, describe, expect, it, vi } from 'vitest';
+import { AgentStateSchema } from '@happier-dev/session-core/state';
 
 import type { Session } from '@/sync/domains/state/storageTypes';
 import type { SessionListRenderableSession } from '@/sync/domains/session/listing/sessionListRenderable';
 import type { EncryptionScopeInput } from '@/sync/encryption/encryption';
 import { storage } from '@/sync/domains/state/storage';
 import { syncPerformanceTelemetry } from '@/sync/runtime/syncPerformanceTelemetry';
-import { createSessionAccessFixture, createSessionListRenderableSessionFixture } from '@/dev/testkit/fixtures/sessionFixtures';
+import { SessionEncryption } from '@/sync/encryption/sessionEncryption';
+import { SecretBoxEncryption } from '@/sync/encryption/encryptor';
+import { EncryptionCache } from '@/sync/encryption/encryptionCache';
+import { createSessionAccessFixture, createSessionFixture, createSessionListRenderableSessionFixture } from '@/dev/testkit/fixtures/sessionFixtures';
 import {
   buildNewSessionFromSocketUpdate,
   buildUpdatedSessionFromSocketUpdate,
@@ -45,6 +49,93 @@ function createDeferred<T>(): {
 }
 
 describe('buildUpdatedSessionFromSocketUpdate (plaintext)', () => {
+  it.each([
+    { name: 'opened owner', layout: 1, access: createSessionAccessFixture(), ownerMetadataView: { path: '/private' }, availability: 'ready' as const, retained: true },
+    { name: 'recipient with a stale owner view', layout: 1, access: createSessionAccessFixture('view'), ownerMetadataView: { path: '/private' }, availability: 'ready' as const, retained: false },
+    { name: 'unavailable access with a stale owner view', layout: 1, access: null, ownerMetadataView: { path: '/private' }, availability: 'ready' as const, retained: false },
+    { name: 'unopened owner', layout: 1, access: createSessionAccessFixture(), ownerMetadataView: null, availability: 'ready' as const, retained: false },
+    { name: 'locked owner visibility', layout: 1, access: createSessionAccessFixture(), ownerMetadataView: {}, availability: 'encrypted_content_unavailable' as const, retained: false },
+    { name: 'unsupported layout', layout: 2, access: createSessionAccessFixture(), ownerMetadataView: { path: '/private' }, availability: 'ready' as const, retained: false },
+    { name: 'legacy layout', layout: 0, access: createSessionAccessFixture('view'), ownerMetadataView: null, availability: 'ready' as const, retained: true },
+  ])('uses $name authority for both new and retained AgentState', async ({ layout, access, ownerMetadataView, availability, retained }) => {
+    const state = AgentStateSchema.parse({ controlledByUser: true, requests: { permission: { tool: 'Bash', arguments: {}, createdAt: 1 } } });
+    const session = createSessionFixture({ metadataLayoutVersion: layout, access, ownerMetadataView,
+      encryptedContentAvailability: availability, agentState: state });
+    const updated = await buildUpdatedSessionFromSocketUpdate({ session,
+      updateBody: { agentState: { version: 2, value: JSON.stringify(state) } },
+      updateSeq: 2, updateCreatedAt: 2, sessionEncryption: null });
+    expect(updated.agentState).toEqual(retained ? state : null);
+    const withoutPayload = await buildUpdatedSessionFromSocketUpdate({ session,
+      updateBody: { active: true }, updateSeq: 2, updateCreatedAt: 2, sessionEncryption: null });
+    expect(withoutPayload.agentState).toBe(retained ? state : null);
+    const renderable = createSessionListRenderableSessionFixture({ metadataLayoutVersion: layout, access,
+      metadata: ownerMetadataView ? { path: '/private' } : null, encryptedContentAvailability: availability });
+    const patch = await buildUpdatedSessionListRenderablePatchFromSocketUpdate({ renderable,
+      updateBody: { agentState: { version: 2, value: JSON.stringify(state) } },
+      updateSeq: 2, updateCreatedAt: 2, sessionEncryption: null });
+    expect(patch.hasPendingPermissionRequests).toBe(retained);
+  });
+
+  it('contracts owner AgentState when the same encrypted socket tuple fails shared-metadata authentication', async () => {
+    const state = AgentStateSchema.parse({ requests: { permission: { tool: 'Bash', arguments: {}, createdAt: 1 } } });
+    const session = createSessionFixture({ metadataLayoutVersion: 1, encryptionMode: 'e2ee',
+      ownerMetadataView: { path: '/private' }, agentState: state });
+    const reader = new SessionEncryption(session.id, new SecretBoxEncryption(new Uint8Array(32).fill(7)), new EncryptionCache());
+    const updateBody = { metadata: { version: 2, value: 'invalid-ciphertext' },
+      agentState: { version: 2, value: await reader.encryptRaw(state) } };
+    const updated = await buildUpdatedSessionFromSocketUpdate({ session, updateBody,
+      updateSeq: 2, updateCreatedAt: 2, sessionEncryption: reader });
+    expect(updated.nextSession.encryptedContentAvailability).toBe('encrypted_content_unavailable');
+    expect(updated.agentState).toBeNull();
+    const renderable = createSessionListRenderableSessionFixture({ metadataLayoutVersion: 1, encryptionMode: 'e2ee' });
+    const patch = await buildUpdatedSessionListRenderablePatchFromSocketUpdate({ renderable, updateBody,
+      updateSeq: 2, updateCreatedAt: 2, sessionEncryption: reader });
+    expect(patch.encryptedContentAvailability).toBe('encrypted_content_unavailable');
+    expect(patch.hasPendingPermissionRequests).toBe(false);
+  });
+
+  it('does not let combined encrypted metadata and AgentState bypass unsupported-layout visibility', async () => {
+    const state = AgentStateSchema.parse({ requests: { permission: { tool: 'Bash', arguments: {}, createdAt: 1 } } });
+    const session = createSessionFixture({ metadataLayoutVersion: 2, encryptionMode: 'e2ee',
+      ownerMetadataView: { path: '/private' }, agentState: state });
+    const reader = new SessionEncryption(session.id, new SecretBoxEncryption(new Uint8Array(32).fill(7)), new EncryptionCache());
+    const updateBody = { metadata: { version: 2, value: await reader.encryptRaw({ path: '/private' }) },
+      agentState: { version: 2, value: await reader.encryptRaw(state) } };
+    const updated = await buildUpdatedSessionFromSocketUpdate({ session, updateBody,
+      updateSeq: 2, updateCreatedAt: 2, sessionEncryption: reader });
+    expect(updated.agentState).toBeNull();
+  });
+
+  it('hydrates a recovered owner command from the same newly authenticated encrypted tuple', async () => {
+    const state = AgentStateSchema.parse({ requests: { permission: { tool: 'Bash', arguments: {}, createdAt: 1 } } });
+    const session = createSessionFixture({ metadataLayoutVersion: 1, encryptionMode: 'e2ee',
+      encryptedContentAvailability: 'encrypted_content_unavailable', ownerMetadataView: { path: '/private' } });
+    const reader = new SessionEncryption(session.id, new SecretBoxEncryption(new Uint8Array(32).fill(7)), new EncryptionCache());
+    const updateBody = { metadata: { version: 2, value: await reader.encryptRaw({ v: 1 }) },
+      agentState: { version: 2, value: await reader.encryptRaw(state) } };
+    const updated = await buildUpdatedSessionFromSocketUpdate({ session, updateBody,
+      updateSeq: 2, updateCreatedAt: 2, sessionEncryption: reader });
+    expect(updated.nextSession.encryptedContentAvailability).toBe('ready');
+    expect(updated.agentState).toEqual(state);
+    const patch = await buildUpdatedSessionListRenderablePatchFromSocketUpdate({
+      renderable: createSessionListRenderableSessionFixture({ metadataLayoutVersion: 1, encryptionMode: 'e2ee',
+        encryptedContentAvailability: 'encrypted_content_unavailable' }),
+      updateBody, updateSeq: 2, updateCreatedAt: 2, sessionEncryption: reader,
+    });
+    expect(patch.encryptedContentAvailability).toBe('ready');
+    expect(patch.hasPendingPermissionRequests).toBe(true);
+  });
+
+  it('does not treat a legacy owner list view as an opened layout-1 owner envelope during contraction', async () => {
+    const state = AgentStateSchema.parse({ requests: { permission: { tool: 'Bash', arguments: {}, createdAt: 1 } } });
+    const patch = await buildUpdatedSessionListRenderablePatchFromSocketUpdate({
+      renderable: createSessionListRenderableSessionFixture({ metadataLayoutVersion: 0 }),
+      updateBody: { metadataLayoutVersion: 1, agentState: { version: 2, value: JSON.stringify(state) } },
+      updateSeq: 2, updateCreatedAt: 2, sessionEncryption: null,
+    });
+    expect(patch.hasPendingPermissionRequests).toBe(false);
+  });
+
   it('does not admit a malformed layout into a list row when the Session tuple owner rejects it', async () => {
     const renderable = createSessionListRenderableSessionFixture({
       metadataLayoutVersion: 0, metadataVersion: 1,

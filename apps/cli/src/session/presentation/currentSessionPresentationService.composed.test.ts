@@ -1,8 +1,11 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
+// Real UI Sync/storage needs the owning harness's native platform boundaries.
+import '../../../../ui/sources/dev/vitestSetup';
 
 import { AgentStateSchema } from '@happier-dev/session-core/state';
 import { SOCKET_RPC_AUTHORIZATION_CONTEXT_KINDS } from '@happier-dev/protocol/rpc';
 import { SessionMetadataTuplePatchV1Schema, SessionMetadataTuplePatchSuccessV1Schema } from '@happier-dev/protocol/sessions/metadata/sessionMetadataSchemasV1';
+import { V2SessionRecordSchema } from '@happier-dev/protocol/sessions/control/contract';
 import {
   CURRENT_SESSION_PRESENTATION_ACK_RPC_METHOD,
   CURRENT_SESSION_PRESENTATION_APPLY_RPC_METHOD,
@@ -13,10 +16,13 @@ import {
 } from '@happier-dev/protocol/sessions/presentation/currentSessionPresentationV1';
 import { createTestApiSessionClient } from '@/testkit/backends/createTestApiSessionClient';
 import { createApiSessionSocketStub, createSessionRuntimeActivityHomeStub, createSessionTranscriptHomeStub, createSessionTurnMutationAppliedSocketAck } from '@/testkit/backends/apiSessionSocketHarness';
-import { createAccountEncryptionCurrentnessFixture, createPlainSessionFixture } from '@/testkit/backends/sessionFixtures';
+import { createAccountEncryptionCurrentnessFixture, createPlainSessionFixture, createSessionNotificationContextFixture } from '@/testkit/backends/sessionFixtures';
 import { ApiSessionClient } from '@/api/session/sessionClient';
 import { encrypt, encodeBase64 } from '@/api/encryption';
 import { parsePlainSessionAgentState } from '../../../../ui/sources/sync/engine/sessions/parsePlainSessionPayload';
+import { buildUpdatedSessionFromSocketUpdate } from '../../../../ui/sources/sync/engine/sessions/syncSessions';
+import { fetchAndApplySessionById } from '../../../../ui/sources/sync/engine/sessions/sessionById';
+import { storage as uiStorage } from '../../../../ui/sources/sync/domains/state/storageStore';
 import { SessionEncryption } from '../../../../ui/sources/sync/encryption/sessionEncryption';
 import { SecretBoxEncryption } from '../../../../ui/sources/sync/encryption/encryptor';
 import { EncryptionCache } from '../../../../ui/sources/sync/encryption/encryptionCache';
@@ -32,7 +38,7 @@ import { createCustomAcpAgentRuntime } from '../../../../../packages/plugins/cus
 import { writeAcpTestAgentScript } from '@/agent/acp/testkit/subprocessHarness';
 import { withTempDir } from '@/testkit/fs/tempDir';
 import { resolveEffectiveCodingPromptPlan } from '@/agent/prompting/coding/resolveEffectiveCodingPrompt';
-import { AgentSessionStartupInstructionsV1Schema, FeaturesResponseSchema, PluginAgentContributionV2Schema, SessionTurnMutationV1Schema, type AgentSessionRuntimeEvent } from '@happier-dev/protocol';
+import { AgentSessionStartupInstructionsV1Schema, FeaturesResponseSchema, PluginAgentContributionV2Schema, SessionTurnMutationV1Schema, UpdateBodySchema, type AgentSessionRuntimeEvent } from '@happier-dev/protocol';
 import { readFile } from 'node:fs/promises';
 import { join } from 'node:path';
 import { AgentRuntimeDaemonSessionOpenRequestV1Schema } from '@/agent/runtime/session/process/agentRuntimeRunnerProtocol';
@@ -101,11 +107,13 @@ describe('current-session presentation publication composition', () => {
     await withTempDir('happier-presentation-composed-', async (directory) => {
     const session = createPlainSessionFixture({ id: 'presentation-composed', metadataLayoutVersion: 1 });
     let stored = {
+      ...createSessionNotificationContextFixture(session.id),
       ...session,
       metadata: JSON.stringify({ v: 1, machineId: 'presentation-machine' }),
       ownerMetadata: { t: 'plain' as const, v: { v: 1 as const } },
       agentState: null as string | null,
       dataEncryptionKey: null,
+      share: null,
     };
     boundary.fetch.mockImplementation(async () => stored);
     // Only HTTP persistence is replaced. The API client, tuple serializer,
@@ -131,6 +139,30 @@ describe('current-session presentation publication composition', () => {
       getAccountEncryptionCurrentness: async () => createAccountEncryptionCurrentnessFixture(),
     });
     clients.add(client);
+    const initialHydration = await fetchAndApplySessionById({
+      sessionId: session.id, credentials: { token: 'owner-token' },
+      accountCurrentness: createAccountEncryptionCurrentnessFixture(),
+      encryption: { decryptEncryptionKey: async () => null, initializeSessions: async () => {}, getSessionEncryption: () => null },
+      sessionDataKeys: new Map(), request: async () => Response.json({ session: V2SessionRecordSchema.parse(stored) }),
+      applySessions: sessions => uiStorage.getState().applySessions(sessions), log: { log: () => {} },
+    });
+    expect(initialHydration, JSON.stringify(initialHydration)).toMatchObject({ ok: true });
+    if (!initialHydration.ok || !initialHydration.session) throw new Error('Owner UI Session did not hydrate');
+    expect(initialHydration.session).toMatchObject({ metadataLayoutVersion: 1,
+      access: { role: 'owner' }, ownerMetadataView: expect.any(Object), encryptedContentAvailability: 'ready' });
+    const hydrateSocketState = async () => {
+      const uiSession = uiStorage.getState().sessions[session.id];
+      if (!uiSession) throw new Error('Owner Session absent from UI storage');
+      const update = await buildUpdatedSessionFromSocketUpdate({
+        session: uiSession,
+        updateBody: UpdateBodySchema.parse({ t: 'update-session', id: session.id, metadataLayoutVersion: stored.metadataLayoutVersion,
+          metadata: { version: stored.metadataVersion, value: stored.metadata },
+          agentState: { version: stored.agentStateVersion, value: stored.agentState } }),
+        updateSeq: stored.agentStateVersion, updateCreatedAt: stored.updatedAt, sessionEncryption: null,
+      });
+      uiStorage.getState().applySessions([update.nextSession]);
+      return uiStorage.getState().sessions[session.id]?.agentState;
+    };
     const metadata = client.getMetadataSnapshot();
     if (!metadata) throw new Error('Composed native Session metadata unavailable');
     const controller = new AbortController();
@@ -280,21 +312,26 @@ describe('current-session presentation publication composition', () => {
       expect(JSON.parse(stored.agentState ?? '{}')[CURRENT_SESSION_PRESENTATION_AGENT_STATE_KEY]?.command)
         .toMatchObject({ id: 'agent-computer-open', kind: 'presentation.apply', clientId: 'viewer-client', intent: { kind: 'viewer.open', source: 'computer' } });
     });
-    const hydrated = parsePlainSessionAgentState(stored.agentState);
-    const state = CurrentSessionPresentationStateV1Schema.parse(hydrated[CURRENT_SESSION_PRESENTATION_AGENT_STATE_KEY]);
+    const hydrated = await hydrateSocketState();
+    expect(hydrated).not.toBeNull();
+    const state = CurrentSessionPresentationStateV1Schema.parse(hydrated?.[CURRENT_SESSION_PRESENTATION_AGENT_STATE_KEY]);
     expect(state.hostNonce).toBe(bound.hostNonce);
-    const { [CURRENT_SESSION_PRESENTATION_AGENT_STATE_KEY]: omittedPresentation, ...withoutPresentation } = hydrated;
+    const { [CURRENT_SESSION_PRESENTATION_AGENT_STATE_KEY]: omittedPresentation, ...withoutPresentation } = hydrated!;
     expect(omittedPresentation).toBeDefined();
     expect(CurrentSessionPresentationStateV1Schema.safeParse(
       AgentStateSchema.parse(withoutPresentation)[CURRENT_SESSION_PRESENTATION_AGENT_STATE_KEY],
     ).success).toBe(false);
-    // The encrypted client reads the exact same producer state after real
-    // encryption/decryption, through its canonical AgentState hydration path.
+    // The encrypted client consumes the same producer through the real socket
+    // hydrator, rather than bypassing its layout/owner decision at decryptAgentState.
     const key = new Uint8Array(32).fill(7);
     const encryptedReader = new SessionEncryption(session.id, new SecretBoxEncryption(key), new EncryptionCache());
-    const encrypted = await encryptedReader.decryptAgentState(stored.agentStateVersion,
-      encodeBase64(encrypt(key, 'legacy', JSON.parse(stored.agentState!))));
-    expect(encrypted[CURRENT_SESSION_PRESENTATION_AGENT_STATE_KEY]).toEqual(state);
+    const encryptedUpdate = await buildUpdatedSessionFromSocketUpdate({
+      session: { ...initialHydration.session, encryptionMode: 'e2ee', encryptedContentAvailability: 'ready' },
+      updateBody: { agentState: { version: stored.agentStateVersion,
+        value: encodeBase64(encrypt(key, 'legacy', JSON.parse(stored.agentState!))) } },
+      updateSeq: stored.agentStateVersion, updateCreatedAt: stored.updatedAt, sessionEncryption: encryptedReader,
+    });
+    expect(encryptedUpdate.agentState?.[CURRENT_SESSION_PRESENTATION_AGENT_STATE_KEY]).toEqual(state);
     expect(AgentStateSchema.safeParse({ ...hydrated, [CURRENT_SESSION_PRESENTATION_AGENT_STATE_KEY]: { ...state, revision: -1 } }).success)
       .toBe(false);
     const appliedIntents: unknown[] = [];
@@ -314,14 +351,14 @@ describe('current-session presentation publication composition', () => {
     expect(await call(CURRENT_SESSION_PRESENTATION_ACK_RPC_METHOD, application!.ack)).toEqual({ status: 'accepted' });
     expect(await pending).toEqual({ ok: true, result: { status: 'applied', revision: `${bound.hostNonce}:${state.revision}` } });
     expect(CurrentSessionPresentationStateV1Schema.parse(
-      parsePlainSessionAgentState(stored.agentState)[CURRENT_SESSION_PRESENTATION_AGENT_STATE_KEY],
+      (await hydrateSocketState())?.[CURRENT_SESSION_PRESENTATION_AGENT_STATE_KEY],
     ).command).toBeUndefined();
 
     const uiPending = call(CURRENT_SESSION_PRESENTATION_APPLY_RPC_METHOD, { intent: { kind: 'viewer.open', source: 'computer' } });
     await vi.waitFor(() => expect(JSON.parse(stored.agentState ?? '{}')[CURRENT_SESSION_PRESENTATION_AGENT_STATE_KEY]?.command?.kind)
       .toBe('presentation.apply'));
     const uiState = CurrentSessionPresentationStateV1Schema.parse(
-      parsePlainSessionAgentState(stored.agentState)[CURRENT_SESSION_PRESENTATION_AGENT_STATE_KEY],
+      (await hydrateSocketState())?.[CURRENT_SESSION_PRESENTATION_AGENT_STATE_KEY],
     );
     const uiApplication = applyCurrentSessionPresentationCommand({
       state: uiState, hostNonce: bound.hostNonce, clientId: 'viewer-client', isCurrentSession: true,
@@ -334,7 +371,7 @@ describe('current-session presentation publication composition', () => {
     await vi.waitFor(() => expect(JSON.parse(stored.agentState ?? '{}')[CURRENT_SESSION_PRESENTATION_AGENT_STATE_KEY]?.command?.id)
       .toBe('agent-no-longer-current'));
     const rejectedState = CurrentSessionPresentationStateV1Schema.parse(
-      parsePlainSessionAgentState(stored.agentState)[CURRENT_SESSION_PRESENTATION_AGENT_STATE_KEY],
+      (await hydrateSocketState())?.[CURRENT_SESSION_PRESENTATION_AGENT_STATE_KEY],
     );
     const rejection = applyCurrentSessionPresentationCommand({
       state: rejectedState, hostNonce: bound.hostNonce, clientId: 'viewer-client', isCurrentSession: false,
