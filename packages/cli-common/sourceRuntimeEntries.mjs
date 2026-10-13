@@ -53,14 +53,14 @@ export async function readWorkspacePackages(repoDir) {
 
 /** Source producers use declared workspace dependencies, including compiler
  * tooling, rather than unrelated package source trees. */
-export function workspaceSourcePackageClosure(packages, roots, { includeDevDependencies = true } = {}) {
+export function workspaceSourcePackageClosure(packages, roots) {
   const selected = new Set();
   const visit = name => {
     if (selected.has(name) || !packages.has(name)) return;
     selected.add(name);
     const { manifest } = packages.get(name);
     for (const dependency of new Set([
-      ...Object.keys({ ...manifest.dependencies, ...(includeDevDependencies ? manifest.devDependencies : {}),
+      ...Object.keys({ ...manifest.dependencies, ...manifest.devDependencies,
         ...manifest.peerDependencies, ...manifest.optionalDependencies }),
       ...(manifest.bundledDependencies ?? []),
     ])) visit(dependency);
