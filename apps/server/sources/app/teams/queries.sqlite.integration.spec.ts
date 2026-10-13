@@ -1,5 +1,5 @@
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
-import { NO_TEAM_CAPABILITIES_V1 } from '@happier-dev/protocol';
+import { NO_TEAM_CAPABILITIES_V1, TeamSummaryV1Schema } from '@happier-dev/protocol';
 
 import { db } from '@/storage/db';
 import { inTx } from '@/storage/inTx';
@@ -445,6 +445,22 @@ describe('Team directory (SQLite integration)', () => {
     });
   });
 
+  it('keeps zero, archived and restored Group counts readable through the strict Team summary consumer', async () => {
+    const owner = await account();
+    const counted = await team(`Group counts ${crypto.randomUUID()}`, [owner]);
+    const read = async () => {
+      const result = await inTx(tx => readTeamSummaryForActorInTx(tx, { teamId: counted.id, actorAccountId: owner.id }));
+      expect(result.ok).toBe(true);
+      if (!result.ok) throw new Error(result.error);
+      return TeamSummaryV1Schema.parse(result.team);
+    };
+    expect((await read()).counts).toMatchObject({ groups: 0, archivedGroups: 0 });
+    const group = await db.teamGroup.create({ data: { teamId: counted.id, name: 'Archived', nameKey: 'archived-counts', archivedAt: new Date() } });
+    expect((await read()).counts).toMatchObject({ groups: 0, archivedGroups: 1 });
+    await db.teamGroup.update({ where: { id: group.id }, data: { archivedAt: null } });
+    expect((await read()).counts).toMatchObject({ groups: 1, archivedGroups: 0 });
+  });
+
   it('projects bounded Overview counts only to viewers who may read them', async () => {
     const owner = await account();
     const member = await account();
@@ -500,6 +516,7 @@ describe('Team directory (SQLite integration)', () => {
       members: 3,
       suspendedMembers: 1,
       groups: 2,
+      archivedGroups: 1,
       waitingInvitations: 1,
     });
     // `teams.get` and every mutation result project through the same owner.
@@ -513,6 +530,7 @@ describe('Team directory (SQLite integration)', () => {
       members: 3,
       suspendedMembers: 1,
       groups: 2,
+      archivedGroups: 1,
       waitingInvitations: 1,
     });
 
@@ -526,10 +544,12 @@ describe('Team directory (SQLite integration)', () => {
       members: 3,
       suspendedMembers: 1,
       groups: 2,
+      archivedGroups: 1,
       waitingInvitations: null,
     });
 
-    // Administrative visibility is not Team view authority: no counts.
+    // Home Team visibility permits coarse membership totals, never roster,
+    // Group or invitation facts (docs/teams.md, Summary counts).
     let administered = await list(homeAdmin.id, { scope: 'administered' });
     while (
       administered.ok &&
@@ -546,11 +566,16 @@ describe('Team directory (SQLite integration)', () => {
     const adminRow = administered.page.items.find(
       (item) => item.id === counted.id,
     );
-    // Home administration composes `viewTeam` for the row but never admits the
-    // roster, so the counts stay withheld.
+    // Home administration composes `viewTeam` without granting roster access.
     expect(adminRow?.capabilities.viewTeam).toBe(true);
     expect(adminRow?.capabilities.viewRoster).toBe(false);
-    expect(adminRow?.counts).toBeNull();
+    expect(adminRow?.counts).toEqual({
+      members: 3,
+      suspendedMembers: 1,
+      groups: null,
+      archivedGroups: null,
+      waitingInvitations: null,
+    });
 
     // Losing the last active owner admits safe roster recovery through the
     // same capability, without granting invitation-management authority.
@@ -571,6 +596,7 @@ describe('Team directory (SQLite integration)', () => {
       members: 3,
       suspendedMembers: 2,
       groups: 2,
+      archivedGroups: 1,
       waitingInvitations: null,
     });
   });

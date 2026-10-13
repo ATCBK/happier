@@ -1,29 +1,51 @@
-import { describe, expect, it } from "vitest";
+import { afterAll, beforeAll, describe, expect, it } from "vitest";
+import { db } from "@/storage/db";
+import { inTx } from "@/storage/inTx";
+import { createLightSqliteHarness, type LightSqliteHarness } from "@/testkit/lightSqliteHarness";
+import { createTeamInvitationForActorInTx } from "./invitationService";
+import { ACCOUNT_DISPLAY_PROFILE_SELECT, type AccountDisplayProfileRow } from "@/app/account/profile/accountDisplayProfile";
 import { TeamInvitationRowV1Schema } from "@happier-dev/protocol/teams";
 import type { TeamInvitationRecord } from "./invitationLifecycle";
-import { projectTeamInvitationRowV1 } from "./project";
+import { projectTeamInvitationRowV1 as produceTeamInvitationRowV1 } from "./project";
+
+// Every real producer result, including terminal and half-written delivery rows,
+// must be readable by the strict wire consumer before its behavior is asserted.
+function projectTeamInvitationRowV1(...args: Parameters<typeof produceTeamInvitationRowV1>) {
+    return TeamInvitationRowV1Schema.parse(produceTeamInvitationRowV1(...args));
+}
 
 const CREATED_AT = new Date("2026-09-06T00:00:00.000Z");
 const EXPIRES_AT = new Date("2026-09-13T00:00:00.000Z");
 
+let harness: LightSqliteHarness;
+let producedRecord: TeamInvitationRecord;
+let acceptingPerson: AccountDisplayProfileRow;
+
+beforeAll(async () => {
+    harness = await createLightSqliteHarness({ tempDirPrefix: "happier-invitation-projection-", initAuth: false });
+    const creator = await db.account.create({ data: { publicKey: crypto.randomUUID(), encryptionMode: "plain" } });
+    acceptingPerson = await db.account.create({
+        data: { publicKey: crypto.randomUUID(), encryptionMode: "plain", name: "Ada Lovelace", firstName: "Old", lastName: "Identity" },
+        select: ACCOUNT_DISPLAY_PROFILE_SELECT,
+    });
+    const team = await db.team.create({ data: { name: "Invitation projection" } });
+    await db.teamMembership.create({ data: { teamId: team.id, accountId: creator.id, role: "owner" } });
+    const created = await inTx(tx => createTeamInvitationForActorInTx(tx, {
+        teamId: team.id, actorAccountId: creator.id, role: "member", historyAccess: "from_membership",
+        recipientEmailNormalized: null, emailDeliveryAvailable: true, requestKey: crypto.randomUUID(),
+    }));
+    expect(created.ok).toBe(true);
+    if (!created.ok) throw new Error(created.error);
+    producedRecord = await db.teamInvitation.findUniqueOrThrow({ where: { id: created.value.invitation.id } });
+}, 120_000);
+
+afterAll(async () => { if (harness) await harness.close(); });
+
+// Start from the actual creation writer's stored row. Controlled timestamps and
+// corrupt/half-written storage fields exercise projection edges without copying
+// the internal persistence shape into a parallel fixture.
 function record(overrides: Partial<TeamInvitationRecord> = {}): TeamInvitationRecord {
-    return {
-        id: "inv-1",
-        teamId: "team-1",
-        tokenHash: new Uint8Array(32).fill(7),
-        recipientEmailNormalized: null,
-        role: "member",
-        historyAccess: "from_membership",
-        createdByAccountId: "account-1",
-        acceptedAt: null,
-        acceptedByAccountId: null,
-        revokedAt: null,
-        expiresAt: EXPIRES_AT,
-        lastEmailDeliveryStatus: null,
-        lastEmailDeliveryAttemptAt: null,
-        createdAt: CREATED_AT,
-        ...overrides,
-    };
+    return { ...producedRecord, createdAt: CREATED_AT, expiresAt: EXPIRES_AT, ...overrides };
 }
 
 describe("Team invitation projection", () => {
@@ -87,7 +109,7 @@ describe("Team invitation projection", () => {
     });
 
     it("projects the accepting Account through the shared neutral display-profile owner", () => {
-        const person = { id: "account-2", name: "Ada Lovelace", firstName: "Old", lastName: "Identity", username: null, avatar: null };
+        const person = acceptingPerson;
         const projected = projectTeamInvitationRowV1(record({
             acceptedAt: CREATED_AT, acceptedByAccountId: person.id,
         }), EXPIRES_AT, person);
