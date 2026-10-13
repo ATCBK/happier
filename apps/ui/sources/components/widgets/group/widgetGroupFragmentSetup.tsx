@@ -108,13 +108,16 @@ export function buildWidgetGroupFragmentEntry(
       inputs: fragment.inputs,
       inputSchema: fragment.inputSchema,
     };
-    // Asked once for the whole group: while it is still needed, the row says who follows the answer.
+    // Asked once for the whole group: the first input it is still needed for says who follows the
+    // answers, once, rather than every row repeating the same sentence.
     const askedOnce = t('widgetFrame.groupInputAskedOnce', { count: fragment.childCount });
-    const fields = widgetSetupFieldsForCandidate(
+    const baseFields = widgetSetupFieldsForCandidate(
       descriptor,
       input.context,
       'personal',
-    ).map((entry) => ({ ...entry, neededHint: askedOnce }));
+    );
+    const firstRequired = baseFields.findIndex((entry) => entry.field.required === true);
+    const fields = baseFields.map((entry, index) => (index === firstRequired ? { ...entry, neededHint: askedOnce } : entry));
     const providedContext = widgetProvidedContext(input.context);
     const definition = fragment.group.children[0]!.instance.definition;
     const widths = resolveWidgetGroupWidthChoices(

@@ -173,6 +173,20 @@ describe('a saved group in Add', () => {
       width: 'half',
     });
   });
+  it('explains the group-wide ask once, on the first input it is still needed for, never on every row', () => {
+    const fields = [
+      { path: 'agents', title: 'Agents', widget: 'select' as const, optionsSourceId: 'agents' },
+      { path: 'project', title: 'Project', widget: 'select' as const, optionsSourceId: 'projects', required: true },
+      { path: 'period', title: 'Period', widget: 'select' as const, optionsSourceId: 'periods', required: true },
+    ];
+    const fragment: WidgetLayoutFragmentSummaryV1 = { artifactId: 'release', name: 'Release check', childCount: 2,
+      inputs: { fields }, inputSchema: { type: 'object' }, origin: { kind: 'home' }, createdAt: Date.UTC(2026, 9, 8, 12),
+      group: { width: 'half', frameStyle: 'card', dividers: 'hairline', children: ['a', 'b'].map(localId => ({ kind: 'widget' as const,
+        instance: { v: 1 as const, definition: { kind: 'installed' as const, surface: { pluginId: 'acme.ci', localId } }, bindings: {} } })) } };
+    const setup = buildWidgetGroupFragmentEntry({ fragment, candidates: [], scope: { ...account, owner: { kind: 'home' } },
+      context: {}, submitLabel: 'Add', add: async () => ({ ok: true }), renderGroupPreview: () => 'group frame' }).setup!();
+    expect(setup.fields.map(entry => entry.neededHint !== undefined)).toEqual([false, true, false]);
+  });
   it('says where the group came from, asks once, keeps its own frame while waiting and names what Add does', () => {
     const field = { path: 'project', title: 'Project', widget: 'select' as const, optionsSourceId: 'projects', required: true };
     const fragment: WidgetLayoutFragmentSummaryV1 = { artifactId: 'release', name: 'Release check', childCount: 2,
