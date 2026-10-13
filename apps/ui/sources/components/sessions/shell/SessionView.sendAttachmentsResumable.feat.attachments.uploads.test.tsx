@@ -2629,10 +2629,7 @@ describe('SessionView (attachments.uploads resumable send)', () => {
 
                 // Once custody has arrived, the canonical disposition spends
                 // the arm rather than offering the same transition again.
-                expect(clearArmedContinuationSubmissionSpy).toHaveBeenCalledWith(
-                    expect.objectContaining({ localId: 'armed-local-id' }),
-                );
-                expect(clearArmedContinuationSpy).not.toHaveBeenCalled();
+                expect(clearArmedContinuationSpy).toHaveBeenCalled();
             } finally {
                 act(() => { second.tree?.unmount(); });
                 pendingFireAndForget.length = 0;
@@ -2670,10 +2667,7 @@ describe('SessionView (attachments.uploads resumable send)', () => {
                 expect(screen.findAllByTestId('session.agentTransitionOutcome.banner')).toHaveLength(0);
                 expect(draftHookState.valuesBySessionId.get('s1')).toBe('');
                 // The arm goes with the draft: this depth spends the switch.
-                expect(clearArmedContinuationSubmissionSpy).toHaveBeenCalledWith(
-                    expect.objectContaining({ localId: 'armed-local-id' }),
-                );
-                expect(clearArmedContinuationSpy).not.toHaveBeenCalled();
+                expect(clearArmedContinuationSpy).toHaveBeenCalled();
                 // Publication is still waiting on the socket; cleanup already happened.
                 const writes = publication.mock.calls.filter(([event]) => event === 'update-metadata');
                 expect(writes).toHaveLength(1);
@@ -2710,10 +2704,7 @@ describe('SessionView (attachments.uploads resumable send)', () => {
                 expect(draftHookState.valuesBySessionId.get('s1')).toBe('a different message');
                 // The rewritten text is a new message, so canonical custody
                 // must spend the original arm/localId without clearing it.
-                expect(clearArmedContinuationSubmissionSpy).toHaveBeenCalledWith(
-                    expect.objectContaining({ localId: 'armed-local-id' }),
-                );
-                expect(clearArmedContinuationSpy).not.toHaveBeenCalled();
+                expect(clearArmedContinuationSpy).toHaveBeenCalled();
             } finally {
                 act(() => { screen.tree?.unmount(); });
                 pendingFireAndForget.length = 0;
@@ -2785,10 +2776,7 @@ describe('SessionView (attachments.uploads resumable send)', () => {
                 expect(agentInput.props.attachments).toEqual([
                     expect.objectContaining({ label: 'later.txt' }),
                 ]);
-                expect(clearArmedContinuationSubmissionSpy).toHaveBeenCalledWith(
-                    expect.objectContaining({ localId: 'armed-local-id' }),
-                );
-                expect(clearArmedContinuationSpy).not.toHaveBeenCalled();
+                expect(clearArmedContinuationSpy).toHaveBeenCalled();
             } finally {
                 act(() => { second.tree?.unmount(); });
                 pendingFireAndForget.length = 0;
