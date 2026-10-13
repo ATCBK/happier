@@ -48,6 +48,7 @@ export type KeyboardCommandId =
     | 'workspace.toggleMaximize'
     | 'workspace.tab.new'
     | 'workspace.tab.close'
+    | 'workspace.tab.closeAll'
     | 'workspace.tab.reopen'
     | `workspace.tab.select${1 | 2 | 3 | 4 | 5 | 6 | 7 | 8 | 9}`
     | 'terminal.jump'

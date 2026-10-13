@@ -253,6 +253,11 @@ export const defaultKeyboardCommands: readonly KeyboardCommand[] = [
         defaultBinding: { binding: 'Mod+W', allowInEditable: true, nativeConsumable: true },
     },
     {
+        id: 'workspace.tab.closeAll',
+        settingsTitleKey: 'settingsKeyboard.commands.workspaceTabCloseAll',
+        defaultBinding: { binding: 'Mod+Shift+W', allowInEditable: true, nativeConsumable: true },
+    },
+    {
         id: 'workspace.tab.reopen',
         settingsTitleKey: 'settingsKeyboard.commands.workspaceTabReopen',
         defaultBinding: { binding: 'Mod+Shift+T', allowInEditable: true, nativeConsumable: true },

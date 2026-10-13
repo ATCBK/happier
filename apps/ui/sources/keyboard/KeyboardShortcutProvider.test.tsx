@@ -2,7 +2,7 @@ import * as React from 'react';
 import { act } from 'react-test-renderer';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
-import type { Settings } from '@/sync/domains/settings/settings';
+import { storage } from '@/sync/domains/state/storage';
 import { Modal } from '@/modal';
 import { standardCleanup } from '@/dev/testkit/cleanup/standardCleanup';
 import { renderScreen } from '@/dev/testkit/render/renderScreen';
@@ -13,17 +13,12 @@ import { buildDetailsWorkspaceStateView } from '@/components/appShell/panes/deta
 import { SessionCockpitSurfaceNavigationProvider } from '@/components/workspaceCockpit/session/SessionCockpitSurfaceNavigation';
 import { useReviewComposerHandoff } from '@/components/sessions/reviews/comments/useReviewComposerHandoff';
 import { ESCAPE_LAYER_PRIORITIES, registerEscapeLayer } from './escape';
+import type { NativeHardwareKeyboardEvent } from '@/components/sessions/agentInput/subscribeToIosHardwareShiftEnter';
 
 const testState = vi.hoisted(() => ({
     platformOS: 'web',
-    settings: {
-        commandPaletteEnabled: true,
-        keyboardShortcutsV2Enabled: true,
-        keyboardSingleKeyShortcutsEnabled: true,
-        keyboardShortcutOverridesV1: {},
-        keyboardShortcutDisabledCommandIdsV1: [],
-    } as Partial<Settings>,
 }));
+const initialSettings = storage.getState().settings;
 
 vi.mock('react-native', async () => {
     const { createReactNativeWebMock } = await import('@/dev/testkit/mocks/reactNative');
@@ -47,39 +42,29 @@ vi.mock('@/modal', async () => {
     return createModalModuleMock().module;
 });
 
-vi.mock('@/sync/domains/state/storage', async () => {
-    const { settingsDefaults } = await import('@/sync/domains/settings/settings');
-    const { createStorageModuleStub } = await import('@/dev/testkit/mocks/storage');
-    const readSnapshot = () => ({
-        settings: {
-            ...settingsDefaults,
-            ...testState.settings,
-        },
-    });
-    const storage = Object.assign(
-        ((selector?: (value: ReturnType<typeof readSnapshot>) => unknown) => {
-            const snapshot = readSnapshot();
-            return typeof selector === 'function' ? selector(snapshot) : snapshot;
-        }),
-        {
-            getState: readSnapshot,
-            getInitialState: readSnapshot,
-            setState: () => undefined,
-            subscribe: () => () => undefined,
-            destroy: () => undefined,
-        },
-    );
-    return createStorageModuleStub({ storage });
-});
-
 const nativeKeyboardState = vi.hoisted(() => ({
-    subscribe: vi.fn(),
-    configureConsumableSignatures: vi.fn(),
+    listeners: new Set<(event: NativeHardwareKeyboardEvent) => void>(),
+    enabled: false,
+    consumableSignatures: null as readonly string[] | null,
+    signaturesAtSubscription: null as readonly string[] | null,
 }));
 
-vi.mock('@/components/sessions/agentInput/subscribeToIosHardwareShiftEnter', () => ({
-    subscribeToNativeHardwareKeyboardEvents: nativeKeyboardState.subscribe,
-    configureNativeHardwareKeyboardConsumableEventSignatures: nativeKeyboardState.configureConsumableSignatures,
+// Only OS delivery is replaced; the real bridge owns subscription lifetime and configuration.
+vi.mock('expo-modules-core', async (importOriginal) => ({
+    ...await importOriginal<typeof import('expo-modules-core')>(),
+    requireOptionalNativeModule: (name: string) => name === 'HappierHardwareKeyboardShortcuts' ? {
+        addListener: (event: string, listener: (event: NativeHardwareKeyboardEvent) => void) => {
+            if (event === 'hardwareKey') {
+                nativeKeyboardState.listeners.add(listener);
+                nativeKeyboardState.signaturesAtSubscription = nativeKeyboardState.consumableSignatures;
+            }
+            return { remove: () => nativeKeyboardState.listeners.delete(listener) };
+        },
+        setHardwareKeyEventsEnabled: (enabled: boolean) => { nativeKeyboardState.enabled = enabled; },
+        setHardwareKeyConsumableEventSignatures: (signatures: readonly string[]) => {
+            nativeKeyboardState.consumableSignatures = [...signatures];
+        },
+    } : null,
 }));
 
 describe('KeyboardShortcutProvider', () => {
@@ -135,22 +120,22 @@ describe('KeyboardShortcutProvider', () => {
         }
         const element = (focused: boolean) => <KeyboardShortcutProvider handlers={{ 'composer.sendImmediate': underlyingSend }}><Input focused={focused} /></KeyboardShortcutProvider>;
         const screen = await renderScreen(element(true));
-        expect(nativeKeyboardState.configureConsumableSignatures.mock.calls.at(-1)?.[0]).toContain('Enter|shift=false|ctrl=false|meta=false|alt=false');
+        expect(nativeKeyboardState.consumableSignatures).toContain('Enter|shift=false|ctrl=false|meta=false|alt=false');
         const event = { key: 'Enter', repeat: false, modifiers: { shift: false, ctrl: false, meta: true, alt: false } };
-        await act(async () => nativeKeyboardState.subscribe.mock.calls.at(-1)?.[0](event));
+        await act(async () => emitNativeKeyboardEvent(event));
         expect(send).toHaveBeenCalledOnce();
         expect(underlyingSend).not.toHaveBeenCalled();
-        await act(async () => nativeKeyboardState.subscribe.mock.calls.at(-1)?.[0]({ ...event, modifiers: { ...event.modifiers, meta: false } }));
+        await act(async () => emitNativeKeyboardEvent({ ...event, modifiers: { ...event.modifiers, meta: false } }));
         expect(insert).toHaveBeenCalledOnce();
         await screen.update(element(false));
-        expect(nativeKeyboardState.configureConsumableSignatures.mock.calls.at(-1)?.[0]).not.toContain('Enter|shift=false|ctrl=false|meta=false|alt=false');
-        await act(async () => nativeKeyboardState.subscribe.mock.calls.at(-1)?.[0](event));
+        expect(nativeKeyboardState.consumableSignatures).not.toContain('Enter|shift=false|ctrl=false|meta=false|alt=false');
+        await act(async () => emitNativeKeyboardEvent(event));
         expect(underlyingSend).toHaveBeenCalledOnce();
     });
 
     it('gives embedded renderers only configured Find chords and releases disabled bindings', async () => {
         testState.platformOS = 'ios';
-        testState.settings = { ...testState.settings, keyboardShortcutOverridesV1: { 'find.open': [{ binding: 'Mod+P' }] } };
+        storage.setState({ settings: { ...storage.getState().settings, keyboardShortcutOverridesV1: { 'find.open': [{ binding: 'Mod+P' }] } } });
         let bridge: ReturnType<typeof useEmbeddedFindKeyboard> | undefined;
         const open = vi.fn();
         function Embedded() { bridge = useEmbeddedFindKeyboard(); return <Child />; }
@@ -159,27 +144,31 @@ describe('KeyboardShortcutProvider', () => {
         expect(bridge?.signatures.some((signature) => signature.startsWith('g|'))).toBe(false);
         await act(async () => { bridge?.dispatch({ key: 'p', code: 'KeyP', repeat: false, modifiers: { shift: false, ctrl: false, meta: true, alt: false } }); });
         expect(open).toHaveBeenCalledOnce();
-        testState.settings = { ...testState.settings, keyboardShortcutDisabledCommandIdsV1: ['find.open'] };
-        await screen.update(<KeyboardShortcutProvider handlers={{ 'find.open': open }}><Embedded /></KeyboardShortcutProvider>);
+        await act(async () => storage.setState({ settings: { ...storage.getState().settings, keyboardShortcutDisabledCommandIdsV1: ['find.open'] } }));
         expect(bridge?.signatures).toEqual([]);
     });
     beforeEach(() => {
         vi.clearAllMocks();
         testState.platformOS = 'web';
-        testState.settings = {
+        storage.setState({ settings: {
+            ...initialSettings,
             commandPaletteEnabled: true,
             keyboardShortcutsV2Enabled: true,
             keyboardSingleKeyShortcutsEnabled: true,
             keyboardShortcutOverridesV1: {},
             keyboardShortcutDisabledCommandIdsV1: [],
-        };
-        nativeKeyboardState.subscribe.mockReturnValue({ remove: vi.fn() });
-        nativeKeyboardState.configureConsumableSignatures.mockReset();
+        } });
+        nativeKeyboardState.enabled = false;
+        nativeKeyboardState.consumableSignatures = null;
+        nativeKeyboardState.signaturesAtSubscription = null;
         installKeyboardWindowMock();
     });
 
     afterEach(() => {
         standardCleanup();
+        expect(nativeKeyboardState.listeners.size).toBe(0);
+        expect(nativeKeyboardState.enabled).toBe(false);
+        storage.setState({ settings: initialSettings });
     });
 
     it('captures handled Find before terminal input, passes the second Find and never steps during composition', async () => {
@@ -234,10 +223,10 @@ describe('KeyboardShortcutProvider', () => {
     });
 
     it('admits the rebound Voice command in an editor but ignores keys consumed by a modal and held-key repeats', async () => {
-        testState.settings = {
-            ...testState.settings,
+        storage.setState({ settings: {
+            ...storage.getState().settings,
             keyboardShortcutOverridesV1: { 'voice.toggle': [{ binding: 'Ctrl+Alt+B' }] },
-        };
+        } });
         let toggles = 0;
         function VoiceRuntime() {
             useKeyboardShortcutHandlers({ 'voice.toggle': () => { toggles += 1; } });
@@ -258,7 +247,7 @@ describe('KeyboardShortcutProvider', () => {
     });
 
     it('invokes the current scoped command from an explicit action even when shortcuts are disabled', async () => {
-        testState.settings = { ...testState.settings, keyboardShortcutsV2Enabled: false };
+        storage.setState({ settings: { ...storage.getState().settings, keyboardShortcutsV2Enabled: false } });
         const { renderScreen } = await import('@/dev/testkit');
         const module = await import('./KeyboardShortcutProvider');
         let focused = '';
@@ -283,7 +272,7 @@ describe('KeyboardShortcutProvider', () => {
 
     it('hands review back to mobile chat before focusing, preserving tabs without sending', async () => {
         testState.platformOS = 'ios';
-        testState.settings = { ...testState.settings, keyboardShortcutsV2Enabled: false };
+        storage.setState({ settings: { ...storage.getState().settings, keyboardShortcutsV2Enabled: false } });
         const { renderScreen } = await import('@/dev/testkit');
         const { KeyboardShortcutProvider } = await import('./KeyboardShortcutProvider');
         type Surface = import('@/components/workspaceCockpit/session/sessionCockpitState').SessionMobileSurface;
@@ -367,17 +356,11 @@ describe('KeyboardShortcutProvider', () => {
             </KeyboardShortcutProvider>,
         );
 
-        expect(nativeKeyboardState.subscribe).toHaveBeenCalled();
-        const listener = nativeKeyboardState.subscribe.mock.calls.at(-1)?.[0] as (event: {
-            key: string;
-            code?: string;
-            modifiers: { shift: boolean; ctrl: boolean; meta: boolean; alt: boolean };
-            repeat: boolean;
-            isEditableTarget?: boolean;
-        }) => void;
+        expect(nativeKeyboardState.enabled).toBe(true);
+        expect(nativeKeyboardState.listeners.size).toBe(1);
 
         await act(async () => {
-            listener({
+            emitNativeKeyboardEvent({
                 key: 'k',
                 code: 'KeyK',
                 modifiers: { shift: false, ctrl: false, meta: true, alt: false },
@@ -403,15 +386,15 @@ describe('KeyboardShortcutProvider', () => {
             return <Child />;
         }
         await renderScreen(<KeyboardShortcutProvider handlers={{}}><Surface /></KeyboardShortcutProvider>);
-        const listener = nativeKeyboardState.subscribe.mock.calls.at(-1)?.[0];
-        expect(listener).toBeTypeOf('function');
+        expect(nativeKeyboardState.enabled).toBe(true);
+        expect(nativeKeyboardState.listeners.size).toBe(1);
         await act(async () => {
-            for (const shift of [false, true]) listener?.({ key: 'g', code: 'KeyG',
+            for (const shift of [false, true]) emitNativeKeyboardEvent({ key: 'g', code: 'KeyG',
                 modifiers: { shift, ctrl: false, meta: true, alt: false }, repeat: false,
                 target: 'reactNativeTextInput', isEditableTarget: true });
         });
         expect(steps).toEqual([1, -1]);
-        expect(nativeKeyboardState.configureConsumableSignatures.mock.calls.at(-1)?.[0]).toEqual(expect.arrayContaining([
+        expect(nativeKeyboardState.consumableSignatures).toEqual(expect.arrayContaining([
             'g|shift=false|ctrl=false|meta=true|alt=false', 'g|shift=true|ctrl=false|meta=true|alt=false',
         ]));
     });
@@ -426,22 +409,17 @@ describe('KeyboardShortcutProvider', () => {
             </KeyboardShortcutProvider>,
         );
 
-        const listener = nativeKeyboardState.subscribe.mock.calls.at(-1)?.[0] as (event: {
-            key: string;
-            code?: string;
-            modifiers: { shift: boolean; ctrl: boolean; meta: boolean; alt: boolean };
-            repeat: boolean;
-            isEditableTarget?: boolean;
-        }) => void;
+        expect(nativeKeyboardState.enabled).toBe(true);
+        expect(nativeKeyboardState.listeners.size).toBe(1);
 
         await act(async () => {
-            listener({
+            emitNativeKeyboardEvent({
                 key: 'k',
                 code: 'KeyK',
                 modifiers: { shift: false, ctrl: false, meta: true, alt: false },
                 repeat: false,
             });
-            listener({
+            emitNativeKeyboardEvent({
                 key: 'k',
                 code: 'KeyK',
                 modifiers: { shift: false, ctrl: false, meta: true, alt: false },
@@ -468,38 +446,41 @@ describe('KeyboardShortcutProvider', () => {
             </KeyboardShortcutProvider>,
         );
 
-        expect(nativeKeyboardState.configureConsumableSignatures).toHaveBeenCalledWith([
+        const signatures = [
             'Escape|shift=true|ctrl=false|meta=false|alt=false',
             'Enter|shift=false|ctrl=false|meta=true|alt=false',
             'k|shift=false|ctrl=false|meta=true|alt=false',
-        ]);
-        expect(nativeKeyboardState.configureConsumableSignatures.mock.invocationCallOrder[0])
-            .toBeLessThan(nativeKeyboardState.subscribe.mock.invocationCallOrder[0]);
+        ];
+        expect(nativeKeyboardState.enabled).toBe(true);
+        expect(nativeKeyboardState.listeners.size).toBe(1);
+        expect(nativeKeyboardState.consumableSignatures).toEqual(signatures);
+        expect(nativeKeyboardState.signaturesAtSubscription).toEqual(signatures);
     });
 
     it('clears native consumable signatures during provider cleanup', async () => {
         testState.platformOS = 'ios';
-        const remove = vi.fn();
-        nativeKeyboardState.subscribe.mockReturnValue({ remove });
-
         const screen = await renderScreen(
             <KeyboardShortcutProvider handlers={{ 'composer.sendImmediate': vi.fn() }}>
                 <Child />
             </KeyboardShortcutProvider>,
         );
 
+        expect(nativeKeyboardState.enabled).toBe(true);
+        expect(nativeKeyboardState.listeners.size).toBe(1);
+        expect(nativeKeyboardState.consumableSignatures).toEqual(['Enter|shift=false|ctrl=false|meta=true|alt=false']);
         await screen.unmount();
 
-        expect(remove).toHaveBeenCalledTimes(1);
-        expect(nativeKeyboardState.configureConsumableSignatures).toHaveBeenLastCalledWith([]);
+        expect(nativeKeyboardState.listeners.size).toBe(0);
+        expect(nativeKeyboardState.enabled).toBe(false);
+        expect(nativeKeyboardState.consumableSignatures).toEqual([]);
     });
 
     it('does not subscribe to native keyboard events when V2 is disabled and no compatibility handler can run', async () => {
         testState.platformOS = 'ios';
-        testState.settings = {
-            ...testState.settings,
+        storage.setState({ settings: {
+            ...storage.getState().settings,
             keyboardShortcutsV2Enabled: false,
-        };
+        } });
 
         await renderScreen(
             <KeyboardShortcutProvider handlers={{ 'session.new': vi.fn() }}>
@@ -507,17 +488,18 @@ describe('KeyboardShortcutProvider', () => {
             </KeyboardShortcutProvider>,
         );
 
-        expect(nativeKeyboardState.subscribe).not.toHaveBeenCalled();
-        expect(nativeKeyboardState.configureConsumableSignatures).not.toHaveBeenCalled();
+        expect(nativeKeyboardState.listeners.size).toBe(0);
+        expect(nativeKeyboardState.enabled).toBe(false);
+        expect(nativeKeyboardState.consumableSignatures).toBeNull();
     });
 
     it('does not subscribe to native keyboard events when no effective handler can match', async () => {
         testState.platformOS = 'ios';
-        testState.settings = {
-            ...testState.settings,
+        storage.setState({ settings: {
+            ...storage.getState().settings,
             keyboardSingleKeyShortcutsEnabled: false,
             keyboardShortcutDisabledCommandIdsV1: ['commandPalette.open'],
-        };
+        } });
 
         await renderScreen(
             <KeyboardShortcutProvider handlers={{ 'commandPalette.open': vi.fn() }}>
@@ -525,19 +507,20 @@ describe('KeyboardShortcutProvider', () => {
             </KeyboardShortcutProvider>,
         );
 
-        expect(nativeKeyboardState.subscribe).not.toHaveBeenCalled();
-        expect(nativeKeyboardState.configureConsumableSignatures).not.toHaveBeenCalled();
+        expect(nativeKeyboardState.listeners.size).toBe(0);
+        expect(nativeKeyboardState.enabled).toBe(false);
+        expect(nativeKeyboardState.consumableSignatures).toBeNull();
     });
 
     it('dispatches descendant scoped handlers through the provider registry', async () => {
         testState.platformOS = 'web';
         vi.stubGlobal('navigator', { platform: 'MacIntel' });
-        testState.settings = {
-            ...testState.settings,
+        storage.setState({ settings: {
+            ...storage.getState().settings,
             keyboardShortcutOverridesV1: {
                 'session.new': [{ binding: 'Mod+P' }],
             },
-        };
+        } });
         const newSession = vi.fn();
 
         function RegisteredChild() {
@@ -584,23 +567,16 @@ describe('KeyboardShortcutProvider', () => {
             </KeyboardShortcutProvider>,
         );
 
-        expect(nativeKeyboardState.subscribe).toHaveBeenCalled();
-        const listener = nativeKeyboardState.subscribe.mock.calls.at(-1)?.[0] as (event: {
-            key: string;
-            code?: string;
-            modifiers: { shift: boolean; ctrl: boolean; meta: boolean; alt: boolean };
-            repeat: boolean;
-        }) => void;
-        nativeKeyboardState.subscribe.mockClear();
+        const listener = currentNativeKeyboardListener();
 
         await act(async () => {
             rerenderRegisteredChild?.();
         });
 
-        expect(nativeKeyboardState.subscribe).not.toHaveBeenCalled();
+        expect(currentNativeKeyboardListener()).toBe(listener);
 
         await act(async () => {
-            listener({
+            emitNativeKeyboardEvent({
                 key: 'Enter',
                 code: 'Enter',
                 modifiers: { shift: false, ctrl: false, meta: true, alt: false },
@@ -622,14 +598,7 @@ describe('KeyboardShortcutProvider', () => {
             </KeyboardShortcutProvider>,
         );
 
-        expect(nativeKeyboardState.subscribe).toHaveBeenCalled();
-        const listener = nativeKeyboardState.subscribe.mock.calls.at(-1)?.[0] as (event: {
-            key: string;
-            code?: string;
-            modifiers: { shift: boolean; ctrl: boolean; meta: boolean; alt: boolean };
-            repeat: boolean;
-        }) => void;
-        nativeKeyboardState.subscribe.mockClear();
+        const listener = currentNativeKeyboardListener();
 
         await screen.update(
             <KeyboardShortcutProvider handlers={{ 'composer.sendImmediate': secondSendImmediate }}>
@@ -637,10 +606,10 @@ describe('KeyboardShortcutProvider', () => {
             </KeyboardShortcutProvider>,
         );
 
-        expect(nativeKeyboardState.subscribe).not.toHaveBeenCalled();
+        expect(currentNativeKeyboardListener()).toBe(listener);
 
         await act(async () => {
-            listener({
+            emitNativeKeyboardEvent({
                 key: 'Enter',
                 code: 'Enter',
                 modifiers: { shift: false, ctrl: false, meta: true, alt: false },
@@ -656,21 +625,10 @@ describe('KeyboardShortcutProvider', () => {
         testState.platformOS = 'ios';
         const firstSendImmediate = vi.fn();
         const secondSendImmediate = vi.fn();
-        let latestNativeListener: ((event: {
-            key: string;
-            code?: string;
-            modifiers: { shift: boolean; ctrl: boolean; meta: boolean; alt: boolean };
-            repeat: boolean;
-        }) => void) | null = null;
-        nativeKeyboardState.subscribe.mockImplementation((listener) => {
-            latestNativeListener = listener as typeof latestNativeListener;
-            return { remove: vi.fn() };
-        });
-
         function NativeDispatchOnLayout(props: Readonly<{ enabled: boolean }>) {
             React.useLayoutEffect(() => {
                 if (!props.enabled) return;
-                latestNativeListener?.({
+                emitNativeKeyboardEvent({
                     key: 'Enter',
                     code: 'Enter',
                     modifiers: { shift: false, ctrl: false, meta: true, alt: false },
@@ -686,7 +644,7 @@ describe('KeyboardShortcutProvider', () => {
             </KeyboardShortcutProvider>,
         );
 
-        nativeKeyboardState.subscribe.mockClear();
+        const listener = currentNativeKeyboardListener();
 
         await screen.update(
             <KeyboardShortcutProvider handlers={{ 'composer.sendImmediate': secondSendImmediate }}>
@@ -694,7 +652,7 @@ describe('KeyboardShortcutProvider', () => {
             </KeyboardShortcutProvider>,
         );
 
-        expect(nativeKeyboardState.subscribe).not.toHaveBeenCalled();
+        expect(currentNativeKeyboardListener()).toBe(listener);
         expect(firstSendImmediate).not.toHaveBeenCalled();
         expect(secondSendImmediate).toHaveBeenCalledTimes(1);
     });
@@ -702,6 +660,19 @@ describe('KeyboardShortcutProvider', () => {
 
 function Child() {
     return React.createElement('Child');
+}
+
+function currentNativeKeyboardListener() {
+    expect(nativeKeyboardState.enabled).toBe(true);
+    expect(nativeKeyboardState.listeners.size).toBe(1);
+    return [...nativeKeyboardState.listeners][0];
+}
+
+function emitNativeKeyboardEvent(event: Omit<NativeHardwareKeyboardEvent, 'target'> & { target?: string }) {
+    if (!nativeKeyboardState.enabled) return;
+    for (const listener of nativeKeyboardState.listeners) {
+        listener({ ...event, target: event.target ?? 'reactNativeTextInput' });
+    }
 }
 
 function installKeyboardWindowMock() {
