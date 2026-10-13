@@ -9,6 +9,10 @@ export type MaterializedClaudeMcpConfigArgs = Readonly<{
     cleanup: () => Promise<void>;
 }>;
 
+export function buildClaudeMcpConfigArgs(mcpServers: Readonly<Record<string, unknown>> | null | undefined): string[] {
+    return mcpServers && Object.keys(mcpServers).length > 0 ? ['--mcp-config', JSON.stringify({ mcpServers })] : [];
+}
+
 function isInlineMcpConfig(value: string): boolean {
     const trimmed = value.trim();
     if (!trimmed.startsWith('{')) return false;

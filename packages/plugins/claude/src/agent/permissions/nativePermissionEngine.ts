@@ -164,6 +164,9 @@ export function createClaudeNativePermissionEngine(
         kind: 'approval',
         title: 'Claude permission',
         subject: { kind: 'tool', name: toolName, input: toolInput.data },
+        // The host owns MCP session grants; the native reply remains invocation-only.
+        ...(toolName.startsWith('mcp__') && !toolName.startsWith('mcp__happier__') && !toolName.startsWith('mcp__happy__')
+          ? { allowSessionPersistence: true } : {}),
       }, options.signal ? { signal: options.signal } : undefined);
       return result.status === 'approved'
         ? {

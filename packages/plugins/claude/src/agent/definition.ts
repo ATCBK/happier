@@ -26,6 +26,7 @@ const CLAUDE_AGENT_ID = 'claude';
 // IMPORTANT: this must stay JSON-serializable (data-only).
 export const AGENT_DEFINITION = defineAgentWithPublicModelConfig({
   id: CLAUDE_AGENT_ID,
+  acpRegistryIds: ['claude-acp'] as const,
   core: {
     id: CLAUDE_AGENT_ID,
     cliSubcommand: CLAUDE_AGENT_ID,
@@ -70,7 +71,7 @@ export const AGENT_DEFINITION = defineAgentWithPublicModelConfig({
       inFlightSteerSupported: true,
       terminalPromptInjectionSupported: true,
     },
-    tools: { delivery: 'native_mcp', support: 'supported' },
+    tools: { delivery: 'native_mcp', support: 'supported', mcpToolControl: { off: 'hidden', approval: 'host' } },
   },
   sessionModeDescriptor: {
     source: 'provider-native',

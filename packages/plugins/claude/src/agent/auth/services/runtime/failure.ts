@@ -23,6 +23,8 @@ import {
   parseClaudeCodeNativeAuthProvenance,
 } from '../native/provenance.js';
 import { mapClaudeProviderFailureToUsageDetails } from './usage.js';
+import type { ClaudeSessionRuntimeIssue } from '../../../runtime/issues/runtimeIssues.js';
+import { ClaudeSessionRuntimeUsageLimitDetailsSchema, ClaudeSessionRuntimeTemporaryThrottleDetailsSchema } from '../../../runtime/issues/providerFailureDetails.js';
 
 export type ClaudeConnectedServiceRuntimeFailureKind =
   | 'usage_limit'
@@ -94,6 +96,7 @@ export type ClaudeRuntimeFailureInput = Readonly<{
   target: Readonly<{ agentId: string; targetId?: string | null }>;
   error: unknown;
   selection?: unknown;
+  normalizedDetails?: Pick<ClaudeSessionRuntimeIssue, 'usageLimit' | 'temporaryThrottle'>;
 }>;
 
 export type ClaudeRuntimeAuthAdapterResult = AgentConnectedAccountRuntimeAuthAdapterResultV1;
@@ -120,6 +123,7 @@ export type ClassifyClaudeConnectedServiceRuntimeAuthFailureInput = Readonly<{
   sourceProviderAccountId?: string | null;
   sourceAccountLabel?: string | null;
   error: unknown;
+  normalizedDetails?: Pick<ClaudeSessionRuntimeIssue, 'usageLimit' | 'temporaryThrottle'>;
 }>;
 
 function readRecord(value: unknown): Record<string, unknown> | null {
@@ -248,7 +252,17 @@ function runtimeFailureIdentity(
 export function classifyClaudeConnectedServiceRuntimeAuthFailure(
   input: ClassifyClaudeConnectedServiceRuntimeAuthFailureInput,
 ): ClaudeConnectedServiceRuntimeFailureClassification | null {
-  const details = mapClaudeProviderFailureToUsageDetails(input.error);
+  const temporaryThrottle = input.normalizedDetails?.temporaryThrottle;
+  if (temporaryThrottle) {
+    return {
+      kind: 'temporary_throttle', limitCategory: 'temporary_throttle', quotaScope: 'provider',
+      serviceId: input.serviceId, profileId: input.profileId, groupId: input.groupId,
+      ...runtimeFailureIdentity(input), resetsAtMs: null, retryAfterMs: temporaryThrottle.retryAfterMs,
+      planType: null, rateLimits: temporaryThrottle, source: 'structured_provider_error',
+    };
+  }
+  const details = input.normalizedDetails?.usageLimit
+    ?? mapClaudeProviderFailureToUsageDetails(input.error);
   if (!details) {
     if (!hasClaudeAuthFailureEvidence(input.error)) return classifyGenericRuntimeAuthFailure(input);
     return {
@@ -268,7 +282,7 @@ export function classifyClaudeConnectedServiceRuntimeAuthFailure(
   const limitCategory = details.limitCategory
     ?? (details.providerLimitId === 'transient'
       ? 'rate_limit'
-      : details.utilization !== null && details.utilization < 100 ? 'rate_limit' : 'usage_limit');
+      : details.utilization != null && details.utilization < 100 ? 'rate_limit' : 'usage_limit');
   return {
     kind: details.providerLimitId === 'transient'
       ? 'temporary_throttle'
@@ -286,8 +300,8 @@ export function classifyClaudeConnectedServiceRuntimeAuthFailure(
     retryAfterMs: details.retryAfterMs,
     providerLimitId: details.providerLimitId ?? null,
     quotaScope: details.quotaScope,
-    action: details.action,
-    planType: details.planType,
+    action: details.action?.kind === 'open_url' ? { kind: 'open_url', url: details.action.url } : null,
+    planType: details.planType ?? null,
     rateLimits: details,
     source: 'structured_provider_error',
   };
@@ -441,9 +455,16 @@ function verifyClaudeSharedGroupApplication(params: Readonly<{
 export function createClaudeConnectedServiceRuntimeAuthAdapter(): ClaudeConnectedServiceRuntimeAuthAdapter {
   return {
     classifyRuntimeAuthFailure(input) {
+      const diagnosticDetails = readRecord(readRecord(input.error)?.details);
+      const usageLimit = ClaudeSessionRuntimeUsageLimitDetailsSchema.safeParse(diagnosticDetails?.usageLimit);
+      const temporaryThrottle = ClaudeSessionRuntimeTemporaryThrottleDetailsSchema.safeParse(diagnosticDetails?.temporaryThrottle);
       return classifyClaudeConnectedServiceRuntimeAuthFailure({
         ...readSelectionIds(input.selection),
         error: input.error,
+        normalizedDetails: input.normalizedDetails ?? {
+          ...(usageLimit.success ? { usageLimit: usageLimit.data } : {}),
+          ...(temporaryThrottle.success ? { temporaryThrottle: temporaryThrottle.data } : {}),
+        },
       });
     },
     async materializeActiveProfile() {

@@ -4,6 +4,14 @@ import type { AgentSessionRuntimeContext } from '@happier-dev/plugin-sdk/agents/
 import { createClaudeNativePermissionEngine } from './nativePermissionEngine.js';
 
 describe('createClaudeNativePermissionEngine', () => {
+  it('keeps an MCP Session grant on the host while returning only a native once decision', async () => {
+    const engine = createClaudeNativePermissionEngine({ services: { interactions: {
+      requestApproval: async (request: { allowSessionPersistence?: boolean }) => request.allowSessionPersistence === true
+        ? { requestId: 'permission', kind: 'approval', status: 'approved', persistence: 'session' }
+        : { requestId: 'permission', kind: 'approval', status: 'declined' },
+    } } } as unknown as AgentSessionRuntimeContext); // The SDK host approval transport is the external boundary.
+    await expect(engine.canCallTool('mcp__docs__mutate', {})).resolves.toEqual({ behavior: 'allow', updatedInput: {} });
+  });
   it('routes AskUserQuestion through the canonical interactions service and preserves every provider-native answer', async () => {
     const askQuestions = vi.fn(async () => ({
       requestId: 'questions-1',

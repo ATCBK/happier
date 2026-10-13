@@ -144,6 +144,37 @@
             ],
             "workspaceWrites": "deny"
           },
+          "skills": {
+            "delivery": "session_dir",
+            "liveReload": "supported",
+            "nativeDisable": "supported",
+            "nativeRoots": {
+              "plugin": [
+                [
+                  ".claude",
+                  "plugins",
+                  "cache",
+                  "*",
+                  "{plugin}",
+                  "*",
+                  "skills"
+                ]
+              ],
+              "project": [
+                [
+                  ".claude",
+                  "skills"
+                ]
+              ],
+              "user": [
+                [
+                  ".claude",
+                  "skills"
+                ]
+              ]
+            },
+            "usageEvidence": "reported"
+          },
           "structuredOutput": {
             "formats": [
               "json"
@@ -154,10 +185,17 @@
             "externalSessions"
           ],
           "tools": {
-            "delivery": "native_mcp"
+            "delivery": "native_mcp",
+            "mcpToolControl": {
+              "approval": "host",
+              "off": "hidden"
+            }
           }
         },
         "catalog": {
+          "acpRegistryIds": [
+            "claude-acp"
+          ],
           "agentCliSystemTool": {
             "toolId": "claude-cli"
           },
@@ -571,6 +609,7 @@
       "discoverySources": [
         {
           "id": "config",
+          "loadedInHappierSessions": true,
           "metadata": {
             "agentId": "claude"
           },
@@ -1145,6 +1184,7 @@
         "websiteUrl": "https://www.anthropic.com"
       }
     ],
+    "registrySources": [],
     "requestInterceptors": [],
     "resources": [],
     "roles": [],

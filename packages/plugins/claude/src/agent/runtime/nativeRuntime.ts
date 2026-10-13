@@ -42,6 +42,8 @@ import type {
   ClaudeRuntimeTurnOperations,
 } from './providerOperations.js';
 import type { ClaudeProviderEvent } from './providerEvents.js';
+import { createClaudeConnectedServiceRuntimeAuthAdapter } from '../auth/services/runtime/failure.js';
+import { readClaudeConnectedServiceRuntimeServiceFromEnv } from '../auth/services/runtime/env.js';
 import {
   createClaudeNativeAgentSdkContext,
   createClaudeNativeExecutionRunAgentSdkContext,
@@ -135,6 +137,7 @@ type ClaudeNativePromptCustodyOperations =
   }>;
 
 export type ClaudeNativeSessionOperations = ClaudeRuntimeTurnOperations & Readonly<{
+  refreshSkills?: AgentSessionRuntime['refreshSkills'];
   prepareTerminalPresentation?: AgentSessionRuntime['prepareTerminalPresentation'];
   supportsEffort?: boolean;
   observeSourceTranscript?: AgentSessionRuntime['observeSourceTranscript'];
@@ -280,7 +283,9 @@ function committedMessage(
   return text === null ? null : { text, role: body.thinking === true ? 'reasoning' : 'assistant' };
 }
 
-function mapEvent(event: ClaudeProviderEvent): AgentExecutionRunConversationEventV1 | null {
+const claudeRuntimeAuthAdapter = createClaudeConnectedServiceRuntimeAuthAdapter();
+
+function mapEvent(event: ClaudeProviderEvent, runtimeAuthServiceId: string | null): AgentExecutionRunConversationEventV1 | null {
   switch (event.kind) {
     case 'available-commands':
       return { kind: event.kind, commands: event.commands };
@@ -300,13 +305,26 @@ function mapEvent(event: ClaudeProviderEvent): AgentExecutionRunConversationEven
       return { kind: event.kind, turnId: event.turnId, agentTurnId: event.agentTurnId };
     case 'turn-complete':
       return { kind: event.kind, turnId: event.turnId, ...(event.agentTurnId ? { agentTurnId: event.agentTurnId } : {}) };
-    case 'turn-failed':
+    case 'turn-failed': {
+      const runtimeAuthClassification = claudeRuntimeAuthAdapter.classifyRuntimeAuthFailure({
+        target: { agentId: 'claude' }, error: event.issue, normalizedDetails: event.issue,
+        ...(runtimeAuthServiceId ? { selection: { serviceId: runtimeAuthServiceId } } : {}),
+      });
       return {
         kind: event.kind,
         turnId: event.turnId,
         ...(event.agentTurnId ? { agentTurnId: event.agentTurnId } : {}),
-        diagnostic: diagnostic(event.issue.code, event.issue.sanitizedPreview ?? event.issue.code),
+        diagnostic: {
+          ...diagnostic(event.issue.code, event.issue.sanitizedPreview ?? event.issue.code),
+          details: {
+            source: event.issue.source,
+            ...(runtimeAuthClassification ? { runtimeAuthClassification: jsonValue(runtimeAuthClassification) } : {}),
+            ...(event.issue.usageLimit ? { usageLimit: jsonValue(event.issue.usageLimit) } : {}),
+            ...(event.issue.temporaryThrottle ? { temporaryThrottle: jsonValue(event.issue.temporaryThrottle) } : {}),
+          },
+        },
       };
+    }
     case 'turn-cancelled':
       return {
         kind: event.kind,
@@ -331,6 +349,9 @@ function mapEvent(event: ClaudeProviderEvent): AgentExecutionRunConversationEven
     case 'mcp-tool-usage':
       return { kind: event.kind, turnId: event.turnId, window: event.window,
         coverage: event.coverage, servers: event.servers };
+    case 'skill-usage':
+      return { kind: event.kind, turnId: event.turnId, skills: event.skills,
+        ...(event.agentTurnId ? { agentTurnId: event.agentTurnId } : {}) };
     case 'tool-progress':
       return {
         kind: event.kind,
@@ -580,8 +601,9 @@ export function createClaudeNativeSessionRuntimeFromOperations(
       bufferedEvents.dispose();
     }
   };
+  const runtimeAuthServiceId = readClaudeConnectedServiceRuntimeServiceFromEnv(request.launchEnvironment?.values);
   const unsubscribeEvents = operations.subscribeProviderEvents((event) => {
-    const mapped = mapEvent(event);
+    const mapped = mapEvent(event, runtimeAuthServiceId);
     if (mapped) enqueueOrEmit(mapped, event.emittedAtMs);
   });
   const unsubscribeActivity = operations.subscribeCanonicalAgentSessionEvents?.((event) => {
@@ -716,6 +738,13 @@ export function createClaudeNativeSessionRuntimeFromOperations(
 
   return {
     nativeGoalControlsSupported: typeof operations.setGoal === 'function' && typeof operations.clearGoal === 'function',
+    ...(request.skills ? { skillsDelivered: true } : {}),
+    ...(operations.refreshSkills ? {
+      refreshSkills: async (...args: Parameters<NonNullable<AgentSessionRuntime['refreshSkills']>>) => {
+        if (disposed) throw new Error('Claude runtime is disposed.');
+        return await operations.refreshSkills!(...args);
+      },
+    } : {}),
     ...(unifiedPromptAcceptanceOperations ? { runtimeCapabilities: { localControl: { supported: false } } } : {}),
     ...(operations.prepareTerminalPresentation ? {
       async prepareTerminalPresentation(presentationRequest: Parameters<NonNullable<AgentSessionRuntime['prepareTerminalPresentation']>>[0]) {
@@ -843,6 +872,10 @@ export function createClaudeNativeSessionRuntimeFromOperations(
       }
     },
     async updateConfiguration(configuration) {
+      if (configuration.mcpToolPolicy !== undefined && !isDeepStrictEqual(configuration.mcpToolPolicy, request.mcpToolPolicy ?? {})) {
+        return { status: 'unsupported', diagnostic: diagnostic('claude_mcp_tool_policy_restart_required',
+          'Claude MCP tool filters require a native process restart.') };
+      }
       if (!isDeepStrictEqual(configuration.allowedTools ?? [], appliedConfiguration?.allowedTools ?? [])
         || (configuration.unlistedTools ?? 'ask') !== (appliedConfiguration?.unlistedTools ?? 'ask')) {
         return { status: 'unsupported', diagnostic: diagnostic('claude_tool_policy_restart_required',
@@ -1065,12 +1098,13 @@ export function createClaudeNativeSessionRuntimeFromOperations(
 
 function createClaudeExecutionRunConversationFromOperations(
   operations: ReturnType<typeof createClaudeAgentSdkTurnOperations>,
+  runtimeAuthServiceId: string | null,
 ): AgentExecutionRunConversationRuntimeV1 {
   const listeners = new Set<Parameters<AgentExecutionRunConversationRuntimeV1['watch']>[0]>();
   let disposed = false;
   const unsubscribe = operations.subscribeProviderEvents((providerEvent) => {
     if (disposed) return;
-    const mapped = mapEvent(providerEvent);
+    const mapped = mapEvent(providerEvent, runtimeAuthServiceId);
     if (!mapped) return;
     const event = Object.freeze({ ...mapped, emittedAtMs: providerEvent.emittedAtMs });
     for (const listener of listeners) listener(event);
@@ -1339,6 +1373,8 @@ async function openClaudeNativeAgentSdkSession(input: Readonly<{
     initialProviderSessionId: providerSessionId(input.request),
     happierSessionId: input.request.sessionId,
     mcpServers: input.request.mcpServers,
+    mcpToolPolicy: input.request.mcpToolPolicy,
+    skills: input.request.skills,
     publishTranscriptMessages: true,
     enableSessionWorkState: true,
     enableSessionResumability: true,
@@ -1400,9 +1436,12 @@ async function openClaudeNativeAgentSdkExecutionRunConversation(input: Readonly<
       : {}),
     initialProviderSessionId: input.request.kind === 'resume' ? input.request.checkpointId : null,
     mcpServers: input.request.mcpServers,
+    mcpToolPolicy: input.request.mcpToolPolicy,
+    skills: input.request.skills,
     publishSdkMessages: true,
   });
-  return createClaudeExecutionRunConversationFromOperations(operations);
+  return createClaudeExecutionRunConversationFromOperations(operations,
+    readClaudeConnectedServiceRuntimeServiceFromEnv(input.request.launchEnvironment?.values));
 }
 
 export const createClaudeAgentRuntime: AgentRuntimeFactory = () => createClaudeNativeRuntime({

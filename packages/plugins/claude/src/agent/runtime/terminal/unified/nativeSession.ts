@@ -192,6 +192,9 @@ export async function openClaudeNativeUnifiedTerminalSession(
     hostPreference: readClaudeTerminalRuntimeSelection(input.request.runtimeDescriptorV1)?.host
       ?? readHostPreference(hostSetting),
     launchEnv,
+    skills: input.request.skills,
+    mcpToolPolicy: input.request.mcpToolPolicy,
+    mcpServers: input.request.mcpServers,
     helperModelEnv: launchSettings.helperModelEnv,
     settingSources: launchSettings.settingSources,
     supportsEffort: input.supportsEffort === true,

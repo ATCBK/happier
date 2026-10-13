@@ -9,11 +9,28 @@ import {
   resolveClaudeNativeLaunchSettings,
 } from './launchSettings.js';
 
-const titlePermissions = {
-  allow: ['mcp__happier__change_title', 'mcp__happier__session_title_set'],
-};
-
 describe('resolveClaudeNativeLaunchSettings', () => {
+  it.each(['interactive_terminal', 'noninteractive_sdk'] as const)(
+    'projects MCP Off and Ask into the existing overlay without irrevocable Allow for %s',
+    (interactionKind) => {
+      const args = resolveClaudeLaunchSettingsOverlayArgs({
+        args: ['--settings', JSON.stringify({ permissions: { allow: ['Read', 'mcp__linear__write'], deny: ['WebFetch'] } })],
+        interactionKind, permissionMode: 'bypassPermissions', launchSettings: {},
+        mcpToolPolicy: {
+          linear: { unlisted: 'ask', tools: { write: 'off', read: 'allow', inspect: 'ask' } },
+          locked: { unlisted: 'deny', tools: {} },
+          happier: { unlisted: 'deny', tools: { change_title: 'off' } },
+        },
+      });
+      const settings = JSON.parse(args[args.indexOf('--settings') + 1] ?? '{}');
+      expect(settings.permissions.deny).toEqual(expect.arrayContaining(['WebFetch', 'mcp__linear__write', 'mcp__locked__*']));
+      expect(settings.permissions.ask).toEqual(expect.arrayContaining(['mcp__linear__*', 'mcp__linear__read', 'mcp__linear__inspect']));
+      expect(settings.permissions.allow).not.toContain('mcp__linear__write');
+      expect(settings.permissions.allow).not.toContain('mcp__linear__read');
+      expect(settings.permissions.deny).not.toContain('mcp__happier__*');
+      expect(args.filter(arg => arg === '--settings')).toHaveLength(1);
+    },
+  );
   it.each(['interactive_terminal', 'noninteractive_sdk'] as const)(
     'merges native skill disables key-wise into the one settings overlay for %s',
     (interactionKind) => {
@@ -126,24 +143,23 @@ describe('resolveClaudeNativeLaunchSettings', () => {
   });
 
   it('acknowledges bypass mode only for interactive terminal launches', () => {
-    expect(resolveClaudeLaunchSettingsOverlayArgs({
+    const acknowledged = resolveClaudeLaunchSettingsOverlayArgs({
       args: ['--model', 'sonnet'],
       interactionKind: 'interactive_terminal',
       permissionMode: 'bypassPermissions',
       launchSettings: {},
-    })).toEqual([
-      '--model',
-      'sonnet',
-      '--settings',
-      JSON.stringify({ skipDangerousModePermissionPrompt: true, permissions: titlePermissions }),
-    ]);
+    });
+    expect(acknowledged.slice(0, 3)).toEqual(['--model', 'sonnet', '--settings']);
+    expect(JSON.parse(acknowledged[3])).toMatchObject({ skipDangerousModePermissionPrompt: true });
 
-    expect(resolveClaudeLaunchSettingsOverlayArgs({
+    const ordinary = resolveClaudeLaunchSettingsOverlayArgs({
       args: ['--model', 'sonnet'],
       interactionKind: 'interactive_terminal',
       permissionMode: 'default',
       launchSettings: {},
-    })).toEqual(['--model', 'sonnet', '--settings', JSON.stringify({ permissions: titlePermissions })]);
+    });
+    expect(ordinary.slice(0, 3)).toEqual(['--model', 'sonnet', '--settings']);
+    expect(JSON.parse(ordinary[3])).not.toHaveProperty('skipDangerousModePermissionPrompt');
 
     expect(resolveClaudeLaunchSettingsOverlayArgs({
       args: ['--model', 'sonnet'],
@@ -154,22 +170,20 @@ describe('resolveClaudeNativeLaunchSettings', () => {
   });
 
   it('merges the interactive acknowledgement into the single existing launch overlay', () => {
-    expect(resolveClaudeLaunchSettingsOverlayArgs({
+    const args = resolveClaudeLaunchSettingsOverlayArgs({
       args: ['--settings', JSON.stringify({ ultracode: true })],
       interactionKind: 'interactive_terminal',
       permissionMode: 'bypassPermissions',
       launchSettings: {
         statusLine: { type: 'command', command: 'status-forwarder' },
       },
-    })).toEqual([
-      '--settings',
-      JSON.stringify({
+    });
+    expect(args.filter(arg => arg === '--settings')).toHaveLength(1);
+    expect(JSON.parse(args[args.indexOf('--settings') + 1])).toMatchObject({
         ultracode: true,
         statusLine: { type: 'command', command: 'status-forwarder' },
         skipDangerousModePermissionPrompt: true,
-        permissions: titlePermissions,
-      }),
-    ]);
+    });
   });
 
   it('reads file-backed settings into the inline launch overlay without creating a sibling file', async () => {
@@ -182,18 +196,17 @@ describe('resolveClaudeNativeLaunchSettings', () => {
     await writeFile(settingsPath, JSON.stringify(sourceSettings));
 
     try {
-      expect(resolveClaudeLaunchSettingsOverlayArgs({
+      const args = resolveClaudeLaunchSettingsOverlayArgs({
         args: ['--settings', settingsPath],
         interactionKind: 'interactive_terminal',
         permissionMode: 'bypassPermissions',
         launchSettings: {},
-      })).toEqual([
-        '--settings',
-        JSON.stringify({
-          permissions: { ...titlePermissions, deny: ['Bash'] },
+      });
+      expect(args.filter(arg => arg === '--settings')).toHaveLength(1);
+      expect(JSON.parse(args[args.indexOf('--settings') + 1])).toMatchObject({
+          permissions: { allow: expect.arrayContaining(['mcp__happier__change_title']), deny: ['Bash'] },
           skipDangerousModePermissionPrompt: true,
-        }),
-      ]);
+      });
       expect(JSON.parse(await readFile(settingsPath, 'utf8'))).toEqual(sourceSettings);
       expect(await readdir(settingsDir)).toEqual(['settings.json']);
     } finally {

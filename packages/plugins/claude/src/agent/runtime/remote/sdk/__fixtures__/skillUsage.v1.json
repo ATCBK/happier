@@ -1,0 +1,27 @@
+{
+  "provenance": {
+    "vendor": "Claude Code",
+    "version": "2.1.296",
+    "capturedAt": "2026-10-13T05:46:50.896Z",
+    "conditions": "Real vendor binary; isolated HOME and CLAUDE_CONFIG_DIR; loopback fake Anthropic model response; dummy API key; no real inference or credentials. The model fixture chose the Skill input; vendor execution accepted it and returned success.",
+    "argv": ["-p", "Use happier:contract-skill.", "--output-format", "stream-json", "--verbose", "--plugin-dir", "<isolated-plugin>", "--dangerously-skip-permissions", "--max-turns", "2"]
+  },
+  "assistant": {
+    "type": "assistant",
+    "message": {
+      "id": "msg_fixture_1", "type": "message", "role": "assistant", "model": "claude-opus-5-5",
+      "content": [{"type": "tool_use", "id": "toolu_fixture_skill", "name": "Skill", "input": {"skill": "happier:contract-skill"}}],
+      "stop_reason": null, "stop_sequence": null, "usage": {"input_tokens": 100, "output_tokens": 20}, "context_management": null
+    },
+    "parent_tool_use_id": null,
+    "session_id": "10f23e14-75f5-4c09-9e6e-4469e1481b40",
+    "uuid": "626d2fce-ffa4-4839-a025-541d7c2c12ee", "timestamp": "2026-10-13T05:46:50.896Z"
+  },
+  "toolResult": {
+    "type": "user", "message": {"role": "user", "content": [{"type": "tool_result", "tool_use_id": "toolu_fixture_skill", "content": "Launching skill: happier:contract-skill"}]},
+    "parent_tool_use_id": null, "session_id": "10f23e14-75f5-4c09-9e6e-4469e1481b40",
+    "uuid": "be307c58-6ad5-4a10-926d-97a338ccf0bb", "timestamp": "2026-10-13T05:46:50.918Z",
+    "tool_use_result": {"success": true, "commandName": "happier:contract-skill"},
+    "tool_result_meta": [{"id": "toolu_fixture_skill", "permission_decision": {"decision": "accept", "source": "config", "reason_type": "mode"}}]
+  }
+}

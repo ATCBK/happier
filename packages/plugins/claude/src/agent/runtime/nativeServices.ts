@@ -186,7 +186,7 @@ export function createClaudeNativeAgentSdkContext(
   const workflowSystemRecords = createClaudeWorkflowSystemRecordBridge(
     currentSession,
   );
-  const sessionAuth = currentSession?.auth;
+  const sessionAuth = services.auth;
   return {
     logger: createClaudeRuntimeLogger(context),
     agentRuntime: {

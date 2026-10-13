@@ -7,8 +7,112 @@ import {
     createTerminalHostFixture,
 } from '../../engine.testkit.js';
 import { createClaudeAgentSdkTurnOperations } from './session.js';
+import { createClaudeAgentRuntime, createClaudeNativeSessionRuntimeFromOperations } from '../../nativeRuntime.js';
+import type { AgentExecutionRunEvent, AgentExecutionRunRuntimeContextV1, AgentSessionRuntimeContext, AgentSessionRuntimeEvent } from '@happier-dev/plugin-sdk/agents/runtime';
+import type { ExecService } from '@happier-dev/plugin-sdk/exec';
+import type { PluginProtocolClientHandle } from '@happier-dev/plugin-sdk/exec/protocol-clients';
 
 describe('Claude SDK turn failure diagnostics', () => {
+    it('retains the admitted Anthropic service through a real native Execution Run failure', async () => {
+        const sdk = createSdkExecFixture();
+        const boundary = createPluginContextFixture(createTerminalHostFixture().service, createEventsFixture().service);
+        // Genuine capsule boundary: only native process/system-tool ports are faked, not the opener or event codecs.
+        const exec = {
+            systemTools: { resolve: async () => ({ executable: { kind: 'systemTool', id: 'claude-cli' }, executablePath: '/managed/claude' }) },
+            run: async () => ({ termination: { observed: { kind: 'exit', exitCode: 0 }, requestedBy: { kind: 'none' } },
+                stdout: new TextEncoder().encode('--effort <level>'), stderr: new Uint8Array(), stdoutTruncated: false, stderrTruncated: false }),
+            clients: { spawn: async () => {
+                const handle = await sdk.service.spawnClient({ launch: { kind: 'agent-cli', agentId: 'claude' },
+                    transport: { kind: 'stdio', framing: { kind: 'strict-lf-json' } }, protocol: { kind: 'json-stream' } });
+                const wait = async () => {
+                    const result = await handle.process.exit;
+                    return { termination: { observed: { kind: 'exit' as const, exitCode: result.exitCode ?? 0 }, requestedBy: { kind: 'none' as const } },
+                        stdout: new TextEncoder().encode(result.stdout), stderr: new TextEncoder().encode(result.stderr), stdoutTruncated: false, stderrTruncated: false };
+                };
+                return { client: { async write(value) { await handle.client.writeRecord(value); },
+                    subscribe(listener) { return { dispose: handle.client.subscribe(listener) }; }, dispose: () => handle.dispose() },
+                    process: { write: data => handle.process.writeStdin(data), closeStdin: async () => {}, wait,
+                        onOutput: () => ({ dispose() {} }), dispose: () => handle.dispose() }, wait, dispose: () => handle.dispose(),
+                } satisfies PluginProtocolClientHandle<'jsonStream'>;
+            } },
+        } as unknown as ExecService;
+        const context = {
+            services: { exec, logger: boundary.logger, settings: boundary.settings, storage: boundary.storage },
+            signal: new AbortController().signal,
+            executionRun: { id: 'source-qualified-run', services: {} },
+        } as unknown as AgentExecutionRunRuntimeContextV1;
+        const runtime = await createClaudeAgentRuntime({ plugin: { id: 'happier.agent.claude', version: '0.0.0' }, agent: { id: 'claude' }, signal: context.signal });
+        const open = runtime.sessions?.executionRunContextV1?.open;
+        if (!open) throw new Error('Native Claude Run factory is unavailable');
+        const execution = await open({ kind: 'create', runId: 'source-qualified-run', cwd: '/tmp/claude-diagnostics',
+            profile: { pluginId: 'happier.agent.claude', localId: 'default' }, input: { text: 'prompt' }, localInputId: 'input-run',
+            launchEnvironment: { values: { HAPPIER_CONNECTED_SERVICE_SELECTIONS_JSON: JSON.stringify([
+                { kind: 'profile', serviceId: 'happier.agent.claude/anthropic', profileId: 'admitted-launch-member', credentialRevision: 'csr_abcdefghijklmnopqrstuv' },
+            ]) }, unset: [] },
+        }, context);
+        const events: AgentExecutionRunEvent[] = [];
+        execution.watch(event => events.push(event));
+        try {
+            await vi.waitFor(() => expect(sdk.spawnClient).toHaveBeenCalledOnce());
+            await sdk.emit({ type: 'result', subtype: 'error_during_execution', is_error: true,
+                session_id: 'native-run', apiErrorStatus: 429, error: 'rate_limit_error', retry_after_ms: 1500, errors: ['Provider failed'] });
+            await vi.waitFor(() => expect(events).toContainEqual(expect.objectContaining({ kind: 'run-failed',
+                diagnostic: expect.objectContaining({ details: expect.objectContaining({ runtimeAuthClassification: expect.objectContaining({
+                    serviceId: 'happier.agent.claude/anthropic', profileId: null, groupId: null, kind: 'rate_limit', retryAfterMs: 1500,
+                }) }) }),
+            })));
+            expect(events.every(event => event.runId === 'source-qualified-run' && !('sessionId' in event))).toBe(true);
+        } finally { await execution.dispose(); }
+    });
+
+    it.each([
+        { category: 'capacity', status: 529, error: 'overloaded_error', quotaScope: 'provider', serviceId: 'happier.agent.claude/claude-subscription' },
+        { category: 'rate_limit', status: 429, error: 'rate_limit_error', quotaScope: 'account', serviceId: 'happier.agent.claude/claude-subscription' },
+        { category: 'capacity', status: 529, error: 'overloaded_error', quotaScope: 'provider', serviceId: 'happier.agent.claude/anthropic' },
+        { category: 'rate_limit', status: 429, error: 'rate_limit_error', quotaScope: 'account', serviceId: 'happier.agent.claude/anthropic' },
+    ] as const)('retains sanitized $category evidence for $serviceId through the SDK and native runtime', async ({ category, status, error, quotaScope, serviceId }) => {
+        const exec = createSdkExecFixture();
+        const ctx = createPluginContextFixture(createTerminalHostFixture().service, createEventsFixture().service, { exec: exec.service });
+        const launchEnv = { HAPPIER_CONNECTED_SERVICE_SELECTIONS_JSON: JSON.stringify([
+            { kind: 'profile', serviceId, profileId: 'admitted-launch-member', credentialRevision: 'csr_abcdefghijklmnopqrstuv' },
+        ]) };
+        const operations = createClaudeAgentSdkTurnOperations({
+            ctx, directory: '/tmp/claude-diagnostics', launchEnv,
+            happierSessionId: 'diagnostic-session', permissionMode: 'default',
+        });
+        // External host services are the boundary; both SDK and native event owners remain real.
+        const context = {
+            services: { exec: exec.service },
+            session: { services: { activeInput: { bind: () => ({ dispose() {} }) }, models: { bind: () => ({ dispose() {} }) } } },
+        } as unknown as AgentSessionRuntimeContext;
+        const native = createClaudeNativeSessionRuntimeFromOperations(operations,
+            { kind: 'create', sessionId: 'diagnostic-session', cwd: '/tmp/claude-diagnostics',
+                launchEnvironment: { values: launchEnv, unset: [] } }, context);
+        const events: AgentSessionRuntimeEvent[] = [];
+        native.watch(event => events.push(event));
+        try {
+            await native.send({ inputIds: ['input-limit'], input: { text: 'prompt' }, delivery: { kind: 'newTurn', turnId: 'host-limit-turn' } });
+            await vi.waitFor(() => expect(exec.spawnClient).toHaveBeenCalledOnce());
+            await exec.emit({ type: 'result', subtype: 'error_during_execution', is_error: true,
+                session_id: 'native-diagnostic', apiErrorStatus: status, error, retry_after_ms: 1500,
+                errors: ['Provider failed'], privateRawField: 'PRIVATE_PROVIDER_FIELD' });
+            await vi.waitFor(() => expect(events).toContainEqual(expect.objectContaining({
+                kind: 'turn-failed', turnId: 'host-limit-turn', diagnostic: expect.objectContaining({
+                    details: expect.objectContaining({
+                        runtimeAuthClassification: expect.objectContaining({
+                            kind: category, limitCategory: category, quotaScope, retryAfterMs: 1500,
+                            serviceId, profileId: null, groupId: null,
+                            source: 'structured_provider_error',
+                        }),
+                        usageLimit: expect.objectContaining({
+                            limitCategory: category, quotaScope, retryAfterMs: 1500,
+                        }),
+                    }),
+                }),
+            })));
+            expect(JSON.stringify(events)).not.toContain('PRIVATE_PROVIDER_FIELD');
+        } finally { await native.dispose('session_closed'); }
+    });
     it.each(['result', 'provider', 'exit', 'unknown-provider', 'unknown-result', 'signal'] as const)('logs the %s cause without provider text or credentials', async (ending) => {
         const exec = createSdkExecFixture();
         const ctx = createPluginContextFixture(createTerminalHostFixture().service, createEventsFixture().service, {

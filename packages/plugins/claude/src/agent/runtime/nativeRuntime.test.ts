@@ -1,4 +1,5 @@
 import { describe, expect, it, vi } from 'vitest';
+import { readFile } from 'node:fs/promises';
 import type {
   AgentExecutionRunConversationRuntimeV1,
   AgentExecutionRunEvent,
@@ -230,6 +231,8 @@ describe('createClaudeNativeRuntime', () => {
       kind: 'resume', sessionId: 'selected-session', cwd: '/tmp/claude-project', providerSessionId: 'provider-claude',
       runtimeDescriptorV1: selected.runtimeDescriptorV1,
       launchEnvironment: { values: helperPins, unset: [] },
+      mcpServers: { linear: { command: 'linear-bridge', args: ['--config-file', '/tmp/private-mcp.json'] } },
+      mcpToolPolicy: { linear: { unlisted: 'ask', tools: { read: 'allow', write: 'off' } } },
       configuration: {
         mode: { value: null, updatedAtMs: 0 }, model: { value: 'gateway-selected', updatedAtMs: 0 },
         permissionIntent: { value: 'yolo', updatedAtMs: 0 }, options: {},
@@ -264,6 +267,11 @@ describe('createClaudeNativeRuntime', () => {
       expect(args[args.indexOf('--allowedTools') + 1]).toBe('mcp__wilson__*');
       expect(args[args.indexOf('--permission-mode') + 1]).toBe('dontAsk');
       const nativeSettings = JSON.parse(args[args.indexOf('--settings') + 1] ?? '{}');
+      expect(JSON.parse(await readFile(args[args.indexOf('--mcp-config') + 1], 'utf8'))).toEqual({
+        mcpServers: { linear: { command: 'linear-bridge', args: ['--config-file', '/tmp/private-mcp.json'] } },
+      });
+      expect(nativeSettings.permissions.deny).toContain('mcp__linear__write');
+      expect(nativeSettings.permissions.ask).toContain('mcp__linear__read');
       expect(nativeSettings.env).toEqual(helperPins);
       expect(Object.keys(nativeSettings.env)).not.toContain('ANTHROPIC_AUTH_TOKEN');
       const serializedConfiguration = AgentSessionConfigurationSnapshotV1Schema.parse(JSON.parse(JSON.stringify({
@@ -272,6 +280,10 @@ describe('createClaudeNativeRuntime', () => {
         allowedTools: ['mcp__wilson__*'], unlistedTools: 'deny',
       })));
       await expect(session.updateConfiguration(serializedConfiguration)).resolves.toEqual(expect.objectContaining({ status: 'applied' }));
+      await expect(session.updateConfiguration({
+        ...serializedConfiguration,
+        mcpToolPolicy: { linear: { unlisted: 'ask', tools: { read: 'off', write: 'off' } } },
+      })).resolves.toMatchObject({ status: 'unsupported', diagnostic: { code: 'claude_mcp_tool_policy_restart_required' } });
       await expect(session.updateConfiguration({
         mode: { value: null, updatedAtMs: 0 }, model: { value: 'gateway-selected', updatedAtMs: 0 },
         permissionIntent: { value: 'yolo', updatedAtMs: 0 }, options: {},

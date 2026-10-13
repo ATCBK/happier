@@ -1,6 +1,7 @@
 import { extractToolResultBlocksFromSdkMessage } from '../../remote/sdk/streamEvents.js';
 
 import { sleep } from '@happier-dev/plugin-sdk/async';
+import { buildClaudeMcpConfigArgs, materializeClaudeMcpConfigArgsForSpawn } from '../../../mcp/materializeConfigArgs.js';
 import type { JsonValue } from '@happier-dev/plugin-sdk';
 import type {
   TerminalHostHandle,
@@ -17,6 +18,8 @@ import {
   type AgentSessionAuthRefreshRequest,
   type AgentSessionRuntimeContext,
   type AgentSessionRuntime,
+  type AgentSessionSkillDelivery,
+  type AgentSessionMcpToolPolicy,
   type AgentSessionTerminalComposerClearOutcome,
   type AgentSessionProviderBinding,
 } from '@happier-dev/plugin-sdk/agents/runtime';
@@ -32,6 +35,7 @@ import { createClaudeRuntimeActivityPublisher } from '../../shared/runtimeActivi
 import type { ClaudeSettingSourceV2 } from '@happier-dev/plugin-sdk/first-party/claude';
 import { readClaudeNativeCommands } from '../../../transcripts/nativeCommands.js';
 import { buildClaudeSettingSourcesArgs, resolveClaudeLaunchSettingsOverlayArgs, type ClaudeHelperModelEnv } from '../../launchSettings.js';
+import { buildClaudePluginDirArgs } from '../../pluginDirArgs.js';
 import { randomUUID } from 'node:crypto';
 import { resolveClaudeTerminalHostDisposeIntent } from './terminalHostDisposeIntent.js';
 import { materializeClaudeStartupInstructions } from '../../startupInstructions.js';
@@ -391,6 +395,9 @@ export type ClaudeUnifiedTerminalTurnOperationsParams = Readonly<{
   happierSessionId: string;
   hostPreference: TerminalHostPreference;
   launchEnv: Readonly<Record<string, string>>;
+  skills?: AgentSessionSkillDelivery;
+  mcpToolPolicy?: Readonly<Record<string, AgentSessionMcpToolPolicy>>;
+  mcpServers?: Readonly<Record<string, unknown>>;
   helperModelEnv?: ClaudeHelperModelEnv;
   settingSources?: readonly ClaudeSettingSourceV2[];
   supportsEffort?: boolean;
@@ -486,6 +493,7 @@ type ClaudeUnifiedPromptDeliveryBlockerClear = Readonly<{
 }>;
 
 export type ClaudeUnifiedTerminalNativeRuntime = ClaudeRuntimeTurnOperations & Readonly<{
+  refreshSkills: NonNullable<AgentSessionRuntime['refreshSkills']>;
   prepareTerminalPresentation: NonNullable<AgentSessionRuntime['prepareTerminalPresentation']>;
   promptCustody: 'unified_terminal';
   observeSourceTranscript(input: Readonly<{ providerSessionId: string; sourceId: string; row: JsonValue; phase?: 'initial_replay' }>): Promise<void>;
@@ -1861,6 +1869,7 @@ export function createClaudeUnifiedTerminalTurnOperations(
   }
 
   let startupInstructionsFile: ReturnType<typeof materializeClaudeStartupInstructions> | undefined;
+  let mcpConfigForSpawn: ReturnType<typeof materializeClaudeMcpConfigArgsForSpawn> | undefined;
 
   async function ensureHost(): Promise<TerminalHostHandle> {
     if (state.disposed) {
@@ -1902,6 +1911,7 @@ export function createClaudeUnifiedTerminalTurnOperations(
     try {
       startupInstructionsFile ??= params.startupInstructions
         ? materializeClaudeStartupInstructions(params.startupInstructions) : undefined;
+      mcpConfigForSpawn ??= materializeClaudeMcpConfigArgsForSpawn(buildClaudeMcpConfigArgs(params.mcpServers), message => params.ctx.logger.warn(message));
       handle = await params.ctx.agentRuntime.terminalHost.createOrAttachHost({
         preference: params.hostPreference,
         sessionName: resolution.hostKind === 'herdr' ? 'default' : sessionName,
@@ -1916,7 +1926,8 @@ export function createClaudeUnifiedTerminalTurnOperations(
               ...buildClaudeSettingSourcesArgs(params.settingSources),
               ...(params.supportsSystemPromptSnapshotOff === true ? ['--system-prompt-snapshot', 'off'] : []),
               ...(startupInstructionsFile?.args ?? []),
-              ...(resolvedHookPluginDir ? ['--plugin-dir', resolvedHookPluginDir] : []),
+              ...mcpConfigForSpawn.args,
+              ...buildClaudePluginDirArgs({ hookPluginDir: resolvedHookPluginDir, skills: params.skills }),
               ...(launchModelId ? ['--model', launchModelId] : []),
               ...(launchFallbackModelId ? ['--fallback-model', launchFallbackModelId] : []),
               ...buildClaudeEffortCliArgs({
@@ -1928,6 +1939,8 @@ export function createClaudeUnifiedTerminalTurnOperations(
               ...buildClaudePermissionModeArgs(launchPermissionMode),
             ],
             interactionKind: 'interactive_terminal',
+            skillOverrides: Object.fromEntries((params.skills?.nativeDisables ?? []).map(item => [item.name, 'off' as const])),
+            mcpToolPolicy: params.mcpToolPolicy,
             permissionMode: mapToClaudePermissionMode(launchPermissionMode),
             launchSettings: settingsOverlay,
             workspaceWrites: launchWorkspaceWrites,
@@ -1942,6 +1955,8 @@ export function createClaudeUnifiedTerminalTurnOperations(
     } catch (error) {
       await startupInstructionsFile?.cleanup();
       startupInstructionsFile = undefined;
+      await mcpConfigForSpawn?.cleanup();
+      mcpConfigForSpawn = undefined;
       throw recordTerminalHostStartupFailure(error) ?? error;
     }
     state.handle = handle;
@@ -3568,6 +3583,9 @@ export function createClaudeUnifiedTerminalTurnOperations(
   }
 
   const nativeRuntime: ClaudeUnifiedTerminalNativeRuntime = {
+    async refreshSkills() {
+      return { kind: 'restart_required' as const, reason: 'launch_path_unsupported' as const };
+    },
     async prepareTerminalPresentation() {
       return { kind: 'managed_terminal', handle: await prepareManagedTerminal() };
     },
@@ -4079,6 +4097,13 @@ export function createClaudeUnifiedTerminalTurnOperations(
           await startupInstructionsFile?.cleanup();
         } catch (error) {
           recordCleanupError(error, '[ClaudeUnifiedTerminal] startup instructions cleanup failed');
+        }
+        try {
+          await mcpConfigForSpawn?.cleanup();
+        } catch (error) {
+          recordCleanupError(error, '[ClaudeUnifiedTerminal] native MCP configuration cleanup failed');
+        } finally {
+          mcpConfigForSpawn = undefined;
         }
         try {
           try {

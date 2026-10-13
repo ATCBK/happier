@@ -1,5 +1,5 @@
 import { readClaudeSettingSourcesV2, type ClaudeSettingSourceV2 } from '@happier-dev/plugin-sdk/first-party/claude';
-import type { AgentLaunchEnvironment, AgentSessionConfigurationSnapshot, AgentSessionProviderBinding } from '@happier-dev/plugin-sdk/agents/runtime';
+import type { AgentLaunchEnvironment, AgentSessionConfigurationSnapshot, AgentSessionMcpToolPolicy, AgentSessionProviderBinding } from '@happier-dev/plugin-sdk/agents/runtime';
 import { readFileSync } from 'node:fs';
 
 import {
@@ -73,17 +73,21 @@ export function resolveClaudeLaunchSettingsOverlayArgs(input: Readonly<{
   permissionMode: string | null;
   launchSettings: Readonly<Record<string, unknown>>;
   helperModelEnv?: ClaudeHelperModelEnv;
+  skillOverrides?: Readonly<Record<string, 'off'>>;
+  mcpToolPolicy?: Readonly<Record<string, AgentSessionMcpToolPolicy>>;
   workspaceWrites?: 'allow' | 'deny';
 }> & ClaudeNativeToolPolicy): readonly string[] {
   const args = resolveClaudeNativeToolPolicyArgs(input.args, input);
+  const mcpPolicies = Object.entries(input.mcpToolPolicy ?? {}).filter(([server]) => server !== 'happier');
   if (input.interactionKind !== 'interactive_terminal' && input.workspaceWrites !== 'deny'
-    && input.helperModelEnv === undefined && input.unlistedTools !== 'deny') return args;
+    && input.helperModelEnv === undefined && input.unlistedTools !== 'deny'
+    && Object.keys(input.skillOverrides ?? {}).length === 0 && mcpPolicies.length === 0) return args;
 
   // Claude treats bypass selection and acknowledgement as distinct inputs. Happier's YOLO mode
   // is the user's explicit choice, so acknowledge it only in the trusted command-line settings
   // overlay. Never persist this key into project or account settings, and never apply it to SDK
   // protocols where Claude's ordinary permission/question handling remains authoritative.
-  const launchSettings = {
+  const launchSettings: Record<string, unknown> = {
     ...input.launchSettings,
     ...(input.unlistedTools !== 'deny' && input.interactionKind === 'interactive_terminal' && input.permissionMode === 'bypassPermissions'
       ? { skipDangerousModePermissionPrompt: true }
@@ -133,6 +137,12 @@ export function resolveClaudeLaunchSettingsOverlayArgs(input: Readonly<{
   }
 
   const mergedSettings: Record<string, unknown> = { ...baseSettings, ...launchSettings };
+  const readSkillOverrides = (value: unknown): Record<string, unknown> =>
+    value && typeof value === 'object' && !Array.isArray(value) ? value as Record<string, unknown> : {};
+  if (baseSettings.skillOverrides !== undefined || launchSettings.skillOverrides !== undefined || Object.keys(input.skillOverrides ?? {}).length > 0) {
+    mergedSettings.skillOverrides = { ...readSkillOverrides(baseSettings.skillOverrides),
+      ...readSkillOverrides(launchSettings.skillOverrides), ...input.skillOverrides };
+  }
   if (input.helperModelEnv !== undefined) {
     const existingEnv = mergedSettings.env && typeof mergedSettings.env === 'object' && !Array.isArray(mergedSettings.env)
       ? mergedSettings.env as Record<string, unknown> : {};
@@ -140,7 +150,7 @@ export function resolveClaudeLaunchSettingsOverlayArgs(input: Readonly<{
     // pins in the existing session-only command-line overlay, never in a global file.
     mergedSettings.env = { ...existingEnv, ...input.helperModelEnv };
   }
-  if (input.interactionKind === 'interactive_terminal' || input.workspaceWrites === 'deny' || input.unlistedTools === 'deny') {
+  if (input.interactionKind === 'interactive_terminal' || input.workspaceWrites === 'deny' || input.unlistedTools === 'deny' || mcpPolicies.length > 0) {
     const basePermissions = baseSettings.permissions && typeof baseSettings.permissions === 'object' && !Array.isArray(baseSettings.permissions)
       ? baseSettings.permissions as Record<string, unknown> : {};
     const existingPermissions = mergedSettings.permissions;
@@ -148,15 +158,28 @@ export function resolveClaudeLaunchSettingsOverlayArgs(input: Readonly<{
       ? existingPermissions as Record<string, unknown>
       : {};
     const rules = (value: unknown) => Array.isArray(value) ? value.filter((rule): rule is string => typeof rule === 'string') : [];
-    const existingAllow = [...rules(basePermissions.allow), ...rules(permissions.allow)];
+    const existingAllow = [...rules(basePermissions.allow), ...rules(permissions.allow)]
+      .filter(rule => !mcpPolicies.some(([server]) => rule === `mcp__${server}` || rule.startsWith(`mcp__${server}__`)));
+    const mcpAsk: string[] = [];
+    const mcpDeny: string[] = [];
+    for (const [server, policy] of mcpPolicies) {
+      // No live native rule replacement exists on this leaf. Keep Allow on the
+      // host permission path, including detached Runs, so it cannot become stale.
+      const hasExposedTools = Object.values(policy.tools).some(setting => setting === 'ask' || setting === 'allow');
+      (policy.unlisted === 'deny' && !hasExposedTools ? mcpDeny : mcpAsk).push(`mcp__${server}__*`);
+      for (const [tool, setting] of Object.entries(policy.tools)) {
+        (setting === 'off' || setting === 'deny' ? mcpDeny : mcpAsk).push(`mcp__${server}__${tool}`);
+      }
+    }
     const deny = [...rules(basePermissions.deny), ...rules(permissions.deny),
-      ...(input.workspaceWrites === 'deny' ? ['Edit', 'Write', 'MultiEdit', 'NotebookEdit', 'Bash'] : [])];
+      ...(input.workspaceWrites === 'deny' ? ['Edit', 'Write', 'MultiEdit', 'NotebookEdit', 'Bash'] : []), ...mcpDeny];
     mergedSettings.permissions = {
       ...permissions,
       allow: input.unlistedTools === 'deny'
         ? [...(input.allowedTools ?? [])]
         : [...new Set([...existingAllow, ...(buildClaudeHookSettingsOverlay().permissions?.allow ?? [])])],
       ...(input.unlistedTools === 'deny' ? { defaultMode: 'dontAsk', disableBypassPermissionsMode: 'disable' } : {}),
+      ...(mcpAsk.length ? { ask: [...new Set([...rules(basePermissions.ask), ...rules(permissions.ask), ...mcpAsk])] } : {}),
       ...(deny.length ? { deny: [...new Set(deny)] } : {}),
     };
   }

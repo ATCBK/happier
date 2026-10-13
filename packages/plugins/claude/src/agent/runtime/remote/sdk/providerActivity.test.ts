@@ -426,6 +426,65 @@ describe('Claude provider task lifecycle', () => {
 });
 
 describe('createClaudeProviderActivityLedger', () => {
+  it.each(['transcript', 'hook', 'child-hook'] as const)(
+    'settles only the explicitly cancelled resumed child through %s evidence',
+    (surface) => {
+      const ledger = createClaudeProviderActivityLedger();
+      const apply = (row: unknown) => {
+        const activity = readClaudeProviderTaskActivity(row);
+        if (activity) ledger.apply(activity);
+        return activity;
+      };
+      const response = {
+        success: false,
+        message: "Agent cancelled-child was stopped by the user and won't be resumed. Treat its work as cancelled; only launch a new agent if the user explicitly asks.",
+      };
+      apply({
+        hook_event_name: 'PostToolUse', session_id: 's1', tool_name: 'Agent',
+        tool_response: { status: 'async_launched', agentId: 'cancelled-child' },
+      });
+      apply({ type: 'system', subtype: 'task_notification', session_id: 's1',
+        task_id: 'cancelled-child', status: 'failed' });
+      apply({ type: 'user', sessionId: 's1',
+        toolUseResult: { success: true, resumedAgentId: 'cancelled-child' } });
+      ledger.apply({ type: 'started', admission: 'launch', sessionId: 's1', taskId: 'sibling' });
+      expect(ledger.getSnapshot()).toEqual({ state: 'active', activeCount: 2 });
+      const stopped = surface === 'transcript'
+        ? { type: 'user', sessionId: 's1', toolUseResult: response,
+          message: { role: 'user', content: [
+            { type: 'tool_result', tool_use_id: 'send-1', content: JSON.stringify(response) },
+          ] } }
+        : { hook_event_name: 'PostToolUse', session_id: 's1', tool_name: 'SendMessage',
+          tool_input: { to: 'cancelled-child', message: 'continue' }, tool_response: response,
+          ...(surface === 'child-hook' ? { agent_id: 'sibling' } : {}) };
+      expect(apply(stopped)).toEqual({
+        type: 'terminal', terminalStatus: 'stopped', sessionId: 's1', taskId: 'cancelled-child',
+      });
+      expect(ledger.getActiveProviderTasks()).toEqual([{ sessionId: 's1', taskId: 'sibling' }]);
+      apply({ type: 'system', subtype: 'task_notification', session_id: 's1',
+        task_id: 'sibling', status: 'completed' });
+      expect(ledger.getSnapshot()).toEqual({ state: 'idle', activeCount: 0 });
+    },
+  );
+
+  it('keeps copied cancellation text and unrelated SendMessage failures inert', () => {
+    const response = { success: false,
+      message: "Agent child was stopped by the user and won't be resumed." };
+    for (const row of [
+      { type: 'user', sessionId: 's1', message: { content: JSON.stringify(response) } },
+      { type: 'user', sessionId: 's1', toolUseResult: response },
+      { hook_event_name: 'PostToolUse', session_id: 's1', tool_name: 'Bash',
+        tool_input: { to: 'child' }, tool_response: response },
+      { hook_event_name: 'PostToolUse', session_id: 's1', tool_name: 'SendMessage',
+        tool_input: { to: 'other' }, tool_response: response },
+      { type: 'user', sessionId: 's1', hook_event_name: 'PostToolUse', tool_name: 'SendMessage',
+        tool_input: { to: 'other' }, tool_response: response, toolUseResult: response,
+        message: { content: [{ type: 'tool_result', tool_use_id: 'send-1', content: JSON.stringify(response) }] } },
+      { hook_event_name: 'PostToolUse', session_id: 's1', tool_name: 'SendMessage',
+        tool_input: { to: 'child' }, tool_response: { success: false, message: 'Request timed out' } },
+    ]) expect(readClaudeProviderTaskActivity(row)).toBeNull();
+  });
+
   it('starts idle and keeps unknown progress inert', () => {
     const snapshots: unknown[] = [];
     const ledger = createClaudeProviderActivityLedger({

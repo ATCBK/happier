@@ -345,6 +345,7 @@ export const CLAUDE_PLUGIN = definePlugin({
         },
         primary: 'sessions',
         catalog: {
+          acpRegistryIds: [...AGENT_DEFINITION.acpRegistryIds],
           vendorResume: { support: AGENT_DEFINITION.core.resume.vendorResume },
           // Binds Claude's own CLI to the declared `claude-cli` system tool so
           // `exec.systemTools.resolve` reaches the canonical Agent CLI launch
@@ -379,7 +380,9 @@ export const CLAUDE_PLUGIN = definePlugin({
           credentialKinds: ['token'],
         }],
         capabilities: projectAgentCapabilitiesV2FromDefinition(AGENT_DEFINITION.core, {
-          skills: { delivery: 'none', nativeDisable: 'unsupported', liveReload: 'unsupported' },
+          skills: { delivery: 'session_dir', nativeDisable: 'supported', liveReload: 'supported', usageEvidence: 'reported',
+            nativeRoots: { user: [['.claude', 'skills']], project: [['.claude', 'skills']],
+              plugin: [['.claude', 'plugins', 'cache', '*', '{plugin}', '*', 'skills']] } },
           surfaces: ['externalSessions'],
           sessions: {
             open: ['create', 'resume'],

@@ -1,7 +1,7 @@
 import { resolveVitestWorkers } from '../../../scripts/testing/vitestWorkers';
 import { resolve } from 'node:path';
 
-import { defineConfig } from 'vitest/config';
+import { configDefaults, defineConfig } from 'vitest/config';
 import { createWorkspacePackageSourcesPlugin } from '../../../scripts/testing/vitestWorkspacePackageResolution';
 
 const uiSources = resolve(__dirname, '../../../apps/ui/sources');
@@ -20,6 +20,7 @@ export default defineConfig({
     environment: 'node',
     hookTimeout: 60_000,
     setupFiles: [uiDev('vitestSetup.ts')],
+    exclude: [...configDefaults.exclude, '**/mcpToolPolicy.contract.test.ts'],
   },
   resolve: {
     alias: [

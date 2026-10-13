@@ -1,4 +1,5 @@
 import type { ClaudeSettingSourceV2 } from '@happier-dev/plugin-sdk/first-party/claude';
+import type { AgentSessionSkillDelivery } from '@happier-dev/plugin-sdk/agents/runtime';
 import type { ClaudeRemoteAdvancedOptions } from '../../protocol/remoteSettings.js';
 
 export interface SDKMessage {
@@ -111,6 +112,7 @@ export interface QueryOptions extends ClaudeRemoteAdvancedOptions {
     cwd?: string;
     effort?: string;
     env?: Readonly<Record<string, string>>;
+    skills?: AgentSessionSkillDelivery;
     extraArgs?: readonly string[];
     fallbackModel?: string;
     maxTurns?: number;

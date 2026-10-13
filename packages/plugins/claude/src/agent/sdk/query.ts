@@ -10,7 +10,8 @@ import type {
     SDKUserMessage,
 } from './types.js';
 import { materializeClaudeMcpConfigArgsForSpawn } from '../mcp/materializeConfigArgs.js';
-import { buildClaudeSettingSourcesArgs, resolveClaudeNativeToolPolicyArgs } from '../runtime/launchSettings.js';
+import { buildClaudeSettingSourcesArgs, resolveClaudeLaunchSettingsOverlayArgs, resolveClaudeNativeToolPolicyArgs } from '../runtime/launchSettings.js';
+import { buildClaudePluginDirArgs } from '../runtime/pluginDirArgs.js';
 import { materializeClaudeStartupInstructions } from '../runtime/startupInstructions.js';
 
 export type ClaudeSdkExecResult = Readonly<{
@@ -205,9 +206,7 @@ function buildClaudeArgs(prompt: QueryPrompt, options: QueryOptions = {}): strin
         }
         args.push('--fallback-model', options.fallbackModel);
     }
-    for (const plugin of options.plugins ?? []) {
-        args.push('--plugin-dir', plugin.path);
-    }
+    args.push(...buildClaudePluginDirArgs({ pluginDirs: options.plugins?.map(plugin => plugin.path), skills: options.skills }));
     if (options.betas && options.betas.length > 0) args.push('--betas', ...options.betas);
     if (options.maxBudgetUsd !== undefined) args.push('--max-budget-usd', String(options.maxBudgetUsd));
     if (options.additionalDirectories && options.additionalDirectories.length > 0) {
@@ -217,10 +216,15 @@ function buildClaudeArgs(prompt: QueryPrompt, options: QueryOptions = {}): strin
     if (options.debug === true) args.push('--debug');
     if (options.debugFile) args.push('--debug-file', options.debugFile);
     args.push(...(options.extraArgs ?? []));
-    const toolPolicyArgs = [...resolveClaudeNativeToolPolicyArgs(args, {
+    const pluginArgs = buildClaudePluginDirArgs({ args });
+    const skillOverrides = Object.fromEntries((options.skills?.nativeDisables ?? []).map(item => [item.name, 'off' as const]));
+    const toolPolicyArgs = [...(Object.keys(skillOverrides).length ? resolveClaudeLaunchSettingsOverlayArgs({
+        args: pluginArgs,
+        interactionKind: 'noninteractive_sdk', permissionMode: options.permissionMode ?? null, launchSettings: {},
+        skillOverrides,
         allowedTools: options.allowedTools,
         unlistedTools: options.unlistedTools,
-    })];
+    }) : resolveClaudeNativeToolPolicyArgs(pluginArgs, { allowedTools: options.allowedTools, unlistedTools: options.unlistedTools }))];
     if (typeof prompt === 'string') {
         toolPolicyArgs.push('--print', prompt.trim());
     } else {
@@ -344,6 +348,7 @@ class AsyncMessageQueue implements AsyncIterableIterator<SDKMessage> {
 export class ClaudeSdkQuery implements AsyncIterableIterator<SDKMessage> {
     private readonly messages = new AsyncMessageQueue();
     private readonly controlControllers = new Map<string, AbortController>();
+    private readonly commandsChangedWaiters = new Set<Readonly<{ resolve(): void; reject(error: Error): void }>>();
     private readonly pendingControlResponses = new Map<string, Readonly<{
         resolve(value: unknown): void;
         reject(error: Error): void;
@@ -463,6 +468,22 @@ export class ClaudeSdkQuery implements AsyncIterableIterator<SDKMessage> {
 
     async stopTask(taskId: string): Promise<void> {
         await this.requestControl({ subtype: 'stop_task', task_id: taskId });
+    }
+
+    async reloadSkills(options?: Readonly<{ signal?: AbortSignal }>): Promise<void> {
+        options?.signal?.throwIfAborted();
+        let waiter!: Readonly<{ resolve(): void; reject(error: Error): void }>;
+        const changed = new Promise<void>((resolve, reject) => { waiter = { resolve, reject }; });
+        this.commandsChangedWaiters.add(waiter);
+        const abort = () => waiter.reject(options?.signal?.reason instanceof Error
+            ? options.signal.reason : new Error('Claude skills reload was cancelled.'));
+        options?.signal?.addEventListener('abort', abort, { once: true });
+        try {
+            await Promise.all([this.requestControl({ subtype: 'reload_skills' }), changed]);
+        } finally {
+            options?.signal?.removeEventListener('abort', abort);
+            this.commandsChangedWaiters.delete(waiter);
+        }
     }
 
     async dispose(): Promise<void> {
@@ -694,6 +715,9 @@ export class ClaudeSdkQuery implements AsyncIterableIterator<SDKMessage> {
             return;
         }
         if (!isSdkMessage(record)) return;
+        if (record.type === 'system' && record.subtype === 'commands_changed') {
+            for (const waiter of this.commandsChangedWaiters) waiter.resolve();
+        }
         this.config.onMessageReceived?.(record);
         this.messages.enqueue(record);
     }
@@ -723,6 +747,8 @@ export class ClaudeSdkQuery implements AsyncIterableIterator<SDKMessage> {
             pending.reject(error);
         }
         this.pendingControlResponses.clear();
+        for (const waiter of this.commandsChangedWaiters) waiter.reject(error);
+        this.commandsChangedWaiters.clear();
     }
 
     private async writeRecordOrThrow(

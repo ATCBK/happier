@@ -25,6 +25,10 @@ const ProviderTurnEventBaseSchema = ProviderEventBaseSchema.extend({
 
 export const ClaudeProviderEventSchema = z.discriminatedUnion('kind', [
   ProviderTurnEventBaseSchema.extend({
+    kind: z.literal('skill-usage'),
+    skills: z.array(z.object({ name: z.string().min(1) }).strict()),
+  }).strict(),
+  ProviderTurnEventBaseSchema.extend({
     kind: z.literal('mcp-tool-usage'),
     window: z.object({ startMs: z.number().int().nonnegative(), endMs: z.number().int().nonnegative() }).strict(),
     coverage: z.enum(['complete', 'partial']),

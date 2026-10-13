@@ -1,5 +1,5 @@
 import { buildShellCommand } from '@happier-dev/plugin-sdk/agents/runtime';
-import { listHappierToolAutoApprovedNamesV1 } from '@happier-dev/protocol/tools/happierToolAutoApprovalV1';
+import { listHappierToolAutoApprovedNameSpellingsV1 } from '@happier-dev/protocol/tools/happierToolAutoApprovalV1';
 
 import { resolveClaudePermissionHookTimeoutSeconds } from './permissionHookTimeout.js';
 
@@ -88,7 +88,7 @@ const CLAUDE_SESSION_HOOK_EVENTS: readonly ClaudeSessionHookEventName[] = [
 export function buildClaudeHookSettingsOverlay(): ClaudeHookSettingsOverlay {
     return {
         permissions: {
-            allow: listHappierToolAutoApprovedNamesV1().map((name) => `mcp__happier__${name}`),
+            allow: listHappierToolAutoApprovedNameSpellingsV1('mcp__happier__'),
         },
     };
 }

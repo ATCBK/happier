@@ -156,7 +156,7 @@ describe('createClaudeNativeAgentSdkContext', () => {
     });
   });
 
-  it('refreshes runtime auth through the common Session handle without forwarding Agent identity', async () => {
+  it('refreshes runtime auth through the native host capability without general Session access or Agent identity', async () => {
     const refreshRuntimeAuth = vi.fn(async () => ({ status: 'refreshed' as const }));
     const controller = new AbortController();
     const context = {
@@ -164,10 +164,10 @@ describe('createClaudeNativeAgentSdkContext', () => {
         logger: { debug: vi.fn(), info: vi.fn(), warn: vi.fn(), error: vi.fn() },
         exec: {},
         sessions: {
-          current: { auth: { services: { refreshRuntimeAuth } } },
+          current: null,
         },
       },
-      session: { services: {} },
+      session: { services: { auth: { services: { refreshRuntimeAuth } } } },
     } as unknown as AgentSessionRuntimeContext;
     const native = createClaudeNativeAgentSdkContext(context);
 

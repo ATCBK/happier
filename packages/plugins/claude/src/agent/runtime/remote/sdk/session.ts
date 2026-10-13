@@ -7,10 +7,15 @@ import {
     type AgentSessionHookServerHandle,
     type AgentSessionProviderBinding,
     type AgentSessionRuntime,
+    type AgentSessionSkillDelivery,
+    type AgentSessionMcpToolPolicy,
 } from '@happier-dev/plugin-sdk/agents/runtime';
 import { HappierStructuredInputV1Schema } from '@happier-dev/plugin-sdk/sessions';
 import type { AgentSessionInputFilesService } from '@happier-dev/plugin-sdk/agents/runtime';
 import { createClaudeMcpUsageWitness } from './mcpUsage.js';
+import { createClaudeSkillUsageWitness } from './skillUsage.js';
+import { parseMcpToolWireNameV1 } from '@happier-dev/protocol/mcp/servers/tools/mcpToolIdentityV1';
+import { buildClaudeMcpConfigArgs, materializeClaudeMcpConfigArgsForSpawn } from '../../../mcp/materializeConfigArgs.js';
 import {
     redactBugReportSensitiveText,
     PluginError,
@@ -76,7 +81,9 @@ import {
 } from '../../providerEvents.js';
 import {
     buildClaudeSessionRuntimeIssue,
+    mapClaudeProviderFailureToUsageDetails,
     type ClaudeSessionRuntimeIssueSource,
+    type ClaudeSessionRuntimeUsageLimitDetails,
 } from '../../issues/runtimeIssues.js';
 import {
     createClaudeUnifiedWorkflowRuntime,
@@ -115,6 +122,7 @@ import { buildClaudeHookSettingsOverlay } from '../../../hooks/settings.js';
 import type { ClaudeSettingSourceV2 } from '@happier-dev/plugin-sdk/first-party/claude';
 import { readClaudeNativeCommands } from '../../../transcripts/nativeCommands.js';
 import { resolveClaudeLaunchSettingsOverlayArgs, type ClaudeHelperModelEnv } from '../../launchSettings.js';
+import { buildClaudePluginDirArgs } from '../../pluginDirArgs.js';
 import { buildClaudeEffortCliArgs } from '../../reasoningEffort.js';
 import { buildClaudePermissionModeArgs, mapToClaudePermissionMode } from '../../permissionMode.js';
 import { materializeClaudeStartupInstructions } from '../../startupInstructions.js';
@@ -181,18 +189,12 @@ type ClaudeProviderFailureEvidence = Readonly<{
     code: string;
     source: ClaudeSessionRuntimeIssueSource;
     preview: string | null;
+    usageLimit?: ClaudeSessionRuntimeUsageLimitDetails | null;
 }>;
 import { readClaudeProviderIdentityValue } from '../../../../protocol/providerIdentity.js';
 const readString = readClaudeRuntimeString;
 const CLAUDE_CONTEXT_USAGE_REFRESH_CONFIG_OPTION_ID = 'context_usage_refresh';
 const CLAUDE_CONTEXT_USAGE_REFRESH_TIMEOUT_MS = 1_500;
-
-function buildClaudeMcpConfigArgs(
-    mcpServers: Readonly<Record<string, unknown>> | null | undefined,
-): string[] {
-    if (!mcpServers || Object.keys(mcpServers).length === 0) return [];
-    return ['--mcp-config', JSON.stringify({ mcpServers })];
-}
 
 function isSdkSystemMessage(message: SDKMessage): message is SDKSystemMessage {
     return message.type === 'system';
@@ -385,6 +387,7 @@ function readProviderFailureEvidence(message: SDKMessage): ClaudeProviderFailure
         code,
         source: classifyFailureSource({ code, preview }),
         preview,
+        usageLimit: mapClaudeProviderFailureToUsageDetails(message),
     };
 }
 
@@ -400,6 +403,7 @@ function buildResultFailureEvidence(
         code,
         source: providerFailure?.source ?? classifyFailureSource({ code, preview }),
         preview,
+        usageLimit: providerFailure?.usageLimit ?? mapClaudeProviderFailureToUsageDetails(message),
     };
 }
 
@@ -558,6 +562,7 @@ function mapSdkRuntimeEvent(params: Readonly<{
                 occurredAt: Date.now(),
                 agentId: 'claude',
                 sanitizedPreview: failure.preview,
+                usageLimit: failure.usageLimit,
             }),
         });
     }
@@ -713,6 +718,8 @@ export type ClaudeAgentSdkTurnOperationsParams = Readonly<{
     providerModel?: AgentSessionProviderBinding['model'];
     initialProviderSessionId?: string | null;
     mcpServers?: Readonly<Record<string, unknown>> | null;
+    mcpToolPolicy?: Readonly<Record<string, AgentSessionMcpToolPolicy>>;
+    skills?: AgentSessionSkillDelivery;
     publishSdkMessages?: boolean;
     publishTranscriptMessages?: boolean;
     /**
@@ -734,6 +741,7 @@ export type ClaudeAgentSdkTurnOperationsParams = Readonly<{
 }>;
 
 export type ClaudeAgentSdkNativeOperations = ClaudeRuntimeTurnOperations & Readonly<{
+    refreshSkills: NonNullable<AgentSessionRuntime['refreshSkills']>;
     observeSourceTranscript: NonNullable<AgentSessionRuntime['observeSourceTranscript']>;
     subscribeCanonicalAgentSessionEvents: ReturnType<typeof createClaudeRuntimeActivityPublisher>['subscribe'];
     subscribeEffectiveModel: ClaudeEffectiveModelEvidenceSubscription;
@@ -750,6 +758,9 @@ function isClaudeAgentSdkSessionContext(
 export function createClaudeAgentSdkTurnOperations(
     params: ClaudeAgentSdkTurnOperationsParams,
 ): ClaudeAgentSdkNativeOperations {
+    const mcpServerKeys = new Set(Object.keys(params.mcpServers ?? {}));
+    let currentSkills = params.skills;
+    const skillOverrides = Object.fromEntries((params.skills?.nativeDisables ?? []).map(item => [item.name, 'off' as const]));
     const sessionContext = isClaudeAgentSdkSessionContext(params.ctx) ? params.ctx : null;
     if (params.unlistedTools === 'deny' && !params.happierSessionId && !params.ctx.agentRuntime.hooks
         && (params.allowedTools ?? []).some(rule => !rule.startsWith('mcp__') && rule.includes('('))) {
@@ -1155,13 +1166,13 @@ export function createClaudeAgentSdkTurnOperations(
         return await contextUsageRefreshPromise;
     }
 
-    async function requestContextUsageOnDemand(): Promise<boolean> {
+    async function withControlQuery<T>(operation: (query: ClaudeSdkQuery) => Promise<T>): Promise<T | null> {
         const reusableQuery = activeQuery;
-        if (reusableQuery) return await requestAndPublishContextUsage(reusableQuery);
+        if (reusableQuery) return await operation(reusableQuery);
         const contextUsageProviderSessionId = params.enableSessionResumability === true
             ? resumableProviderSessionId ?? pendingResumeProviderSessionId
             : providerSessionId;
-        if (!contextUsageProviderSessionId) return false;
+        if (!contextUsageProviderSessionId) return null;
 
         const hookPluginDir = await ensureSessionHookPluginDir();
         const idleController = new AbortController();
@@ -1170,12 +1181,14 @@ export function createClaudeAgentSdkTurnOperations(
             options: {
                 cwd: params.directory,
                 env: params.launchEnv,
+                skills: currentSkills,
                 abort: params.abortSignal,
                 resume: contextUsageProviderSessionId,
                 ...(currentModelId ? { model: currentModelId } : {}),
                 extraArgs: [
                     ...(params.supportsSystemPromptSnapshotOff === true ? ['--system-prompt-snapshot', 'off'] : []),
-                    ...(hookPluginDir ? ['--plugin-dir', hookPluginDir, '--include-hook-events'] : []),
+                    ...buildClaudePluginDirArgs({ hookPluginDir, skills: currentSkills }),
+                    ...(hookPluginDir ? ['--include-hook-events'] : []),
                     ...buildClaudeMcpConfigArgs(params.mcpServers),
                 ],
                 ...params.advancedOptions,
@@ -1187,11 +1200,15 @@ export function createClaudeAgentSdkTurnOperations(
             },
         });
         try {
-            return await requestAndPublishContextUsage(transientQuery);
+            return await operation(transientQuery);
         } finally {
             idleController.abort();
             await transientQuery.dispose().catch(() => undefined);
         }
+    }
+
+    async function requestContextUsageOnDemand(): Promise<boolean> {
+        return await withControlQuery(requestAndPublishContextUsage) ?? false;
     }
 
     function applyProviderTaskActivity(activity: ClaudeProviderTaskActivity): void {
@@ -1397,7 +1414,10 @@ export function createClaudeAgentSdkTurnOperations(
         if (toolPermissionPolicy === 'no_tools') {
             return { behavior: 'deny', message: 'Tools are disabled for this execution run.', interrupt: true };
         }
-        if (toolPermissionPolicy === 'workspace_write' && params.unlistedTools !== 'deny') {
+        // Run workspace-write is a built-in execution profile, not an external
+        // MCP grant. Resolve exact admitted server keys through the host parser.
+        if (toolPermissionPolicy === 'workspace_write' && params.unlistedTools !== 'deny'
+            && !parseMcpToolWireNameV1(toolName, mcpServerKeys)) {
             return {
                 behavior: 'allow',
                 updatedInput: readAgentToolInputRecord(input) ?? {},
@@ -1500,6 +1520,7 @@ export function createClaudeAgentSdkTurnOperations(
 
     async function consumeTurnMessages(turnQuery: ClaudeSdkQuery, completion: DeferredCompletion, launchEffort?: string | null): Promise<void> {
         const mcpUsage = createClaudeMcpUsageWitness(Object.keys(params.mcpServers ?? {}).filter(name => name !== 'happier'), Date.now());
+        const skillUsage = createClaudeSkillUsageWitness();
         let sawResult = false;
         let retainQueryForNextTurn = false;
         let messageSequence = 0;
@@ -1557,6 +1578,7 @@ export function createClaudeAgentSdkTurnOperations(
                     occurredAt: Date.now(),
                     agentId: 'claude',
                     sanitizedPreview: failure.preview,
+                    usageLimit: failure.usageLimit,
                 }),
             }));
         };
@@ -1574,7 +1596,10 @@ export function createClaudeAgentSdkTurnOperations(
                         || message.subtype === 'error_during_execution'
                         ? message.subtype : 'Unrecognized result subtype (details redacted)';
                 }
-                if (!isReplayClaudeAgentSdkMessage(message)) mcpUsage.observe(message);
+                if (!isReplayClaudeAgentSdkMessage(message)) {
+                    mcpUsage.observe(message);
+                    skillUsage.observe(message);
+                }
                 const commands = readClaudeNativeCommands(message);
                 if (commands !== null) {
                     publishRuntimeEvent(ClaudeProviderEventSchema.parse({
@@ -1753,6 +1778,11 @@ export function createClaudeAgentSdkTurnOperations(
                     reconcileProviderTaskRuntimeActivityForCurrentQuery('result-with-queued-user-turns');
                     continue;
                 }
+                const usedSkills = skillUsage.finish();
+                if (currentTurnId && !cancelledQueries.has(turnQuery) && !foregroundCompleted && usedSkills.length) {
+                    publishRuntimeEvent(ClaudeProviderEventSchema.parse({ kind: 'skill-usage',
+                        sessionId: readRuntimeEventSessionId(), turnId: currentTurnId, emittedAtMs: Date.now(), skills: usedSkills }));
+                }
                 if (isSuccessfulResultMessage) {
                     sawResult = true;
                     const shouldContinueForBackgroundTasks = providerActivityLedger.hasActiveProviderTasks();
@@ -1872,10 +1902,12 @@ export function createClaudeAgentSdkTurnOperations(
 
     let onPromptDeliveryOutcome: ClaudeProviderPromptDeliveryOutcomeCallback | null = null;
     let terminalStartupInstructions: ReturnType<typeof materializeClaudeStartupInstructions> | undefined;
+    let terminalMcpConfig: ReturnType<typeof materializeClaudeMcpConfigArgsForSpawn> | undefined;
     const readCurrentResumeProviderSessionId = () => params.enableSessionResumability === true
         ? resumableProviderSessionId ?? pendingResumeProviderSessionId
         : providerSessionId ?? pendingResumeProviderSessionId;
     const operations: ClaudeRuntimeTurnOperations & Readonly<{
+        refreshSkills: NonNullable<AgentSessionRuntime['refreshSkills']>;
         prepareTerminalPresentation: NonNullable<AgentSessionRuntime['prepareTerminalPresentation']>;
         observeSourceTranscript: NonNullable<AgentSessionRuntime['observeSourceTranscript']>;
         subscribeCanonicalAgentSessionEvents: typeof runtimeActivityPublisher.subscribe;
@@ -1883,6 +1915,13 @@ export function createClaudeAgentSdkTurnOperations(
         subscribeUsageObservation: ClaudeUsageObservationSubscription;
         setOnPromptDeliveryOutcome(handler: ClaudeProviderPromptDeliveryOutcomeCallback | null): void;
     }> = {
+        async refreshSkills(request, options) {
+            if (runtimeDisposed) throw new Error('Claude Agent SDK runtime is disposed.');
+            options?.signal?.throwIfAborted();
+            currentSkills = { ...request.skills, nativeDisables: params.skills?.nativeDisables ?? [] };
+            await withControlQuery(query => query.reloadSkills(options));
+            return { kind: 'applied' };
+        },
         async prepareTerminalPresentation() {
             if (runtimeDisposed) throw new Error('Claude Agent SDK runtime is disposed.');
             await resumeIdentityOwner?.settleCurrentCandidate();
@@ -1893,6 +1932,7 @@ export function createClaudeAgentSdkTurnOperations(
             const resumeId = readCurrentResumeProviderSessionId();
             terminalStartupInstructions ??= params.startupInstructions
                 ? materializeClaudeStartupInstructions(params.startupInstructions) : undefined;
+            terminalMcpConfig ??= materializeClaudeMcpConfigArgsForSpawn(buildClaudeMcpConfigArgs(params.mcpServers), message => params.ctx.logger.warn(message));
             return {
                 kind: 'terminal_launch',
                 plan: {
@@ -1901,14 +1941,16 @@ export function createClaudeAgentSdkTurnOperations(
                             ...(resumeId ? ['--resume', resumeId] : []),
                             ...(terminalStartupInstructions?.args ?? []),
                             ...(params.supportsSystemPromptSnapshotOff === true ? ['--system-prompt-snapshot', 'off'] : []),
-                            ...(hookPluginDir ? ['--plugin-dir', hookPluginDir] : []),
+                            ...buildClaudePluginDirArgs({ hookPluginDir, skills: currentSkills }),
                             ...(currentModelId ? ['--model', currentModelId] : []),
                             ...buildClaudeEffortCliArgs({ modelId: currentModelId, effort: currentEffort,
                                 ...(currentProviderModel ? { providerModel: currentProviderModel } : {}) }),
                             ...buildClaudePermissionModeArgs(currentPermissionMode),
-                            ...buildClaudeMcpConfigArgs(params.mcpServers),
+                            ...terminalMcpConfig.args,
                         ],
                         interactionKind: 'interactive_terminal',
+                        skillOverrides,
+                        mcpToolPolicy: params.mcpToolPolicy,
                         permissionMode: mapToClaudePermissionMode(currentPermissionMode),
                         launchSettings: currentUltracode && isClaudeUltracodeSupportedModelId(currentModelId, currentProviderModel)
                             ? { ultracode: true } : {},
@@ -2096,6 +2138,8 @@ export function createClaudeAgentSdkTurnOperations(
                 const denySettingsArgs = resolveClaudeLaunchSettingsOverlayArgs({
                     args: [], interactionKind: 'noninteractive_sdk', permissionMode: currentPermissionMode,
                     launchSettings, workspaceWrites: currentWorkspaceWrites,
+                    skillOverrides,
+                    mcpToolPolicy: params.mcpToolPolicy,
                     helperModelEnv: params.helperModelEnv,
                     allowedTools: params.allowedTools,
                     unlistedTools: params.unlistedTools,
@@ -2108,6 +2152,7 @@ export function createClaudeAgentSdkTurnOperations(
                     options: {
                         cwd: params.directory,
                         env: params.launchEnv,
+                        skills: currentSkills,
                         abort: params.abortSignal,
                         ...(toolPermissionPolicy
                             ? {}
@@ -2126,7 +2171,8 @@ export function createClaudeAgentSdkTurnOperations(
                             // Execution-run policy remains owned by Happier's admitted mode and
                             // canCallTool. Pin the Claude process away from any ambient bypass mode.
                             ...(toolPermissionPolicy ? ['--permission-mode', 'default'] : []),
-                            ...(hookPluginDir ? ['--plugin-dir', hookPluginDir, '--include-hook-events'] : []),
+                            ...buildClaudePluginDirArgs({ hookPluginDir, skills: currentSkills }),
+                            ...(hookPluginDir ? ['--include-hook-events'] : []),
                             ...buildClaudeMcpConfigArgs(params.mcpServers),
                         ],
                         // Ultracode rides the single inline --settings overlay; an unhonorable
@@ -2435,6 +2481,8 @@ export function createClaudeAgentSdkTurnOperations(
                 }));
                 effectiveModelListeners.clear();
                 usageObservationListeners.clear();
+                await terminalMcpConfig?.cleanup();
+                terminalMcpConfig = undefined;
             })();
             await runtimeDisposePromise;
         },

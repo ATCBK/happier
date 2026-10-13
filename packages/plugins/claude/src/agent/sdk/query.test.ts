@@ -131,6 +131,57 @@ describe('Claude plugin SDK query', () => {
         expect(settled).toBe(true);
         await running.dispose();
     });
+
+    it('does not acknowledge a repeated reload from the previous commands_changed or before control success', async () => {
+        const { ctx, stream } = createContextFixture();
+        const running = query(ctx, { prompt: prompt() });
+        const nextRequest = async (count: number) => {
+            await vi.waitFor(() => expect(stream.written.filter(record => record && typeof record === 'object'
+                && 'type' in record && record.type === 'control_request')).toHaveLength(count));
+            const request = stream.written.filter((record): record is { request_id: string } =>
+                Boolean(record && typeof record === 'object' && 'type' in record && record.type === 'control_request'
+                    && 'request_id' in record && typeof record.request_id === 'string')).at(-1)!;
+            return request.request_id;
+        };
+        try {
+            const first = running.reloadSkills();
+            const firstId = await nextRequest(1);
+            await stream.emit({ type: 'control_response', response: { subtype: 'success', request_id: firstId, response: {} } });
+            await stream.emit({ type: 'system', subtype: 'commands_changed', slash_commands: ['happier:first'] });
+            await first;
+            let settled = false;
+            const second = running.reloadSkills().then(() => { settled = true; });
+            const secondId = await nextRequest(2);
+            await Promise.resolve();
+            expect(settled).toBe(false);
+            await stream.emit({ type: 'system', subtype: 'commands_changed', slash_commands: ['happier:second'] });
+            await Promise.resolve();
+            expect(settled).toBe(false);
+            await stream.emit({ type: 'control_response', response: { subtype: 'success', request_id: secondId, response: {} } });
+            await second;
+        } finally { await running.dispose(); }
+    });
+
+    it('rejects cancellation while commands_changed is pending and accepts a subsequent reload', async () => {
+        const { ctx, stream } = createContextFixture();
+        const running = query(ctx, { prompt: prompt() });
+        const abort = new AbortController();
+        try {
+            const cancelled = running.reloadSkills({ signal: abort.signal });
+            const rejection = expect(cancelled).rejects.toThrow('cancel reload');
+            await vi.waitFor(() => expect(stream.written).toContainEqual(expect.objectContaining({
+                type: 'control_request', request: { subtype: 'reload_skills' },
+            })));
+            await stream.emit({ type: 'control_response', response: { subtype: 'success', request_id: 'claude-sdk-control-1', response: {} } });
+            abort.abort(new Error('cancel reload'));
+            await rejection;
+            const retry = running.reloadSkills();
+            await vi.waitFor(() => expect(stream.written).toContainEqual(expect.objectContaining({ request_id: 'claude-sdk-control-2' })));
+            await stream.emit({ type: 'system', subtype: 'commands_changed', slash_commands: ['happier:retry'] });
+            await stream.emit({ type: 'control_response', response: { subtype: 'success', request_id: 'claude-sdk-control-2', response: {} } });
+            await retry;
+        } finally { await running.dispose(); }
+    });
     it('removes every built-in tool for an empty confined list despite broader native options', async () => {
         const { ctx, spawnClient } = createContextFixture();
         const running = query(ctx, {
@@ -149,6 +200,7 @@ describe('Claude plugin SDK query', () => {
         expect(args).not.toContain('--allow-dangerously-skip-permissions');
         expect(args).not.toContain('--allowed-tools');
         expect(args).not.toContain('--permission-mode=bypassPermissions');
+        expect(args).not.toContain('--settings');
         await running.dispose();
     });
 

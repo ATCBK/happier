@@ -962,6 +962,38 @@ describe('bindClaudeAgentSdkFallbackSession', () => {
     }
   });
 
+  it('keeps projected MCP Ask below the detached workspace-write Run fast allow', async () => {
+    const exec = createSdkExecFixture();
+    const requestApproval = vi.fn(async () => ({ status: 'declined' as const }));
+    const fixture = createPluginContextFixture(createTerminalHostFixture().service, createEventsFixture().service, {
+      exec: exec.service,
+      toolExecution: { before: async request => ({ status: 'continue', input: request.input }) } satisfies AgentSessionHostServices['toolExecution'],
+    });
+    const { createClaudeNativePermissionEngine } = await import('../../../permissions/nativePermissionEngine.js');
+    const operations = createClaudeAgentSdkProviderOperations({
+      ctx: { logger: fixture.logger, agentRuntime: { exec: exec.service, toolExecution: fixture.agentRuntime.toolExecution } },
+      permissionEngine: createClaudeNativePermissionEngine({ services: { interactions: { requestApproval } } } as unknown as AgentSessionRuntimeContext),
+      directory: '/tmp/claude-project', launchEnv: {}, executionRunId: 'workspace-mcp',
+      permissionMode: 'default', toolPermissionPolicy: 'workspace_write',
+      mcpServers: { first__team: { command: 'fixture-mcp' } },
+      mcpToolPolicy: { first__team: { unlisted: 'ask', tools: { mutate: 'ask' } } },
+    });
+    try {
+      operations.beginProviderTurn();
+      await operations.sendProviderTurnPrompt('use the external tool');
+      await vi.waitFor(() => expect(exec.spawnClient).toHaveBeenCalledOnce());
+      await exec.emit({ type: 'control_request', request_id: 'run-mcp',
+        request: { subtype: 'can_use_tool', tool_name: 'mcp__first__team__mutate', input: {} } });
+      await vi.waitFor(() => expect(exec.written).toContainEqual({ type: 'control_response',
+        response: { subtype: 'success', request_id: 'run-mcp', response: {
+          behavior: 'deny', message: 'Permission denied', interrupt: true,
+        } } }));
+      expect(requestApproval).toHaveBeenCalledWith(expect.objectContaining({
+        subject: { kind: 'tool', name: 'mcp__first__team__mutate', input: {} },
+      }), expect.anything());
+    } finally { await operations.disposeProviderSession(); }
+  });
+
   it('intercepts workspace-write tool input before the SDK auto-approval leaf', async () => {
     const terminalHost = createTerminalHostFixture();
     const events = createEventsFixture();

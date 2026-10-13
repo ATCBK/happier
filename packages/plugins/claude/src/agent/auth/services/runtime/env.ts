@@ -133,16 +133,18 @@ export function readClaudeSubscriptionRuntimeAuthSelectionFromEnv(
   return null;
 }
 
-function readConnectedServiceId(
-  env: Readonly<Record<string, string | undefined>>,
-): 'claude-subscription' | 'anthropic' | null {
+export function readClaudeConnectedServiceRuntimeServiceFromEnv(
+  env: Readonly<Record<string, string | undefined>> | null | undefined,
+): 'happier.agent.claude/claude-subscription' | 'happier.agent.claude/anthropic' | null {
   let hasAnthropic = false;
-  for (const item of parseJsonArray(env[CONNECTED_SERVICE_SELECTIONS_ENV_KEY])) {
+  for (const item of parseJsonArray(env?.[CONNECTED_SERVICE_SELECTIONS_ENV_KEY])) {
     const serviceId = readString(isRecord(item) ? item.serviceId : null);
-    if (serviceId === 'claude-subscription') return 'claude-subscription';
-    if (serviceId === 'anthropic') hasAnthropic = true;
+    if (serviceId === 'claude-subscription' || serviceId === 'happier.agent.claude/claude-subscription') {
+      return 'happier.agent.claude/claude-subscription';
+    }
+    if (serviceId === 'anthropic' || serviceId === 'happier.agent.claude/anthropic') hasAnthropic = true;
   }
-  return hasAnthropic ? 'anthropic' : null;
+  return hasAnthropic ? 'happier.agent.claude/anthropic' : null;
 }
 
 function readMaterializedEnvKeys(
@@ -164,10 +166,10 @@ function stripConnectedServiceRuntimeMetadata(env: Record<string, string | undef
 function resolveAllowedConnectedAuthEnvKeys(
   env: Readonly<Record<string, string | undefined>>,
 ): Set<ClaudeAuthEnvKey> | null {
-  const serviceId = readConnectedServiceId(env);
+  const serviceId = readClaudeConnectedServiceRuntimeServiceFromEnv(env);
   if (!serviceId) return null;
 
-  const serviceAllowedKeys: readonly ClaudeAuthEnvKey[] = serviceId === 'anthropic'
+  const serviceAllowedKeys: readonly ClaudeAuthEnvKey[] = serviceId === 'happier.agent.claude/anthropic'
     ? ['ANTHROPIC_API_KEY']
     : ['CLAUDE_CODE_OAUTH_TOKEN'];
   const materializedKeys = readMaterializedEnvKeys(env);

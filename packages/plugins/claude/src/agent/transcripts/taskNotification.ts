@@ -124,6 +124,23 @@ export function readClaudeTaskLifecycleEnvelope(value: unknown): ClaudeTaskLifec
   const hookResponse = hookName === 'PostToolUse' ? readRecord(row.tool_response ?? row.toolResponse ?? row.toolUseResult ?? row.tool_use_result) : null;
   const toolName = readString(row.tool_name ?? row.toolName);
   const resumeResponse = hookName === 'PostToolUse' && toolName === 'SendMessage' ? hookResponse : response;
+  // Claude 2.1.296 explicitly reports a user-stopped Agent when SendMessage cannot
+  // resume it. This is settled native task evidence, not a generic delivery failure.
+  if (resumeResponse?.success === false) {
+    const cancelledAgentId = /^Agent (\S+) was stopped by the user and won't be resumed\./
+      .exec(readString(resumeResponse.message) ?? '')?.[1];
+    const content = readRecord(row.message)?.content;
+    const nativeToolResult = Array.isArray(content)
+      && content.map(readRecord).some(block => block?.type === 'tool_result' && readString(block.tool_use_id));
+    const hookInput = readRecord(row.tool_input ?? row.toolInput);
+    const matchingHookTarget = hookName === 'PostToolUse' && toolName === 'SendMessage'
+      && readString(hookInput?.to) === cancelledAgentId;
+    if (cancelledAgentId && (hookName === 'PostToolUse'
+      ? matchingHookTarget : row.type === 'user' && nativeToolResult)) {
+      return { subtype: 'task_status', taskId: cancelledAgentId, toolUseId: null, status: 'cancelled',
+        summary: readString(resumeResponse.message)!, ...identity };
+    }
+  }
   const resumedAgentId = readString(resumeResponse?.resumedAgentId ?? resumeResponse?.resumed_agent_id);
   if (resumedAgentId && resumeResponse && resumeResponse.success !== false && resumeResponse.is_error !== true
     && resumeResponse.isError !== true && resumeResponse.error == null

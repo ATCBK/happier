@@ -3,6 +3,45 @@ import { describe, expect, it, vi } from 'vitest';
 
 import { CLAUDE_CODE_RECOMMENDED_OAUTH_SCOPE } from '../native/scopes.js';
 
+describe('canonical Claude failure evidence', () => {
+  it.each([
+    [{ usageLimit: { v: 1, resetAtMs: null, retryAfterMs: 1500, quotaScope: 'provider',
+      recoverability: 'wait', limitCategory: 'capacity' } }, 'capacity'],
+    [{ temporaryThrottle: { v: 1, retryAfterMs: 1500, recoverability: 'wait' } }, 'temporary_throttle'],
+  ])('classifies normalized native diagnostics for the actual selected Account service (%s)', async (details, kind) => {
+    const { createClaudeConnectedServiceRuntimeAuthAdapter } = await import('./failure.js');
+    expect(createClaudeConnectedServiceRuntimeAuthAdapter().classifyRuntimeAuthFailure({
+      target: { agentId: 'claude', targetId: 'run-current' },
+      selection: { kind: 'profile', serviceId: 'happier.agent.claude/anthropic', profileId: 'current' },
+      error: { code: 'claude_provider_failure', details },
+    })).toMatchObject({ kind, serviceId: 'happier.agent.claude/anthropic', profileId: 'current',
+      groupId: null, retryAfterMs: 1500, source: 'structured_provider_error' });
+  });
+
+  it('retains typed temporary-throttle evidence without inventing account identity', async () => {
+    const { classifyClaudeConnectedServiceRuntimeAuthFailure } = await import('./failure.js');
+    expect(classifyClaudeConnectedServiceRuntimeAuthFailure({
+      serviceId: 'happier.agent.claude/claude-subscription', profileId: null, groupId: null,
+      error: { code: 'claude_provider_throttle' },
+      normalizedDetails: { temporaryThrottle: { v: 1, retryAfterMs: 1500, recoverability: 'wait' } },
+    })).toMatchObject({ kind: 'temporary_throttle', limitCategory: 'temporary_throttle',
+      quotaScope: 'provider', retryAfterMs: 1500, profileId: null, groupId: null,
+      source: 'structured_provider_error' });
+  });
+
+  it('does not promote malformed normalized diagnostic facts into recovery evidence', async () => {
+    const { createClaudeConnectedServiceRuntimeAuthAdapter } = await import('./failure.js');
+    expect(createClaudeConnectedServiceRuntimeAuthAdapter().classifyRuntimeAuthFailure({
+      target: { agentId: 'claude' },
+      selection: { serviceId: 'happier.agent.claude/anthropic', profileId: 'current' },
+      error: { code: 'claude_provider_failure', details: {
+        usageLimit: { v: 1, limitCategory: 'capacity' },
+        temporaryThrottle: { v: 1, retryAfterMs: '1500', recoverability: 'wait' },
+      } },
+    })).toBeNull();
+  });
+});
+
 type ClaudeRuntimeAuthEnvIsolator = (
   env: Record<string, string | undefined>,
 ) => Record<string, string | undefined>;
