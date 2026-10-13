@@ -1,10 +1,11 @@
 import { mkdir, mkdtemp, readFile, rm } from 'node:fs/promises';
+import { randomUUID } from 'node:crypto';
 import { constants, tmpdir } from 'node:os';
 import { basename, dirname, relative, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
-import { exitWithCommandResult, runCommand } from '../../apps/stack/scripts/utils/proc/proc.mjs';
+import { exitWithCommandResult, runCommand, spawnForegroundCommand } from '../../apps/stack/scripts/utils/proc/proc.mjs';
 
-import { prepareTypeScriptProjectBuildFromArgs } from './prepareTypeScriptProjectBuild.mjs';
+import { prepareTypeScriptProjectBuildFromArgs, verifyTypeScriptProjectCoverage } from './prepareTypeScriptProjectBuild.mjs';
 import { writeJsonAtomic } from '../../apps/stack/scripts/utils/fs/json.mjs';
 import {
   resolveTypeScriptCliInvocation,
@@ -14,6 +15,14 @@ import {
 const scriptDir = dirname(fileURLToPath(import.meta.url));
 const repoRoot = resolve(scriptDir, '..', '..');
 const args = process.argv.slice(2);
+let coverageBaseline;
+for (let index = 0; index < args.length; index += 1) {
+  if (args[index] !== '--verifyProjectCoverage') continue;
+  coverageBaseline = args[index + 1];
+  if (!coverageBaseline || coverageBaseline.startsWith('-')) throw new Error('--verifyProjectCoverage requires a baseline tsconfig path');
+  args.splice(index, 2);
+  index -= 1;
+}
 
 // Plugin SDK's finite task delegates to its existing prepared compiler script.
 const lifecycleTask = process.env.npm_lifecycle_event === 'typecheck:tests:prepared'
@@ -46,27 +55,33 @@ function compilerProjects(args) {
 }
 
 async function prepareReferencedUiDeclarations(projects, cwd) {
-  const consumer = projects.find(({ project }) => project && basename(project) === 'tsconfig.test.json'
-    && basename(dirname(resolve(cwd, project))) === 'cli');
+  const consumer = projects.find(({ project, authoredProject }) => {
+    const authored = authoredProject ?? project;
+    return authored && basename(authored) === 'tsconfig.test.json' && basename(dirname(resolve(cwd, authored))) === 'cli';
+  });
   if (!consumer) return [];
-  const authored = resolve(cwd, consumer.project);
-  const config = JSON.parse(await readFile(authored, 'utf8'));
-  const reference = config.references?.find(({ path }) => basename(path) === 'tsconfig.source.json'
-    && basename(dirname(resolve(dirname(authored), path))) === 'ui');
+  const authored = resolve(cwd, consumer.authoredProject ?? consumer.project);
+  const configPath = resolve(cwd, consumer.project);
+  const config = JSON.parse(await readFile(configPath, 'utf8'));
+  const authoredConfig = JSON.parse(await readFile(authored, 'utf8'));
+  const references = config.references ?? authoredConfig.references ?? [];
+  const reference = references.find(({ path }) => basename(path) === 'tsconfig.source.json'
+    && basename(dirname(resolve(dirname(configPath), path))) === 'ui');
   if (!reference) return [];
-  const uiDir = dirname(resolve(dirname(authored), reference.path));
-  const producers = ['foundation', 'core', 'source', 'test'].map(name => {
+  const uiDir = dirname(resolve(dirname(configPath), reference.path));
+  const producers = ['foundation', 'core', 'source'].map(name => {
     const args = ['--singleThreaded', '--project', resolve(uiDir, `tsconfig.${name}.json`)];
-    return { project: resolve(uiDir, `tsconfig.${name}.json`), args, authoredArgs: args };
+    return { project: resolve(uiDir, `tsconfig.${name}.json`), authoredProject: resolve(uiDir, `tsconfig.${name}.json`), args, authoredArgs: args };
   });
   const { prepareUiTypecheckProjects } = await import('../../apps/ui/scripts/deriveTypecheckProjects.mjs');
   await prepareUiTypecheckProjects(producers, cwd);
   const target = resolve(dirname(authored), 'node_modules/.cache/tsc/tsconfig.test.json');
   await mkdir(dirname(target), { recursive: true });
   await writeJsonAtomic(target, {
-    extends: authored,
-    references: config.references.map(value => ({ ...value,
-      path: value === reference ? producers[2].project : resolve(dirname(authored), value.path),
+    ...config,
+    extends: config.extends ?? authored,
+    references: references.map(value => ({ ...value,
+      path: value === reference ? producers[2].project : resolve(dirname(configPath), value.path),
     })),
   });
   consumer.args = consumer.args.map((arg, index) => ['--project', '-p'].includes(consumer.args[index - 1])
@@ -77,9 +92,32 @@ async function prepareReferencedUiDeclarations(projects, cwd) {
 
 async function runCompiler(invocation, project, isCancelled) {
   const options = { ownedProcessGroup: true, cwd: process.cwd(), stdio: 'inherit', env: process.env };
-  const compilerArgs = [...invocation.argsPrefix, ...project.args];
+  const diagnosticReportDir = process.env.HAPPIER_TYPECHECK_REPORT_DIR;
+  const compilerArgs = [...invocation.argsPrefix, ...project.args, ...(diagnosticReportDir ? ['--pretty', 'false'] : [])];
+  const execute = async (command, args) => {
+    if (!diagnosticReportDir) return await runCommand(command, args, options);
+    const child = spawnForegroundCommand(command, args, { ...options, stdio: ['inherit', 'pipe', 'pipe'] });
+    const stdout = [];
+    const stderr = [];
+    child.stdout.on('data', chunk => { stdout.push(chunk); process.stdout.write(chunk); });
+    child.stderr.on('data', chunk => { stderr.push(chunk); process.stderr.write(chunk); });
+    const result = await new Promise(resolveResult => {
+      child.once('error', error => resolveResult({ status: null, signal: null, error }));
+      child.once('close', (status, signal) => resolveResult({ status, signal }));
+    });
+    return { ...result, stdout: Buffer.concat(stdout).toString(), stderr: Buffer.concat(stderr).toString() };
+  };
+  const publish = async result => {
+    if (diagnosticReportDir) await writeJsonAtomic(resolve(diagnosticReportDir, `${randomUUID()}.json`), {
+      cwd: process.cwd(), project: project.authoredProject ?? project.project,
+      status: result.status, signal: result.signal,
+      ...(result.error ? { error: { message: result.error.message, code: result.error.code } } : {}),
+      stdout: result.stdout ?? '', stderr: result.stderr ?? '',
+    });
+    return result;
+  };
   if (process.platform !== 'linux' || process.env.CI !== 'true' || process.env.HAPPIER_TYPESCRIPT_CLI_MEASURE_RSS !== '1') {
-    return await runCommand(invocation.command, compilerArgs, options);
+    return await publish(await execute(invocation.command, compilerArgs));
   }
 
   // A private result file keeps binary terminal streams inherited and preserves
@@ -88,17 +126,17 @@ async function runCompiler(invocation, project, isCancelled) {
   const reportPath = resolve(reportDir, 'result.json');
   try {
     if (isCancelled()) return { status: 0, signal: null };
-    const adapterResult = await runCommand('python3', [resolve(scriptDir, 'measureTypeScriptCompiler.py'), reportPath, invocation.command, ...compilerArgs], options);
-    if (adapterResult.error || adapterResult.signal || adapterResult.status !== 0) return adapterResult;
+    const adapterResult = await execute('python3', [resolve(scriptDir, 'measureTypeScriptCompiler.py'), reportPath, invocation.command, ...compilerArgs]);
+    if (adapterResult.error || adapterResult.signal || adapterResult.status !== 0) return await publish(adapterResult);
     const report = JSON.parse(await readFile(reportPath, 'utf8'));
-    if (report.error) return { status: null, signal: null, error: Object.assign(new Error(report.error.message), { code: report.error.code }) };
+    if (report.error) return await publish({ ...adapterResult, status: null, signal: null, error: Object.assign(new Error(report.error.message), { code: report.error.code }) });
     const exited = Number.isInteger(report.status) && report.status >= 0 && report.status <= 255 && report.signal === null;
     const signalled = report.status === null && typeof report.signal === 'string' && constants.signals[report.signal] !== undefined;
     if ((!exited && !signalled) || !Number.isInteger(report.maxRssKiB) || report.maxRssKiB < 0) {
       throw new Error('Invalid TypeScript compiler measurement result');
     }
     process.stderr.write(`[typescript] ${JSON.stringify({ project: project.project, metric: 'wait4-child-max-rss', ...report })}\n`);
-    return { status: report.status, signal: report.signal };
+    return await publish({ ...adapterResult, status: report.status, signal: report.signal });
   } finally {
     await rm(reportDir, { recursive: true, force: true });
   }
@@ -108,7 +146,8 @@ async function runCompiler(invocation, project, isCancelled) {
 if (process.platform !== 'win32' && shouldRouteTypeScriptCliThroughHstack({ args, env: process.env })) {
   const launcher = resolve(repoRoot, 'apps', 'stack', 'bin', 'hstack-exec');
   const scriptFromWorkspace = relative(process.cwd(), fileURLToPath(import.meta.url));
-  const routedResult = await runCommand(launcher, ['--', 'node', scriptFromWorkspace, ...args], {
+  const routedArgs = coverageBaseline ? ['--verifyProjectCoverage', coverageBaseline, ...args] : args;
+  const routedResult = await runCommand(launcher, ['--', 'node', scriptFromWorkspace, ...routedArgs], {
     ownedProcessGroup: true,
     cwd: process.cwd(),
     stdio: 'inherit',
@@ -124,11 +163,17 @@ if (process.platform !== 'win32' && shouldRouteTypeScriptCliThroughHstack({ args
   // still stop the batch after the user cancels the containing operation.
   for (const signal of cancellationSignals) process.on(signal, observeCancellation);
   try {
-    const projects = compilerProjects(args).map(project => ({ ...project, authoredArgs: project.args }));
-    if (projects.length === 4) {
+    const projects = compilerProjects(args).map(project => ({ ...project, authoredProject: project.project, authoredArgs: project.args }));
+    if ([3, 4, 5].includes(projects.length)) {
       const { prepareUiTypecheckProjects } = await import('../../apps/ui/scripts/deriveTypecheckProjects.mjs');
       if (!cancelled) await prepareUiTypecheckProjects(projects, process.cwd());
     }
+    if (projects.length === 5) {
+      const { prepareCliTypecheckProjects } = await import('../../apps/cli/scripts/deriveTypecheckProjects.mjs');
+      if (!cancelled) await prepareCliTypecheckProjects(projects, process.cwd());
+    }
+    if (coverageBaseline && !cancelled) await verifyTypeScriptProjectCoverage({ baselinePath: coverageBaseline,
+      projectPaths: projects.map(({ project }) => project).filter(Boolean), cwd: process.cwd() });
     const producers = cancelled ? [] : await prepareReferencedUiDeclarations(projects, process.cwd());
     for (const project of [...producers, ...projects]) {
       if (cancelled) break;

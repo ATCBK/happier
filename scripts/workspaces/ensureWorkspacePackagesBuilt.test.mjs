@@ -1366,7 +1366,7 @@ test('component builds remain strict unless a caller opts in to plugin failure p
   );
 });
 
-test('component admission refreshes its bundled workspace package copies', async (t) => {
+test('component admission can defer bundled copies until shared preparation completes', async (t) => {
   const repoRoot = mkdtempSync(join(tmpdir(), 'happier-component-bundled-workspace-refresh-'));
   t.after(() => rmSync(repoRoot, { recursive: true, force: true }));
 
@@ -1441,6 +1441,7 @@ test('component admission refreshes its bundled workspace package copies', async
   });
   const result = await ensureWorkspacePackagesBuiltForComponent(stackDir, {
     quiet: true,
+    deferBundledWorkspaceSync: true,
     workspaceBuildBoundary: {
       async prepareEnv(_packageDir, env) {
         return { ...env };
@@ -1453,6 +1454,10 @@ test('component admission refreshes its bundled workspace package copies', async
 
   assert.deepEqual(result.built, []);
   assert.deepEqual(result.skipped, []);
+  assert.equal(readFileSync(join(bundledProtocolDir, 'dist', 'index.js'), 'utf8'),
+    'export const value = "stale";\n');
+  const { syncWorkspaceComponentBundledDependencies } = await import('./ensureWorkspacePackagesBuilt.mjs');
+  await syncWorkspaceComponentBundledDependencies(stackDir);
   assert.equal(
     readFileSync(join(bundledProtocolDir, 'dist', 'index.js'), 'utf8'),
     'export const value = "current";\n',

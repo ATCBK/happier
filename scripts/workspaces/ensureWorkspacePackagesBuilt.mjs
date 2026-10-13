@@ -1571,12 +1571,15 @@ export async function ensureWorkspacePackagesBuiltForComponent(componentDir, {
   startup = false,
   refresh,
   logger = console,
+  onPackageBuildResult = null,
+  deferBundledWorkspaceSync = false,
 } = {}) {
   signal?.throwIfAborted();
   if (startup && resolveWorkspaceBuildMode({ buildMode, env }) !== 'strict' && publicationMode === 'live') {
     const prepare = () => ensureWorkspacePackagesBuiltForComponent(componentDir, {
       quiet, env, workspaceBuildBoundary, publicationMode, maxConcurrentBuilds,
       isolatePluginFailures, buildMode, signal,
+      onPackageBuildResult, deferBundledWorkspaceSync,
     });
     return await prepareWorkspaceComponentStartup({
       readLastGreen: async () => await hasUsableWorkspaceLastGreen(componentDir)
@@ -1614,7 +1617,28 @@ export async function ensureWorkspacePackagesBuiltForComponent(componentDir, {
     maxConcurrentBuilds,
     isolatePluginFailures,
     signal,
+    onPackageBuildResult,
   });
+  if (!deferBundledWorkspaceSync) {
+    await syncWorkspaceComponentBundledDependencies(componentDir, {
+      env, publicationMode: resolvedPublicationMode, pluginFailures: result.pluginFailures, signal,
+    });
+  }
+  return { ok: true, ...result, skipped: [] };
+}
+
+export async function syncWorkspaceComponentBundledDependencies(componentDir, {
+  env = process.env,
+  publicationMode = 'live',
+  pluginFailures = [],
+  signal,
+} = {}) {
+  signal?.throwIfAborted();
+  const monorepoRoot = coerceHappyMonorepoRootFromPath(componentDir);
+  const componentPackageJsonPath = join(componentDir, 'package.json');
+  if (!monorepoRoot || !existsSync(componentPackageJsonPath)) return;
+  const componentPackageJson = await readJson(componentPackageJsonPath);
+  const resolvedPublicationMode = resolveWorkspaceBundlePublicationMode({ mode: publicationMode });
   if (hasBundledWorkspaceDependencies(componentPackageJson)) {
     await withWorkspaceBundleLock(
       async () => {
@@ -1622,7 +1646,7 @@ export async function ensureWorkspacePackagesBuiltForComponent(componentDir, {
           repoRoot: monorepoRoot,
           hostPackageDirs: [componentDir],
           packages: collectBundledWorkspaceDependencyNames(componentPackageJson)
-            .filter((packageName) => !result.pluginFailures?.some((failure) => failure.packageName === packageName))
+            .filter((packageName) => !pluginFailures.some((failure) => failure.packageName === packageName))
             .map((packageName) => packageName.split('/').at(-1))
             .filter(Boolean),
           replaceExisting: true,
@@ -1638,5 +1662,4 @@ export async function ensureWorkspacePackagesBuiltForComponent(componentDir, {
       },
     );
   }
-  return { ok: true, ...result, skipped: [] };
 }

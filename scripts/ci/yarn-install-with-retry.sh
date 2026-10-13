@@ -6,6 +6,11 @@ MAX_ATTEMPTS="${YARN_INSTALL_MAX_ATTEMPTS:-3}"
 SLEEP_SECONDS="${YARN_INSTALL_RETRY_SLEEP_SECONDS:-5}"
 DEFAULT_REGISTRY="${YARN_INSTALL_REGISTRY:-https://registry.npmjs.org}"
 
+# Redis adapter validation uses REDIS_URL or fetches its pinned version at runtime.
+# Avoid compiling an unrelated latest Redis during dependency installation.
+REDISMS_DISABLE_POSTINSTALL="${REDISMS_DISABLE_POSTINSTALL-1}"
+export REDISMS_DISABLE_POSTINSTALL
+
 is_transient_yarn_error() {
     log_path="$1"
     # Retry only when the failure is very likely transient (registry/network throttling).
@@ -31,17 +36,31 @@ clear_cache_after_transient_failure() {
     yarn cache clean >/dev/null 2>&1 || true
 }
 
+run_yarn_install() {
+    # Keep POSIX sh callers: fd 3 captures Yarn's status, while fd 4 preserves
+    # live job output across the command substitution and tee pipeline.
+    install_status=$(
+        exec 3>&1
+        {
+            if yarn install "$@" 2>&1; then
+                printf '0\n' >&3
+            else
+                printf '%s\n' "$?" >&3
+            fi
+        } | tee "$LOG_PATH" >&4
+    ) || return 1
+    return "$install_status"
+} 4>&1
+
 configure_registry
 
 attempt=1
 while [ "$attempt" -le "$MAX_ATTEMPTS" ]; do
-    if yarn install "$@" >"$LOG_PATH" 2>&1; then
-        rm -f "$LOG_PATH" || true
+    if run_yarn_install "$@"; then
         exit 0
     fi
 
     if is_transient_yarn_error "$LOG_PATH"; then
-        cat "$LOG_PATH" >&2
         if [ "$attempt" -lt "$MAX_ATTEMPTS" ]; then
             clear_cache_after_transient_failure
             echo "yarn install failed due to transient network/registry issue (attempt ${attempt}/${MAX_ATTEMPTS}), retrying..." >&2
@@ -53,7 +72,6 @@ while [ "$attempt" -le "$MAX_ATTEMPTS" ]; do
         exit 1
     fi
 
-    cat "$LOG_PATH" >&2
     echo "yarn install failed with a non-transient error (attempt ${attempt}); not retrying." >&2
     exit 1
 done

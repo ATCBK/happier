@@ -328,12 +328,12 @@ test('plugin package scripts prepare declarations and invoke the shared governan
   );
   assert.equal(
     pluginUiPackage.scripts['check:api-governance'],
-    'yarn -s prepare:api-governance && node ../../scripts/api-governance/cli.mjs --profile plugin-ui --check',
+    'yarn -s prepare:api-governance && node --max-old-space-size=6144 ../../scripts/api-governance/cli.mjs --profile plugin-ui --check',
   );
   assert.match(pluginUiPackage.scripts.prepack, /check:api-governance/u);
   assert.equal(
     pluginUiPackage.scripts['check:api-governance:prepared'],
-    'node ../../scripts/api-governance/cli.mjs --profile plugin-ui --check',
+    'node --max-old-space-size=6144 ../../scripts/api-governance/cli.mjs --profile plugin-ui --check',
   );
   assert.deepEqual(
     ['API.md', 'api-surface.json', 'api-declarations.md'].every((path) => pluginUiPackage.files.includes(path)),

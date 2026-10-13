@@ -1,7 +1,7 @@
 import assert from 'node:assert/strict';
 import { spawn, spawnSync } from 'node:child_process';
 import { once } from 'node:events';
-import { chmod, mkdir, mkdtemp, readFile, rm, symlink, writeFile } from 'node:fs/promises';
+import { chmod, mkdir, mkdtemp, readFile, readdir, rm, symlink, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import test from 'node:test';
@@ -266,6 +266,9 @@ for (const windows of [false, true]) {
           },
         }));
       }
+      for (const name of ['test-components', 'test-other']) await writeFile(join(uiDir, `tsconfig.${name}.json`), JSON.stringify({
+        extends: './tsconfig.test.json', include: [],
+      }));
       await writeFile(join(cliDir, 'source.ts'), 'export const cliValue = true;\n');
       await writeFile(join(cliDir, 'source.test.ts'), 'export const cliTestValue = true;\n');
       await writeFile(join(cliDir, 'tsconfig.source.json'), JSON.stringify({ files: ['source.ts'] }));
@@ -394,6 +397,29 @@ for (const exitCode of [0, 7]) {
     const setup = await fixture(t, { exitCode });
     const { child, stderr } = setup.start([runner]);
     assert.deepEqual(await once(child, 'exit'), [exitCode, null], stderr());
+  });
+}
+
+for (const status of [0, 1, 7]) {
+  test(`baseline reporting records actual native result ${status} and preserves visible diagnostics`, async (t) => {
+    const output = status === 0 ? '' : "source.ts(3,2): error TS2322: Type 'number' is not assignable to type 'string'.\\n  A nested diagnostic.\\n";
+    const setup = await fixture(t, { exitCode: status, compilerBody: `process.stdout.write(${JSON.stringify(output.replaceAll('\\n', '\n'))});` });
+    const reports = join(setup.root, 'compiler-results');
+    await mkdir(reports);
+    await writeFile(join(setup.root, 'tsconfig.json'), JSON.stringify({ files: [] }));
+    const { child, stderr, stdout } = setup.start([runner, '--noEmit', '--project', 'tsconfig.json'], {
+      stdio: ['ignore', 'pipe', 'pipe'], env: { HAPPIER_TYPECHECK_REPORT_DIR: reports },
+    });
+    assert.deepEqual(await once(child, 'exit'), [status, null], stderr());
+    assert.equal(stdout().toString(), output.replaceAll('\\n', '\n'));
+    const names = await readdir(reports);
+    assert.equal(names.length, 1, 'each attempted compiler publishes its terminal result');
+    const report = JSON.parse(await readFile(join(reports, names[0]), 'utf8'));
+    assert.equal(report.status, status);
+    assert.equal(report.signal, null);
+    assert.equal(report.project, 'tsconfig.json');
+    assert.equal(report.cwd, setup.root);
+    assert.equal(report.stdout, stdout().toString());
   });
 }
 

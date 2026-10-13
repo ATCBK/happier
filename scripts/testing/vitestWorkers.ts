@@ -26,3 +26,13 @@ export function resolveVitestWorkers(options: {
             ?? Math.max(1, Math.min(4, Math.floor(availableParallelism() / 2))),
     };
 }
+
+/** Vitest 3 pool-specific environment values take precedence over maxWorkers. */
+export function resolveVitestPoolEnv(workers: ReturnType<typeof resolveVitestWorkers>) {
+    return {
+        VITEST_MAX_FORKS: String(workers.maxWorkers),
+        VITEST_MIN_FORKS: String(workers.minWorkers),
+        VITEST_MAX_THREADS: String(workers.maxWorkers),
+        VITEST_MIN_THREADS: String(workers.minWorkers),
+    };
+}

@@ -5,6 +5,7 @@ import { fileURLToPath, pathToFileURL } from 'node:url';
 import {
   ensureWorkspacePackagesBuiltByName,
   ensureWorkspacePackagesBuiltForComponent,
+  syncWorkspaceComponentBundledDependencies,
 } from './ensureWorkspacePackagesBuilt.mjs';
 
 const defaultRepoRoot = resolve(fileURLToPath(new URL('../..', import.meta.url)));
@@ -32,6 +33,7 @@ export async function runWorkspacePackageBuild({
   ensureWorkspacePackagesBuiltForComponentImpl = ensureWorkspacePackagesBuiltForComponent,
   publishBundledPluginArtifactsAfterWorkspaceBuildImpl = publishBundledPluginArtifactsAfterWorkspaceBuildDefault,
   rebuildWorkspacesInvalidatedByBundledPluginPublicationImpl = rebuildWorkspacesInvalidatedByBundledPluginPublicationDefault,
+  onPackageBuildResult,
 } = {}) {
   const normalizedPackageNames = [...new Set(
     packageNames.map((name) => String(name ?? '').trim()).filter(Boolean),
@@ -44,16 +46,27 @@ export async function runWorkspacePackageBuild({
   }
 
   const results = [];
+  const preparedPackageNames = new Set();
+  const reportPackageResult = async (result) => {
+    preparedPackageNames.add(result.packageName);
+    await onPackageBuildResult?.(result);
+  };
+  const preparedComponents = [];
   if (normalizedPackageNames.length > 0) {
     results.push(await ensureWorkspacePackagesBuiltByNameImpl(repoRoot, normalizedPackageNames, {
       publicationMode: 'live',
+      env,
+      onPackageBuildResult: reportPackageResult,
     }));
   }
   for (const componentDir of normalizedComponentDirs) {
-    results.push(await ensureWorkspacePackagesBuiltForComponentImpl(
-      resolve(repoRoot, componentDir),
-      { publicationMode: 'live' },
-    ));
+    const resolvedComponentDir = resolve(repoRoot, componentDir);
+    const prepared = await ensureWorkspacePackagesBuiltForComponentImpl(
+      resolvedComponentDir,
+      { publicationMode: 'live', env, onPackageBuildResult: reportPackageResult, deferBundledWorkspaceSync: true },
+    );
+    results.push(prepared);
+    preparedComponents.push({ componentDir: resolvedComponentDir, pluginFailures: prepared.pluginFailures });
   }
   const result = {
     ok: results.every((result) => result.ok !== false),
@@ -63,9 +76,11 @@ export async function runWorkspacePackageBuild({
   const refreshed = [...new Set(results.flatMap((result) => result.refreshed ?? []))];
   if (refreshed.length > 0) result.refreshed = refreshed;
   if (result.ok) {
+    const workspaceNames = [...new Set([...preparedPackageNames, ...result.built, ...refreshed])];
     const published = await publishBundledPluginArtifactsAfterWorkspaceBuildImpl({
       repoRoot,
-      workspaceNames: [...new Set([...result.built, ...refreshed])],
+      workspaceNames,
+      pluginFailures: results.flatMap((prepared) => prepared.pluginFailures ?? []),
       env,
       // This adapter owns preparation of the current checkout. A remote replica
       // must publish projections for its target-local ignored dist bytes instead
@@ -82,8 +97,14 @@ export async function runWorkspacePackageBuild({
       // pass. Reuse the canonical invalidation owner before reporting success.
       await rebuildWorkspacesInvalidatedByBundledPluginPublicationImpl({
         repoRoot,
-        workspaceNames: [...new Set([...result.built, ...refreshed])],
+        workspaceNames,
         env,
+      });
+    }
+    // Publish generated plugin outputs before strict component copies consume them.
+    for (const prepared of preparedComponents) {
+      await syncWorkspaceComponentBundledDependencies(prepared.componentDir, {
+        env, publicationMode: 'live', pluginFailures: prepared.pluginFailures,
       });
     }
   }
@@ -108,7 +129,12 @@ export function parseWorkspaceBuildArgs(argv) {
 }
 
 export async function main(argv = process.argv.slice(2)) {
-  const result = await runWorkspacePackageBuild(parseWorkspaceBuildArgs(argv));
+  const result = await runWorkspacePackageBuild({
+    ...parseWorkspaceBuildArgs(argv),
+    onPackageBuildResult({ packageName, reason, elapsedMs, queueWaitMs }) {
+      process.stdout.write(`[workspace-build] ${packageName}: ${reason}; work=${elapsedMs.toFixed(1)}ms queue=${queueWaitMs.toFixed(1)}ms\n`);
+    },
+  });
   const built = result.built.length > 0 ? result.built.join(', ') : 'none (already current)';
   process.stdout.write(`[workspace-build] built: ${built}\n`);
   if (result.refreshed?.length > 0) process.stdout.write(`[workspace-build] refreshed: ${result.refreshed.join(', ')}\n`);
