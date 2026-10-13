@@ -73,6 +73,12 @@ it.each(['focused-unmount', 'exact-unmount', 'exact-retarget'] as const)(
         act(() => { submission = screen!.findByTestId('restore-manual-submit')!.props.onPress(); });
         try {
             await act(async () => { await vi.waitFor(() => expect(redemptionStarted).toBe(true)); });
+            if (retirement === 'focused-unmount') {
+                // A second submit while the first proof is pending must not mint
+                // another credential. This exercises the real form admission.
+                await screen.pressByTestIdAsync('restore-manual-submit');
+                expect(boundary.request.mock.calls.filter(([, path]) => path === '/v1/auth')).toHaveLength(1);
+            }
             if (retirement === 'exact-retarget') {
                 // Equivalent freshly-created target props must keep the original observation alive.
                 await screen.update(<AuthProvider initialCredentials={null}>

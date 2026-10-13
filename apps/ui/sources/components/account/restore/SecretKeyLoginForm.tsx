@@ -4,20 +4,14 @@ import { StyleSheet } from 'react-native-unistyles';
 
 import { useRouter } from 'expo-router';
 
-import {
-    useAuth,
-    type AuthCredentialLifecycleResult,
-} from '@/auth/context/AuthContext';
-import { authGetToken, authGetTokenAtEndpoint, type AuthGetTokenAtEndpointParams } from '@/auth/flows/getToken';
+import { useAuth } from '@/auth/context/AuthContext';
+import { authGetTokenAtEndpoint, type AuthGetTokenAtEndpointParams } from '@/auth/flows/getToken';
+import { resolveHomeAuthenticationTarget } from '@/auth/flows/resolveHomeAuthenticationTarget';
 import type { AuthCredentials } from '@/auth/storage/tokenStorage';
 import { fetchAccountEncryptionMode } from '@/sync/api/account/apiAccountEncryptionMode';
 import { createServerFetchAtEndpoint } from '@/sync/http/client';
-import { getActiveServerSnapshot } from '@/sync/domains/server/serverRuntime';
+import { getActiveServerHomeCarrier, getActiveServerSnapshot } from '@/sync/domains/server/serverRuntime';
 import { createEncryptionFromAuthCredentials } from '@/auth/encryption/createEncryptionFromAuthCredentials';
-import {
-    activateStackRuntimeServer,
-    readStackRuntimeServerUrl,
-} from '@/sync/domains/server/stackRuntimeServer';
 import { t } from '@/text';
 import { trackAccountRestored } from '@/track';
 import { SecretKeyEntryForm, type SecretKeyEntrySubmitResult } from './SecretKeyEntryForm';
@@ -28,22 +22,6 @@ import {
     guardAccountEncryptionFirstKeyCredentialMutation,
 } from '@/sync/ops/account/accountEncryptionFirstKeyExternalAuth';
 import { mergeAbortSignals } from '@/utils/runtime/abortSignals';
-
-async function guardStackAuthIngress(
-): Promise<AuthCredentialLifecycleResult> {
-    const current =
-        await guardAccountEncryptionFirstKeyCredentialMutation();
-    if (current.kind !== 'allowed') return current;
-    const stackServerUrl = readStackRuntimeServerUrl();
-    if (!stackServerUrl) return { kind: 'completed' };
-    const target =
-        await guardAccountEncryptionFirstKeyCredentialMutation({
-            serverUrl: stackServerUrl,
-        });
-    return target.kind === 'allowed'
-        ? { kind: 'completed' }
-        : target;
-}
 
 export type SecretKeyLoginTarget = Readonly<Pick<AuthGetTokenAtEndpointParams,
     'endpointUrl' | 'serverId' | 'runtimeOrigin' | 'homeCarrier' | 'signal' | 'requireKeyChallengeV2' | 'expectedAccountId' | 'admission'
@@ -113,66 +91,47 @@ export const SecretKeyLoginForm = React.memo(function SecretKeyLoginForm(props: 
         const isCurrent = () => mountedRef.current && !cancellation.signal.aborted;
         try {
             if (!isCurrent()) return { kind: 'cancelled' };
-            const target = props.target;
-            if (target) {
-                const onAuthenticated = props.onAuthenticated;
-                if (!onAuthenticated) return { kind: 'failed' };
-                const persistenceTarget = { serverUrl: target.canonicalServerUrl, serverId: target.serverId ?? target.serverIdentityId };
-                let allowed = false;
-                await presentFirstKeyCredentialLifecycle({
-                    run: async () => {
-                        const guard = await guardAccountEncryptionFirstKeyCredentialMutation(persistenceTarget);
-                        return guard.kind === 'allowed' ? { kind: 'completed' } : guard;
-                    },
-                    onCompleted: () => { allowed = true; },
-                });
-                if (!allowed || !isCurrent()) return { kind: 'cancelled' };
-                const authenticated = await authGetTokenAtEndpoint({ ...target, secret: input.secret, signal: cancellation.signal, isCurrent });
-                if (!isCurrent()) return { kind: 'cancelled' };
-                const request = createServerFetchAtEndpoint({ ...target, credentials: authenticated });
-                const { mode } = await fetchAccountEncryptionMode(authenticated, {
-                    request: (path, init) => request(path, { ...init, signal: cancellation.signal }, { includeAuth: false, retry: 'none' }),
-                });
-                const credentials: AuthCredentials = mode === 'plain'
-                    ? { token: authenticated.token }
-                    : { token: authenticated.token, secret: input.normalizedKey };
-                if (mode === 'e2ee') await createEncryptionFromAuthCredentials(credentials);
-                if (!isCurrent()) return { kind: 'cancelled' };
-                let completed = false;
-                await presentFirstKeyCredentialLifecycle({
-                    run: async () => isCurrent()
-                        ? await auth.loginWithCredentials(credentials, { target: persistenceTarget })
-                        : { kind: 'recovery_failed' },
-                    onCompleted: () => { completed = true; },
-                });
-                if (!completed || !isCurrent()) return { kind: 'cancelled' };
-                trackAccountRestored();
-                await onAuthenticated(credentials);
-                return { kind: 'completed' };
-            }
-            let mayActivateStack = false;
+            // Sign-out retires the authenticated transport, not the selected Home.
+            // Both ingress paths use the exact endpoint auth owner, which can run
+            // before an authenticated connection exists and preserves the target.
+            const active = getActiveServerSnapshot();
+            const target: Omit<SecretKeyLoginTarget, 'serverIdentityId'> & Readonly<{ serverIdentityId?: string }> = props.target ?? {
+                ...(resolveHomeAuthenticationTarget({ kind: 'saved_profile', profileRef: active.serverId }) ?? {
+                    endpointUrl: active.serverUrl, canonicalServerUrl: active.serverUrl,
+                    serverId: active.serverId,
+                }),
+                runtimeOrigin: active.runtimeOrigin,
+                homeCarrier: getActiveServerHomeCarrier() ?? undefined,
+                requireKeyChallengeV2: false,
+            };
+            home = target.canonicalServerUrl;
+            const persistenceTarget = { serverUrl: home, serverId: target.serverId ?? target.serverIdentityId };
+            let allowed = false;
             await presentFirstKeyCredentialLifecycle({
-                run: guardStackAuthIngress,
-                onCompleted: () => {
-                    mayActivateStack = true;
+                run: async () => {
+                    const guard = await guardAccountEncryptionFirstKeyCredentialMutation(persistenceTarget);
+                    return guard.kind === 'allowed' ? { kind: 'completed' } : guard;
                 },
+                onCompleted: () => { allowed = true; },
             });
-            if (!mayActivateStack || !isCurrent()) return { kind: 'cancelled' };
+            if (!allowed || !isCurrent()) return { kind: 'cancelled' };
 
-            await activateStackRuntimeServer({ scope: 'device' });
+            const authenticated = await authGetTokenAtEndpoint({ ...target, secret: input.secret, signal: cancellation.signal, isCurrent });
             if (!isCurrent()) return { kind: 'cancelled' };
-            home = getActiveServerSnapshot().serverUrl;
-
-            const token = await authGetToken(input.secret, { signal: cancellation.signal });
+            const request = createServerFetchAtEndpoint({ ...target, credentials: authenticated });
+            const { mode } = await fetchAccountEncryptionMode(authenticated, {
+                request: (path, init) => request(path, { ...init, signal: cancellation.signal }, { includeAuth: false, retry: 'none' }),
+            });
+            const credentials: AuthCredentials = mode === 'plain'
+                ? { token: authenticated.token }
+                : { token: authenticated.token, secret: input.normalizedKey };
+            if (mode === 'e2ee') await createEncryptionFromAuthCredentials(credentials);
             if (!isCurrent()) return { kind: 'cancelled' };
-            if (!token) {
-                return { kind: 'invalid_key' };
-            }
 
             let completed = false;
             await presentFirstKeyCredentialLifecycle({
                 run: async () => isCurrent()
-                    ? await auth.login(token, input.normalizedKey)
+                    ? await auth.loginWithCredentials(credentials, { target: persistenceTarget })
                     : { kind: 'recovery_failed' },
                 onCompleted: () => {
                     completed = true;
@@ -180,7 +139,8 @@ export const SecretKeyLoginForm = React.memo(function SecretKeyLoginForm(props: 
             });
             if (!completed || !isCurrent()) return { kind: 'cancelled' };
             trackAccountRestored();
-            handleSuccess();
+            if (props.onAuthenticated) await props.onAuthenticated(credentials);
+            else handleSuccess();
             return { kind: 'completed' };
         } catch (error) {
             if (!isCurrent()) return { kind: 'cancelled' };

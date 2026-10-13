@@ -24,6 +24,7 @@ import { PairingLinkDisclosure } from '@/components/auth/pairing/PairingLinkDisc
 import type { HomeQrEntryIntent } from '@/auth/pairing/homeQrEntryIntent';
 import { openEnrolledHomeOrReturnToShell } from '@/auth/pairing/openEnrolledHome';
 import { useAuth } from '@/auth/context/AuthContext';
+import { resolveHomeAuthenticationTarget } from '@/auth/flows/resolveHomeAuthenticationTarget';
 import { isDesktopHost } from '@/utils/platform/desktopHost';
 import { EnrolledComputerSetup } from './EnrolledComputerSetup';
 
@@ -382,7 +383,16 @@ export const RestoreQrView = React.memo(function RestoreQrView(props: RestoreQrV
                                     props.onOpenSecretKeyLogin();
                                     return;
                                 }
-                                router.push('/restore/manual');
+                                const target = props.targetProfileId
+                                    ? resolveHomeAuthenticationTarget({ kind: 'saved_profile', profileRef: props.targetProfileId })
+                                    : null;
+                                router.push(props.targetProfileId ? {
+                                    pathname: '/restore/manual',
+                                    params: {
+                                        targetServerId: props.targetProfileId,
+                                        targetServerUrl: target?.canonicalServerUrl ?? '',
+                                    },
+                                } : '/restore/manual');
                             }}
                         />
                     </View>
