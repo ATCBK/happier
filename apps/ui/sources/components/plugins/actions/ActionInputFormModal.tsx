@@ -1,5 +1,5 @@
 import * as React from 'react';
-import { ScrollView, View } from 'react-native';
+import { View } from 'react-native';
 import { StyleSheet, useUnistyles } from 'react-native-unistyles';
 import { useRouter } from 'expo-router';
 import {
@@ -171,13 +171,13 @@ export function ActionInputFormModal(props: ActionInputFormModalProps): React.Re
         title,
         ...(description ? { subtitle: description } : {}),
         footer,
+        // The card fits its form; a long form scrolls inside the card's own overlay.
         dimensions: { size: 'md' as const, maxHeightRatio: 0.84 },
-        scrollHost: 'body' as const,
     }), [description, footer, title]);
     useModalCardChrome(props.setChrome, chrome);
 
     return (
-        <ScrollView style={{ flex: 1 }} contentContainerStyle={styles.content} keyboardShouldPersistTaps="handled">
+        <View style={styles.content}>
             <ActionInputFields
                 fields={fields}
                 input={{ ...input }}
@@ -209,6 +209,6 @@ export function ActionInputFormModal(props: ActionInputFormModalProps): React.Re
                     />
                 </View>
             ) : null}
-        </ScrollView>
+        </View>
     );
 }

@@ -49,7 +49,7 @@ export function createHostInputTypePickerForm(params: Readonly<{
     const form = createActionInputForm({
         presentation: { title: projection === 'period' ? t('usage.board.page.periodLabel')
             : projection === 'session' ? t('usage.summary.export.session') : t('usage.summary.title'),
-            description: null, inputHints: { fields: [...fields] } },
+            description: null, inputHints: { fields: [...fields], submitLabel: t('common.done') } },
         accountLifetime: params.accountLifetime, signal: request.signal, isCurrent: params.isCurrent,
         submit: async candidate => {
             let value: unknown = projection ? candidate.value : candidate;
