@@ -1,5 +1,5 @@
 import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it, vi } from 'vitest';
-import { mkdtemp, readdir, readFile, rm } from 'node:fs/promises';
+import { mkdtemp, readdir, readFile, rm, writeFile } from 'node:fs/promises';
 import axios, { AxiosHeaders, type AxiosResponse } from 'axios';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
@@ -214,11 +214,19 @@ describe('Custom ACP fresh daemon launch composition', () => {
     }
   });
 
-  it.each(['alpha', 'beta'])('retains the qualified spawn target %s through installed runner startup and permission seeding to the first native model call', async definitionId => {
+  it.each([
+    { definitionId: 'alpha', failure: null },
+    { definitionId: 'beta', failure: null },
+    { definitionId: 'alpha', failure: 'registry_miss' },
+    { definitionId: 'alpha', failure: 'custody_mismatch' },
+    { definitionId: 'alpha', failure: 'authority_refusal' },
+  ] as const)('carries qualified $definitionId runner preparation through the real daemon route ($failure)', async ({ definitionId, failure }) => {
     const fatal = vi.spyOn(logger, 'fatal').mockImplementation(() => {});
     const exit = vi.spyOn(process, 'exit').mockImplementation(() => { throw new Error('df41-child-exit'); });
     const stderr = vi.spyOn(console, 'error').mockImplementation(() => {});
     const debug = vi.spyOn(logger, 'debug');
+    const refusalLog = vi.spyOn(logger, 'warnLocalFile');
+    const retainedServicesDescriptor = Object.getOwnPropertyDescriptor(runtime.registry, 'createRetainedRunnerAgentInvocationServices');
     const actualFetch = globalThis.fetch;
     const networkSpies: Array<{ mockRestore(): void }> = [];
     const daemonServiceDeliveries: Array<{ request: ReturnType<typeof AgentRuntimeDaemonServiceRequestV1Schema.parse>;
@@ -300,6 +308,28 @@ describe('Custom ACP fresh daemon launch composition', () => {
         if (url.hostname === '127.0.0.1' || url.hostname === 'localhost') {
           const serviceRequest = typeof init?.body === 'string'
             ? AgentRuntimeDaemonServiceRequestV1Schema.safeParse(JSON.parse(init.body)) : null;
+          if (serviceRequest?.success && serviceRequest.data.operation.kind === 'plugin_services.prepare_v1') {
+            // Force actual owner inputs/registry wiring, never substitute its
+            // preparation, authority, custody verifier or refusal implementation.
+            if (failure === 'registry_miss') {
+              Reflect.deleteProperty(runtime.registry, 'createRetainedRunnerAgentInvocationServices');
+            } else if (failure === 'custody_mismatch') {
+              const tracked = [...trackedSessions.values()].find(value => value.happySessionId === sessionId);
+              const authorityPath = tracked?.agentRuntimeDaemonServiceAuthorityFilePath;
+              if (!authorityPath) throw new Error('Expected the produced private runner authority');
+              const authority = JSON.parse(await readFile(authorityPath, 'utf8'));
+              // The real HTTP reader consumes a retained binding whose version
+              // no longer matches its actual source manifest. The original
+              // capability, process identity and source custody remain exact.
+              authority.retainedAgent.pluginVersion = 'df43-unavailable-version';
+              await writeFile(authorityPath, JSON.stringify(authority), 'utf8');
+            } else if (failure === 'authority_refusal') {
+              const request = AgentRuntimeDaemonServiceRequestV1Schema.parse({ ...serviceRequest.data,
+                operation: { ...serviceRequest.data.operation, witness: { turnId: 'df43-unadmitted-turn',
+                  inputId: 'df43-unadmitted-input', userMessageSeq: null, userMessageSeqs: [] } } });
+              init = { ...init, body: JSON.stringify(request) };
+            }
+          }
           const response = await actualFetch(input, init);
           if (response.ok && serviceRequest?.success && serviceRequest.data.operation.kind === 'plugin_services.prepare_v1') {
             daemonServiceDeliveries.push({ request: serviceRequest.data,
@@ -464,6 +494,21 @@ describe('Custom ACP fresh daemon launch composition', () => {
         await runnerCompletion;
         storage.runnerSpawn = null;
         const observed = await readFile(observedPath, 'utf8').catch(() => null);
+        if (failure) {
+          const cause = failure === 'registry_miss'
+            ? { code: 'plugin_services_retained_generation_unavailable', stage: 'retained_agent_services' }
+            : failure === 'custody_mismatch'
+              ? { code: 'plugin_services_retained_managed_dependency_unavailable', stage: 'retained_agent_services' }
+              : { code: 'plugin_services_turn_authority_unavailable', stage: 'turn_authority' };
+          expect(daemonServiceDeliveries, 'The refusal must traverse the strict real HTTP consumer').toHaveLength(1);
+          expect(daemonServiceDeliveries[0]?.response).toEqual({ ok: false, error: {
+            code: cause.code, message: `Runner PluginServices preparation failed (${cause.stage}: ${cause.code})`, cause } });
+          expect(runnerFailure).toMatchObject({ name: 'PluginError', code: cause.code, details: { cause } });
+          expect(refusalLog.mock.calls.filter(([message]) => message.includes('runner_plugin_services_prepare_refused')))
+            .toEqual([[JSON.stringify({ kind: 'runner_plugin_services_prepare_refused', cause })]]);
+          expect(observed, 'A refused preparation must not start the vendor model operation').toBeNull();
+          return;
+        }
         const snapshotFailure = debug.mock.calls.filter(([message]) => String(message).includes('Failed to sync session snapshot')).at(-1);
         expect(observed, `Spawn result: ${JSON.stringify(result)}\nOwn OS launch: ${JSON.stringify(storage.runnerLaunches)}\nRunner failed before native model call: ${runnerFailure instanceof Error
           ? runnerFailure.stack : String(runnerFailure)}\nRunner cause code: ${runnerFailure && typeof runnerFailure === 'object'
@@ -502,6 +547,7 @@ describe('Custom ACP fresh daemon launch composition', () => {
         expect(storage.runnerExited, 'The owned in-process runner must be retired').toBe(true);
       }
     } finally {
+      if (retainedServicesDescriptor) Object.defineProperty(runtime.registry, 'createRetainedRunnerAgentInvocationServices', retainedServicesDescriptor);
       await daemon?.stopControlServer();
       await daemonMutationCustody.close();
       for (const spy of networkSpies.reverse()) spy.mockRestore();
@@ -511,7 +557,7 @@ describe('Custom ACP fresh daemon launch composition', () => {
       storage.runnerSpawn = null;
       storage.runnerBootstrapPath = '';
       storage.daemonPort = 0; storage.daemonControlToken = '';
-      fatal.mockRestore(); exit.mockRestore(); stderr.mockRestore(); debug.mockRestore();
+      fatal.mockRestore(); exit.mockRestore(); stderr.mockRestore(); debug.mockRestore(); refusalLog.mockRestore();
     }
   }, 180_000);
 

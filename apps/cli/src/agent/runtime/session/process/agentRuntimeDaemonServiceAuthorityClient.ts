@@ -538,6 +538,7 @@ export async function dispatchCurrentRunnerDaemonPluginService(
     throw new PluginError({
       code: response.error.code,
       message: response.error.message,
+      ...(response.error.cause ? { details: { cause: response.error.cause } } : {}),
     });
   }
   throw createNativeAgentSessionEffectBoundaryError(

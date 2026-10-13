@@ -44,6 +44,20 @@ import {
   AgentRuntimeDaemonServiceTurnWitnessV1Schema,
 } from './agentRuntimeDaemonServiceTurnWitness';
 
+// Diagnostic only: reuse the daemon refusal owner's existing code bound. Never
+// transport raw exception text, paths, environment or arbitrary PluginError details.
+export const RunnerDaemonPluginServicesPreparationCauseV1Schema = z.object({
+  code: z.string().regex(/^[A-Za-z][A-Za-z0-9_]{0,127}$/u),
+  stage: z.enum([
+    'dispatch', 'runner_authority', 'invocation_context', 'registry_acquisition',
+    'current_registration', 'turn_authority', 'managed_provider',
+    'retained_agent_services', 'invocation_projection',
+  ]),
+}).strict();
+
+export type RunnerDaemonPluginServicesPreparationCauseV1 =
+  z.infer<typeof RunnerDaemonPluginServicesPreparationCauseV1Schema>;
+
 export {
   AgentRuntimeDaemonServiceTurnWitnessV1Schema,
 } from './agentRuntimeDaemonServiceTurnWitness';
@@ -416,6 +430,7 @@ export const AgentRuntimeDaemonServiceResponseV1Schema =
       error: z.object({
         code: OpaqueIdSchema,
         message: z.string().max(4_096),
+        cause: RunnerDaemonPluginServicesPreparationCauseV1Schema.optional(),
       }).strict(),
     }).strict(),
   ]);

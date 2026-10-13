@@ -46,6 +46,8 @@ import {
 } from '@/plugins/runtime/runner/agentSessionRunnerFactoryBinding';
 import {
     createRunnerDaemonPluginServicesHost,
+    createRunnerDaemonPluginServicesPreparationError,
+    projectRunnerDaemonPluginServicesFailure,
     type RunnerDaemonCurrentGlobalExternalSessionsOwner,
     type RunnerDaemonCurrentGlobalMcpOwner,
 } from './runnerDaemonPluginServicesHost';
@@ -53,6 +55,7 @@ import { PluginAgentContributionV2Schema } from '@happier-dev/protocol';
 import { createConfiguredPluginExternalSessionsAdapter } from '@/session/external/configuredSourceMaterializer';
 import { createServer, type Server } from 'node:http';
 import { createRunnerManagedProviderConsumerAccess } from '@/agent/runtime/session/process/runnerManagedProviderConsumerAccess';
+import { AgentRuntimeDaemonServiceResponseV1Schema } from '@/agent/runtime/session/process/agentRuntimeDaemonServiceProtocol';
 
 const binding = createAgentSessionRunnerFactoryBinding({
     v: 1,
@@ -196,6 +199,50 @@ function isWireRecord(
 }
 
 describe('runner daemon PluginServices host', () => {
+    it('projects only bounded preparation codes and owner stages through the strict refusal consumer', () => {
+        const privateText = 'Bearer private-df43-secret /private/df43/path';
+        for (const error of [
+            new Error(privateText),
+            Object.assign(new Error(privateText), { code: `invalid\n${privateText}` }),
+            new PluginError({ code: 'a'.repeat(129), message: privateText, details: { privateText } }),
+        ]) {
+            const preparedError = createRunnerDaemonPluginServicesPreparationError(error, 'registry_acquisition');
+            const refusal = AgentRuntimeDaemonServiceResponseV1Schema.parse({ ok: false,
+                error: projectRunnerDaemonPluginServicesFailure(preparedError, 'dispatch') });
+            expect(refusal).toEqual({ ok: false, error: {
+                code: 'runner_plugin_services_unavailable',
+                message: 'Runner PluginServices preparation failed (registry_acquisition: runner_plugin_services_unavailable)',
+                cause: { code: 'runner_plugin_services_unavailable', stage: 'registry_acquisition' },
+            } });
+            expect(JSON.stringify(preparedError.data)).not.toContain(privateText);
+        }
+        const code = 'a'.repeat(128);
+        const typed = new PluginError({ code, message: privateText, details: {
+            cause: { code, stage: 'runner_authority', privateText }, privateText,
+        } });
+        const projected = projectRunnerDaemonPluginServicesFailure(typed, 'dispatch');
+        expect(projected.cause).toEqual({ code, stage: 'dispatch' });
+        expect(JSON.stringify(projected)).not.toContain(privateText);
+        expect(AgentRuntimeDaemonServiceResponseV1Schema.safeParse({ ok: false,
+            error: { ...projected, cause: { ...projected.cause, privateText } } }).success).toBe(false);
+        expect(AgentRuntimeDaemonServiceResponseV1Schema.safeParse({ ok: false,
+            error: { ...projected, cause: { code, stage: 'unrecognized_stage' } } }).success).toBe(false);
+        expect(AgentRuntimeDaemonServiceResponseV1Schema.parse({ ok: false,
+            error: projectRunnerDaemonPluginServicesFailure(typed) })).toEqual({ ok: false,
+            error: { code, message: 'Runner PluginServices operation is unavailable' } });
+        // Filesystem/loader failures use uppercase machine codes. Keep the
+        // underlying code in the diagnostic, without exposing their path text.
+        const missingFile = Object.assign(new Error(privateText), { code: 'ENOENT', path: privateText });
+        const missingFileError = createRunnerDaemonPluginServicesPreparationError(missingFile, 'registry_acquisition');
+        const missingFileRefusal = AgentRuntimeDaemonServiceResponseV1Schema.parse({ ok: false,
+            error: projectRunnerDaemonPluginServicesFailure(missingFileError, 'dispatch') });
+        expect(missingFileRefusal).toMatchObject({ ok: false, error: {
+            code: 'runner_plugin_services_unavailable', cause: { code: 'ENOENT', stage: 'registry_acquisition' },
+        } });
+        expect(missingFileError.details).toEqual({ cause: { code: 'ENOENT', stage: 'registry_acquisition' } });
+        expect(JSON.stringify(missingFileRefusal)).not.toContain(privateText);
+    });
+
     it('refreshes private shared access after daemon replacement without rematerializing or replaying an Agent request', async () => {
         const unavailable = createUnavailablePluginServices();
         const bootstrap = { ...managedProviderBootstrap(), custody: 'daemonShared' as const };

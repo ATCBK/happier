@@ -65,6 +65,53 @@ import {
 import type {
     AgentRuntimeDaemonServiceAuthorityRunnerIdentity,
 } from './sessionBridgeAuthorization';
+import {
+    RunnerDaemonPluginServicesPreparationCauseV1Schema,
+    type RunnerDaemonPluginServicesPreparationCauseV1,
+    type AgentRuntimeDaemonServiceResponseV1,
+} from '@/agent/runtime/session/process/agentRuntimeDaemonServiceProtocol';
+
+export function projectRunnerDaemonPluginServicesFailure(
+    error: unknown,
+    preparationStage?: RunnerDaemonPluginServicesPreparationCauseV1['stage'],
+): Extract<AgentRuntimeDaemonServiceResponseV1, { ok: false }>['error'] {
+    const candidateCode = isPluginError(error)
+        ? error.code
+        : error && typeof error === 'object'
+            ? Reflect.get(error, 'code')
+            : undefined;
+    const code = typeof candidateCode === 'string'
+        && /^[a-z][a-z0-9_]{0,127}$/u.test(candidateCode)
+        ? candidateCode
+        : 'runner_plugin_services_unavailable';
+    if (!preparationStage) {
+        return { code, message: 'Runner PluginServices operation is unavailable' };
+    }
+    const retainedCause = RunnerDaemonPluginServicesPreparationCauseV1Schema.safeParse(
+        isPluginError(error) && isRecord(error.details) ? error.details.cause : undefined,
+    );
+    const causeCode = RunnerDaemonPluginServicesPreparationCauseV1Schema.shape.code.safeParse(candidateCode);
+    const cause = retainedCause.success
+        ? retainedCause.data
+        : { code: causeCode.success ? causeCode.data : code, stage: preparationStage };
+    return {
+        code,
+        message: `Runner PluginServices preparation failed (${cause.stage}: ${cause.code})`,
+        cause,
+    };
+}
+
+export function createRunnerDaemonPluginServicesPreparationError(
+    error: unknown,
+    stage: RunnerDaemonPluginServicesPreparationCauseV1['stage'],
+): PluginError {
+    const failure = projectRunnerDaemonPluginServicesFailure(error, stage);
+    return new PluginError({
+        code: failure.code,
+        message: failure.message,
+        details: { cause: { code: failure.cause?.code ?? failure.code, stage } },
+    });
+}
 
 type Invocation = {
     readonly key: string;
