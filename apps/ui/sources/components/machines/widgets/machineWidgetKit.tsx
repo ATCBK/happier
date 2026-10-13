@@ -21,7 +21,7 @@ import { storage } from '@/sync/domains/state/storageStore';
 import type { Machine } from '@/sync/domains/state/storageTypes';
 import { t } from '@/text';
 import { usePreferredLanguage } from '@/text/usePreferredLanguage';
-import { getMachineDisplayName } from '@/utils/sessions/machineDisplayNames';
+import { getMachineDisplayName, isMachineDisplayHydrating } from '@/utils/sessions/machineDisplayNames';
 import { useMachinePresenceSummary } from '@/components/sessions/model/useMachinePresenceSummary';
 import { formatLastSeen } from '@/utils/sessions/sessionUtils';
 import { runGuardedNavigation } from '@/utils/navigation/runGuardedNavigation';
@@ -117,7 +117,8 @@ export function useMachineWidgetMachine(
     const activeAt = machine?.activeAt;
     return {
       machine,
-      name: machine
+      // A widget sentence can use the generic subject while identity loads, never "Loading is offline".
+      name: machine && !isMachineDisplayHydrating(machine)
         ? getMachineDisplayName(machine, inventory ?? undefined)
         : t('machines.widgets.body.common.unknownMachine'),
       online: machine ? presence.reachability === 'reachable' : false,
@@ -211,6 +212,7 @@ export function MachineWidgetState(
         kind: 'error';
         title?: string;
         reason?: string;
+        diagnosticCode?: string;
         onRetry: () => void;
         testID: string;
       }
@@ -289,6 +291,7 @@ export function MachineWidgetState(
         kind="error"
         replacesContent
         title={props.title ?? t('machines.widgets.body.common.readFailed')}
+        diagnosticCode={props.diagnosticCode}
         {...(props.reason ? { reason: props.reason } : {})}
         action={{ label: t('common.retry'), onPress: props.onRetry }}
       />

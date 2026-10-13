@@ -154,6 +154,7 @@ export function ProcessesOwnerPage(
           platform={answer.platform}
           homeDir={target.machine?.metadata?.homeDir}
           samples={answer.history?.[row.ref]}
+          ceiling={process?.owner.ceiling}
           onCopyCommand={row.level === 'proven' ? controller.copy : null}
           onOpenSession={controller.openSession}
         />
@@ -221,6 +222,16 @@ export function ProcessesOwnerPage(
           />
         </View>
       </ItemGroup>
+      {owner.owner.ceiling ? <ItemGroup
+        title={t('machineProcesses.ceiling.title')}
+        description={t('machineProcesses.ceiling.scopeHelp')}
+      >
+        <Item testID="machine-processes-ceiling-usage" mode="info" title={t('machineProcesses.tiles.memory')}
+          detail={formatProcessMemory(owner.memoryBytes, owner.owner.ceiling)} />
+        <Item testID="machine-processes-ceiling-throttles" mode="info"
+          title={owner.owner.ceiling.throttleCount5m === undefined ? t('machineProcesses.ceiling.throttlesUnknown')
+            : t('machineProcesses.ceiling.throttles', { count: owner.owner.ceiling.throttleCount5m })} />
+      </ItemGroup> : null}
       <ItemGroup
         title={t('machineProcesses.phone.ownerProcesses', {
           count: owner.processCount,

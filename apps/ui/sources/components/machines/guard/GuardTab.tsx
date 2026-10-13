@@ -23,6 +23,7 @@ import { guardRowAwaitsMachine } from './guardPresentation';
 import { IdleSessionsSection, IdleTerminalsSection } from './IdleSessionsSection';
 import { LeftBehindSection, LimitsAndPowerSection } from './LeftBehindAndLimitsSections';
 import { MemoryGuardSection } from './MemoryGuardSection';
+import { AgentToolsSection } from './AgentToolsSection';
 import { useGuardPolicy, type GuardRowId } from './useGuardPolicy';
 
 const RECENT_ACTIVITY = 3;
@@ -116,6 +117,7 @@ function GuardRules(props: Readonly<{ serverId: string; machineId: string; machi
                 editable={editable} failure={failure} awaiting={awaiting} save={policyState.save} />
             <LimitsAndPowerSection machineName={props.machineName} platform={facts.platform} policy={policy} state={view?.state ?? null}
                 keepAwake={view?.keepAwake ?? null} editable={editable} failure={failure} awaiting={awaiting} save={policyState.save} />
+            <AgentToolsSection settings={guard.settings} editable={editable} machineName={props.machineName} />
             <ItemGroup title={t('machineGuard.activity.title')}
                 action={recent.length > 0 ? <TextLinkButton testID="machine-guard-all-activity" label={t('machineGuard.activity.all')} onPress={props.onOpenActivity} /> : undefined}>
                 {recent.length > 0 ? recent.map((entry, index) => (

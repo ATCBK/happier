@@ -30,6 +30,6 @@ describe('Machine to admitted Project terminal', () => {
             expect(route.searchParams.get('mobileSurface')).toBe('terminal');
             expect(route.searchParams.get('serverId')).toBe(serverId);
             await screen.unmount();
-        } finally { home.dispose(); }
+        } finally { await home.dispose(); }
     });
 });

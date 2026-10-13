@@ -6,15 +6,19 @@ import {
     writeCachedMachineDoctorSnapshot,
 } from './machineDoctorSnapshotCache';
 import { createTextModuleMock } from '@/dev/testkit/mocks/text';
+import { RPC_METHODS } from '@happier-dev/protocol/rpc';
 
 const machineCollectBugReportDiagnosticsMock = vi.hoisted(() => vi.fn());
 
-vi.mock('@/sync/ops/machines', () => ({
-    machineCollectBugReportDiagnostics: machineCollectBugReportDiagnosticsMock,
-}));
+vi.mock('@/sync/runtime/orchestration/serverScopedRpc/serverScopedMachineRpc', async () => {
+    const { createServerScopedMachineRpcBoundaryMock } = await import('@/dev/testkit/mocks/serverScopedRpc');
+    return createServerScopedMachineRpcBoundaryMock(machineCollectBugReportDiagnosticsMock);
+});
 
 const textMock = createTextModuleMock({ translate: (key: string) => key });
 vi.mock('@/text', () => textMock);
+// Collect the real operations graph once, outside timed cache/RPC contracts.
+await import('./readMachineDoctorSnapshot');
 
 describe('machine doctor snapshot helpers', () => {
     beforeEach(() => {
@@ -204,7 +208,10 @@ describe('machine doctor snapshot helpers', () => {
         const result = await fetchMachineDoctorSnapshot({ machineId: 'machine_1', serverId: 'srv_1', timeoutMs: 4_000 });
         nowSpy.mockRestore();
 
-        expect(machineCollectBugReportDiagnosticsMock).toHaveBeenCalledWith('machine_1', {
+        expect(machineCollectBugReportDiagnosticsMock).toHaveBeenCalledWith({
+            machineId: 'machine_1',
+            method: RPC_METHODS.BUGREPORT_COLLECT_DIAGNOSTICS,
+            payload: {},
             timeoutMs: 4_000,
             serverId: 'srv_1',
         });

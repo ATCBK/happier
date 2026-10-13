@@ -44,14 +44,6 @@ installMachineComponentCommonModuleMocks({
     },
 });
 
-vi.mock('@/components/ui/lists/ItemGroup', () => ({
-    ItemGroup: ({ children }: any) => React.createElement('ItemGroup', null, children),
-}));
-
-vi.mock('@/components/ui/lists/Item', () => ({
-    Item: (props: any) => React.createElement('Item', props),
-}));
-
 const installLabels = {
     install: 'Install now',
     update: 'Update now',
@@ -92,6 +84,8 @@ async function renderInstaller(
         />,
     );
 }
+
+await import('./InstallableDepInstaller');
 
 describe('InstallableDepInstaller', () => {
     beforeEach(() => {

@@ -49,6 +49,7 @@ export type MachineVitalsOverviewView =
       kind: 'unavailable';
       since: number | null;
       reason: 'reader_failed' | 'helper_missing' | 'request_failed';
+      errorCode?: string;
     }>
   /** Offline with nothing this app session read: the banner and one quiet line. */
   | Readonly<{ kind: 'offline_empty' }>
@@ -66,6 +67,7 @@ export function selectMachineVitalsOverviewView(
       status: 'loading' | 'ready' | 'error' | 'not_reported';
       snapshot: MachineVitalsSnapshotV1 | null;
       stale: boolean;
+      errorCode?: string | null;
     }>;
   }>,
 ): MachineVitalsOverviewView {
@@ -101,13 +103,13 @@ export function selectMachineVitalsOverviewView(
       sample,
       freshness: state.stale || state.status === 'error' ? 'stale' : 'live',
     };
+  if (state.status === 'error')
+    return { kind: 'unavailable', since: null, reason: 'request_failed', ...(state.errorCode ? { errorCode: state.errorCode } : {}) };
   // No published summary and no answer yet: a daemon without the field has no sampler (no version sniffing).
   if (!published)
     return state.status === 'ready'
       ? { kind: 'loading' }
       : { kind: 'older_happier' };
-  if (state.status === 'error')
-    return { kind: 'unavailable', since: null, reason: 'request_failed' };
   return { kind: 'loading' };
 }
 

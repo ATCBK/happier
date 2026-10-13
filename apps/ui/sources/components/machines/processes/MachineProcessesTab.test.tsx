@@ -194,6 +194,17 @@ const textOf = (node: { children: unknown[] } | null): string =>
         )
         .join('');
 const count = (text: string, needle: string) => text.split(needle).length - 1;
+it('displays native ceiling utilization and the unverifiable count without inventing actionable rows', async () => {
+  const answer = createProcessesAnswer();
+  answer.unverifiableCount = 2;
+  answer.owners[0].ceiling = { limitBytes: 4 * GB, usedBytes: 3 * GB, observedAtMs: answer.capturedAtMs, throttleCount5m: 7 };
+  const { screen } = await mount({ answer });
+  expect(screen.getTextContent()).toContain('3 GB of 4 GB');
+  expect(screen.findByTestId('machine-processes-unverifiable')).not.toBeNull();
+  expect(screen.root.findAll(node => String(node.props.testID ?? '').startsWith('machine-processes-row-unknown'))).toHaveLength(0);
+  const phone = await mount({ answer, params: { id: 'processes', page: 'owner', owner: answer.owners[0].rowId }, waitForRows: false });
+  expect(phone.screen.findByTestId('machine-processes-ceiling-throttles')).not.toBeNull();
+});
 type Screen = Awaited<ReturnType<typeof mount>>['screen'];
 /** The row's menu owner (DropdownMenu): choose an item the way a press on it does. */
 function chooseMenuItem(screen: Screen, key: string, itemId: string) {

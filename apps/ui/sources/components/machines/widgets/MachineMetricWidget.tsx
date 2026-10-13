@@ -230,6 +230,7 @@ function MetricSmall(
       />
     );
   }
+  if (availability?.kind === 'unavailable') return <MachineWidgetState kind="error" diagnosticCode={availability.errorCode} onRetry={() => machineResourceStore.retry(key)} testID={props.testID} />;
   return (
     <MachineWidgetColumn testID={props.testID}>
       <HappierPressable
@@ -317,6 +318,7 @@ function MetricTile(
       <MachineWidgetState
         kind="error"
         onRetry={vitals.retry}
+        diagnosticCode={view.errorCode}
         testID={props.testID}
       />
     ) : (

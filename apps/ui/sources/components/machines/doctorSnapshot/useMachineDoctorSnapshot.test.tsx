@@ -3,20 +3,15 @@ import { describe, expect, it, beforeEach, vi } from 'vitest';
 import { renderHook } from '@/dev/testkit';
 import { clearCachedMachineDoctorSnapshot, writeCachedMachineDoctorSnapshot } from './machineDoctorSnapshotCache';
 
-const machineCollectBugReportDiagnosticsMock = vi.hoisted(() => vi.fn());
-
-vi.mock('@/sync/ops/machines', () => ({
-    machineCollectBugReportDiagnostics: machineCollectBugReportDiagnosticsMock,
-}));
-
 vi.mock('@/text', async () => {
     const { createTextModuleMock } = await import('@/dev/testkit/mocks/text');
     return createTextModuleMock({ translate: (key: string) => key });
 });
 
+await import('./useMachineDoctorSnapshot');
+
 describe('useMachineDoctorSnapshot', () => {
     beforeEach(() => {
-        machineCollectBugReportDiagnosticsMock.mockReset();
         clearCachedMachineDoctorSnapshot({ serverId: 'srv_1', machineId: 'machine_1' });
         clearCachedMachineDoctorSnapshot({ serverId: 'srv_2', machineId: 'machine_1' });
     });

@@ -23,11 +23,13 @@ afterEach(() => {
 });
 
 function shortOnMemory(id: string): Machine {
+  const metadata = createMachineFixture().metadata;
+  if (metadata === null) throw new Error('Machine fixture metadata is missing');
   return createMachineFixture({
     id,
     activeAt: Date.now(),
     metadata: {
-      ...createMachineFixture().metadata,
+      ...metadata,
       host: 'build-box',
     },
     daemonState: {

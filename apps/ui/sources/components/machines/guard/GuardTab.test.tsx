@@ -24,6 +24,7 @@ installHomeGovernanceBoundaries(home);
 const { machineGuardStore } = await import('@/sync/domains/machines/guard/machineGuardStore');
 const { storage } = await import('@/sync/domains/state/storageStore');
 const { GuardTab } = await import('./GuardTab');
+const { Modal } = await import('@/modal');
 const { GuardBarAccessory } = await import('./GuardBarAccessory');
 const { MachineFreshnessChip } = await import('@/components/machines/page/MachineFreshnessChip');
 
@@ -75,10 +76,54 @@ async function mount(options: Readonly<{ params?: React.ComponentProps<typeof Gu
 /** What the machine's Guard read answers by default; a test may change it before reading again. */
 const guardAnswer: { current: typeof VIEW } = { current: VIEW };
 const before = storage.getState();
+function policyControl(screen: Awaited<ReturnType<typeof mount>>['screen'], testID: string) {
+    const control = screen.root.findAll(node => node.props.testID === testID && Array.isArray(node.props.items)
+        && typeof node.props.onSelect === 'function')[0];
+    if (!control) throw new Error(`Policy select unavailable: ${testID}`);
+    return control;
+}
 beforeEach(async () => { await home.reset(); machineGuardStore.reset(); transport.rpc.mockReset(); guardAnswer.current = VIEW; });
 afterEach(async () => { standardCleanup(); machineGuardStore.reset(); storage.setState(before); await home.reset(); });
 
 describe('GuardTab', () => {
+    it('accepts Custom values across the policy units and returns failed tool saves to their saved truth', async () => {
+        const writes: unknown[] = [];
+        const { screen } = await mount({ rpc: (method, payload) => {
+            if (method !== RPC_METHODS.MACHINES_RESOURCES_POLICY_SET) return undefined;
+            writes.push(payload.patch);
+            return { status: 'conflict', policy: MachineResourcesPolicyV1Schema.parse({ v: 1 }), revision: writes.length + 1 };
+        } });
+        await act(async () => { await vi.waitFor(() => expect(screen.findByTestId('machine-guard-tool-idle-select')).not.toBeNull()); });
+        const prompt = vi.spyOn(Modal, 'prompt').mockResolvedValueOnce('1001 ms').mockResolvedValueOnce('12');
+        try {
+            await act(async () => { policyControl(screen, 'machine-guard-tool-idle-select').props.onSelect('custom'); });
+            await act(async () => { await vi.waitFor(() => expect(writes).toHaveLength(1)); });
+            expect(writes[0]).toEqual({ processes: { toolIdleCloseMs: 1001 } });
+            expect(policyControl(screen, 'machine-guard-tool-idle-select').props.selectedId).toBe('300000');
+            expect(screen.getTextContent()).toContain(t('machineGuard.saveFailed', { machine: 'leeroy-mbp' }));
+            await act(async () => { policyControl(screen, 'machine-guard-browser-limit-select').props.onSelect('custom'); });
+            await act(async () => { await vi.waitFor(() => expect(writes).toHaveLength(2)); });
+            expect(writes[1]).toEqual({ processes: { browserMaxConcurrent: 12 } });
+        } finally { prompt.mockRestore(); }
+    });
+    it('saves tool idle close and browser concurrency through the sole resources policy Action', async () => {
+        const writes: unknown[] = [];
+        const { screen } = await mount({ rpc: (method, payload) => {
+            if (method !== RPC_METHODS.MACHINES_RESOURCES_POLICY_SET) return undefined;
+            writes.push(payload.patch);
+            return { status: 'applied', policy: MachineResourcesPolicyV1Schema.parse({ v: 1, ...payload.patch as object }), revision: writes.length + 1 };
+        } });
+        await act(async () => { await vi.waitFor(() => expect(screen.findByTestId('machine-guard-tool-idle-select')).not.toBeNull()); });
+        await act(async () => { policyControl(screen, 'machine-guard-tool-idle-select').props.onSelect('600000'); });
+        await act(async () => { await vi.waitFor(() => expect(writes).toHaveLength(1)); });
+        expect(writes[0]).toEqual({ processes: { toolIdleCloseMs: 600000 } });
+        await act(async () => { policyControl(screen, 'machine-guard-browser-limit-select').props.onSelect('4'); });
+        await act(async () => { await vi.waitFor(() => expect(writes).toHaveLength(2)); });
+        expect(writes[1]).toEqual({ processes: { browserMaxConcurrent: 4 } });
+        await act(async () => { policyControl(screen, 'machine-guard-browser-limit-select').props.onSelect('null'); });
+        await act(async () => { await vi.waitFor(() => expect(writes).toHaveLength(3)); });
+        expect(writes[2]).toEqual({ processes: { browserMaxConcurrent: null } });
+    });
     it('keeps feedback on both rows when two queued local saves encounter genuine external conflicts', async () => {
         let writes = 0;
         const { screen } = await mount({ rpc: method => {
@@ -120,7 +165,7 @@ describe('GuardTab', () => {
             await act(async () => { await vi.waitFor(() => expect(freshness()).toMatchObject({ kind: 'stale', at: asOf })); });
             expect(screen.findByTestId('machine-activity-activity-retained')).not.toBeNull();
             fail = false; asOf += 1000;
-            await act(async () => freshness().onRetry());
+            await act(async () => screen.pressByTestId('machine-vitals-retry'));
             await act(async () => { await vi.waitFor(() => expect(freshness()).toMatchObject({ kind: 'live' })); });
         }
     });

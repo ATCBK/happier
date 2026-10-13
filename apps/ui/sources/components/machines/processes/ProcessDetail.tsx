@@ -7,6 +7,7 @@ import type {
   ProcessOwnerRefV1,
   ProcessRowV1,
   ProcessSampleV1,
+  OwnerRowV1,
 } from '@happier-dev/protocol/machines/processes/machineProcessesV1';
 
 import {
@@ -51,6 +52,7 @@ export type ProcessDetailInput = Readonly<{
   platform: MachineProcessesAnswerV1['platform'];
   homeDir?: string;
   samples: readonly ProcessSampleV1[] | undefined;
+  ceiling?: OwnerRowV1['ceiling'];
   onCopyCommand: ((command: string) => void) | null;
   onOpenSession: ((sessionId: string) => void) | null;
 }>;
@@ -274,6 +276,15 @@ export const ProcessDetail = React.memo(function ProcessDetail(
               }
             />
           </ItemGroup>
+          {props.ceiling ? <ItemGroup title={t('machineProcesses.ceiling.title')} description={t('machineProcesses.ceiling.scopeHelp')}>
+            <Item mode="info" title={t('machineProcesses.tiles.memory')} detail={t('machineProcesses.ceiling.usage', {
+              used: props.ceiling.usedBytes === undefined ? '—' : formatMachineBytes(props.ceiling.usedBytes, 'memory'),
+              limit: formatMachineBytes(props.ceiling.limitBytes, 'memory'),
+            })} />
+            <Item mode="info" testID="machine-processes-ceiling-throttles"
+              title={props.ceiling.throttleCount5m === undefined ? t('machineProcesses.ceiling.throttlesUnknown')
+                : t('machineProcesses.ceiling.throttles', { count: props.ceiling.throttleCount5m })} />
+          </ItemGroup> : null}
         </View>
       </View>
     </View>

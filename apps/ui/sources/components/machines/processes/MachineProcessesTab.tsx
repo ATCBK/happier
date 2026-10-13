@@ -506,6 +506,7 @@ function MachineProcessesTree(
             platform={answer?.platform ?? 'linux'}
             homeDir={homeDir}
             samples={answer?.history?.[item.row.ref]}
+            ceiling={item.kind === 'process' ? item.owner.ceiling : undefined}
             onCopyCommand={item.row.level === 'proven' ? controller.copy : null}
             onOpenSession={controller.openSession}
           />
@@ -956,6 +957,7 @@ function MachineProcessesTree(
                 answer && !allOff ? (
                   <Text style={styles.platform}>
                     {t(`machineProcesses.platform.${answer.platform}`)}
+                    {(answer.unverifiableCount ?? 0) > 0 ? <Text testID="machine-processes-unverifiable">{' '}{t('machineProcesses.states.unverifiable', { count: answer.unverifiableCount! })}</Text> : null}
                   </Text>
                 ) : null
               }
@@ -1003,7 +1005,7 @@ function LeavingRow(
   );
 }
 
-const PHONE_HEADER_SLOTS: CollectionHeaderSlots = { search: null };
+const PHONE_HEADER_SLOTS: CollectionHeaderSlots = { search: null, selection: null, pageActions: null };
 const LIVE = { kind: 'live' } as const;
 const PAUSED = { kind: 'paused' } as const;
 

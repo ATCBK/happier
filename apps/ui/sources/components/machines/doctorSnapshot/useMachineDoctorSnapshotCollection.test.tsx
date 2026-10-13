@@ -9,14 +9,17 @@ import {
 
 const machineCollectBugReportDiagnosticsMock = vi.hoisted(() => vi.fn());
 
-vi.mock('@/sync/ops/machines', () => ({
-    machineCollectBugReportDiagnostics: machineCollectBugReportDiagnosticsMock,
-}));
+vi.mock('@/sync/runtime/orchestration/serverScopedRpc/serverScopedMachineRpc', async () => {
+    const { createServerScopedMachineRpcBoundaryMock } = await import('@/dev/testkit/mocks/serverScopedRpc');
+    return createServerScopedMachineRpcBoundaryMock(machineCollectBugReportDiagnosticsMock);
+});
 
 vi.mock('@/text', async () => {
     const { createTextModuleMock } = await import('@/dev/testkit/mocks/text');
     return createTextModuleMock({ translate: (key: string) => key });
 });
+
+await import('./useMachineDoctorSnapshotCollection');
 
 describe('useMachineDoctorSnapshotCollection', () => {
     beforeEach(() => {

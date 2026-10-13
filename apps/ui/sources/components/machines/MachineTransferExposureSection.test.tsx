@@ -1,7 +1,8 @@
 import * as React from 'react';
-import { beforeEach, describe, expect, it, vi } from 'vitest';
+import { Item } from '@/components/ui/lists/Item';
+import { describe, expect, it } from 'vitest';
 
-import { renderScreen } from '@/dev/testkit';
+import { renderScreen, findTestInstanceByTypeWithProps } from '@/dev/testkit';
 import { installMachinesSettingsCommonModuleMocks } from '@/components/settings/machines/machinesSettingsTestHelpers';
 
 installMachinesSettingsCommonModuleMocks({
@@ -33,20 +34,7 @@ installMachinesSettingsCommonModuleMocks({
     },
 });
 
-vi.mock('@/components/ui/lists/ItemGroup', () => ({
-    ItemGroup: ({ children, title }: { children?: React.ReactNode; title?: React.ReactNode }) =>
-        React.createElement('Group', { title }, children),
-}));
-
-vi.mock('@/components/ui/lists/Item', () => ({
-    Item: (props: Record<string, unknown>) => React.createElement('Item', props),
-}));
-
 describe('MachineTransferExposureSection', () => {
-    beforeEach(() => {
-        vi.resetModules();
-    });
-
     it('renders listener class states from daemonState.transfer', async () => {
         const { MachineTransferExposureSection } = await import('./MachineTransferExposureSection');
         const screen = await renderScreen(React.createElement(MachineTransferExposureSection, {
@@ -62,9 +50,9 @@ describe('MachineTransferExposureSection', () => {
             },
         }));
 
-        expect(screen.findByTestId('machine.transferExposure.loopbackHttp')?.props.subtitle).toBe('machine.transferExposure.stateActive');
-        expect(screen.findByTestId('machine.transferExposure.lanHttp')).toBeNull();
-        expect(screen.findByTestId('machine.transferExposure.tailscaleServeHttps')?.props.subtitle).toBe('machine.transferExposure.stateActive');
+        expect(findTestInstanceByTypeWithProps(screen, Item, { testID: 'machine.transferExposure.loopbackHttp' })?.props.subtitle).toBe('machine.transferExposure.stateActive');
+        expect(findTestInstanceByTypeWithProps(screen, Item, { testID: 'machine.transferExposure.lanHttp' })).toBeUndefined();
+        expect(findTestInstanceByTypeWithProps(screen, Item, { testID: 'machine.transferExposure.tailscaleServeHttps' })?.props.subtitle).toBe('machine.transferExposure.stateActive');
     });
 
     it('renders approval-needed for tailscale serve when enabled but not configured', async () => {
@@ -82,7 +70,7 @@ describe('MachineTransferExposureSection', () => {
             },
         }));
 
-        expect(screen.findByTestId('machine.transferExposure.tailscaleServeHttps')?.props.subtitle).toBe('machine.transferExposure.stateApprovalNeeded');
+        expect(findTestInstanceByTypeWithProps(screen, Item, { testID: 'machine.transferExposure.tailscaleServeHttps' })?.props.subtitle).toBe('machine.transferExposure.stateApprovalNeeded');
     });
 
     it('renders stale for tailscale serve when configured but inactive', async () => {
@@ -100,7 +88,7 @@ describe('MachineTransferExposureSection', () => {
             },
         }));
 
-        expect(screen.findByTestId('machine.transferExposure.tailscaleServeHttps')?.props.subtitle).toBe('machine.transferExposure.stateStale');
+        expect(findTestInstanceByTypeWithProps(screen, Item, { testID: 'machine.transferExposure.tailscaleServeHttps' })?.props.subtitle).toBe('machine.transferExposure.stateStale');
     });
 
     it('renders unavailable for tailscale serve when it is configured but unavailable', async () => {
@@ -118,6 +106,6 @@ describe('MachineTransferExposureSection', () => {
             },
         }));
 
-        expect(screen.findByTestId('machine.transferExposure.tailscaleServeHttps')?.props.subtitle).toBe('machine.transferExposure.stateUnavailable');
+        expect(findTestInstanceByTypeWithProps(screen, Item, { testID: 'machine.transferExposure.tailscaleServeHttps' })?.props.subtitle).toBe('machine.transferExposure.stateUnavailable');
     });
 });

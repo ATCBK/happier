@@ -4,8 +4,9 @@ import { act } from 'react-test-renderer';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { WidgetPresentationProvider } from '@happier-dev/plugin-ui';
 import { getWidgetSizeFootprintV1, type WidgetSizeV1 } from '@happier-dev/protocol/widgets';
+import { createRpcCallError, RPC_ERROR_CODES, RPC_ERROR_MESSAGES } from '@happier-dev/protocol/rpcErrors';
 
-import { renderScreen, standardCleanup } from '@/dev/testkit';
+import { createDeferred, renderScreen, standardCleanup } from '@/dev/testkit';
 import { createMachineFixture } from '@/dev/testkit/fixtures/machineFixtures';
 import { createHomeGovernanceHarness, installHomeGovernanceBoundaries } from '@/dev/testkit/harness/homeGovernanceHarness';
 import { installDisconnectedServerSocketBoundary, restoreServerAccountForTest } from '@/dev/testkit/harness/serverAccountConnectionHarness';
@@ -198,7 +199,44 @@ describe('Vitals widget (lab rw V, VS)', () => {
     expect(boundary.rpc).not.toHaveBeenCalled();
   });
 
+  it('keeps an unanswered Vitals read loading, then shows unsupported only after the owner answers', async () => {
+    const answer = createDeferred<unknown>();
+    boundary.rpc.mockReturnValue(answer.promise);
+    seed(createMachineFixture({ id: 'm1', active: true, activeAt: Date.now(), daemonStateVersion: 1,
+      metadata: null, daemonState: {} }));
+    const screen = await renderVitals('small');
+    expect(screen.findByTestId('vitals.loading')).toBeTruthy();
+    expect(screen.findByTestId('vitals.notReported')).toBeNull();
+    await act(async () => {
+      seed(createMachineFixture({ id: 'm1', active: true, activeAt: Date.now(), daemonStateVersion: 1, daemonState: {} }));
+      answer.reject(createRpcCallError({ error: RPC_ERROR_MESSAGES.METHOD_NOT_FOUND, errorCode: RPC_ERROR_CODES.METHOD_NOT_FOUND }));
+    });
+    await vi.waitFor(() => expect(screen.findByTestId('vitals.notReported')).toBeTruthy());
+    expect(screen.findByTestId('vitals.loading')).toBeNull();
+  });
+
+  it('shows a failed Vitals read as retryable, not unsupported or still loading', async () => {
+    boundary.rpc.mockRejectedValue(new Error('network failed'));
+    seed(createMachineFixture({ id: 'm1', active: true, activeAt: Date.now(), daemonStateVersion: 1, daemonState: {} }));
+    const screen = await renderVitals('small');
+    await vi.waitFor(() => expect(machineResourceStore.getState({ serverId: HOME, machineId: 'm1', view: 'summary' }).status).toBe('error'));
+    expect(screen.findByTestId('vitals.error')).toBeTruthy();
+    expect(screen.findHostByTestId('vitals.error-details-toggle')).not.toBeNull();
+    await screen.pressByTestIdAsync('vitals.error-details-toggle');
+    expect(screen.getTextContent()).toContain('action_failed');
+    expect(screen.findByTestId('vitals.notReported')).toBeNull();
+    expect(screen.findByTestId('vitals.loading')).toBeNull();
+    const metric = await renderScreen(<MachineMetricWidget
+      input={{ machine: { serverId: HOME, machineId: 'm1' } }} serverId={HOME} testID="failedMetric" />);
+    await vi.waitFor(() => expect(metric.findByTestId('failedMetric.error')).toBeTruthy());
+    expect(metric.findHostByTestId('failedMetric.error-details-toggle')).not.toBeNull();
+    await metric.pressByTestIdAsync('failedMetric.error-details-toggle');
+    expect(metric.getTextContent()).toContain('action_failed');
+    expect(metric.findByTestId('failedMetric.strip')).toBeNull();
+  });
+
   it('says a machine on an older Happier does not report, never zero', async () => {
+    boundary.rpc.mockRejectedValue(createRpcCallError({ error: RPC_ERROR_MESSAGES.METHOD_NOT_FOUND, errorCode: RPC_ERROR_CODES.METHOD_NOT_FOUND }));
     seed(
       createMachineFixture({
         id: 'm1',
@@ -209,12 +247,28 @@ describe('Vitals widget (lab rw V, VS)', () => {
       }),
     );
     const screen = await renderVitals('small');
+    await vi.waitFor(() => expect(screen.findByTestId('vitals.notReported')).toBeTruthy());
     expect(screen.findByTestId('vitals.notReported')).toBeTruthy();
     expect(screen.findByTestId('vitals.strip')).toBeNull();
   });
 });
 
 describe('Machine widget names', () => {
+  it('uses the existing generic machine subject while identity is hydrating, never a Loading sentence subject', async () => {
+    seed(createMachineFixture({ id: 'm1', metadata: null, daemonState: {}, active: true, activeAt: Date.now() }));
+    let subject = '';
+    function Probe() {
+      subject = useMachineWidgetMachine({ serverId: HOME, machineId: 'm1' }).name;
+      return null;
+    }
+    const screen = await renderScreen(<Probe />);
+    expect(subject).toBe('machines.widgets.body.common.unknownMachine');
+    const readable = createMachineFixture({ id: 'm1' });
+    if (!readable.metadata) throw new Error('Fixture must have readable metadata');
+    await act(async () => seed({ ...readable, metadata: { ...readable.metadata, host: 'Readable box' } }));
+    expect(subject).toBe('Readable box');
+    await screen.unmount();
+  });
   it('says the same disambiguated name as the Home list when two machines share a host name', async () => {
     const twin = (id: string) => createMachineFixture({ id, active: true, activeAt: Date.now(), daemonStateVersion: 1, daemonState: {} });
     storage.setState({

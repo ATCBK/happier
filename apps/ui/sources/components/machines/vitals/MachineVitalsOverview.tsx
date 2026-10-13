@@ -353,7 +353,7 @@ function MachineVitalsStateCard(
               ? t('machineVitals.states.unreachableReason')
               : t('machineVitals.states.unreadableReason')
         }
-        diagnosticCode={view.reason}
+        diagnosticCode={view.errorCode ?? view.reason}
         {...(view.reason === 'helper_missing'
           ? {}
           : {

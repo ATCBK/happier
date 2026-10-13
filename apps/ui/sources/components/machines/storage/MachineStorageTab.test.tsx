@@ -3,11 +3,13 @@ import { act } from 'react-test-renderer';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import type { DiskScanStateV1, HappierStorageSummaryV1, MachineStorageCategoryListResultV1, StorageItemV1 } from '@happier-dev/protocol/storage/storageV1';
 import { RPC_METHODS } from '@happier-dev/protocol/rpc';
+import { DiskScanStateV1Schema, HappierStorageSummaryV1Schema, MachineStorageScanStartInputV1Schema } from '@happier-dev/protocol/storage/storageV1';
 import { MachineResourcesPolicyV1Schema } from '@happier-dev/protocol/machines/resources/machineResourcesPolicyV1';
 import type { WorkflowDefinitionDraftSeed } from '@/sync/domains/workflows/workflowDefinitionDraftSeed';
 import { peekTempData } from '@/utils/sessions/tempDataStore';
 
 import { createMachineFixture } from '@/dev/testkit/fixtures/machineFixtures';
+import { applyProjectAccountRowsFixture } from '@/dev/testkit/fixtures/projectAccountRows';
 import { createRootLayoutFeaturesResponse } from '@/dev/testkit/fixtures/featureFixtures';
 import { renderScreen } from '@/dev/testkit';
 import { createDeferred } from '@/dev/testkit/hooks/createDeferred';
@@ -42,6 +44,8 @@ const home = createHomeGovernanceHarness();
 installHomeGovernanceBoundaries(home);
 const { primeServerFeaturesSnapshot } = await import('@/sync/api/capabilities/serverFeaturesClient');
 const { resolveServerCredentialAccountScope } = await import('@/sync/domains/scope/serverCredentialAccountScope');
+const { getActiveServerSnapshot } = await import('@/sync/domains/server/serverRuntime');
+const { publishAppliedActiveServerSnapshot } = await import('@/sync/runtime/orchestration/appliedActiveServerRuntime');
 const { t } = await import('@/text');
 const { machineStorageStore } = await import('@/sync/domains/machines/storage/machineStorageStore');
 const { storage } = await import('@/sync/domains/state/storageStore');
@@ -106,6 +110,12 @@ async function mount(params: React.ComponentProps<typeof MachineStorageTab>['par
         serverIdentityId: 'srv_storage_tab', accountId: 'owner' });
     primeServerFeaturesSnapshot({ serverId, snapshot: { status: 'ready', features: createRootLayoutFeaturesResponse() } });
     home.answer(serverId, '/v2/account/settings', { body: { content: { t: 'plain', v: {} }, version: 1 } });
+    // Mounted settings and known Project rows consume the applied Home/Account lifetime.
+    publishAppliedActiveServerSnapshot(getActiveServerSnapshot());
+    const resolution = await resolveServerCredentialAccountScope(serverId);
+    if (resolution.kind !== 'bound') throw new Error('Storage Home must be bound');
+    storage.getState().activateProfileScope(resolution.scope);
+    await storage.getState().activateSettingsScope(resolution.scope);
     storage.setState({ machines: {}, machineListByServerId: { [serverId]: [machine(overrides)] }, machineListStatusByServerId: { [serverId]: 'idle' } });
     transport.rpc.mockImplementation(async (rpc: Rpc) => {
         const { method } = rpc;
@@ -725,6 +735,90 @@ describe('MachineStorageTab', () => {
         await act(async () => { screen.pressByTestId('machine-storage-disk-shortcut-0'); });
         await act(async () => { await vi.waitFor(() => expect(calls.some(call => call.method === RPC_METHODS.DAEMON_STORAGE_SCAN_START)).toBe(true)); });
         expect(calls.find(call => call.method === RPC_METHODS.DAEMON_STORAGE_SCAN_START)?.payload).toMatchObject({ target: { folderPath: '/Users/leeroy' } });
+    });
+
+    it.each(['/Volumes/Personal/Downloads', '/Volumes/Cache/user', '/Users/leeroy/projects/known'])(
+        'starts daemon-supplied shortcuts and known project roots through the same scan Action: %s', async path => {
+        const base = machine();
+        const starts: unknown[] = [];
+        const { screen, serverId } = await mount({ id: 'storage', view: 'disk' }, { metadata: { ...base.metadata!,
+            resourcesPolicyV1: MachineResourcesPolicyV1Schema.parse({ v: 1, storage: { wholeDiskEnabled: true } }) } }, ({ method, payload }) => {
+            if (method === RPC_METHODS.DAEMON_STORAGE_SUMMARY_GET) return HappierStorageSummaryV1Schema.parse({ ...SUMMARY,
+                scanShortcuts: [{ kind: 'downloads', path: '/Volumes/Personal/Downloads' }, { kind: 'cache', path: '/Volumes/Cache/user' }] });
+            if (method === RPC_METHODS.DAEMON_STORAGE_SCAN_START) {
+                const request = MachineStorageScanStartInputV1Schema.parse({ machineId: 'machine', ...payload });
+                starts.push(request);
+                return DiskScanStateV1Schema.parse({ scanId: 'shortcut-scan', target: request.target, status: 'running', startedAt: 1,
+                    progress: { sizedBytes: 0, usedBytes: GB, items: 0 },
+                    unreadable: { counts: { permission: 0, os_private: 0, timeout: 0, io: 0 }, examples: [] },
+                    fullDiskAccess: { state: 'not_applicable', binary: { name: 'happier-support', path: '/x' } } });
+            }
+            return undefined;
+        });
+        await act(async () => { applyProjectAccountRowsFixture(storage, { workspaceRefs: [
+            { id: 'project', serverId, machineId: 'machine', rootPath: '/Users/leeroy/projects/known', createdAtMs: 1 },
+            { id: 'other-machine', serverId, machineId: 'other', rootPath: '/other-machine/private', createdAtMs: 1 },
+            { id: 'other-home', serverId: 'other-home', machineId: 'machine', rootPath: '/other-home/private', createdAtMs: 1 },
+        ] }); });
+        await vi.waitFor(async () => { await act(async () => {}); expect(screen.findByTestId('machine-storage-disk-shortcut-0')).not.toBeNull(); });
+        expect(screen.getTextContent()).not.toContain('/other-machine/private');
+        expect(screen.getTextContent()).not.toContain('/other-home/private');
+            const shortcut = screen.root.findAll(node => typeof node.type !== 'string'
+                && node.props.testID?.startsWith('machine-storage-disk-shortcut-') && typeof node.props.onPress === 'function')
+                .find(node => node.props.subtitle === (path.startsWith('/Users/leeroy') ? '~/projects/known' : path));
+            expect(shortcut, `Missing shortcut ${path}`).toBeDefined();
+            await act(async () => { shortcut!.props.onPress(); });
+            await vi.waitFor(() => expect(starts).toContainEqual(expect.objectContaining({ target: { folderPath: path } })));
+        expect(screen.findByTestId('machine-storage-disk')).not.toBeNull();
+    });
+
+    it.each([0, undefined])('renders only an observed read-only APFS snapshot count: %s', async count => {
+        const scan = DiskScanStateV1Schema.parse({ scanId: 'apfs-scan', target: { volumeId: 'mac' }, status: 'complete', startedAt: 1, finishedAt: 2,
+            ...(count === undefined ? {} : { apfsLocalSnapshotCount: count }),
+            progress: { sizedBytes: GB, usedBytes: GB, items: 1 }, unreadable: { counts: { permission: 0, os_private: 0, timeout: 0, io: 0 }, examples: [] },
+            fullDiskAccess: { state: 'not_applicable', binary: { name: 'happier-support', path: '/x' } } });
+        const { screen } = await mount({ id: 'storage', view: 'disk' }, {}, ({ method }) => {
+            if (method === RPC_METHODS.DAEMON_STORAGE_SUMMARY_GET) return HappierStorageSummaryV1Schema.parse({ ...SUMMARY, wholeDisk: { enabled: true, scans: [scan] } });
+            if (method === RPC_METHODS.DAEMON_STORAGE_PILE_GET) return { revision: 1, items: [], summary: SUMMARY.pile };
+            if (method === RPC_METHODS.DAEMON_STORAGE_SCAN_GET) return { state: scan, coverage: [], nodes: [] };
+            return undefined;
+        });
+        await vi.waitFor(async () => { await act(async () => {}); expect(screen.findByTestId('machine-storage-disk')).not.toBeNull(); });
+        const note = screen.findByTestId('machine-storage-disk-apfs-snapshots');
+        if (count === undefined) expect(note).toBeNull();
+        else {
+            expect(note).not.toBeNull();
+            expect(note!.findAll(node => node.children.includes(t('machineStorage.disk.apfsLocalSnapshots', { count })))).not.toHaveLength(0);
+        }
+    });
+
+    it.each(['map', 'rings'] as const)('copies the keyboard-inspected %s item after leaving the chart, including a deeper node', async shape => {
+        clipboard.setStringAsync.mockClear();
+        const scan: DiskScanStateV1 = { scanId: 'inspector-scan', target: { volumeId: 'mac' }, status: 'complete', startedAt: 1, finishedAt: 2,
+            progress: { sizedBytes: GB, usedBytes: GB, items: 2 }, unreadable: { counts: { permission: 0, os_private: 0, timeout: 0, io: 0 }, examples: [] },
+            fullDiskAccess: { state: 'not_applicable', binary: { name: 'happier-support', path: '/x' } } };
+        const diskNode = (nodeId: string, parentId: string, bytes: number) => ({ nodeId, parentId, name: nodeId.split('/').pop(),
+            kind: 'folder', size: size(bytes), logicalBytes: bytes, items: 1, changedAt: 1,
+            flags: { happier: false, protection: 'none', atLeast: false, inUse: false }, childCount: 1 });
+        const { screen } = await mount({ id: 'storage', view: 'disk' }, {}, ({ method }) => {
+            if (method === RPC_METHODS.DAEMON_STORAGE_SUMMARY_GET) return HappierStorageSummaryV1Schema.parse({ ...SUMMARY, wholeDisk: { enabled: true, scans: [scan] } });
+            if (method === RPC_METHODS.DAEMON_STORAGE_PILE_GET) return { revision: 1, items: [], summary: SUMMARY.pile };
+            if (method === RPC_METHODS.DAEMON_STORAGE_SCAN_GET) return { state: scan, coverage: [], nodes: [
+                diskNode('/Users', '/', GB), diskNode('/Users/leeroy', '/Users', GB),
+            ] };
+            return undefined;
+        });
+        await vi.waitFor(async () => { await act(async () => {}); expect(screen.findByTestId(`machine-storage-disk-shape:${shape}`)).not.toBeNull(); });
+        await act(async () => { screen.pressByTestId(`machine-storage-disk-shape:${shape}`); });
+        await vi.waitFor(async () => { await act(async () => {}); expect(screen.findHostByTestId(`machine-storage-disk-${shape}`)).not.toBeNull(); });
+        await act(async () => { screen.findHostByTestId(`machine-storage-disk-${shape}`)!.props.onLayout({ nativeEvent: { layout: { width: 792 } } }); });
+        const chart = () => screen.root.find(node => typeof node.type === 'string' && node.props.accessibilityRole === 'image' && typeof node.props.onKeyDown === 'function');
+        await act(async () => { chart().props.onKeyDown({ key: 'ArrowRight' }); });
+        await act(async () => { chart().props.onKeyDown({ key: shape === 'rings' ? 'ArrowUp' : 'ArrowRight' }); });
+        await act(async () => { chart().props.onPointerLeave(); });
+        expect(screen.findByTestId('machine-storage-disk-inspector-copy')).not.toBeNull();
+        await act(async () => { screen.pressByTestId('machine-storage-disk-inspector-copy'); });
+        await vi.waitFor(() => expect(clipboard.setStringAsync).toHaveBeenCalledWith('/Users/leeroy'));
     });
 
     it('copies a scanned item’s exact machine path from its row actions, and offers none for folded space', async () => {

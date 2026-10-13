@@ -289,7 +289,7 @@ function MachineProposalSuggestion(
           onPress={controller.checkAgain}
         />
       ) : null}
-      {size === 'full' && !stale ? (
+      {size === 'full' && !stale && controller.rows.length <= LIST_ROWS[size] ? (
         <RoundButton
           testID={`${props.testID}.approve`}
           size="small"

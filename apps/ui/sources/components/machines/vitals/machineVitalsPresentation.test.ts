@@ -73,6 +73,11 @@ describe('history maxima', () => {
 });
 
 describe('the Overview state (lab rv OS 1–6)', () => {
+  it('retains a failed read and its code without inferring support from absent publication metadata', () => {
+    expect(selectMachineVitalsOverviewView({ online: true, published: null,
+      state: { status: 'error', snapshot: null, stale: false, errorCode: 'action_failed' },
+    })).toEqual({ kind: 'unavailable', since: null, reason: 'request_failed', errorCode: 'action_failed' });
+  });
   it('chooses each of the six states from presence, the published summary and the read', () => {
     const ready = (
       s: MachineVitalsSnapshotV1 | null,

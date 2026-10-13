@@ -38,6 +38,7 @@ import { Text } from '@/components/ui/text/Text';
 import { Typography } from '@/constants/Typography';
 import { useMachineVitalsAttribution } from '@/sync/domains/machines/resources/useMachineVitalsAttribution';
 import { useMachineResourceLiveDemand } from '@/sync/domains/machines/resources/useMachineResourceLiveDemand';
+import { machineResourceStore } from '@/sync/domains/machines/resources/machineResourceStore';
 import {
   useMachineResourceSummary,
   type MachineResourceAvailability,
@@ -108,6 +109,7 @@ function VitalsBody(
     enabled: facts.online,
   });
   const availability = useMachineResourceSummary(props.target);
+  const retry = React.useCallback(() => machineResourceStore.retry({ ...props.target, view: 'summary' }), [props.target]);
   const freshness = resolveSummaryFreshness(availability, facts);
   useMachineWidgetFreshness(freshness, props.testID);
   const open = useOpenMachinePage(props.target);
@@ -140,6 +142,7 @@ function VitalsBody(
           testID={props.testID}
         />
       );
+    if (availability?.kind === 'unavailable') return <MachineWidgetState kind="error" diagnosticCode={availability.errorCode} onRetry={retry} testID={props.testID} />;
     return <VitalsLoading size={size} testID={props.testID} />;
   }
   return (

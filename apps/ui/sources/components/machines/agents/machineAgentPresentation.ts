@@ -1,11 +1,11 @@
 import type {
     MachineAgent,
-    MachineAgentJob,
     MachineAgentSignInSession,
 } from '@/agents/machineAgents/machineAgentTypes';
+import type { AgentInstallJobFailurePresentationInput } from '@/agents/machineAgents/installJobs/presentAgentInstallJobFailure';
 
-/** A failed install or update, as the install-job owner reports it. */
-export type MachineAgentJobFailure = Extract<NonNullable<MachineAgentJob['outcome']>, { kind: 'failed' }>;
+/** A reported installer failure or the presentation owner's uncertainty fallback. */
+export type MachineAgentJobFailure = AgentInstallJobFailurePresentationInput;
 
 const UNKNOWN_FAILURE: MachineAgentJobFailure = { kind: 'failed', code: 'unknown', stepId: null, message: null };
 

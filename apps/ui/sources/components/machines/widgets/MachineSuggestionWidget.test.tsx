@@ -13,6 +13,8 @@ import {
   buildApprovalRequestArtifactHeaderV1,
   computeExternalActionRequestEnvelopeDigestV1,
   encodePlainArtifactStoredContent,
+  ExternalActionRequestEnvelopeV1Schema,
+  ExternalActionResponseEnvelopeV1Schema,
   signExternalActionApprovalInputV1,
   type ApprovalRequestV2,
 } from '@happier-dev/protocol';
@@ -79,9 +81,6 @@ vi.mock('@/text', async () => {
   const { createTextModuleMock } = await import('@/dev/testkit/mocks/text');
   return createTextModuleMock({ translate: (key) => key });
 });
-vi.mock('@/components/ui/text/Text', () => ({
-  Text: (props: any) => React.createElement('Text', props, props.children),
-}));
 vi.mock('@/modal', async () => {
   const { createModalModuleMock } = await import('@/dev/testkit/mocks/modal');
   return createModalModuleMock().module;
@@ -293,8 +292,15 @@ describe('MachineSuggestionWidget', () => {
   beforeEach(async () => {
     webLocks = installWebLockManagerMock();
     await home.reset();
-    homeId = await home.addHome({ name: 'Home A', serverUrl: 'https://suggestion-home.example', serverIdentityId: 'srv_stable-home-a', accountId: 'account-1' });
+    homeId = await home.addHome({ name: 'Home A', serverUrl: 'https://suggestion-home.example', serverIdentityId: 'srv_stable-home-a', accountId: 'account-1', currentAccount: true });
     home.answer(homeId, 'GET /v1/machines', { body: [{ ...createPlainMachineRowFixture({ id: MACHINE, accountId: 'account-1' }), installationId: 'installation-exact' }] });
+    home.answer(homeId, 'POST /v1/actions/approval.request.decide', {
+      select: raw => {
+        const request = ExternalActionRequestEnvelopeV1Schema.parse(raw);
+        return { body: ExternalActionResponseEnvelopeV1Schema.parse({ v: 1, actionId: 'approval.request.decide',
+          requestId: request.requestId, execution: { ok: true, result: { status: 'executed' } } }) };
+      },
+    });
     storage.setState({
       sessions: { 'session-1': createSessionFixture({ id: 'session-1', serverId: homeId }) },
       machines: {},
@@ -337,8 +343,12 @@ describe('MachineSuggestionWidget', () => {
     expect(screen.findByTestId('widget.approve')).toBeNull();
   });
 
-  it('approves at Full through the existing decision owner, with every checked item', async () => {
-    const screen = await render('full', proposal());
+  it('approves eight visible items at Full through the existing decision owner', async () => {
+    const items = [...proposalArgs.items, ...['cache-seven', 'cache-eight'].map(itemId => ({
+      ref: ref(itemId), expect: `claimed-${itemId}`, claimedVerdict: 'safe' as const, reason: { code: 'rebuilds' as const },
+    }))];
+    const request = signed(ApprovalRequestV2Schema.parse({ ...proposal(), actionArgs: { ...proposalArgs, items } }));
+    const screen = await render('full', request);
     await vi.waitFor(() => expect(calls(RPC_METHODS.DAEMON_STORAGE_ITEMS_CHECK)).toHaveLength(1));
     await vi.waitFor(() => expect(screen.findByTestId('widget.approve')).toBeTruthy());
     await new Promise((resolve) => setTimeout(resolve, 50));
@@ -346,7 +356,21 @@ describe('MachineSuggestionWidget', () => {
     await vi.waitFor(() => expect(readApproval()).toMatchObject({ status: 'approved', decision: { kind: 'approve' } }));
     const decision = (readApproval() as ApprovalRequestV2).decision;
     const kept = (decision?.narrowedInput as { items: Array<{ ref: { itemId: string } }> }).items;
-    expect(kept.map((item) => item.ref.itemId)).toEqual([...ids]);
+    expect(kept.map((item) => item.ref.itemId)).toEqual(items.map(item => item.ref.itemId));
+  });
+
+  it('keeps a nine-item proposal open for Review when Full cannot show the entire consent set', async () => {
+    const items = [...proposalArgs.items, ...['cache-seven', 'cache-eight', 'cache-nine'].map(itemId => ({
+      ref: ref(itemId), expect: `claimed-${itemId}`, claimedVerdict: 'safe' as const, reason: { code: 'rebuilds' as const },
+    }))];
+    const request = signed(ApprovalRequestV2Schema.parse({ ...proposal(), actionArgs: { ...proposalArgs, items } }));
+    const screen = await render('full', request);
+    await vi.waitFor(() => expect(calls(RPC_METHODS.DAEMON_STORAGE_ITEMS_CHECK)).toHaveLength(1));
+    await vi.waitFor(() => expect(screen.findByTestId('widget.row.cache-eight')).toBeTruthy());
+    expect(screen.findByTestId('widget.row.cache-nine')).toBeNull();
+    expect(screen.findByTestId('widget.approve')).toBeNull();
+    expect(screen.findByTestId('widget.review')).toBeTruthy();
+    expect(readApproval().status).toBe('open');
   });
 
   it('with nothing proposed and nothing verified, invites an agent instead of drawing zero', async () => {

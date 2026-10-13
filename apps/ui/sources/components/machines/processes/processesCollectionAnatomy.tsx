@@ -14,6 +14,7 @@ import type {
   MachineProcessesAnswerV1,
   ProcessOwnershipLevelV1,
   ProcessSampleV1,
+  OwnerRowV1,
 } from '@happier-dev/protocol/machines/processes/machineProcessesV1';
 
 import { projectPluginUiTheme } from '@/components/plugins/surfaces/pluginUiThemeProjection';
@@ -69,7 +70,11 @@ export function formatProcessCpu(value: number | null): string {
   return value === null ? '—' : `${formatVitalsPercent(value)}%`;
 }
 
-export function formatProcessMemory(value: number | null): string {
+export function formatProcessMemory(value: number | null, ceiling?: OwnerRowV1['ceiling']): string {
+  if (ceiling) return t('machineProcesses.ceiling.usage', {
+    used: ceiling.usedBytes === undefined ? '—' : formatMachineBytes(ceiling.usedBytes, 'memory'),
+    limit: formatMachineBytes(ceiling.limitBytes, 'memory'),
+  });
   return value === null ? '—' : formatMachineBytes(value, 'memory');
 }
 
@@ -470,7 +475,7 @@ export function useProcessesCollectionAnatomy(
     const memory = (item: ProcessesItem) => (
       <ProcessFigure
         testID={`machine-processes-memory-${item.key}`}
-        text={formatProcessMemory(item.memoryBytes)}
+        text={formatProcessMemory(item.memoryBytes, item.kind === 'owner' ? item.owner.ceiling : undefined)}
         strong={figureStrong(item, input.logicalCores)}
       />
     );

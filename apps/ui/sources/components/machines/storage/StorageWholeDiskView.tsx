@@ -54,7 +54,7 @@ import { useMachineStorageScan } from '@/sync/domains/machines/storage/useMachin
 import { useMachineStorageSummary } from '@/sync/domains/machines/storage/useMachineStorageSummary';
 import { getPreferredLanguage, t } from '@/text';
 import { usePreferredLanguage } from '@/text/usePreferredLanguage';
-import { useAllSessionListRenderables, useAuthoringMemoryField } from '@/sync/store/hooks';
+import { useAllSessionListRenderables, useAuthoringMemoryField, useProjectAccountRows } from '@/sync/store/hooks';
 import { formatPathRelativeToHome } from '@/utils/sessions/formatPathRelativeToHome';
 import { useStableRecentPathsForMachine } from '@/utils/sessions/useStableRecentPathsForMachine';
 import { formatRelativeTime } from '@/utils/time/formatShortRelativeTime';
@@ -344,8 +344,10 @@ export const StorageWholeDiskView = React.memo(function StorageWholeDiskView(
         {props.offline ? null : <StorageHint icon="info" text={t('machineStorage.disk.neverHint')} />}
         {props.offline ? null : (
           <ScanFolderShortcuts
+            serverId={props.serverId}
             machineId={props.machineId}
             homeDir={facts.homeDir}
+            shortcuts={props.summary.scanShortcuts}
             disabled={starting}
             onScan={(folderPath) => startScan({ folderPath })}
           />
@@ -469,6 +471,10 @@ export const StorageWholeDiskView = React.memo(function StorageWholeDiskView(
           machineName={props.machineName}
           onRecheck={scanState.retry}
         />
+      ) : null}
+      {scan.apfsLocalSnapshotCount !== undefined ? (
+        <StorageSaySection testID="machine-storage-disk-apfs-snapshots"
+          text={t('machineStorage.disk.apfsLocalSnapshots', { count: scan.apfsLocalSnapshotCount })} />
       ) : null}
       <ItemGroup surface="none" header="none">
       <View style={[styles.tools, layout.compact ? styles.toolsCompact : null]}>
@@ -858,6 +864,12 @@ function DiskChart(
   const pluginTheme = React.useMemo(() => projectPluginUiTheme(theme), [theme]);
   const [width, setWidth] = React.useState(0);
   const [pointed, setPointed] = React.useState<string | null>(null);
+  const [inspected, setInspected] = React.useState<string | null>(null);
+  const pointAt = (key: string | null) => {
+    setPointed(key);
+    // Keep the inspected item reachable when the pointer or focus moves to Copy path.
+    if (key !== null) setInspected(key);
+  };
   const parts = React.useMemo(
     () => props.level.chart.map(toChartPart),
     [props.level.chart],
@@ -866,6 +878,17 @@ function DiskChart(
     () => new Map(props.level.rows.map((row) => [row.key, row])),
     [props.level.rows],
   );
+  const chartNodes = React.useMemo(() => {
+    const out = new Map<string, StorageDiskChartNode>();
+    const visit = (nodes: readonly StorageDiskChartNode[]) => {
+      for (const node of nodes) { out.set(node.key, node); visit(node.children); }
+    };
+    visit(props.level.chart);
+    return out;
+  }, [props.level.chart]);
+  const inspectedNode = inspected ? chartNodes.get(inspected)?.node : undefined;
+  const inspectedPath = inspectedNode && !['small-items', 'hidden-space', 'reserved'].includes(inspectedNode.kind)
+    ? inspectedNode.nodeId : null;
   // Another disk mounted here is a gap at 12 o'clock with its name, not an arc (lab MU).
   const mountRow = props.level.rows.find((row) => row.mark === 'mount') ?? null;
   const total = props.level.chart.reduce((sum, node) => sum + node.value, 0);
@@ -874,22 +897,22 @@ function DiskChart(
     const row = rows.get(key);
     if (row) { props.collect.toggle(toCollectRow(row)); return; }
     // A tile or arc a level deeper collects through the same row as the list (Forbidden and folded parts have no box).
-    const node = props.level.chart.flatMap((entry) => [entry, ...entry.children]).find((entry) => entry.key === key);
+    const node = chartNodes.get(key);
     if (node) props.collect.toggle(toStorageDiskCollectRow(node.node));
   };
   const tooltip = (key: string) => {
-    const row = rows.get(key);
-    if (!row) return null;
+    const node = chartNodes.get(key)?.node;
+    if (!node) return null;
     const share =
-      total > 0 ? Math.round((row.node.size.allocatedBytes / total) * 100) : 0;
+      total > 0 ? Math.round((node.size.allocatedBytes / total) * 100) : 0;
     return (
       <View style={styles.tooltip}>
         <View style={styles.tooltipHead}>
           <Text style={styles.tooltipTitle} numberOfLines={1}>
-            {storageDiskNodeName(row.node)}
+            {storageDiskNodeName(node)}
           </Text>
           <Text style={styles.tooltipTitle}>
-            {formatMachineBytes(row.node.size.allocatedBytes, 'storage')}
+            {formatMachineBytes(node.size.allocatedBytes, 'storage')}
           </Text>
         </View>
         <Text style={styles.tooltipMeta}>
@@ -949,7 +972,7 @@ function DiskChart(
               t('machineStorage.disk.smaller', { count })
             }
             pointedKey={pointed}
-            onPointAt={setPointed}
+            onPointAt={pointAt}
             onOpen={open}
             onCollect={collectKey}
             onUp={props.onUp}
@@ -986,7 +1009,7 @@ function DiskChart(
               t('machineStorage.disk.smaller', { count })
             }
             pointedKey={pointed}
-            onPointAt={setPointed}
+            onPointAt={pointAt}
             onOpen={open}
             onCollect={collectKey}
             onUp={props.onUp}
@@ -1026,6 +1049,21 @@ function DiskChart(
           </View>
         ))}
       </View>
+      {inspectedPath && inspectedNode ? (
+        <Item
+          testID="machine-storage-disk-inspector"
+          title={storageDiskNodeName(inspectedNode)}
+          subtitle={inspectedPath}
+          mode="info"
+          showChevron={false}
+          rightElement={<TextLinkButton
+            testID="machine-storage-disk-inspector-copy"
+            label={t('files.repositoryTree.actions.copyPath')}
+            accessibilityLabel={`${t('files.repositoryTree.actions.copyPath')}: ${inspectedPath}`}
+            onPress={() => copyStoragePath(inspectedPath)}
+          />}
+        />
+      ) : null}
     </View>
   );
 }
@@ -1055,19 +1093,32 @@ function folderName(path: string): string {
  */
 function ScanFolderShortcuts(
   props: Readonly<{
+    serverId: string;
     machineId: string;
     homeDir: string | undefined;
+    shortcuts: StorageSummary['scanShortcuts'];
     disabled: boolean;
     onScan: (folderPath: string) => void;
   }>,
 ) {
   usePreferredLanguage();
   const sessions = useAllSessionListRenderables();
+  const projects = useProjectAccountRows();
   const recentMachinePaths = useAuthoringMemoryField('recentMachinePaths');
   const recent = useStableRecentPathsForMachine({ machineId: props.machineId, recentMachinePaths, sessions });
   const places = React.useMemo(() => {
     const out: { path: string; title: string; icon: IconName }[] = [];
     if (props.homeDir) out.push({ path: props.homeDir, title: t('machineStorage.disk.shortcutHome'), icon: 'house' });
+    for (const shortcut of props.shortcuts ?? []) {
+      if (out.some(place => place.path === shortcut.path)) continue;
+      out.push({ path: shortcut.path, title: t(shortcut.kind === 'downloads'
+        ? 'machineStorage.disk.shortcutDownloads' : 'machineStorage.disk.shortcutCache'), icon: 'folder' });
+    }
+    for (const project of projects?.workspaceRefs ?? []) {
+      if (project.serverId !== props.serverId || project.machineId !== props.machineId
+        || out.some(place => place.path === project.rootPath)) continue;
+      out.push({ path: project.rootPath, title: project.label || folderName(project.rootPath), icon: 'folder' });
+    }
     const firstRecent = out.length;
     for (const path of recent) {
       if (out.length - firstRecent >= RECENT_FOLDER_SHORTCUTS) break;
@@ -1075,11 +1126,10 @@ function ScanFolderShortcuts(
       out.push({ path, title: folderName(path), icon: 'folder' });
     }
     return out;
-  }, [props.homeDir, recent]);
+  }, [props.homeDir, props.shortcuts, props.serverId, props.machineId, projects, recent]);
   if (places.length === 0) return null;
   return (
     <ItemGroup
-      testID="machine-storage-disk-shortcuts"
       title={t('machineStorage.disk.shortcutsTitle')}
       description={t('machineStorage.disk.shortcutsNote')}
     >
