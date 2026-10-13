@@ -148,6 +148,7 @@ import {
     CLAUDE_GOAL_WORK_STATE_SOURCE_FAMILY,
 } from './workState/claudeGoalStatus';
 import { createClaudeWorkflowActivitySourceForSession } from './workflows/createClaudeWorkflowActivitySourceForSession';
+import type { ClaudeWorkflowActivityObservationContext } from './workflows/claudeWorkflowActivitySource';
 import { filterWorkflowOwnedWorkStateItems } from './workflows/claudeWorkflowOwnedWorkState';
 import { routeClaudeSdkMessageToWorkflowSource } from './workflows/routeClaudeSdkMessageToWorkflowSource';
 import { createClaudeGoalStatusTranscriptTail } from './workState/createClaudeGoalStatusTranscriptTail';
@@ -614,6 +615,7 @@ export async function claudeRemoteLauncher(
             getCollector: () => subagentFileCollectorRef,
         }),
         getCurrentClaudeSessionId: () => {
+            if (typeof session.sessionId === 'string' && session.sessionId.trim().length > 0) return session.sessionId.trim();
             const claudeSessionId = session.client.getMetadataSnapshot?.()?.claudeSessionId;
             return typeof claudeSessionId === 'string' && claudeSessionId.trim().length > 0 ? claudeSessionId.trim() : null;
         },
@@ -724,6 +726,7 @@ export async function claudeRemoteLauncher(
     });
     const observeLegacyProviderActivityHook = (hook: unknown): void => {
         if (activeRemoteRunnerKind !== 'legacy') return;
+        workflowActivitySource?.observeTranscriptMessage(hook, { historicalReplay: false, authenticatedHook: true });
         observeClaudeProviderTaskRuntimeActivityHook({
             hook,
             evidence: providerRuntimeActivityEvidence,
@@ -779,11 +782,15 @@ export async function claudeRemoteLauncher(
         void teamInboxBridge.syncAll();
     }, 3000);
 
-    const seededTeamInboxSessionIds = new Set<string>();
-    const seedTeamInboxFromTranscriptPath = async (sessionId: string | null, transcriptPath: string | null): Promise<void> => {
+    const seededTranscriptHistorySessionIds = new Set<string>();
+    const seedClaudeTranscriptHistory = async (
+        sessionId: string | null,
+        transcriptPath: string | null,
+        observeWorkflowHistory = false,
+    ): Promise<void> => {
         const sid = typeof sessionId === 'string' ? sessionId.trim() : '';
         if (!sid) return;
-        if (seededTeamInboxSessionIds.has(sid)) return;
+        if (seededTranscriptHistorySessionIds.has(sid)) return;
 
         const resolvedTranscriptPath = (() => {
             const direct = typeof transcriptPath === 'string' ? transcriptPath.trim() : '';
@@ -798,11 +805,15 @@ export async function claudeRemoteLauncher(
         })();
         if (!resolvedTranscriptPath) return;
 
-        seededTeamInboxSessionIds.add(sid);
+        seededTranscriptHistorySessionIds.add(sid);
         try {
             const messages = await readClaudeSessionJsonlMessages({
                 sessionFilePath: resolvedTranscriptPath,
-                logLabel: 'CLAUDE_TEAM_INBOX_SEED',
+                logLabel: 'CLAUDE_TRANSCRIPT_HISTORY_SEED',
+                ...(observeWorkflowHistory ? {
+                    observeFullHistory: true as const,
+                    onJsonValue: (value: unknown) => workflowActivitySource?.observeTranscriptMessage(value, { historicalReplay: true }),
+                } : {}),
             });
             for (const m of messages) {
                 try {
@@ -813,6 +824,11 @@ export async function claudeRemoteLauncher(
             }
             await teamInboxBridge.syncAll();
         } catch (error) {
+            if (observeWorkflowHistory) {
+                seededTranscriptHistorySessionIds.delete(sid);
+                await providerTaskRuntimeActivityAdapter?.handleRuntimeLoss('claude_startup_transcript_history_unavailable');
+                throw error;
+            }
             logger.debug('[remote]: failed seeding team inbox from transcript path (non-fatal)', { error });
         }
     };
@@ -1442,7 +1458,17 @@ export async function claudeRemoteLauncher(
                     if (!localId) {
                         throw new Error('Canonical Pending provider input requires exactly one nonblank localId');
                     }
-                    return pinBatchToActiveRuntime({ ...batch, userMessageLocalIds: [localId] });
+                    const pinnedBatch = pinBatchToActiveRuntime({ ...batch, userMessageLocalIds: [localId] });
+                    // SDK resume does not replay historical Agent launches and acknowledgements.
+                    // Runtime selection is now known; observe aliases before returning its first
+                    // input to the dispatcher, which can then construct the SDK query and hooks.
+                    session.adoptExplicitResumeSessionIdFromArgs();
+                    await seedClaudeTranscriptHistory(
+                        session.sessionId,
+                        session.transcriptPath ?? null,
+                        activeRuntimeModeKind === 'agentSdk' && workflowActivitySource !== null,
+                    );
+                    return pinnedBatch;
                 };
 
                 const takeBatchDeliveryAttributionForProvider = (batch: MessageBatch<EnhancedMode, string>) =>
@@ -1572,11 +1598,6 @@ export async function claudeRemoteLauncher(
                 const claudeSubscriptionAccessTokenRefreshSelection =
                     resolveClaudeSubscriptionRefreshSelectionFromEnv(process.env);
 
-                // If this is a restarted daemon process resuming an existing agent-team session,
-                // we may not replay transcript history through `onMessage`. Seed team inbox mapping
-                // from the transcript file so unread teammate messages still import correctly.
-                session.adoptExplicitResumeSessionIdFromArgs();
-                await seedTeamInboxFromTranscriptPath(session.sessionId, session.transcriptPath ?? null);
                 const launchAbortSignal = abortController.signal;
 
                 const remoteDispatch = await inputConsumer.runProviderInputDispatch({
@@ -1689,10 +1710,13 @@ export async function claudeRemoteLauncher(
                         sdkToLogConverter.updateSessionId(sessionId);
                         session.onSessionFound(sessionId, data as any);
                         const transcriptPath = typeof (data as any)?.transcript_path === 'string' ? String((data as any).transcript_path) : null;
-                        void seedTeamInboxFromTranscriptPath(sessionId, transcriptPath);
+                        void seedClaudeTranscriptHistory(sessionId, transcriptPath);
                         // Agent-SDK only: now that the transcript path is known, follow it for
                         // goal_status attachments (the SDK stream omits them). No-op for other runners.
                         maybeStartAgentSdkGoalStatusTail(transcriptPath);
+                    },
+                    onSessionHook: (data: unknown) => {
+                        workflowActivitySource?.observeTranscriptMessage(data, { historicalReplay: false, authenticatedHook: true });
                     },
                     loadCommittedClaudeJsonlMessageBaseline: () =>
                         session.client.fetchCommittedClaudeJsonlMessageBaseline?.()
@@ -1750,7 +1774,7 @@ export async function claudeRemoteLauncher(
                     // goal_status by design (stream-json omits transcript attachments).
                     onRawTranscriptValue: (
                         value: unknown,
-                        observation: Readonly<{ historicalReplay: boolean }>,
+                        observation: ClaudeWorkflowActivityObservationContext,
                     ) => {
                         goalWorkStateSource.observeTranscriptMessage(value);
                         // Claude workflow ACTIVITY rides the SAME raw transcript channel as the goal

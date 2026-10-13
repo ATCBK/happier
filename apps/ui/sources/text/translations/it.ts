@@ -479,6 +479,15 @@ const promptLibraryUxRefinementTranslationExtension = {
 
 const sessionHandoffTranslationExtensions = {
   it: {
+    transferSessionData: {
+      title: "Trasferisci i dati della sessione",
+      subtitle: "Copia la cronologia della conversazione di questa sessione sull’altro computer. Disattiva se è già presente.",
+      checking: "Verifica del supporto su entrambi i computer…",
+      agentRequiresTransfer: "Questo Agente richiede il trasferimento dei dati della sessione tra computer.",
+      updateRequired: "Aggiorna Happier su entrambi i computer per disattivare questa opzione.",
+      sessionMissing: "La cronologia di questa sessione non è sul computer di destinazione. Attiva «Trasferisci i dati della sessione» e riprova.",
+      workspaceRequiresTransfer: "Attiva «Trasferisci i dati della sessione» per copiare o sincronizzare i file dell’area di lavoro.",
+    },
     activeWarning: {
       title: 'Questa sessione è ancora in esecuzione qui',
       message: 'Il trasferimento fermerà questa sessione su questa macchina prima di trasferirla alla macchina selezionata.',
@@ -1508,6 +1517,7 @@ export const it: TranslationStructure = {
       agySubtitleExperimental: "CLI Antigravity (sperimentale)",
       fxSubtitleExperimental: "FX CLI (sperimentale)",
       droidSubtitleExperimental: "Factory Droid CLI (sperimentale)",
+      codebuddySubtitleExperimental: "CodeBuddy Code CLI (sperimentale)",
       customAcpSubtitleExperimental: "CLI ACP personalizzata (sperimentale)",
       grokSubtitleExperimental: "Grok Build CLI (sperimentale)",
       piSubtitleExperimental: "Pi CLI (sperimentale)",
@@ -2823,6 +2833,19 @@ export const it: TranslationStructure = {
   },
 
   connectedServices: {
+    importAccounts: {
+        unknownResult: "Il risultato dell’importazione è sconosciuto. Aggiorna l’elenco degli account e verifica questo profilo prima di riprovare.",
+        title: "Importa un accesso esistente",
+        failed: "Impossibile importare l’accesso. Verifica di aver effettuato l’accesso sul computer selezionato, poi riprova.",
+        actionDescription: "Copia un accesso da una delle tue macchine",
+        description: "Copia l’accesso nel profilo crittografato. I token di rinnovo condivisi possono cambiare e l’app locale potrebbe richiedere un nuovo accesso.",
+        unsupported: "Importazione non disponibile. Scegli un’altra macchina o aggiorna la sua CLI.",
+        credentialsUnavailable: "Nessun accesso utilizzabile. Accedi nell’app locale e riprova.",
+        profileConflict: "Il profilo appartiene a un altro account o è cambiato durante l’importazione. Scegli un nuovo nome.",
+        reauthorizationRequired: "Accedi di nuovo nell’app locale e riprova.",
+        imported: "Accesso importato",
+        refreshFailed: "L’accesso è stato importato, ma l’elenco degli account non si è aggiornato. Riapri i servizi connessi.",
+    },
       subscription: {
           title: "Abbonamento",
           currentPeriod: "Periodo attuale",
@@ -2852,6 +2875,7 @@ export const it: TranslationStructure = {
       openai: "Chiave API OpenAI",
       anthropic: "Chiave API Anthropic",
       gemini: "Gemini di Google",
+      antigravity: 'Google Antigravity',
       github: "GitHub",
     },
     title: "Servizi connessi",
@@ -3103,6 +3127,21 @@ export const it: TranslationStructure = {
       resets: {
         use: "Usa",
         available: "Ripristino disponibile",
+        remainingCount: ({ count }: { count: number }) => `Ripristini salvati: ${count}`,
+        appliesTo: ({ limits }: { limits: string }) => `Si applica a: ${limits}`,
+        fiveHourLimit: "Limite di 5 ore",
+        weeklyLimit: "Limite settimanale",
+        unavailableReasons: {
+          paused: "In pausa",
+          cooldown: "In attesa del periodo di recupero",
+          ineligible: "Non idoneo",
+          not_selected: "Non selezionato",
+          provider_unavailable: "Provider non disponibile",
+          not_started: "Non ancora iniziato",
+          expired: "Scaduto",
+          consumed: "Già usato",
+          unknown: "Al momento non disponibile",
+        },
         rowLabel: ({ date, countdown }: { date: string; countdown: string }) => `Scade ${date} · ${countdown}`,
         now: "ora",
         inDays: ({ days }: { days: number }) => `tra ${days}g`,
@@ -3124,6 +3163,12 @@ export const it: TranslationStructure = {
       pasteRedirectUrlPromptBody:
         "Dopo aver completato OAuth, copia l’URL finale reindirizzato dalla barra degli indirizzi del browser e incollalo qui.",
       providerOverrides: {
+        antigravity: {
+          connectWebDescription: "Passaggio successivo: accedi con Google. Antigravity mostra un codice di autorizzazione da copiare.",
+          pasteRedirectUrlPromptBody: "1) Accedi con Google. 2) Copia il codice di autorizzazione mostrato su antigravity.google. 3) Incollalo qui sotto mantenendo aperto questo accesso.",
+          pasteRedirectUrlPlaceholder: "Incolla il codice di autorizzazione Antigravity",
+          pasteRedirectUrlTitle: "Incolla codice di autorizzazione",
+        },
         claudeSubscription: {
           connectWebDescription:
             "Passaggio successivo: accedi nella pagina che si apre. Claude potrebbe mostrare una stringa di codice invece di reindirizzare automaticamente.",
@@ -3209,6 +3254,7 @@ export const it: TranslationStructure = {
       addOauthProfileDeviceTitle: "Aggiungi con auth dispositivo",
       addOauthProfileDeviceSubtitle: "Consigliato per web/ambienti remoti",
       addOauthProfilePasteTitle: "Aggiungi con incolla reindirizzamento",
+      signInWithGoogle: 'Accedi con Google',
       addOauthProfilePasteSubtitle: "Flusso manuale di copia/incolla URL di reindirizzamento",
       addOauthProfileBrowserTitle: "Aggiungi con browser in-app",
       addOauthProfileBrowserSubtitle: "Usa un browser incorporato dove supportato",
@@ -3253,6 +3299,7 @@ export const it: TranslationStructure = {
       errors: {
         credentialReferencedByGroup: "Questo account è ancora usato da un Pool di account. Rimuovilo dal Pool e riprova.",
         credentialNotFound: "Questo account connesso è già stato rimosso.",
+        serviceUnsupportedServer: 'Questo relay non supporta questo servizio connesso. Aggiorna il relay per collegarlo.',
         credentialRequestFailed: "La richiesta dell'account connesso non è riuscita. Aggiorna i servizi connessi e riprova.",
         groupRequestFailed: "La richiesta del Pool di account non è riuscita. Aggiorna i servizi connessi e riprova.",
         generationConflict: "Questo Pool di account è cambiato prima del completamento dell'azione. Aggiorna i servizi connessi e riprova.",
@@ -4639,6 +4686,7 @@ export const it: TranslationStructure = {
             agy: { title: 'Antigravity' },
             fx: { title: "FX" },
             droid: { title: "Factory Droid" },
+            codebuddy: { title: "CodeBuddy" },
             grok: {
                 title: "Grok Build"
             },
@@ -6895,7 +6943,9 @@ export const it: TranslationStructure = {
     fxSessionId: "ID sessione FX",
     fxSessionIdCopied: "ID sessione FX copiato negli appunti",
     droidSessionId: "ID sessione Factory Droid",
+    codebuddySessionId: "ID sessione CodeBuddy",
     droidSessionIdCopied: "ID sessione Factory Droid copiato negli appunti",
+    codebuddySessionIdCopied: "ID sessione CodeBuddy copiato negli appunti",
     customAcpSessionId: "ID sessione ACP personalizzata",
     grokSessionId: "ID sessione Grok",
     grokSessionIdCopied: "ID sessione Grok copiato negli appunti",
@@ -7111,6 +7161,8 @@ export const it: TranslationStructure = {
     permissionMode: {
       title: "MODALITÀ PERMESSI",
       effectiveLabel: ({ label }: { label: string }) => `Effettivo: ${label}`,
+      nativeModeOverrides: ({ mode }: { mode: string }) => `La modalità agente ${mode} ha priorità su questa impostazione dei permessi. Cancella la selezione di Modalità per usare i permessi.`,
+            usePermissionSetting: 'Usa l’impostazione dei permessi',
       default: "Predefinito",
       readOnly: "Sola lettura",
       acceptEdits: "Accetta modifiche",
@@ -7141,6 +7193,7 @@ export const it: TranslationStructure = {
       agy: 'Antigravity',
       fx: "FX",
       droid: "Factory Droid",
+      codebuddy: "CodeBuddy",
       customAcp: "ACP personalizzato",
       pi: "Pi",
       copilot: "Copilot",
@@ -10721,6 +10774,7 @@ settingsSession: {
     blockedTitle: 'Configurazione interrotta',
     blockedStatusFallback: 'La configurazione non è riuscita a completarsi. Il tuo account e le tue sessioni sono intatti.',
     blockedServiceConflictStatus: 'Prima bisogna risolvere un altro servizio in background su questo computer. È rimasto com’era: apri Dettagli per vedere quale.',
+    blockedServiceManagerUnavailableStatus: 'Happier non può configurare il servizio in background su questo computer. Apri Dettagli per ricevere aiuto o continua con le altre macchine.',
     blockedConsentDeclinedStatus: 'La configurazione si è fermata. Il servizio in background già presente è rimasto esattamente com’era.',
     blockedAccountKeptStatus: 'La configurazione si è interrotta. Questo computer resta collegato all’account con cui ha effettuato l’accesso.',
     blockedAccountChangedStatus: 'Questo computer ha effettuato l’accesso a un altro account durante la configurazione, che si è quindi interrotta prima dell’abbinamento. Riprova.',
@@ -11024,6 +11078,7 @@ settingsSession: {
     providerStateSharingDegraded: "Condivisione stato provider applicata parzialmente",
     connectedServiceRuntimeAuthRecoveryRecovered: "Autenticazione provider recuperata",
     connectedServiceRuntimeAuthRecoveryCancelled: "Recupero autenticazione provider annullato",
+        connectedServiceRuntimeAuthRecoveryStopped: "Ripristino del provider interrotto; nessun nuovo tentativo automatico",
     runtimeConfigOutcomeAppliesBeforeNextMessage: "Verrà applicato prima del tuo prossimo messaggio",
     runtimeConfigOutcomeQueuedUntilReady: "In coda finché non è pronto",
     runtimeConfigOutcomeAlreadySet: "Già impostato",

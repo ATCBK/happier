@@ -18,6 +18,7 @@ import {
     readSessionRuntimePresentationFreshnessTimestamps,
     SESSION_RUNTIME_STATUS_STALE_SIGNAL_MS,
 } from '@/sync/domains/session/attention/deriveSessionRuntimePresentationState';
+import { deriveSessionAttentionState } from '@/sync/domains/session/attention/deriveSessionAttentionState';
 import {
     readDisplayMachineIdForSession,
     readDisplayMachineTargetForSession,
@@ -35,7 +36,7 @@ export {
 } from '@/sync/domains/session/attention/deriveSessionRuntimePresentationState';
 export { isFreshTimestamp };
 
-export type SessionState = 'disconnected' | 'recoverable_unservable' | 'resuming' | 'thinking' | 'background_active' | 'waiting' | 'permission_required' | 'action_required';
+export type SessionState = 'disconnected' | 'recoverable_unservable' | 'resuming' | 'thinking' | 'background_active' | 'waiting' | 'permission_required' | 'action_required' | 'failed';
 
 export interface SessionStatus {
     state: SessionState;
@@ -346,6 +347,22 @@ export function getSessionStatus(session: SessionStatusSource, nowMs: number = D
             statusColor: statusColors.actionRequired,
             statusDotColor: statusColors.actionRequired,
             isPulsing: true
+        };
+    }
+
+    if (deriveSessionAttentionState({
+        latestTurnStatus: session.latestTurnStatus,
+        lastRuntimeIssue: session.lastRuntimeIssue,
+        isRunning: isThinking,
+    }) === 'failed') {
+        return {
+            state: 'failed',
+            isConnected: true,
+            statusText: t('status.error'),
+            shouldShowStatus: true,
+            statusColor: statusColors.error,
+            statusDotColor: statusColors.error,
+            isPulsing: false,
         };
     }
 

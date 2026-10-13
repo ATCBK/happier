@@ -1,7 +1,7 @@
 import * as React from 'react';
 import { Pressable, View } from 'react-native';
 import { StyleSheet, useUnistyles } from 'react-native-unistyles';
-import { readSessionAgentTransitionDividerV1 } from '@happier-dev/protocol';
+import { isConnectedServiceRuntimeAuthRecoveryCancellation, readSessionAgentTransitionDividerV1 } from '@happier-dev/protocol';
 import { ActivitySpinner, iconMatchedSpinnerSize } from '@/components/ui/feedback/ActivitySpinner';
 import { AgentTransitionDividerRow } from '@/components/sessions/transcript/agentTransition/AgentTransitionDividerRow';
 
@@ -123,7 +123,9 @@ function formatRuntimeAuthRecoveryText(event: Extract<AgentEvent, { type: 'conne
         case 'recovered':
             return t('message.connectedServiceRuntimeAuthRecoveryRecovered');
         case 'cancelled':
-            return t('message.connectedServiceRuntimeAuthRecoveryCancelled');
+            return isConnectedServiceRuntimeAuthRecoveryCancellation(event.reason)
+                ? t('message.connectedServiceRuntimeAuthRecoveryCancelled')
+                : t('message.connectedServiceRuntimeAuthRecoveryStopped');
     }
 }
 

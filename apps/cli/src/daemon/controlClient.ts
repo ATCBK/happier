@@ -747,6 +747,7 @@ export async function materializeDaemonConnectedServicesForExecutionRun(
     pid: number;
     materializationKey: string;
     connectedServicesBindingsRaw: unknown;
+    previousMaterializedRoot?: string;
     sessionDirectory?: string | null;
     sessionId?: string;
   }>,
@@ -758,6 +759,7 @@ export async function materializeDaemonConnectedServicesForExecutionRun(
     pid: body.pid,
     materializationKey: body.materializationKey,
     connectedServicesBindingsRaw: body.connectedServicesBindingsRaw,
+    ...(body.previousMaterializedRoot ? { previousMaterializedRoot: body.previousMaterializedRoot } : {}),
     ...(body.sessionDirectory !== undefined ? { sessionDirectory: body.sessionDirectory } : {}),
     ...(body.sessionId ? { sessionId: body.sessionId } : {}),
   }, {

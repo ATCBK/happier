@@ -75,6 +75,24 @@ function legacyQuotaSnapshot(): ConnectedServiceQuotaSnapshotV1 {
 }
 
 describe('selectProviderUsageDisplaySnapshot', () => {
+  it('preserves structured credit facts through the native account usage display projection', () => {
+    const usage = {
+      ...accountUsageSnapshot(),
+      recoveryCredits: { kind: 'usage_limit_resets' as const, availableCount: 0, credits: [
+        { kind: 'usage_limit_reset' as const, status: 'unknown' as const, providerCreditId: 'saved' },
+      ] },
+      recoveryCreditDetails: { saved: {
+        remainingCount: 2, appliesToProviderLimitIds: ['seven_day'], unavailableReason: 'paused' as const,
+      } },
+    };
+    const source = selectProviderUsageDisplaySnapshot({
+      providerId: 'codex', metadataRecordIds: [usage.recordId],
+      accountUsageSnapshotsByRecordId: { [usage.recordId]: usage },
+      connectedServiceProfileRef: null, connectedServiceQuotaView: null,
+    });
+    expect(source?.snapshot).toMatchObject({ recoveryCreditDetails: usage.recoveryCreditDetails });
+  });
+
   it('projects native account usage metadata into a non-connected provider usage display snapshot', () => {
     const usage = accountUsageSnapshot();
 

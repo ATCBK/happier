@@ -236,6 +236,26 @@ describe("publicShareRoutes plaintext sessions (integration)", () => {
             expect(messages.statusCode).toBe(200);
             const seqs = messages.json().messages.map((message: { seq: number }) => message.seq);
             expect(seqs).toEqual([3, 2, 1]);
+            expect(messages.json().hasMore).toBe(false);
+            for (let seq = 4; seq <= 150; seq += 1) {
+                await db.sessionMessage.create({ data: {
+                    sessionId: session.id, seq, messageRole: "user",
+                    content: { t: "plain", v: { role: "user", content: { type: "text", text: `message ${seq}` } } },
+                } });
+            }
+            const exactPage = await app.inject({ method: "GET", url: `/v1/public-share/${encodeURIComponent(token)}/messages` });
+            expect(exactPage.json().messages).toHaveLength(150);
+            expect(exactPage.json().hasMore).toBe(false);
+            await db.sessionMessage.create({ data: {
+                sessionId: session.id, seq: 151, messageRole: "user",
+                content: { t: "plain", v: { role: "user", content: { type: "text", text: "newest message" } } },
+            } });
+            const partialPage = await app.inject({ method: "GET", url: `/v1/public-share/${encodeURIComponent(token)}/messages` });
+            expect(partialPage.json().hasMore).toBe(true);
+            expect(partialPage.json().messages).toHaveLength(150);
+            expect(partialPage.json().messages[0].seq).toBe(151);
+            expect(partialPage.json().messages.at(-1).seq).toBe(2);
+
         } finally {
             await app.close();
         }

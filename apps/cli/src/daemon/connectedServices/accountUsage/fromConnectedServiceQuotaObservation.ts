@@ -80,6 +80,7 @@ export function buildProviderAccountUsageSnapshotFromConnectedServiceQuotaObserv
     accountLabel: snapshot.accountLabel,
     ...(snapshot.subscription ? { subscription: snapshot.subscription } : {}),
     ...(snapshot.recoveryCredits ? { recoveryCredits: snapshot.recoveryCredits } : {}),
+    ...(snapshot.recoveryCreditDetails ? { recoveryCreditDetails: snapshot.recoveryCreditDetails } : {}),
     meters: snapshot.meters,
   });
 }

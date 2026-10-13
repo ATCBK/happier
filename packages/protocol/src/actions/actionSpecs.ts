@@ -567,8 +567,13 @@ const SessionHandoffInputSchema = z.object({
   targetMachineId: z.string().min(1).optional(),
   targetPath: z.string().min(1).optional(),
   targetSessionStorageMode: z.enum(['direct', 'persisted']).optional(),
+  stateTransfer: z.enum(['transfer', 'existing']).optional(),
   workspaceTransfer: SessionHandoffWorkspaceTransferSchema.optional(),
-}).passthrough();
+}).passthrough().superRefine((value, context) => {
+  if (value.stateTransfer === 'existing' && value.workspaceTransfer?.enabled === true) {
+    context.addIssue({ code: z.ZodIssueCode.custom, path: ['workspaceTransfer'], message: 'Existing session state requires workspace copying to be disabled' });
+  }
+});
 
 const SessionSpawnTerminalInputSchema = z.object({
   mode: z.enum(['plain', 'tmux', 'zellij', 'herdr', 'windows_terminal', 'windows_console']).optional(),
@@ -947,7 +952,8 @@ const SessionUserActionAnswerInputSchema = z.object({
 
 const SessionModeSetInputSchema = z.object({
   sessionId: z.string().min(1).optional(),
-  modeId: z.string().min(1),
+  // An empty id clears the override; native `default` remains a provider mode.
+  modeId: z.string(),
 }).passthrough();
 
 const SessionPrimaryTargetInputSchema = z.object({
@@ -1838,7 +1844,7 @@ export const ACTION_SPECS: readonly ActionSpec[] = Object.freeze([
       voice_action_block: false,
       session_agent: false,
       mcp: false,
-      cli: false,
+      cli: true,
     },
     inputHints: {
       title: 'Hand off a session',
@@ -1846,6 +1852,10 @@ export const ACTION_SPECS: readonly ActionSpec[] = Object.freeze([
       fields: [
         { path: 'sessionId', title: 'Session id', widget: 'text' },
         { path: 'targetMachineId', title: 'Target machine id', widget: 'text' },
+        { path: 'stateTransfer', title: 'Session state', widget: 'select', options: [
+          { value: 'transfer', label: 'Transfer session state' },
+          { value: 'existing', label: 'Use existing target state' },
+        ] },
       ],
     },
     inputSchema: SessionHandoffInputSchema,

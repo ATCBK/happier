@@ -369,6 +369,7 @@ vi.mock('@/components/ui/lists/flashListCompat/SessionListVirtualizedList', asyn
     SessionListVirtualizedList: ((await import('@/dev/testkit/mocks/flashList')) as typeof import('@/dev/testkit/mocks/flashList')).createCapturingFlashListMock({
         componentName: 'FlashListCompat',
         renderItems: true,
+        memoizeItems: true,
     }).module.FlashList,
 }));
 
@@ -495,7 +496,7 @@ installSessionShellCommonModuleMocks({
         return createModalModuleMock().module;
     },
     storage: async (importOriginal) => {
-        const { createStorageModuleMock, createStorageStoreMock } = await import('@/dev/testkit/mocks/storage');
+        const { createStorageModuleMock, createReactiveStorageStoreMock } = await import('@/dev/testkit/mocks/storage');
         return createStorageModuleMock({
             importOriginal,
             overrides: {
@@ -535,7 +536,7 @@ installSessionShellCommonModuleMocks({
                 },
                 useSessionFolderAssignmentsBySessionKey: () => sessionFolderAssignmentsBySessionKey,
                 useLocalSettingMutable: useLocalSettingMutableMock,
-                storage: createStorageStoreMock(storageState),
+                storage: createReactiveStorageStoreMock(storageState),
             },
         });
     },
@@ -805,6 +806,9 @@ function findRecordedGestureDetectors(
         String(node.type) === 'GestureDetector' && Boolean(findGestureByKind(node.props.gesture, 'pan'))
     );
 }
+
+// Load the real owner after installing boundaries, outside the first behavior timeout.
+await import('./SessionsList');
 
 describe('SessionsList (native virtualization)', () => {
     beforeEach(async () => {
@@ -1829,6 +1833,33 @@ describe('SessionsList (native virtualization)', () => {
         expect(updatedData).toBe(initialData);
         expect(updatedRow.props.rowModel).toBe(initialRow.props.rowModel);
         expect(updatedRow.props.rowAttentionAnimationEnabled).toBe(initialRow.props.rowAttentionAnimationEnabled);
+    });
+
+
+    it('activates an already mounted large-web row when viewability changes and receives completion', async () => {
+        platformOs = 'web';
+        const header = expectPresent(mockVisibleSessionListViewData?.find((item) => item.type === 'header'), 'expected header');
+        mockVisibleSessionListViewData = [header, ...Array.from({ length: 145 }, (_, index) => ({
+            type: 'session', session: { ...sessionA, id: `sess_visible_${index}` },
+            groupKey, groupKind: 'date', serverId: 'server_a', serverName: 'Server A',
+        }))];
+        const screen = await renderSessionsList();
+        const list = expectPresent(screen.root.findAll((node) => String(node.type) === 'FlashListCompat')[0], 'expected virtualized web list');
+        const target = expectPresent(list.props.data.find((item: SessionListViewItem) => item.type === 'session' && item.session.id === 'sess_visible_80'), 'expected target');
+        expect(findSessionItem(screen, 'sess_visible_80')?.props.rowModel.session.thinking).toBe(false);
+        await act(async () => list.props.onViewableItemsChanged({ changed: [], viewableItems: [{ item: target, index: 81, isViewable: true, key: 'session:server_a:sess_visible_80' }] }));
+        const { storage } = await import('@/sync/domains/state/storage');
+        const previousState = storage.getState();
+        try {
+            const working = { ...sessionA, id: 'sess_visible_80', active: true, activeAt: Date.now(), thinking: true, thinkingAt: Date.now(), presence: 'online' as const, latestTurnStatus: 'in_progress' as const, latestTurnStatusObservedAt: Date.now() };
+            await act(async () => storage.setState((state) => ({ sessionListRenderables: { ...state.sessionListRenderables, sess_visible_80: working } })));
+            expect(findSessionItem(screen, 'sess_visible_80')?.props.rowModel.session.thinking).toBe(true);
+            await act(async () => storage.setState((state) => ({ sessionListRenderables: { ...state.sessionListRenderables, sess_visible_80: { ...working, thinking: false, latestTurnStatus: 'completed', latestTurnStatusObservedAt: Date.now() } } })));
+            expect(findSessionItem(screen, 'sess_visible_80')?.props.rowModel.session.thinking).toBe(false);
+            expect(findSessionItem(screen, 'sess_visible_80')?.props.rowModel.status.state).not.toBe('thinking');
+        } finally {
+            await act(async () => storage.setState(previousState, true));
+        }
     });
 
     it('keeps row action props stable when FlashList re-renders the same item', async () => {

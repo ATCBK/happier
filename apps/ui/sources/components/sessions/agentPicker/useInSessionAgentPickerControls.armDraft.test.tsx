@@ -3,8 +3,6 @@ import { act } from 'react-test-renderer';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
 import { renderHook } from '@/dev/testkit/hooks/renderHook';
-import { buildBackendTargetKey } from '@happier-dev/protocol';
-import type { AgentId } from '@/agents/registry/registryCore';
 import type { ResolvedBackendCatalogEntry } from '@/agents/backendCatalog/getResolvedBackendCatalogEntries';
 import type { ServerAccountScope } from '@/sync/domains/scope/serverAccountScope';
 import { existingSessionDraftSemanticValues } from '@/sync/domains/input/drafts/existingSessionDraftSemanticValues';
@@ -49,16 +47,16 @@ let scopeSequence = 0;
 let SCOPE: ServerAccountScope = { serverId: 'server-1', accountId: 'account-0' };
 
 function entry(
-    agentId: AgentId,
+    agentId: string,
     overrides: Partial<ResolvedBackendCatalogEntry> = {},
 ): ResolvedBackendCatalogEntry {
     return {
-        target: { kind: 'builtInAgent', agentId },
-        targetKey: buildBackendTargetKey({ kind: 'builtInAgent', agentId }),
+        target: { kind: 'builtInAgent', agentId } as ResolvedBackendCatalogEntry['target'],
+        targetKey: `agent:${agentId}`,
         family: 'builtInAgent',
-        providerAgentId: agentId,
-        builtInAgentId: agentId,
-        iconAgentId: agentId,
+        providerAgentId: agentId as ResolvedBackendCatalogEntry['providerAgentId'],
+        builtInAgentId: agentId as ResolvedBackendCatalogEntry['builtInAgentId'],
+        iconAgentId: agentId as ResolvedBackendCatalogEntry['iconAgentId'],
         title: agentId === 'claude' ? 'Claude Code' : agentId,
         subtitle: null,
         ...overrides,
@@ -146,15 +144,15 @@ async function armTarget(
     });
 }
 
+function readPersistedArm(): SessionArmedAgentContinuation | undefined {
+    return existingSessionDraftSemanticValues.read(SCOPE, 'session-1', 'routing.agentContinuation');
+}
+
 function readTargetOptionIds(hook: Awaited<ReturnType<typeof renderControls>>): string[] {
     return hook.getCurrent()
         .composeAgentPickerOptions([CURRENT_AGENT_ROW])
         .map((option) => option.id)
         .filter((id) => id !== CURRENT_AGENT_ROW.id);
-}
-
-function readPersistedArm(): SessionArmedAgentContinuation | undefined {
-    return existingSessionDraftSemanticValues.read(SCOPE, 'session-1', 'routing.agentContinuation');
 }
 
 function armedIntentFor(targetAgentId: string) {
@@ -191,6 +189,32 @@ describe('useInSessionAgentPickerControls arm draft', () => {
                 inspections: params.payload.selections.map(() => AVAILABLE),
             })
         ));
+    });
+
+    it('restores configured B only while its exact configured source remains A', async () => {
+        const configured = (id: string) => entry('customAcp', {
+            target: { kind: 'configuredAcpBackend', backendId: id }, targetKey: `acpBackend:${id}`,
+            family: 'configuredAcpBackend', builtInAgentId: null, title: id,
+        });
+        const props = {
+            currentAgentId: 'customAcp', entries: [configured('a'), configured('b'), configured('c')],
+            source: { ...supportedSource, currentBackendTargetKey: 'acpBackend:a' },
+        };
+        const first = await renderControls(props);
+        await armTarget(first, 'acpBackend:b');
+        const intent = first.getCurrent().armedContinuation;
+        expect(intent?.selection.backendTarget).toEqual({ kind: 'configuredAcpBackend', backendId: 'b' });
+        await first.unmount();
+        const restored = await renderControls(props);
+        await act(async () => restored.getCurrent().onAgentPickerIntent());
+        await act(async () => { await Promise.resolve(); });
+        expect(restored.getCurrent().armedContinuation).toEqual(intent);
+        await restored.unmount();
+        const stale = await renderControls({ ...props, source: { ...props.source, currentBackendTargetKey: 'acpBackend:c' } });
+        await act(async () => stale.getCurrent().onAgentPickerIntent());
+        await act(async () => { await Promise.resolve(); });
+        expect(stale.getCurrent().armedContinuation).toBeNull();
+        expect(readPersistedArm()).toBeUndefined();
     });
 
     it('keeps the armed Agent across a remount, exactly as the draft text already survives one', async () => {
