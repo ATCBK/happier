@@ -1,13 +1,30 @@
 import assert from 'node:assert/strict';
 import { test } from 'node:test';
-import { readFile, rm, writeFile } from 'node:fs/promises';
-import { join } from 'node:path';
+import { access, mkdir, readFile, rm, symlink, writeFile } from 'node:fs/promises';
+import { dirname, join, resolve } from 'node:path';
+import { createRequire } from 'node:module';
 import { fileURLToPath, pathToFileURL } from 'node:url';
 import { execFile } from 'node:child_process';
 import { promisify } from 'node:util';
 
 import { buildSourceRuntimeBundle, captureSourceWebBuildInputs, setBundleReadOnly } from './build_source_runtime.mjs';
 import { createTempFixture } from '../testkit/core/temp_fixture.mjs';
+import { runServerRuntimeMigration } from '../runtime/launch/runServerRuntimeMigration.mjs';
+import { resolveServerRuntimeLaunchSpec } from '../runtime/launch/resolveServerRuntimeLaunchSpec.mjs';
+
+async function assertEmittedCodeClosure(t, outputDir, runtime) {
+  const metafile = JSON.parse(await readFile(join(runtime.runtimeDir, 'metafile.json'), 'utf8'));
+  const outputs = Object.entries(metafile.outputs);
+  assert.ok(outputs.length > 0);
+  for (const [path, output] of outputs) {
+    // The producer's esbuild working directory is its now-retired captured view.
+    const bytes = await readFile(resolve(outputDir, 'workspace', path));
+    assert.equal(bytes.length, output.bytes, `retained output ${path}`);
+  }
+  await access(runtime.entrypoint);
+  await assert.rejects(access(join(outputDir, 'workspace')), { code: 'ENOENT' });
+  t.diagnostic(`Retained ${outputs.length} emitted code files after input capture retirement`);
+}
 
 test('source daemon serves every bundled packaged Resource through admitted activation roots', async t => {
   const fixture = await createTempFixture(t, { prefix: 'happier-source-resource-composition-', registerCleanup: false });
@@ -41,6 +58,7 @@ test('source daemon serves every bundled packaged Resource through admitted acti
   `);
   const outputDir = fixture.path('runtime');
   const runtime = await buildSourceRuntimeBundle({ repoDir, outputDir, component: 'daemon' });
+  await assertEmittedCodeClosure(t, outputDir, runtime);
   const probe = fixture.path('probe.mjs');
   await writeFile(probe, `
     import assert from 'node:assert/strict';
@@ -109,4 +127,57 @@ test('source daemon serves every bundled packaged Resource through admitted acti
   assert.equal(counts.pluginCount, plugins.length);
   assert.ok(counts.resourceCount > 0);
   t.diagnostic(`Composed ${counts.pluginCount} bundled plugins and ${counts.resourceCount} packaged Resources`);
+});
+
+test('source server retains executable migration wrappers and the complete emitted code graph', async t => {
+  const fixture = await createTempFixture(t, { prefix: 'happier-source-migration-closure-', registerCleanup: false });
+  t.after(async () => {
+    await setBundleReadOnly(fixture.root, false);
+    await fixture.cleanup();
+  });
+  const repoDir = fixture.path('repo');
+  const serverDir = join(repoDir, 'apps/server');
+  await Promise.all(['sources', 'scripts', 'node_modules'].map(path => mkdir(join(serverDir, path), { recursive: true })));
+  await writeFile(join(serverDir, 'package.json'), JSON.stringify({ name: '@happier-dev/server', type: 'module' }));
+  await writeFile(join(serverDir, 'tsconfig.json'), '{}');
+  // Shared and lazy code force closure beyond the two entry files. These are
+  // producer input fixtures, not mocked compilation or migration consumers.
+  await writeFile(join(serverDir, 'sources/shared.ts'), 'export const marker = "retained-code";');
+  await writeFile(join(serverDir, 'sources/lazy.ts'), 'export const lazy = "retained-lazy";');
+  const entry = `export { marker } from './shared'; export const load = () => import('./lazy');`;
+  await writeFile(join(serverDir, 'sources/main.ts'), entry);
+  await writeFile(join(serverDir, 'sources/main.light.ts'), entry);
+  await writeFile(join(serverDir, 'scripts/migrate.full.deploy.ts'), `
+    import { marker } from '../sources/shared';
+    if (marker !== 'retained-code') throw new Error('missing shared migration code');
+  `);
+  await writeFile(join(serverDir, 'scripts/migrate.sqlite.deploy.ts'), `
+    import { marker } from '../sources/shared';
+    export async function runSqliteMigrationDeploy() {
+      if (marker !== 'retained-code') throw new Error('missing shared migration code');
+    }
+  `);
+  await symlink(dirname(createRequire(import.meta.url).resolve('esbuild/package.json')),
+    join(serverDir, 'node_modules/esbuild'), process.platform === 'win32' ? 'junction' : 'dir');
+  for (const [dbProvider, serverComponent] of [['sqlite', 'happier-server-light'], ['postgres', 'happier-server']]) {
+    const outputDir = fixture.path(dbProvider);
+    const runtime = await buildSourceRuntimeBundle({ repoDir, outputDir, component: 'server', serverComponent, dbProvider });
+    await assertEmittedCodeClosure(t, outputDir, runtime);
+    assert.equal(runtime.migration.command, join(outputDir, 'apps/server/scripts/migrate.mjs'));
+    assert.equal(await readFile(runtime.migration.command, 'utf8'), "export * from './migrate.js';\n");
+    const loaded = await import(pathToFileURL(runtime.entrypoint));
+    assert.equal(loaded.marker, 'retained-code');
+    assert.equal((await loaded.load()).lazy, 'retained-lazy');
+    const serverLaunchSpec = resolveServerRuntimeLaunchSpec({ sourceRuntimeLaunch: runtime });
+    await runServerRuntimeMigration({ serverLaunchSpec, env: process.env, children: [] });
+    // Falsify the specific EH failure at the real consumer without changing
+    // shared source or touching a retained user/Stack bundle.
+    const wrapper = await readFile(runtime.migration.command);
+    await rm(runtime.migration.command);
+    await assert.rejects(runServerRuntimeMigration({ serverLaunchSpec, env: process.env, children: [] }), error =>
+      error.code === 'ERUNTIMESERVERMIGRATIONUNAVAILABLE'
+      && error.reason === 'unusable_artifact_migration_command' && error.cause?.code === 'ENOENT');
+    await writeFile(runtime.migration.command, wrapper);
+    t.diagnostic(`${dbProvider}: migrate.mjs runs; removing it reproduces the reported ENOENT`);
+  }
 });
