@@ -1,4 +1,8 @@
 {
+  "brand": {
+    "iconResourceId": "brand-icon",
+    "monochrome": true
+  },
   "contributes": {
     "accountCollections": [],
     "actions": [],
@@ -156,8 +160,16 @@
         "websiteUrl": "https://z.ai"
       }
     ],
+    "registrySources": [],
     "requestInterceptors": [],
-    "resources": [],
+    "resources": [
+      {
+        "contentType": "image/png",
+        "id": "brand-icon",
+        "kind": "asset",
+        "path": "assets/brand.png"
+      }
+    ],
     "roles": [],
     "scmBackends": [],
     "scmHostingProviders": [],
