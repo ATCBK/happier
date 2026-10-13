@@ -2,8 +2,16 @@ import { describe, expect, it } from 'vitest';
 import type { PluginApi, PluginInvocationContext } from '@happier-dev/plugin-sdk';
 import type { ActionHandler } from '@happier-dev/plugin-sdk/actions';
 import { parsePluginManifest } from '@happier-dev/plugin-sdk/manifest';
+import { defineMachineProvisionerReconciliationSchemas } from '@happier-dev/plugin-sdk/machine-provisioners';
 import * as exports from './index.js';
 import { PLUGIN_MANIFEST, ROLE_SCHEMAS, prepareStoredSchemas } from './manifest.js';
+import { BoatLaunchV1Schema, BoatNativeOperationV1Schema, BoatResourceV1Schema } from './machine/schemas.js';
+
+const DESTROY_RESULT_SCHEMA = defineMachineProvisionerReconciliationSchemas({
+  launch: BoatLaunchV1Schema,
+  resource: BoatResourceV1Schema,
+  nativeOperation: BoatNativeOperationV1Schema,
+}).destroyResult;
 
 async function activated() {
   const handlers = new Map<string, ActionHandler>();
@@ -85,9 +93,13 @@ describe('Boat machine provisioner contract', () => {
   it('returns accepted destroy custody and settles only from that retained operation', async () => {
     const runtime = await activated();
     const accepted = await runtime.handlers.get('destroy')!({ resource: { sandboxId: 'bx_23456789' } }, runtime.context);
-    expect(accepted).toMatchObject({ kind: 'accepted', nativeOperationRef: { value: {
+    expect(DESTROY_RESULT_SCHEMA.parse(accepted)).toMatchObject({ kind: 'accepted', nativeOperationRef: { value: {
       kind: 'delete', operationId: 'bdop_aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa', sandboxId: 'bx_23456789',
     } } });
+    expect(DESTROY_RESULT_SCHEMA.safeParse({
+      ...(accepted as Record<string, unknown>),
+      unknownField: true,
+    }).success).toBe(false);
     const nativeOperation = (accepted as { nativeOperationRef: { value: unknown } }).nativeOperationRef.value;
     expect(await runtime.handlers.get('destroy')!({ nativeOperation }, runtime.context)).toEqual({ kind: 'confirmed' });
     expect(runtime.requests.filter(request => request.method === 'DELETE')).toHaveLength(1);

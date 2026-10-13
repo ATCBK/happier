@@ -143,8 +143,9 @@ export function createBoatNativeClient(options: BoatNativeClientOptions = {}) {
       const launch = BoatLaunchV1Schema.parse(input.launch);
       if (!input.idempotencyKey.trim() || input.idempotencyKey.length > 255) return { kind: 'refused', code: 'invalid_request' };
       if (launch.source.kind === 'named-snapshot') {
+        const source = launch.source;
         const listed = parseBoatValue(snapshotsResponse, await request('/named-snapshots'));
-        if (!listed.snapshots.some(value => value.name === launch.source.name && value.status === 'ready')) {
+        if (!listed.snapshots.some(value => value.name === source.name && value.status === 'ready')) {
           return { kind: 'refused', code: 'native_snapshot_not_ready' };
         }
       }

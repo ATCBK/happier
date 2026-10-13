@@ -99,9 +99,6 @@ export const PLUGIN = definePlugin({
       inputSchema: reconciliation.input, resultSchema: reconciliation.result,
       async run(input, context) {
         const native = runtime(context);
-        if ('nativeOperation' in input && input.nativeOperation.kind === 'delete') {
-          return { kind: 'unknown' as const, recovery: { reference: input.nativeOperation.operationId, reason: 'native_destroy_custody_requires_shared_owner' } };
-        }
         const operation = 'nativeOperation' in input ? input.nativeOperation : {
           kind: 'acquire' as const,
           idempotencyKey: input.correlation.managedId,
@@ -115,6 +112,9 @@ export const PLUGIN = definePlugin({
           sourceKind: input.correlation.launch.source.kind,
           requestedAtMs: context.invokedAtMs,
         };
+        if (operation.kind === 'delete') {
+          return { kind: 'unknown' as const, recovery: { reference: operation.operationId, reason: 'native_destroy_custody_requires_shared_owner' } };
+        }
         try {
           const result = await native.reconcileAcquire(operation);
           if (result.kind === 'bound') return { kind: 'bound' as const, resource: resourceRef(result.resource) };
@@ -173,6 +173,7 @@ export const PLUGIN = definePlugin({
         const connection = await runtime(context).bootstrap(input.resource, input.bootstrapPublicKey);
         const carrier = await resolveMachineProvisionerSshBootstrap({ exec: context.services.exec, signal: context.signal,
           connection: { address: connection.address, user: connection.username, port: connection.port }, credentialRef: input.credentialRef });
+        if (carrier.kind !== 'ssh') throw new Error('native_ssh_host_key_mismatch');
         const expected = connection.hostKey.trim().split(/\s+/u).slice(0, 2).join(' ');
         const observed = carrier.hostKeyEvidence.hostKey.trim().split(/\s+/u).slice(-2).join(' ');
         if (expected !== observed) throw new Error('native_ssh_host_key_mismatch');
