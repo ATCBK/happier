@@ -2,8 +2,8 @@ import { inTx, type Tx } from '@/storage/inTx';
 import { readSnapshotWithCurrentAdmission } from '@/storage/readSnapshotWithCurrentAdmission';
 import type { SessionAccessAuthentication } from '@/app/session/access/sessionAccessAuthentication';
 import type { SessionReportsToSetResultV1, SessionReportsToOptionsV1 } from '@happier-dev/protocol';
-import { resolveEffectiveSessionAccess } from '@/app/session/access/sessionAccess';
-import { evaluateCurrentSessionContextPairInTx, mayInjectSessionContextInTx } from '@/app/session/access/sessionContextInjection';
+import { resolveEffectiveSessionAccess, resolveEffectiveSessionAccessForSessionsInTx, type EffectiveSessionAccess } from '@/app/session/access/sessionAccess';
+import { evaluateCurrentSessionContextPairInTx, mayInjectSessionContextInTx, mayInjectSessionContextForDestinationsInTx } from '@/app/session/access/sessionContextInjection';
 import { acquireSessionReportsToHomeFenceInTx } from './sessionReportsToFence';
 import { acquireSessionAccountCursorLocksInTx } from '@/app/session/changeTracking/acquireSessionAccountCursorLocksInTx';
 import { resolveCurrentSessionRecipientAccountIdsBySessionInTx } from '@/app/session/access/sessionRecipients';
@@ -38,6 +38,14 @@ const forbidden = (reason: 'read' | 'input' | 'pairwise'): SessionReportsToSetRe
 
 type ReportsToAdmission = Readonly<{ ok: true }> | Extract<SessionReportsToSetResult, { ok: false }>;
 
+function evaluateReportsToEndpointAdmission(accountActive: boolean, access: readonly (EffectiveSessionAccess | null | undefined)[],
+    sessionId: string, leadSessionId: string | null): ReportsToAdmission {
+    if (!accountActive || access.some(value => value?.capabilities.readTranscript !== true)) return forbidden('read');
+    if (access.some(value => value?.capabilities.submitAgentInput !== true)) return forbidden('input');
+    if (leadSessionId === sessionId) return { ok: false, error: 'reports_to_cycle' };
+    return { ok: true };
+}
+
 /** The same endpoint and pairwise owner serves read-only options and final mutation. */
 async function readReportsToAdmissionInTx(tx: Tx, input: Omit<SessionReportsToSetInput, 'expectedLeadSessionId'>,
     existingLeadSessionId: string | null): Promise<ReportsToAdmission> {
@@ -48,9 +56,8 @@ async function readReportsToAdmissionInTx(tx: Tx, input: Omit<SessionReportsToSe
     const access = await Promise.all(endpointIds.map((sessionId) => resolveEffectiveSessionAccess(tx, {
         accountId: input.accountId, sessionId, authentication: input.authentication,
     })));
-    if (access.some((value) => value?.capabilities.readTranscript !== true)) return forbidden('read');
-    if (access.some((value) => value?.capabilities.submitAgentInput !== true)) return forbidden('input');
-    if (input.leadSessionId === input.sessionId) return { ok: false, error: 'reports_to_cycle' };
+    const endpoints = evaluateReportsToEndpointAdmission(true, access, input.sessionId, input.leadSessionId);
+    if (!endpoints.ok) return endpoints;
     if (input.leadSessionId !== null) {
         const pair = await mayInjectSessionContextInTx(tx, {
             configuringAccountId: input.accountId, sourceSessionId: input.sessionId,
@@ -61,18 +68,59 @@ async function readReportsToAdmissionInTx(tx: Tx, input: Omit<SessionReportsToSe
     return { ok: true };
 }
 
-async function reportsToWouldCycleInTx(tx: Tx, sessionId: string, leadSessionId: string): Promise<boolean> {
-    const visited = new Set([sessionId]);
-    let ancestor: string | null = leadSessionId;
-    while (ancestor !== null) {
-        if (visited.has(ancestor)) return true;
-        visited.add(ancestor);
-        const parent: { leadSessionId: string } | null = await tx.sessionReportsTo.findUnique({
-            where: { sessionId: ancestor }, select: { leadSessionId: true },
-        });
-        ancestor = parent?.leadSessionId ?? null;
+/** Same endpoint and pairwise decisions as final mutation, with page-oriented loading. */
+async function readReportsToCandidateAdmissionsInTx(tx: Tx, input: Readonly<{
+    accountId: string; sessionId: string; candidateSessionIds: readonly string[]; authentication: SessionAccessAuthentication;
+}>): Promise<ReadonlyMap<string, ReportsToAdmission>> {
+    const admissions = new Map<string, ReportsToAdmission>();
+    const candidateIds = [...new Set(input.candidateSessionIds)];
+    if (candidateIds.length === 0) return admissions;
+    const account = await tx.account.findUnique({ where: { id: input.accountId }, select: { status: true } });
+    if (account?.status !== 'active') return new Map(candidateIds.map(id => [id, forbidden('read')]));
+    const access = await resolveEffectiveSessionAccessForSessionsInTx(tx, {
+        ...input, sessionIds: [input.sessionId, ...candidateIds],
+    });
+    const pairCandidates: string[] = [];
+    for (const id of candidateIds) {
+        const admission = evaluateReportsToEndpointAdmission(true, [access.get(input.sessionId), access.get(id)], input.sessionId, id);
+        admissions.set(id, admission);
+        if (admission.ok) pairCandidates.push(id);
     }
-    return false;
+    const pairs = await mayInjectSessionContextForDestinationsInTx(tx, {
+        configuringAccountId: input.accountId, sourceSessionId: input.sessionId,
+        destinationSessionIds: pairCandidates, authentication: input.authentication,
+    });
+    for (const id of pairCandidates) if (!pairs.get(id)?.ok) admissions.set(id, forbidden('pairwise'));
+    return admissions;
+}
+
+async function reportsToWouldCycleInTx(tx: Tx, sessionId: string, leadSessionId: string): Promise<boolean> {
+    return (await readReportsToCyclesInTx(tx, sessionId, [leadSessionId])).has(leadSessionId);
+}
+
+/** Walk only candidate ancestry, sharing already-read ancestors across the page. */
+async function readReportsToCyclesInTx(tx: Tx, sessionId: string, leadSessionIds: readonly string[]): Promise<ReadonlySet<string>> {
+    const parents = new Map<string, string | null>();
+    let frontier = [...new Set(leadSessionIds)].filter(id => id !== sessionId);
+    while (frontier.length > 0) {
+        const edges = await tx.sessionReportsTo.findMany({
+            where: { sessionId: { in: frontier } }, select: { sessionId: true, leadSessionId: true },
+        });
+        for (const id of frontier) parents.set(id, null);
+        for (const edge of edges) parents.set(edge.sessionId, edge.leadSessionId);
+        frontier = [...new Set(edges.map(edge => edge.leadSessionId))].filter(id => id !== sessionId && !parents.has(id));
+    }
+    const cycles = new Set<string>();
+    for (const leadSessionId of leadSessionIds) {
+        const visited = new Set([sessionId]);
+        let ancestor: string | null = leadSessionId;
+        while (ancestor !== null) {
+            if (visited.has(ancestor)) { cycles.add(leadSessionId); break; }
+            visited.add(ancestor);
+            ancestor = parents.get(ancestor) ?? null;
+        }
+    }
+    return cycles;
 }
 
 /** Reads only requested candidates; no grants, keys, runtime state or relation edges are written. */
@@ -84,15 +132,16 @@ export async function readSessionReportsToOptions(input: Readonly<{
         const existing = sourceAccess?.capabilities.readTranscript === true
             ? await tx.sessionReportsTo.findUnique({ where: { sessionId: input.sessionId }, select: { leadSessionId: true } }) : null;
         const currentLeadSessionId = existing?.leadSessionId ?? null;
+        const admissions = await readReportsToCandidateAdmissionsInTx(tx, input);
+        const cycles = await readReportsToCyclesInTx(tx, input.sessionId,
+            [...admissions].filter(([, admission]) => admission.ok).map(([id]) => id));
         const candidates: SessionReportsToOptionsV1['candidates'] = [];
         for (const sessionId of [...new Set(input.candidateSessionIds)]) {
-            const admission = await readReportsToAdmissionInTx(tx, {
-                accountId: input.accountId, sessionId: input.sessionId, leadSessionId: sessionId, authentication: input.authentication,
-            }, currentLeadSessionId);
+            const admission = admissions.get(sessionId)!;
             if (!admission.ok) {
                 candidates.push({ sessionId, allowed: false,
                     reason: admission.error === 'reports_to_forbidden' ? admission.reason : 'cycle' });
-            } else if (await reportsToWouldCycleInTx(tx, input.sessionId, sessionId)) {
+            } else if (cycles.has(sessionId)) {
                 candidates.push({ sessionId, allowed: false, reason: 'cycle' });
             } else {
                 candidates.push({ sessionId, allowed: true });
@@ -105,10 +154,13 @@ export async function readSessionReportsToOptions(input: Readonly<{
         const lead = canReadSource && captured.currentLeadSessionId !== null
             ? await resolveEffectiveSessionAccess(tx, { ...input, sessionId: captured.currentLeadSessionId }) : null;
         const currentLeadSessionId = lead?.capabilities.readTranscript === true ? captured.currentLeadSessionId : null;
+        const admissions = await readReportsToCandidateAdmissionsInTx(tx, {
+            ...input, candidateSessionIds: captured.candidates.filter(candidate => candidate.allowed).map(candidate => candidate.sessionId),
+        });
         const candidates: SessionReportsToOptionsV1['candidates'] = [];
         for (const candidate of captured.candidates) {
             if (!candidate.allowed) { candidates.push(candidate); continue; }
-            const current = await readReportsToAdmissionInTx(tx, { ...input, leadSessionId: candidate.sessionId }, currentLeadSessionId);
+            const current = admissions.get(candidate.sessionId)!;
             candidates.push(current.ok ? candidate : { sessionId: candidate.sessionId, allowed: false,
                 reason: current.error === 'reports_to_forbidden' ? current.reason : 'cycle' });
         }

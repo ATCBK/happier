@@ -138,7 +138,7 @@ describe("pendingMessageService", () => {
             $queryRawUnsafe: vi.fn(async () => [{ id: 's1' }]),
             session: {
                 findUnique: vi.fn(async () => createPendingSessionFixture()),
-                findMany: vi.fn(async () => [{ id: 's1', ...createPendingSessionFixture(), account: { status: 'active' } }]),
+                findMany: vi.fn(async () => [{ ...createPendingSessionFixture(), account: { status: 'active' } }]),
                 update: vi.fn(async () => ({ pendingQueueSeq: 1 })),
             },
             sessionReportsTo: { findMany: vi.fn(async () => []) },

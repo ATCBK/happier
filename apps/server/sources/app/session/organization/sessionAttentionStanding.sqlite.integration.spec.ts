@@ -1,13 +1,9 @@
 import { randomUUID } from "node:crypto";
 
 import { SessionOrganizationSnapshotResponseSchema } from "@happier-dev/protocol";
-import { afterAll, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
+import { Expo, type ExpoPushMessage } from "expo-server-sdk";
+import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import { z } from "zod";
-
-const scheduleAccountActivityBadgeRefresh = vi.hoisted(() => vi.fn());
-vi.mock("@/app/activity/refreshAccountActivityBadgePushes", () => ({
-    scheduleAccountActivityBadgeRefresh,
-}));
 
 import { registerSessionOrganizationRoutes } from "@/app/api/routes/session/registerSessionOrganizationRoutes";
 import { createRouteTestBuilder } from "@/app/api/testkit/routeTestBuilder";
@@ -19,6 +15,13 @@ import { createLightSqliteHarness, type LightSqliteHarness } from "@/testkit/lig
 import { setSessionAttentionStandingInTx } from "./organizationMutations";
 
 type OrganizationAccount = Readonly<{ accountId: string; sessionId: string }>;
+const deliveredMessages: ExpoPushMessage[] = [];
+
+async function createBadgePushToken(accountId: string): Promise<string> {
+    const token = `ExponentPushToken[${accountId}]`;
+    await db.accountPushToken.create({ data: { accountId, token } });
+    return token;
+}
 
 function createStandingRouteBuilder() {
     return createRouteTestBuilder({
@@ -70,6 +73,12 @@ describe("session attention standings on SQLite", () => {
     let harness: LightSqliteHarness;
 
     beforeAll(async () => {
+        // Only Expo's network send is replaced. Recipient selection, badge
+        // counting, timer coalescing and the real SQLite transaction stay real.
+        vi.spyOn(Expo.prototype, "sendPushNotificationsAsync").mockImplementation(async (messages) => {
+            deliveredMessages.push(...messages);
+            return messages.map(() => ({ status: "ok" as const, id: randomUUID() }));
+        });
         harness = await createLightSqliteHarness({
             tempDirPrefix: "happier-session-attention-standing-sqlite-",
             initAuth: false,
@@ -80,11 +89,17 @@ describe("session attention standings on SQLite", () => {
 
     beforeEach(() => {
         harness.resetEnv();
-        scheduleAccountActivityBadgeRefresh.mockClear();
+        vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout"] });
+    });
+
+    afterEach(async () => {
+        await vi.runOnlyPendingTimersAsync();
+        vi.useRealTimers();
     });
 
     afterAll(async () => {
         await harness.close();
+        vi.restoreAllMocks();
     });
 
     it("requires an update only for released readers whose standing snapshot exceeds 500 rows", async () => {
@@ -302,7 +317,7 @@ describe("session attention standings on SQLite", () => {
         expect(restored.response).toEqual({
             standing: { sessionId: kept.sessionId, standing: true, updatedAt: expect.any(Number) },
         });
-        scheduleAccountActivityBadgeRefresh.mockClear();
+        await vi.runOnlyPendingTimersAsync();
         const repeatedRemoval = await route.invoke({
             userId: kept.accountId,
             params: { sessionId: kept.sessionId },
@@ -312,7 +327,7 @@ describe("session attention standings on SQLite", () => {
             standing: { sessionId: kept.sessionId, standing: true, updatedAt: expect.any(Number) },
         });
         // Removing an already-removed reminder changes nothing, so it owes no badge refresh.
-        expect(scheduleAccountActivityBadgeRefresh).not.toHaveBeenCalled();
+        expect(vi.getTimerCount()).toBe(0);
 
         await route.invoke({ userId: suppressed.accountId, params: { sessionId: suppressed.sessionId }, body: { standing: false } });
         await route.invoke({ userId: suppressed.accountId, params: { sessionId: suppressed.sessionId }, body: { remindAt } });
@@ -361,6 +376,9 @@ describe("session attention standings on SQLite", () => {
 
     it("marks the attentionStandings scope and bumps the organization checkpoint", async () => {
         const { accountId, sessionId } = await createAccountWithSession();
+        const token = await createBadgePushToken(accountId);
+        const unrelated = await createAccountWithSession();
+        const unrelatedToken = await createBadgePushToken(unrelated.accountId);
 
         await createStandingRouteBuilder().invoke({
             userId: accountId,
@@ -382,15 +400,16 @@ describe("session attention standings on SQLite", () => {
         ).resolves.toEqual({
             hint: { sessionOrganization: true, scope: "attentionStandings", sessionIds: [sessionId] },
         });
-        expect(scheduleAccountActivityBadgeRefresh).toHaveBeenCalledOnce();
-        expect(scheduleAccountActivityBadgeRefresh).toHaveBeenCalledWith({
-            badgeAttentionChanged: true,
-            accountIds: [accountId],
+        await vi.runOnlyPendingTimersAsync();
+        await vi.waitFor(() => {
+            expect(deliveredMessages.filter((message) => message.to === token || message.to === unrelatedToken))
+                .toEqual([{ to: token, badge: 1, data: { type: "badge_refresh" } }]);
         });
     });
 
     it("does not schedule a badge refresh when the enclosing transaction rolls back", async () => {
         const { accountId, sessionId } = await createAccountWithSession();
+        const token = await createBadgePushToken(accountId);
 
         await expect(inTx(async (tx) => {
             await setSessionAttentionStandingInTx(tx, {
@@ -407,23 +426,29 @@ describe("session attention standings on SQLite", () => {
         })).rejects.toThrow("rolled back after the attention write");
 
         await expect(db.sessionAttentionStanding.count({ where: { accountId } })).resolves.toBe(0);
-        expect(scheduleAccountActivityBadgeRefresh).not.toHaveBeenCalled();
+        expect(vi.getTimerCount()).toBe(0);
+        expect(deliveredMessages.filter((message) => message.to === token)).toEqual([]);
     });
 
     it("does not schedule a badge refresh for a standing write that changes nothing", async () => {
         const { accountId, sessionId } = await createAccountWithSession();
+        const token = await createBadgePushToken(accountId);
         const route = createStandingRouteBuilder();
 
         await route.invoke({ userId: accountId, params: { sessionId }, body: { standing: true } });
-        expect(scheduleAccountActivityBadgeRefresh).toHaveBeenCalledOnce();
-        scheduleAccountActivityBadgeRefresh.mockClear();
+        await vi.runOnlyPendingTimersAsync();
+        await vi.waitFor(() => {
+            expect(deliveredMessages.filter((message) => message.to === token))
+                .toEqual([{ to: token, badge: 1, data: { type: "badge_refresh" } }]);
+        });
 
         const repeated = await route.invoke({ userId: accountId, params: { sessionId }, body: { standing: true } });
         expect(repeated.reply.statusCode).toBe(200);
         expect(repeated.response).toEqual({
             standing: { sessionId, standing: true, updatedAt: expect.any(Number) },
         });
-        expect(scheduleAccountActivityBadgeRefresh).not.toHaveBeenCalled();
+        expect(vi.getTimerCount()).toBe(0);
+        expect(deliveredMessages.filter((message) => message.to === token)).toHaveLength(1);
         await expect(
             db.sessionOrganizationCheckpoint.findUnique({ where: { accountId }, select: { version: true } }),
         ).resolves.toEqual({ version: 1 });
@@ -431,6 +456,7 @@ describe("session attention standings on SQLite", () => {
 
     it("does not schedule a badge refresh when clearing a standing the account never declared", async () => {
         const { accountId, sessionId } = await createAccountWithSession();
+        const token = await createBadgePushToken(accountId);
 
         const cleared = await createStandingRouteBuilder().invoke({
             userId: accountId,
@@ -440,7 +466,8 @@ describe("session attention standings on SQLite", () => {
 
         expect(cleared.reply.statusCode).toBe(200);
         expect(cleared.response).toEqual({ standing: null });
-        expect(scheduleAccountActivityBadgeRefresh).not.toHaveBeenCalled();
+        expect(vi.getTimerCount()).toBe(0);
+        expect(deliveredMessages.filter((message) => message.to === token)).toEqual([]);
         await expect(db.sessionOrganizationCheckpoint.count({ where: { accountId } })).resolves.toBe(0);
     });
 

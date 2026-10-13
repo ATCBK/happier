@@ -6,7 +6,7 @@ import { createLightSqliteHarness, type LightSqliteHarness } from "@/testkit/lig
 import { createPresentUserSessionAccessAuthentication } from "./sessionAccessAuthentication.testkit";
 import { createSessionMessage, reassertSessionLatestTurnStatus, updateSessionReadCursor } from "@/app/session/sessionWriteService";
 import { buildSessionAccessWhere, buildSessionReadableAccountWhereInTx, createApplicableAudienceWhere, buildMembershipHistorySessionAccessWhereInTx, resolveEffectiveSessionAccessWhere } from "./sessionAccessWhere";
-import { assertSessionCapabilityInTx, resolveEffectiveSessionAccess, resolveStructuralSessionAccessForAccountsInTx, resolveSessionAccessForOperation, SESSION_CAPABILITY_RULES, type SessionCapability, listCurrentSessionAudienceAccountsInTx, assertSessionTeamReadableGrantInTx, buildSessionAccessProjectionSelect, projectEffectiveSessionAccess } from "./sessionAccess";
+import { assertSessionCapabilityInTx, resolveEffectiveSessionAccess, resolveEffectiveSessionAccessForSessionsInTx, resolveStructuralSessionAccessForAccountsInTx, resolveSessionAccessForOperation, SESSION_CAPABILITY_RULES, type SessionCapability, listCurrentSessionAudienceAccountsInTx, assertSessionTeamReadableGrantInTx, buildSessionAccessProjectionSelect, projectEffectiveSessionAccess } from "./sessionAccess";
 import { inTx, type Tx } from "@/storage/inTx";
 import { canApprovePermissions, canManagePermissionDelegation } from "@/app/session/access/sessionAccess";
 import {
@@ -109,6 +109,12 @@ describe("Session access owner/direct authority (SQLite)", () => {
             authenticationEvidence: undefined,
             sessionRuntimePrincipal: principal,
         };
+        const sibling = await db.session.create({ data: {
+            accountId: account.id, tag: crypto.randomUUID(), metadata: "{}", encryptionMode: "plain",
+        } });
+        const batch = () => inTx(tx => resolveEffectiveSessionAccessForSessionsInTx(tx, {
+            accountId: account.id, sessionIds: [session.id, sibling.id], authentication: runnerAuthentication,
+        }));
         const decide = () => resolveSessionAccessForOperation(db, {
             accountId: account.id,
             sessionId: session.id,
@@ -131,10 +137,12 @@ describe("Session access owner/direct authority (SQLite)", () => {
 
         await expect(decide()).resolves.toMatchObject({ status: "allowed" });
         await expect(query()).resolves.toEqual({ id: session.id });
+        expect([...(await batch()).keys()]).toEqual([session.id]);
 
         await db.machine.update({ where: { id: machineId }, data: { installationId: `${installationId}-substituted` } });
         await expect(decide()).resolves.toEqual({ status: "unavailable" });
         await expect(query()).resolves.toBeNull();
+        expect((await batch()).size).toBe(0);
     });
 
     it("denies suspended owner and direct Accounts consistently without removing an active direct recipient", async () => {
@@ -560,7 +568,7 @@ describe("Session access owner/direct authority (SQLite)", () => {
         }))).resolves.toEqual({ status: "authentication_unavailable" });
     });
 
-    it("keeps the batch recipient projection semantically identical to the point owner", async () => {
+    it("keeps the batch recipient projection semantically identical to the paged audience owner", async () => {
         const viewer = await db.account.create({ data: { publicKey: crypto.randomUUID(), encryptionMode: "plain" } });
         const collaborator = await db.account.create({ data: { publicKey: crypto.randomUUID(), encryptionMode: "plain" } });
         const suspended = await db.account.create({
@@ -670,7 +678,7 @@ describe("Session access owner/direct authority (SQLite)", () => {
             }),
             point: new Map(await Promise.all(sessionIds.map(async (sessionId) => [
                 sessionId,
-                await resolveCurrentSessionRecipientAccountIdsInTx(tx, { sessionId }),
+                (await listCurrentSessionAudienceAccountsInTx({ tx, sessionId, limit: 10 })).map(row => row.accountId),
             ] as const))),
         }));
 
@@ -843,7 +851,7 @@ describe("Session access owner/direct authority (SQLite)", () => {
         });
     });
 
-    it("keeps query admission and row projection on the same exact Team qualification result", async () => {
+    it("keeps query admission, row projection and batch reads on the same exact Team qualification result", async () => {
         const { actor, session } = await fixture("view");
         await enableKeyChallengeForAccount(actor.id);
         const qualifiedTeam = await db.team.create({ data: {
@@ -886,6 +894,17 @@ describe("Session access owner/direct authority (SQLite)", () => {
                 sources: [{ kind: "team", teamId: qualifiedTeam.id, requiredByTeamPolicy: false }],
                 capabilities: { manageAccess: false, managePermissionDelegation: false },
             });
+            const batch = await resolveEffectiveSessionAccessForSessionsInTx(tx, {
+                accountId: actor.id, sessionIds: [session.id], authentication,
+            });
+            expect(batch.get(session.id)).toMatchObject({
+                level: "edit", sources: [{ kind: "team", teamId: qualifiedTeam.id, requiredByTeamPolicy: false }],
+                capabilities: { submitAgentInput: true, manageAccess: false },
+            });
+            const unqualified = await resolveEffectiveSessionAccessForSessionsInTx(tx, {
+                accountId: actor.id, sessionIds: [session.id], authentication: { ...authentication, authenticationEvidence: [] },
+            });
+            expect(unqualified.get(session.id)).toMatchObject({ level: "view", capabilities: { submitAgentInput: false } });
         });
     });
 

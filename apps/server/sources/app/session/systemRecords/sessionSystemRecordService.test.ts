@@ -24,6 +24,10 @@ import {
     writePermissionMediationRecord,
 } from "./sessionSystemRecordService";
 
+const logError = vi.hoisted(() => vi.fn());
+// Capture only log output; access, protocol and transaction owners remain real.
+vi.mock("@/utils/logging/log", () => ({ error: logError }));
+
 const authentication = createPresentUserSessionAccessAuthentication();
 import { deriveSessionSystemRecordAddressKeys } from "./sessionSystemRecordAddressKeys";
 import {
@@ -252,6 +256,98 @@ describe("sessionSystemRecordService account scoping", () => {
                 deleteMany: vi.fn(),
             },
         };
+    });
+
+    const diagnosticHostParams = {
+        actorUserId: "owner-account", sessionId: "s1", authentication,
+        namespace: "activity", kind: "workflow_run.v1", localId: "activity:workflow_run:v1:wf_demo",
+        content: { t: "encrypted", c: "private-ciphertext" },
+    } as const;
+    const diagnosticV1Params = {
+        actorUserId: "owner-account", sessionId: "s1", authentication, pluginId: "acme.notes",
+        address: { owner: "plugin", namespace: "notes", kind: "entry.v1", localId: "private-local-id" },
+        content: { t: "encrypted", c: "private-ciphertext" },
+    } as const;
+    const diagnosticPermissionParams = {
+        actorUserId: "owner-account", sessionId: "s1", authentication, identity: permissionMediationIdentity,
+    };
+
+    it.each([
+        ["upsert", () => upsertSessionSystemRecord(diagnosticHostParams)],
+        ["list", () => listSessionSystemRecords(diagnosticHostParams)],
+        ["get", () => getSessionSystemRecord(diagnosticHostParams)],
+        ["latest", () => getLatestSessionSystemRecord(diagnosticHostParams)],
+        ["v1-read", () => readSessionSystemRecordV1(diagnosticV1Params)],
+        ["v1-list", () => listSessionSystemRecordsV1({ ...diagnosticV1Params, query: { owner: "plugin", namespace: "notes", limit: 10 } })],
+        ["v1-upsert", () => upsertSessionSystemRecordV1(diagnosticV1Params)],
+        ["v1-delete", () => deleteSessionSystemRecordV1(diagnosticV1Params)],
+        ["permission-read", () => readPermissionMediationRecord(diagnosticPermissionParams)],
+        ["permission-list", () => listPermissionMediationRecords({ ...diagnosticPermissionParams, query: { limit: 10 } })],
+        ["permission-write", () => writePermissionMediationRecord({ ...diagnosticPermissionParams,
+            request: { kind: "remote_settlement.v1", content: { t: "encrypted", c: "private-ciphertext" }, expectedRevision: null } })],
+        ["permission-prune", () => prunePermissionMediationRecord({ ...diagnosticPermissionParams,
+            request: { expectedRevision: encodeSessionSystemRecordRevision({ id: "permission-record-1", version: 1 }) } })],
+    ] as const)("reports %s database failure with safe diagnostics", async (operation, run) => {
+        const currentTx = testState.currentTx as TxMock;
+        testState.readAccessSession.mockResolvedValue(accessSessionRow("owner"));
+        currentTx.session.findUnique.mockResolvedValue({ encryptionMode: "e2ee", accountId: "owner-account" });
+        const failure = Object.assign(new Error("private-SQL private-prompt"), { name: "PrismaClientKnownRequestError", code: "P2021", meta: { query: "private-query" } });
+        currentTx.sessionSystemRecord.findFirst.mockRejectedValue(failure);
+        currentTx.sessionSystemRecord.findMany.mockRejectedValue(failure);
+
+        const result = await run();
+        expect(result.ok).toBe(false);
+        expect(logError.mock.calls).toEqual([[
+            { module: "session-system-record-service", operation, reason: "exception", prismaCode: "P2021", errorType: "PrismaClientKnownRequestError" },
+            expect.any(String),
+        ]]);
+        expect(JSON.stringify(logError.mock.calls)).not.toContain("private-");
+    });
+
+    it.each([
+        ["upsert", () => upsertSessionSystemRecord(diagnosticHostParams)],
+        ["list", () => listSessionSystemRecords(diagnosticHostParams)],
+        ["get", () => getSessionSystemRecord(diagnosticHostParams)],
+        ["latest", () => getLatestSessionSystemRecord(diagnosticHostParams)],
+    ] as const)("reports %s invalid stored projection without row data", async (operation, run) => {
+        const currentTx = testState.currentTx as TxMock;
+        testState.readAccessSession.mockResolvedValue(accessSessionRow("owner"));
+        currentTx.session.findUnique.mockResolvedValue({ encryptionMode: "e2ee", accountId: "owner-account" });
+        const row = activityRecord({ content: { t: "plain", v: "private-invalid-payload" } });
+        currentTx.sessionSystemRecord.findFirst.mockResolvedValue(row);
+        currentTx.sessionSystemRecord.findMany.mockResolvedValue([row]);
+
+        expect(await run()).toEqual({ ok: false, error: "internal" });
+        expect(logError.mock.calls).toEqual([[
+            { module: "session-system-record-service", operation, reason: "internal-result", prismaCode: null, errorType: null },
+            expect.any(String),
+        ]]);
+        expect(JSON.stringify(logError.mock.calls)).not.toContain("private-");
+    });
+
+    it.each([false, true])("reports a unique-race winner that is missing or invalid (%s)", async (missing) => {
+        const currentTx = testState.currentTx as TxMock;
+        testState.readAccessSession.mockResolvedValue(accessSessionRow("owner"));
+        currentTx.session.findUnique.mockResolvedValue({ encryptionMode: "e2ee", accountId: "owner-account" });
+        const address = diagnosticV1Params.address;
+        const row = {
+            id: "private-record", accountId: "owner-account", sessionId: "s1",
+            ownerKind: "plugin", pluginId: diagnosticV1Params.pluginId,
+            namespace: address.namespace, kind: address.kind, localId: address.localId,
+            ...deriveSessionSystemRecordAddressKeys({ ownerKind: "plugin", pluginId: diagnosticV1Params.pluginId,
+                namespace: address.namespace, localId: address.localId }),
+            content: null, version: 1, createdAt: new Date(), updatedAt: new Date(),
+        };
+        currentTx.sessionSystemRecord.findFirst.mockResolvedValueOnce(null).mockResolvedValueOnce(missing ? null : row);
+        currentTx.sessionSystemRecord.create.mockRejectedValue(Object.assign(new Error("private-unique-key"), { code: "P2002" }));
+
+        expect(await upsertSessionSystemRecordV1({ ...diagnosticV1Params, expectedRevision: null }))
+            .toEqual({ ok: false, code: "plugin_session_record_internal" });
+        expect(logError.mock.calls).toEqual([[
+            { module: "session-system-record-service", operation: "v1-upsert-settlement", reason: "internal-result", prismaCode: null, errorType: null },
+            expect.any(String),
+        ]]);
+        expect(JSON.stringify(logError.mock.calls)).not.toContain("private-");
     });
 
     it("rejects direct v1 service calls before access or persistence while CONTRACT remains inactive", async () => {

@@ -38,6 +38,8 @@ export function projectSessionEffectiveAccessV1(access: EffectiveSessionAccess):
     };
 }
 export type SessionAccessReader = Pick<Tx, "session">;
+// Session-major projections stay below the existing conservative SQLite bind boundary.
+const SESSION_ACCESS_SESSION_BATCH_SIZE = 200;
 /**
  * Team and Group access, responsibility and atomic initial access are Session
  * sharing: they are served wherever `sharing.session` is enabled, with no
@@ -432,6 +434,26 @@ export async function resolveEffectiveSessionAccess(reader: Tx, input: { account
     });
     return decision.status === "allowed" ? decision.access : null;
 }
+
+/** Batch row loading for one actor; every decision remains the exact operation resolver. */
+export async function resolveEffectiveSessionAccessForSessionsInTx(reader: Tx, input: Readonly<{
+    accountId: string; sessionIds: readonly string[]; authentication: SessionAccessAuthentication;
+}>): Promise<ReadonlyMap<string, EffectiveSessionAccess>> {
+    const result = new Map<string, EffectiveSessionAccess>();
+    const sessionIds = [...new Set(input.sessionIds)];
+    // This chunks database parameters, never the authorized result set.
+    for (let offset = 0; offset < sessionIds.length; offset += SESSION_ACCESS_SESSION_BATCH_SIZE) {
+        const rows = await reader.session.findMany({
+            where: { id: { in: sessionIds.slice(offset, offset + SESSION_ACCESS_SESSION_BATCH_SIZE) } },
+            select: buildSessionAccessProjectionSelect(input.accountId),
+        });
+        for (const row of rows) {
+            const decision = await resolveSessionAccessForOperation(reader, { ...input, sessionId: row.id, row });
+            if (decision.status === "allowed") result.set(row.id, decision.access);
+        }
+    }
+    return result;
+}
 export type SessionCapabilityAssertion =
     | { ok: true; access: EffectiveSessionAccess }
     | { ok: false; reason: "authentication_required" | "authentication_unavailable" | "unavailable" };
@@ -555,8 +577,8 @@ export async function resolveSessionAccessForSessionsInTx(tx: Tx, input: Readonl
     }
     for (let accountOffset = 0; accountOffset < accountIds.length; accountOffset += 100) {
         const accountBatch = accountIds.slice(accountOffset, accountOffset + 100);
-        for (let sessionOffset = 0; sessionOffset < sessionIds.length; sessionOffset += 200) {
-            const sessionBatch = sessionIds.slice(sessionOffset, sessionOffset + 200);
+        for (let sessionOffset = 0; sessionOffset < sessionIds.length; sessionOffset += SESSION_ACCESS_SESSION_BATCH_SIZE) {
+            const sessionBatch = sessionIds.slice(sessionOffset, sessionOffset + SESSION_ACCESS_SESSION_BATCH_SIZE);
             const rows = await tx.session.findMany({
                 where: { id: { in: sessionBatch } },
                 select: buildSessionAccessProjectionSelectForAccounts(accountBatch),
@@ -619,8 +641,8 @@ export async function resolveStructuralSessionAccessForSessionsInTx(tx: SessionA
     if (accountIds.length === 0 || sessionIds.length === 0) return result;
     for (let accountOffset = 0; accountOffset < accountIds.length; accountOffset += 100) {
         const accountBatch = accountIds.slice(accountOffset, accountOffset + 100);
-        for (let sessionOffset = 0; sessionOffset < sessionIds.length; sessionOffset += 200) {
-            const sessionBatch = sessionIds.slice(sessionOffset, sessionOffset + 200);
+        for (let sessionOffset = 0; sessionOffset < sessionIds.length; sessionOffset += SESSION_ACCESS_SESSION_BATCH_SIZE) {
+            const sessionBatch = sessionIds.slice(sessionOffset, sessionOffset + SESSION_ACCESS_SESSION_BATCH_SIZE);
             const rows = await tx.session.findMany({
                 where: { id: { in: sessionBatch } },
                 select: buildSessionAccessProjectionSelectForAccounts(accountBatch),

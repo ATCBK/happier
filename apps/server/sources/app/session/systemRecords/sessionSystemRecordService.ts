@@ -68,6 +68,7 @@ import { db } from "@/storage/db";
 import { inTx, type Tx } from "@/storage/inTx";
 import { readSnapshotWithCurrentAdmission } from "@/storage/readSnapshotWithCurrentAdmission";
 import { isPrismaErrorCode } from "@/storage/prisma";
+import { error as logError } from "@/utils/logging/log";
 import {
     deriveSessionSystemRecordAddressKeys,
     sessionSystemRecordRawAddressEquals,
@@ -83,6 +84,42 @@ const SESSION_SYSTEM_RECORD_CURSOR_PREFIX = "v1";
 const SESSION_SYSTEM_RECORD_MAX_LIMIT = 500;
 const SESSION_SYSTEM_RECORD_DEFAULT_LIMIT = 100;
 const PLUGIN_SESSION_SYSTEM_RECORD_CURSOR_PREFIX = "ssrp1";
+
+function reportSystemRecordFailure(operation: string, error: unknown, reason: "exception" | "internal-result" = "exception"): void {
+    // Exception messages, stacks and metadata may contain SQL, content or credentials.
+    // Keep diagnostics to fixed categories and the documented Prisma code shape.
+    const knownErrorNames = [
+        "Error", "TypeError", "RangeError", "SyntaxError",
+        "PrismaClientKnownRequestError", "PrismaClientUnknownRequestError",
+        "PrismaClientInitializationError", "PrismaClientValidationError", "PrismaClientRustPanicError",
+        "TransactionAcquisitionUnavailableError", "TransactionDeadlineExceededError",
+        "TransactionReplayRequiredError", "TransactionConflictExhaustedError",
+    ];
+    const code = error && typeof error === "object" && "code" in error ? error.code : null;
+    logError({
+        module: "session-system-record-service",
+        operation,
+        reason,
+        prismaCode: typeof code === "string" && /^P\d{4}$/.test(code) ? code : null,
+        errorType: error === undefined ? null : error instanceof Error
+            ? (knownErrorNames.includes(error.name) ? error.name : "Error")
+            : typeof error,
+    }, "Session system-record operation failed");
+}
+
+// Call only after the owning transaction/snapshot has settled, never in its callback.
+function reportSystemRecordResult<T extends object>(operation: string, result: T): T {
+    if ("ok" in result && result.ok === false && (
+        ("error" in result && result.error === "internal")
+        || ("code" in result && (
+            result.code === "plugin_session_record_internal"
+            || result.code === "permission_mediation_record_internal"
+        ))
+    )) {
+        reportSystemRecordFailure(operation, undefined, "internal-result");
+    }
+    return result;
+}
 
 type SessionSystemRecordV1ErrorCode =
     | "plugin_session_records_unavailable"
@@ -987,7 +1024,7 @@ async function refetchV1RecordAfterMutation(
     currentAccess: CurrentSessionRecordAccess,
 ): Promise<FoundV1Record | SessionSystemRecordV1Failure> {
     try {
-        return await inTx(async (tx) => {
+        return reportSystemRecordResult("v1-refetch", await inTx(async (tx) => {
             const found = await findV1RecordByAddress(tx, { ...params, accountId, requiredAccess: currentAccess });
             if (!found) return { ok: false, code: "plugin_session_record_invalid_query" as const };
             if (!await hasCurrentSessionRecordAccessInTx(tx, {
@@ -999,8 +1036,9 @@ async function refetchV1RecordAfterMutation(
                 return { ok: false, code: "plugin_session_record_forbidden" as const };
             }
             return found;
-        }, { isolationLevel: "Serializable" /* Standalone record access, Session storage tuple and content decisions lack an early Account fence. */ });
-    } catch {
+        }, { isolationLevel: "Serializable" /* Standalone record access, Session storage tuple and content decisions lack an early Account fence. */ }));
+    } catch (error) {
+        reportSystemRecordFailure("v1-refetch", error);
         return { ok: false, code: "plugin_session_record_internal" };
     }
 }
@@ -1023,7 +1061,7 @@ async function resolveV1ConditionalUpsertMiss(
     if (isV1RecordRefetchFailure(found)) return found;
     if (!found.row) return { ok: false, code: "plugin_session_record_revision_conflict" };
     const current = storedV1Record(found.row, found.expected);
-    if (!current.ok) return current;
+    if (!current.ok) return reportSystemRecordResult("v1-upsert-settlement", current);
     if (found.row.kind !== params.address.kind) {
         return { ok: false, code: "plugin_session_record_kind_conflict" };
     }
@@ -1044,7 +1082,7 @@ async function resolveV1ConditionalDeleteMiss(
     if (isV1RecordRefetchFailure(found)) return found;
     if (!found.row) return { ok: true };
     const current = storedV1Record(found.row, found.expected);
-    if (!current.ok) return current;
+    if (!current.ok) return reportSystemRecordResult("v1-delete-settlement", current);
     if (found.row.kind !== params.address.kind) {
         return { ok: false, code: "plugin_session_record_kind_conflict" };
     }
@@ -1089,7 +1127,7 @@ export async function readSessionSystemRecordV1(
         return { ok: false, code: "plugin_session_record_invalid_query" };
     }
     try {
-        return await readV1Snapshot(params, { ...params.address, operation: "read" }, async (tx, access): ReturnType<typeof readSessionSystemRecordV1> => {
+        return reportSystemRecordResult("v1-read", await readV1Snapshot(params, { ...params.address, operation: "read" }, async (tx, access): ReturnType<typeof readSessionSystemRecordV1> => {
             const found = await findV1RecordByAddress(tx, {
                 ...params,
                 accountId: access.accountId,
@@ -1113,8 +1151,9 @@ export async function readSessionSystemRecordV1(
                 return { ok: false, code: "plugin_session_record_kind_conflict" as const };
             }
             return projected;
-        });
-    } catch {
+        }));
+    } catch (error) {
+        reportSystemRecordFailure("v1-read", error);
         return { ok: false, code: "plugin_session_record_internal" };
     }
 }
@@ -1143,7 +1182,7 @@ export async function listSessionSystemRecordsV1(
     };
     const keys = deriveSessionSystemRecordAddressKeys(expectedAddress);
     try {
-        return await readV1Snapshot(params, {
+        return reportSystemRecordResult("v1-list", await readV1Snapshot(params, {
                 owner: parsed.data.owner,
                 namespace: parsed.data.namespace,
                 ...(parsed.data.kind ? { kind: parsed.data.kind } : {}),
@@ -1205,8 +1244,9 @@ export async function listSessionSystemRecordsV1(
                     hasNext,
                 },
             };
-        });
-    } catch {
+        }));
+    } catch (error) {
+        reportSystemRecordFailure("v1-list", error);
         return { ok: false, code: "plugin_session_record_internal" };
     }
 }
@@ -1221,9 +1261,9 @@ async function settleV1CreateRace(
 ): Promise<SessionSystemRecordV1Result<{ record: SessionSystemRecordStored }>> {
     const raced = await refetchV1RecordAfterMutation(params, accountId, currentAccess);
     if (isV1RecordRefetchFailure(raced)) return raced;
-    if (!raced.row) return { ok: false, code: "plugin_session_record_internal" };
+    if (!raced.row) return reportSystemRecordResult("v1-upsert-settlement", { ok: false, code: "plugin_session_record_internal" });
     const replay = storedV1Record(raced.row, raced.expected);
-    if (!replay.ok) return replay;
+    if (!replay.ok) return reportSystemRecordResult("v1-upsert-settlement", replay);
     if (raced.row.kind !== params.address.kind) {
         return { ok: false, code: "plugin_session_record_kind_conflict" };
     }
@@ -1246,9 +1286,9 @@ async function settleV1UnconditionalCreateRace(
     const raced = await refetchV1RecordAfterMutation(params, accountId, currentAccess);
     if (isV1RecordRefetchFailure(raced)) return raced;
     const currentRow = raced.row;
-    if (!currentRow) return { ok: false, code: "plugin_session_record_internal" };
+    if (!currentRow) return reportSystemRecordResult("v1-upsert-settlement", { ok: false, code: "plugin_session_record_internal" });
     const current = storedV1Record(currentRow, raced.expected);
-    if (!current.ok) return current;
+    if (!current.ok) return reportSystemRecordResult("v1-upsert-settlement", current);
     if (currentRow.kind !== params.address.kind) {
         return { ok: false, code: "plugin_session_record_kind_conflict" };
     }
@@ -1257,7 +1297,7 @@ async function settleV1UnconditionalCreateRace(
         return { ok: false, code: "plugin_session_record_revision_exhausted" };
     }
     try {
-        return await inTx(async (tx) => {
+        return reportSystemRecordResult("v1-upsert-settlement", await inTx(async (tx) => {
             const updated = await tx.sessionSystemRecord.updateMany({
                 where: {
                     accountId,
@@ -1301,8 +1341,9 @@ async function settleV1UnconditionalCreateRace(
             return next
                 ? storedV1Record(next, raced.expected)
                 : { ok: false, code: "plugin_session_record_internal" as const };
-        }, { isolationLevel: "Serializable" /* Standalone record access, Session storage tuple and content decisions lack an early Account fence. */ });
-    } catch {
+        }, { isolationLevel: "Serializable" /* Standalone record access, Session storage tuple and content decisions lack an early Account fence. */ }));
+    } catch (error) {
+        reportSystemRecordFailure("v1-upsert-settlement", error);
         return { ok: false, code: "plugin_session_record_internal" };
     }
 }
@@ -1476,6 +1517,7 @@ async function upsertSessionSystemRecordV1Attempt(
         outcome = await inTx((tx) => upsertSessionSystemRecordV1InTx(tx, params, access), { isolationLevel: "Serializable" /* Standalone record access, Session storage tuple and content decisions lack an early Account fence. */ });
     } catch (error) {
         if (!isPrismaErrorCode(error, "P2002")) {
+            reportSystemRecordFailure("v1-upsert", error);
             return { ok: false, code: "plugin_session_record_internal" };
         }
         if (params.expectedRevision === undefined) {
@@ -1485,12 +1527,12 @@ async function upsertSessionSystemRecordV1Attempt(
         }
         return await settleV1CreateRace(params, access.accountId, access.currentAccess);
     }
-    if (!isV1UpsertMutationRace(outcome)) return outcome;
+    if (!isV1UpsertMutationRace(outcome)) return reportSystemRecordResult("v1-upsert", outcome);
     if (outcome.kind === "retry-unconditional-upsert") {
         if (retryUnconditionalSettlement) {
             return await upsertSessionSystemRecordV1Attempt(params, false);
         }
-        return { ok: false, code: "plugin_session_record_internal" };
+        return reportSystemRecordResult("v1-upsert-settlement", { ok: false, code: "plugin_session_record_internal" });
     }
     return await resolveV1ConditionalUpsertMiss(params, access.accountId, access.currentAccess);
 }
@@ -1506,12 +1548,12 @@ async function settleV1UnconditionalDeleteMiss(
     if (isV1RecordRefetchFailure(found)) return found;
     if (!found.row) return { ok: true };
     const current = storedV1Record(found.row, found.expected);
-    if (!current.ok) return current;
+    if (!current.ok) return reportSystemRecordResult("v1-delete-settlement", current);
     if (found.row.kind !== params.address.kind) {
         return { ok: false, code: "plugin_session_record_kind_conflict" };
     }
     try {
-        return await inTx(async (tx) => {
+        return reportSystemRecordResult("v1-delete-settlement", await inTx(async (tx) => {
             const deleted = await tx.sessionSystemRecord.deleteMany({
                 where: {
                     accountId,
@@ -1536,8 +1578,9 @@ async function settleV1UnconditionalDeleteMiss(
                 return { ok: false, code: "plugin_session_record_forbidden" as const };
             }
             return { ok: false, code: "plugin_session_record_internal" as const };
-        }, { isolationLevel: "Serializable" /* Standalone record access, Session storage tuple and content decisions lack an early Account fence. */ });
-    } catch {
+        }, { isolationLevel: "Serializable" /* Standalone record access, Session storage tuple and content decisions lack an early Account fence. */ }));
+    } catch (error) {
+        reportSystemRecordFailure("v1-delete-settlement", error);
         return { ok: false, code: "plugin_session_record_internal" };
     }
 }
@@ -1632,10 +1675,11 @@ export async function deleteSessionSystemRecordV1(
     let outcome: SessionSystemRecordV1Result<Record<never, never>> | V1DeleteMutationRace;
     try {
         outcome = await inTx((tx) => deleteSessionSystemRecordV1InTx(tx, params, access), { isolationLevel: "Serializable" /* Standalone record access, Session storage tuple and content decisions lack an early Account fence. */ });
-    } catch {
+    } catch (error) {
+        reportSystemRecordFailure("v1-delete", error);
         return { ok: false, code: "plugin_session_record_internal" };
     }
-    if (!isV1DeleteMutationRace(outcome)) return outcome;
+    if (!isV1DeleteMutationRace(outcome)) return reportSystemRecordResult("v1-delete", outcome);
     if (outcome.kind === "settle-unconditional-delete") {
         return await settleV1UnconditionalDeleteMiss(params, access.accountId, access.currentAccess);
     }
@@ -1969,7 +2013,7 @@ async function resolvePermissionMediationConflictAfterMutation(
     }>,
 ): Promise<PermissionMediationRecordFailure> {
     try {
-        return await inTx(async (tx) => {
+        return reportSystemRecordResult("permission-settlement", await inTx(async (tx) => {
             const found = await findPermissionMediationRecord(tx, params);
             if (!found.row) {
                 return { ok: false, code: "permission_mediation_record_conflict" as const };
@@ -1981,8 +2025,9 @@ async function resolvePermissionMediationConflictAfterMutation(
                 code: "permission_mediation_record_conflict" as const,
                 currentRevision: current.record.revision,
             };
-        });
-    } catch {
+        }));
+    } catch (error) {
+        reportSystemRecordFailure("permission-settlement", error);
         return { ok: false, code: "permission_mediation_record_internal" };
     }
 }
@@ -2029,7 +2074,7 @@ export async function readPermissionMediationRecord(
         return { ok: false, code: "permission_mediation_record_invalid" };
     }
     try {
-        return await readPermissionSnapshot(params, async (tx, access): ReturnType<typeof readPermissionMediationRecord> => {
+        return reportSystemRecordResult("permission-read", await readPermissionSnapshot(params, async (tx, access): ReturnType<typeof readPermissionMediationRecord> => {
             const found = await findPermissionMediationRecord(tx, {
                 accountId: access.accountId,
                 identity: params.identity,
@@ -2037,8 +2082,9 @@ export async function readPermissionMediationRecord(
             if (!found.row) return { ok: true, record: null };
             const stored = storedPermissionMediationRecord(found.row, params.identity);
             return stored.ok ? { ok: true, record: stored.record } : stored;
-        });
-    } catch {
+        }));
+    } catch (error) {
+        reportSystemRecordFailure("permission-read", error);
         return { ok: false, code: "permission_mediation_record_internal" };
     }
 }
@@ -2154,9 +2200,10 @@ export async function writePermissionMediationRecord(
                 identity: params.identity,
             });
         }
+        reportSystemRecordFailure("permission-write", error);
         return { ok: false, code: "permission_mediation_record_internal" };
     }
-    if (!isPermissionMediationMutationMiss(outcome)) return outcome;
+    if (!isPermissionMediationMutationMiss(outcome)) return reportSystemRecordResult("permission-write", outcome);
     return await resolvePermissionMediationConflictAfterMutation({
         accountId: access.accountId,
         identity: params.identity,
@@ -2216,10 +2263,11 @@ export async function prunePermissionMediationRecord(
                 ? { ok: true }
                 : { kind: "refetch-permission-mediation-conflict" as const };
         });
-    } catch {
+    } catch (error) {
+        reportSystemRecordFailure("permission-prune", error);
         return { ok: false, code: "permission_mediation_record_internal" };
     }
-    if (!isPermissionMediationMutationMiss(outcome)) return outcome;
+    if (!isPermissionMediationMutationMiss(outcome)) return reportSystemRecordResult("permission-prune", outcome);
     return await resolvePermissionMediationConflictAfterMutation({
         accountId: access.accountId,
         identity: params.identity,
@@ -2239,7 +2287,7 @@ export async function listPermissionMediationRecords(
         permissionMediationNamespaceAddress(),
     );
     try {
-        return await readPermissionSnapshot(params, async (tx, access): ReturnType<typeof listPermissionMediationRecords> => {
+        return reportSystemRecordResult("permission-list", await readPermissionSnapshot(params, async (tx, access): ReturnType<typeof listPermissionMediationRecords> => {
             const rows = await tx.sessionSystemRecord.findMany({
                 where: {
                     accountId: access.accountId,
@@ -2274,8 +2322,9 @@ export async function listPermissionMediationRecords(
                     hasNext,
                 },
             };
-        });
-    } catch {
+        }));
+    } catch (error) {
+        reportSystemRecordFailure("permission-list", error);
         return { ok: false, code: "permission_mediation_record_internal" };
     }
 }
@@ -2310,7 +2359,7 @@ async function upsertSessionSystemRecordWithCreateRaceRetry(
     const currentAccess = currentSessionRecordAccessForRequirement(mutationPolicy.requirement);
 
     try {
-        return await inTx(async (tx) => {
+        return reportSystemRecordResult("upsert", await inTx(async (tx) => {
             const session = await tx.session.findUnique({
                 where: { id: params.sessionId },
                 select: { accountId: true, encryptionMode: true },
@@ -2441,11 +2490,12 @@ async function upsertSessionSystemRecordWithCreateRaceRetry(
             const createdRecord = toSessionSystemRecordRow(created);
             if (!createdRecord) return { ok: false, error: "internal" };
             return { ok: true, didCreate: true, didUpdate: false, record: createdRecord };
-        }, { isolationLevel: "Serializable" /* Standalone record access, Session storage tuple and content decisions lack an early Account fence. */ });
+        }, { isolationLevel: "Serializable" /* Standalone record access, Session storage tuple and content decisions lack an early Account fence. */ }));
     } catch (error) {
         if (retryCreateRace && isPrismaErrorCode(error, "P2002")) {
             return await upsertSessionSystemRecordWithCreateRaceRetry(params, false);
         }
+        reportSystemRecordFailure("upsert", error);
         return { ok: false, error: "internal" };
     }
 }
@@ -2484,7 +2534,7 @@ export async function listSessionSystemRecords(
     const cursor = decodeCursor(params.cursor);
 
     try {
-        return await readLegacyHostSnapshot(params, async (tx, session): Promise<ListSessionSystemRecordsResult> => {
+        return reportSystemRecordResult("list", await readLegacyHostSnapshot(params, async (tx, session): Promise<ListSessionSystemRecordsResult> => {
             const access = await ensureSessionRecordAccess(params, tx);
             if (!access.ok) return access;
             if (!canReadHostSystemRecords({
@@ -2587,8 +2637,9 @@ export async function listSessionSystemRecords(
                 records: records as SessionSystemRecordRow[],
                 nextCursor: rows.length > limit && last ? encodeCursor(last) : null,
             };
-        });
-    } catch {
+        }));
+    } catch (error) {
+        reportSystemRecordFailure("list", error);
         return { ok: false, error: "internal" };
     }
 }
@@ -2599,7 +2650,7 @@ export async function getSessionSystemRecord(
     if (!validateLookupParams(params)) return { ok: false, error: "invalid-params" };
 
     try {
-        return await readLegacyHostSnapshot(params, async (tx, session): Promise<GetSessionSystemRecordResult> => {
+        return reportSystemRecordResult("get", await readLegacyHostSnapshot(params, async (tx, session): Promise<GetSessionSystemRecordResult> => {
             const access = await ensureSessionRecordAccess(params, tx);
             if (!access.ok) return access;
             if (!canReadHostSystemRecords({ access: access.access, namespace: params.namespace })) {
@@ -2637,8 +2688,9 @@ export async function getSessionSystemRecord(
             const record = toSessionSystemRecordRow(row);
             if (!record) return { ok: false, error: "internal" };
             return { ok: true, record };
-        });
-    } catch {
+        }));
+    } catch (error) {
+        reportSystemRecordFailure("get", error);
         return { ok: false, error: "internal" };
     }
 }
@@ -2649,7 +2701,7 @@ export async function getLatestSessionSystemRecord(
     if (!validateLatestParams(params)) return { ok: false, error: "invalid-params" };
 
     try {
-        return await readLegacyHostSnapshot(params, async (tx, session): Promise<GetLatestSessionSystemRecordResult> => {
+        return reportSystemRecordResult("latest", await readLegacyHostSnapshot(params, async (tx, session): Promise<GetLatestSessionSystemRecordResult> => {
             const access = await ensureSessionRecordAccess(params, tx);
             if (!access.ok) return access;
             if (!canReadHostSystemRecords({
@@ -2704,8 +2756,9 @@ export async function getLatestSessionSystemRecord(
             const record = toSessionSystemRecordRow(row);
             if (!record) return { ok: false, error: "internal" };
             return { ok: true, record };
-        });
-    } catch {
+        }));
+    } catch (error) {
+        reportSystemRecordFailure("latest", error);
         return { ok: false, error: "internal" };
     }
 }

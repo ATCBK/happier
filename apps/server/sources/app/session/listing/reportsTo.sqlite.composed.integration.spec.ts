@@ -1,6 +1,10 @@
 import { randomUUID } from "node:crypto";
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
-import { readSessionAwarenessWorkStatusV1 } from '@happier-dev/protocol';
+import {
+    projectSessionAwarenessV1,
+    readSessionAwarenessWorkStatusV1,
+    SessionAwarenessProjectionV1Schema,
+} from '@happier-dev/protocol';
 
 import { db } from "@/storage/db";
 import { createLightSqliteHarness, type LightSqliteHarness } from "@/testkit/lightSqliteHarness";
@@ -339,16 +343,30 @@ describe("Reports-to listing (SQLite)", () => {
         const foreign = await fixture();
         await db.session.update({ where: { id: foreign.lead.id }, data: { active: true, latestTurnStatus: "failed" } });
         await db.sessionReportsTo.create({ data: { sessionId: foreign.lead.id, leadSessionId: lead.id } });
-        const statuses = primaries.map(primary => readSessionAwarenessWorkStatusV1({ awareness: {
-            runtime: "unknown", freshness: "unknown", encryption: "plain", operational: { primary },
-        } }));
         const expected = { total: primaries.length, working: 1, needsYou: 3, stalled: 0 };
-        expect(statuses.filter(status => status.bucket === "working")).toHaveLength(expected.working);
-        expect(statuses.filter(status => status.bucket === "needs_you")).toHaveLength(expected.needsYou);
         const page = await list(owner.id, lead.id);
         expect(page?.sessions.find((row) => row.id === lead.id)?.reports)
             .toEqual(expected);
         expect(page?.sessions.map((row) => row.id)).not.toContain(foreign.lead.id);
+        const awareness = page!.sessions.map(row => SessionAwarenessProjectionV1Schema.parse(projectSessionAwarenessV1({
+            nowMs: Date.now(), sessionId: row.id, origin: row.origin,
+            reportsTo: row.reportsTo, reports: row.reports, pendingReviewRuns: row.pendingReviewRuns,
+            lifecycle: { archivedAtMs: row.archivedAt, latestTurnStatus: row.latestTurnStatus,
+                latestTurnStatusObservedAtMs: row.latestTurnStatusObservedAt,
+                latestReadyEventSeq: row.latestReadyEventSeq, latestReadyEventAtMs: row.latestReadyEventAt },
+            runtime: { presence: 'unknown', active: row.active, lastObservedAtMs: row.activeAt },
+            pending: { hasPendingPermissionRequests: (row.pendingPermissionRequestCount ?? 0) > 0,
+                hasPendingUserActionRequests: (row.pendingUserActionRequestCount ?? 0) > 0,
+                pendingRequestObservedAtMs: row.pendingRequestObservedAt },
+            content: { mode: 'plain' },
+            currentness: { lifecycle: 'observed', runtime: 'observed', pending: 'observed' },
+        })));
+        expect(awareness.find(row => row.sessionId === lead.id)?.reports).toEqual(expected);
+        const reports = awareness.filter(row => row.reportsTo?.sessionId === lead.id);
+        expect(reports).toHaveLength(expected.total);
+        const statuses = reports.map(row => readSessionAwarenessWorkStatusV1({ awareness: row }));
+        expect(statuses.filter(status => status.bucket === "working")).toHaveLength(expected.working);
+        expect(statuses.filter(status => status.bucket === "needs_you")).toHaveLength(expected.needsYou);
     });
 
     it("does not disclose a shared report whose publication tuple is malformed", async () => {

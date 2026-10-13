@@ -3,9 +3,11 @@ import type { Tx } from "@/storage/inTx";
 import {
     listCurrentSessionAudienceAccountsInTx,
     resolveEffectiveSessionAccess,
+    resolveEffectiveSessionAccessForSessionsInTx,
     resolveStructuralSessionAccess,
     resolveStructuralSessionAccessForAccountsInTx,
 } from "./sessionAccess";
+import { resolveCurrentSessionRecipientAccountIdsBySessionInTx } from "./sessionRecipients";
 import type { SessionAccessAuthentication } from "./sessionAccessAuthentication";
 import type { VerifiedEphemeralSessionRunnerPrincipal } from "@happier-dev/protocol/ephemeralRunner/principal";
 import { readRunnerActivationAuthenticationInTx } from "@/app/ephemeralRunner/activationAuthentication";
@@ -32,6 +34,17 @@ type DestinationSession = Readonly<{
 // Bound each census/batch allocation without imposing a total audience limit.
 const AUDIENCE_PAGE_SIZE = 100;
 
+/** One custody/public/audience decision, shared by point and set-oriented reads. */
+function evaluateSessionContextPair(destination: DestinationSession, facts: Readonly<{
+    runtimeMayReadSource: boolean;
+    audienceMayReadSource: boolean;
+}>): SessionContextInjectionDecision {
+    if (!facts.runtimeMayReadSource) return { ok: false, reason: "destination_runtime_not_allowed" };
+    if (isPublicSessionShareActive(destination.publicShare)) return { ok: false, reason: "destination_public" };
+    if (!facts.audienceMayReadSource) return { ok: false, reason: "destination_audience_broader" };
+    return { ok: true, destinationRuntimeAccountId: destination.accountId };
+}
+
 /** Pairwise policy over transaction-loaded custody, separate from the author. */
 async function evaluateSessionContextPairInTx(
     tx: Tx,
@@ -51,12 +64,11 @@ async function evaluateSessionContextPairInTx(
             accountId: destination.accountId,
             sessionId: sourceSessionId,
         });
-    if (runtimeAccess?.capabilities.readTranscript !== true) {
-        return { ok: false, reason: "destination_runtime_not_allowed" };
-    }
-    if (isPublicSessionShareActive(destination.publicShare)) {
-        return { ok: false, reason: "destination_public" };
-    }
+    const custody = evaluateSessionContextPair(destination, {
+        runtimeMayReadSource: runtimeAccess?.capabilities.readTranscript === true,
+        audienceMayReadSource: true,
+    });
+    if (!custody.ok) return custody;
 
     let afterAccountId: string | undefined;
     for (;;) {
@@ -72,13 +84,15 @@ async function evaluateSessionContextPairInTx(
             sessionId: sourceSessionId,
             accountIds: audience.map(({ accountId }) => accountId),
         });
-        if (audience.some(({ accountId }) => sourceAccess.get(accountId)?.capabilities.readTranscript !== true)) {
-            return { ok: false, reason: "destination_audience_broader" };
-        }
+        const decision = evaluateSessionContextPair(destination, {
+            runtimeMayReadSource: true,
+            audienceMayReadSource: audience.every(({ accountId }) => sourceAccess.get(accountId)?.capabilities.readTranscript === true),
+        });
+        if (!decision.ok) return decision;
         if (audience.length < AUDIENCE_PAGE_SIZE) break;
         afterAccountId = last.accountId;
     }
-    return { ok: true, destinationRuntimeAccountId: destination.accountId };
+    return custody;
 }
 
 /**
@@ -129,38 +143,56 @@ export async function mayInjectSessionContextInTx(
         authentication: SessionAccessAuthentication;
     }>,
 ): Promise<SessionContextInjectionDecision> {
-    if (input.sourceSessionId === input.destinationSessionId) {
-        return { ok: false, reason: "same_session" };
-    }
+    const decisions = await mayInjectSessionContextForDestinationsInTx(tx, {
+        ...input, destinationSessionIds: [input.destinationSessionId],
+    });
+    return decisions.get(input.destinationSessionId)!;
+}
+
+/** Authoring page admission shares source facts and the complete canonical audience census. */
+export async function mayInjectSessionContextForDestinationsInTx(tx: Tx, input: Readonly<{
+    configuringAccountId: string;
+    sourceSessionId: string;
+    destinationSessionIds: readonly string[];
+    authentication: SessionAccessAuthentication;
+}>): Promise<ReadonlyMap<string, SessionContextInjectionDecision>> {
+    const decisions = new Map<string, SessionContextInjectionDecision>();
+    const requestedIds = [...new Set(input.destinationSessionIds)];
+    if (requestedIds.includes(input.sourceSessionId)) decisions.set(input.sourceSessionId, { ok: false, reason: "same_session" });
+    const destinationIds = requestedIds.filter(id => id !== input.sourceSessionId);
+    if (destinationIds.length === 0) return decisions;
     const sessions = await tx.session.findMany({
-        where: { id: { in: [input.sourceSessionId, input.destinationSessionId] } },
+        where: { id: { in: [...new Set([input.sourceSessionId, ...destinationIds])] } },
         select: { id: true, accountId: true, publicShare: { select: { expiresAt: true } } },
     });
     const source = sessions.find(({ id }) => id === input.sourceSessionId);
-    const destination = sessions.find(({ id }) => id === input.destinationSessionId);
-    if (!source || !destination) return { ok: false, reason: "unavailable" };
-
-    const [sourceAccess, destinationAccess] = await Promise.all([
-        resolveEffectiveSessionAccess(tx, {
-            accountId: input.configuringAccountId,
-            sessionId: source.id,
-            authentication: input.authentication,
-        }),
-        resolveEffectiveSessionAccess(tx, {
-            accountId: input.configuringAccountId,
-            sessionId: destination.id,
-            authentication: input.authentication,
-        }),
-    ]);
-    if (sourceAccess?.capabilities.readTranscript !== true || destinationAccess?.capabilities.submitAgentInput !== true) {
-        return { ok: false, reason: "configurer_not_allowed" };
+    if (!source) {
+        for (const id of destinationIds) decisions.set(id, { ok: false, reason: "unavailable" });
+        return decisions;
     }
-    return await evaluateSessionContextPairInTx(
-        tx,
-        source.id,
-        destination,
-        { kind: "content_free_structural_authoring" },
-    );
+    const byId = new Map(sessions.map(session => [session.id, session]));
+    const access = await resolveEffectiveSessionAccessForSessionsInTx(tx, {
+        accountId: input.configuringAccountId, sessionIds: sessions.map(session => session.id), authentication: input.authentication,
+    });
+    const admitted: DestinationSession[] = [];
+    for (const id of destinationIds) {
+        const destination = byId.get(id);
+        if (!destination) decisions.set(id, { ok: false, reason: "unavailable" });
+        else if (access.get(source.id)?.capabilities.readTranscript !== true || access.get(id)?.capabilities.submitAgentInput !== true) {
+            decisions.set(id, { ok: false, reason: "configurer_not_allowed" });
+        } else admitted.push(destination);
+    }
+    if (admitted.length === 0) return decisions;
+    const audiences = await resolveCurrentSessionRecipientAccountIdsBySessionInTx(tx, { sessionIds: admitted.map(session => session.id) });
+    const sourceAccess = await resolveStructuralSessionAccessForAccountsInTx(tx, {
+        sessionId: source.id,
+        accountIds: [...new Set(admitted.flatMap(destination => [destination.accountId, ...(audiences.get(destination.id) ?? [])]))],
+    });
+    for (const destination of admitted) decisions.set(destination.id, evaluateSessionContextPair(destination, {
+        runtimeMayReadSource: sourceAccess.get(destination.accountId)?.capabilities.readTranscript === true,
+        audienceMayReadSource: (audiences.get(destination.id) ?? []).every(id => sourceAccess.get(id)?.capabilities.readTranscript === true),
+    }));
+    return decisions;
 }
 
 /**

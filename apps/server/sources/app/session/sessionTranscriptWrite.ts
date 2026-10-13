@@ -504,7 +504,11 @@ async function writeHistoricalSessionMessageBatchWithModeInTx(
                 continue;
             }
             const references = new Map<string, SessionTranscriptSurfaceItemReferencesV1['references'][number]>();
-            for (const reference of [...admitted.references, ...(readSessionTranscriptSurfaceItemReferencesV1(stored.surfaceItemReference) ?? [])]) {
+            const collectedReferences: SessionTranscriptSurfaceItemReferencesV1['references'] = [
+                ...admitted.references,
+                ...(readSessionTranscriptSurfaceItemReferencesV1(stored.surfaceItemReference) ?? []),
+            ];
+            for (const reference of collectedReferences) {
                 const key = 'sourceItemId' in reference
                     ? getSessionTranscriptSurfaceItemReferenceSourceKeyV1(reference)
                     : `legacy:${JSON.stringify(reference)}`;
