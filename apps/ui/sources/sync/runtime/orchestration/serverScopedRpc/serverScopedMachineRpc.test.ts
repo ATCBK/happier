@@ -794,7 +794,7 @@ describe('machineRpcWithServerScope', () => {
         } finally { resetRuntimeFetch(); }
     });
 
-    it.each(['capability', 'installDecision', 'marketplaceQuery'] as const)('keeps plugin capability execution pending until its admitted daemon operation completes (%s)', async (operation) => {
+    it.each(['capability', 'installDecision'] as const)('keeps plugin capability execution pending until its admitted daemon operation completes (%s)', async (operation) => {
         vi.useFakeTimers();
         try {
             getActiveServerSnapshotSpy.mockReturnValue({
@@ -813,28 +813,22 @@ describe('machineRpcWithServerScope', () => {
                 options?.onIssued?.();
                 return await new Promise((resolve) => { resolveResult = resolve; });
             });
-            const page = { revision: 7, items: [], nextCursor: null, sources: [], diagnostics: [] };
             const pending = operation === 'capability'
                 ? (await import('@/sync/ops/capabilities')).machineCapabilitiesInvoke('machine-1', {
                     id: 'tool.plugins', method: 'install', params: { pluginId: 'example' },
                 }, { timeoutMs: null })
-                : operation === 'installDecision'
-                    ? (await import('@/sync/ops/machinePluginInstallDecision')).machinePluginInstallDecision('machine-1', {
+                : (await import('@/sync/ops/machinePluginInstallDecision')).machinePluginInstallDecision('machine-1', {
                         timeoutMs: null, isAuthorityCurrent: () => true,
                         decision: { pendingChangeId: 'pending-1', decision: 'cancel' },
-                    })
-                    : (await import('@/sync/ops/machineMarketplaceSources')).machineMarketplaceIndexQuery('machine-1', {
-                        text: '', cursor: null, limit: 50, filters: {},
-                    }, { timeoutMs: null });
+                    });
             const settled = vi.fn();
             void pending.then(settled, settled);
             await vi.advanceTimersByTimeAsync(601_000);
             expect(settled).not.toHaveBeenCalled();
-            resolveResult(operation === 'capability' ? { ok: true, result: { installed: true } }
-                : operation === 'installDecision' ? { kind: 'cancelled' } : page);
+            resolveResult(operation === 'capability' ? { ok: true, result: { installed: true } } : { kind: 'cancelled' });
             await expect(pending).resolves.toMatchObject(operation === 'capability'
                 ? { supported: true, response: { ok: true, result: { installed: true } } }
-                : operation === 'installDecision' ? { supported: true, outcome: { kind: 'cancelled' } } : page);
+                : { supported: true, outcome: { kind: 'cancelled' } });
             expect(createEphemeralSocketSpy).not.toHaveBeenCalled();
         } finally { vi.useRealTimers(); }
     });

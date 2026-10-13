@@ -163,7 +163,10 @@ describe('machineRpcWithServerScope (scoped encrypted network)', () => {
         const response = Response.json({});
         // Response is the HTTP boundary; route selection and timeout accounting remain real.
         vi.spyOn(response, 'json').mockImplementation(() => body.promise);
-        vi.stubGlobal('fetch', async () => { answered.resolve(); return response; });
+        vi.stubGlobal('fetch', async (_input: RequestInfo | URL, init?: RequestInit) => {
+            if (init?.method === 'OPTIONS') return new Response(null, { status: 204 });
+            answered.resolve(); return response;
+        });
         vi.useFakeTimers();
         try {
             const pending = enableDirectRoute(RPC_METHODS.DAEMON_BROWSER_CONTROL_DISPATCH)
@@ -181,7 +184,10 @@ describe('machineRpcWithServerScope (scoped encrypted network)', () => {
     it.each([RPC_METHODS.DAEMON_BROWSER_CONTROL_DISPATCH, RPC_METHODS.DAEMON_BROWSER_CONTEXT_DISPATCH])(
         'does not replay an ambiguous direct effect over a successful relay for %s', async (method) => {
             let effects = 0;
-            vi.stubGlobal('fetch', async () => { effects++; return Response.json({ unreadableResponse: true }); });
+            vi.stubGlobal('fetch', async (_input: RequestInfo | URL, init?: RequestInit) => {
+                if (init?.method === 'OPTIONS') return new Response(null, { status: 204 });
+                effects++; return Response.json({ unreadableResponse: true });
+            });
             boundary.setRpcAckResponder(async (request) => {
                 effects++;
                 const decoded = await decodeRequest(request);
@@ -196,7 +202,10 @@ describe('machineRpcWithServerScope (scoped encrypted network)', () => {
 
     it('keeps a sent direct outcome unknown when relay preparation cannot emit', async () => {
         let directCalls = 0;
-        vi.stubGlobal('fetch', async () => { directCalls++; return Response.json({ unreadableResponse: true }); });
+        vi.stubGlobal('fetch', async (_input: RequestInfo | URL, init?: RequestInit) => {
+            if (init?.method === 'OPTIONS') return new Response(null, { status: 204 });
+            directCalls++; return Response.json({ unreadableResponse: true });
+        });
         boundary.setSocketConfigurator(({ socket }) => {
             socket.timeout.mockImplementation(() => { throw new Error('R16 relay preparation failure'); });
         });
@@ -209,6 +218,7 @@ describe('machineRpcWithServerScope (scoped encrypted network)', () => {
     it.each(['grant_revoked', 'handler_unavailable'] as const)(
         'distinguishes the direct %s refusal from an ambiguous handler result', async (reasonCode) => {
             vi.stubGlobal('fetch', async (_input: RequestInfo | URL, init?: RequestInit) => {
+                if (init?.method === 'OPTIONS') return new Response(null, { status: 204 });
                 const request = JSON.parse(String(init?.body));
                 return Response.json({ v: 2, ok: false, receipt: 'peer.rpc.fell_back_to_server',
                     requestId: request.requestId, method: request.method, reasonCode });
@@ -224,6 +234,7 @@ describe('machineRpcWithServerScope (scoped encrypted network)', () => {
 
     it('can deliver through the encrypted relay after a bound stale-grant refusal', async () => {
         vi.stubGlobal('fetch', async (_input: RequestInfo | URL, init?: RequestInit) => {
+            if (init?.method === 'OPTIONS') return new Response(null, { status: 204 });
             const request = JSON.parse(String(init?.body));
             return Response.json({ v: 2, ok: false, receipt: 'peer.rpc.fell_back_to_server',
                 requestId: request.requestId, method: request.method, reasonCode: 'grant_revoked' });

@@ -604,6 +604,7 @@ export async function machineRpcWithServerScope<R, A>(params: ServerScopedMachin
                             serverId: effectiveParams.serverId,
                             timeoutMs,
                             resolveRemainingTimeoutMs: timeoutBudget.resolveRemainingTimeoutMs,
+                            signal: effectiveParams.signal,
                         });
                         if (route.kind === 'selected') {
                             observeScope(createServerAccountScope(
