@@ -500,7 +500,7 @@ export async function createSessionScanner(opts: {
             logger.debug('[SESSION_SCANNER] Failed observing message:', err);
         }
         if (isClaudeInternalTranscriptMessage(file)
-            && readClaudeTaskLifecycleEnvelope(file)?.subtype !== 'task_notification') {
+            && (file.isSidechain === true || readClaudeTaskLifecycleEnvelope(file)?.subtype !== 'task_notification')) {
             return false;
         }
         const key = messageKey(file);

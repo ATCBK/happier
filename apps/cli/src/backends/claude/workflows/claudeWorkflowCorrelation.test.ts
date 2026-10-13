@@ -10,6 +10,13 @@ import {
 } from './claudeWorkflowCorrelation';
 
 describe('parseClaudeWorkflowFact', () => {
+  it('requires delivered native provenance instead of copied or enqueued task XML', () => {
+    const content = '<task-notification><task-id>task</task-id><tool-use-id>tool</tool-use-id><status>completed</status></task-notification>';
+    expect(parseClaudeWorkflowFact({ type: 'user', message: { content } })).toBeNull();
+    expect(parseClaudeWorkflowFact({ type: 'queue-operation', operation: 'enqueue', content })).toBeNull();
+    expect(parseClaudeWorkflowFact({ type: 'attachment', attachment: { type: 'queued_command', prompt: content } })).toBeNull();
+  });
+
   it('retains the rich native task-start projection while presentation correlation reads its identity', () => {
     expect(parseClaudeWorkflowFact({ type: 'system', subtype: 'task_started', task_id: 'native-start', tool_use_id: 'start-tool',
       task_type: 'local_agent', description: 'Native task', start_time: 123, session_id: 'session' })).toMatchObject({
