@@ -31,7 +31,7 @@ function snapshotHome(home: string): Map<string, string> {
             entries.set(path, `directory:${mode}`);
             for (const child of readdirSync(path).sort()) visit(join(path, child));
         } else if (stat.isFile()) {
-            entries.set(path, `file:${mode}:${createHash('sha256').update(readFileSync(path)).digest('hex')}`);
+            entries.set(path, `file:${mode}:${stat.mtimeMs}:${stat.ctimeMs}:${createHash('sha256').update(readFileSync(path)).digest('hex')}`);
         } else {
             entries.set(path, `other:${mode}:${stat.size}`);
         }
@@ -55,9 +55,9 @@ export function createAgentLaunchObserver(input: Readonly<{ home: string }>): Re
             argv = [...launch.argv];
             env = Object.fromEntries(Object.entries(launch.env ?? {}).filter((entry): entry is [string, string] => typeof entry[1] === 'string'));
         },
-        recordAcpSessionNew(params) { acpSessionNew = params; },
-        recordAppServerRequest(method, params) { appServerRequests.push({ method, params }); },
-        recordRuntimeEvent(event) { runtimeEvents.push(event); },
+        recordAcpSessionNew(params) { acpSessionNew = structuredClone(params); },
+        recordAppServerRequest(method, params) { appServerRequests.push({ method, params: structuredClone(params) }); },
+        recordRuntimeEvent(event) { runtimeEvents.push(structuredClone(event)); },
         reset() {
             baseline = snapshotHome(input.home);
             argv = [];
@@ -73,8 +73,8 @@ export function createAgentLaunchObserver(input: Readonly<{ home: string }>): Re
             const current = snapshotHome(input.home);
             const filesWritten = [...new Set([...baseline.keys(), ...current.keys()])]
                 .filter(path => baseline.get(path) !== current.get(path)).sort();
-            return { argv: [...argv], env: { ...env }, acpSessionNew,
-                appServerRequests: [...appServerRequests], filesWritten, runtimeEvents: [...runtimeEvents] };
+            return { argv: [...argv], env: { ...env }, acpSessionNew: structuredClone(acpSessionNew),
+                appServerRequests: structuredClone(appServerRequests), filesWritten, runtimeEvents: structuredClone(runtimeEvents) };
         },
     };
 }

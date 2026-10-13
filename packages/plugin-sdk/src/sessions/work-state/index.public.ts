@@ -84,3 +84,4 @@ export { SessionBackgroundTaskRecordV1Schema } from '../workState.js';
 export type { SessionBackgroundTaskRecordV1 } from '../workState.js';
 export { buildBackgroundTaskSystemRecordLocalId } from '../workState.js';
 export { redactBackgroundCommand } from '../workState.js';
+

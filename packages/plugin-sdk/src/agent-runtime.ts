@@ -100,6 +100,7 @@ export type {
   AgentSessionActiveInputStatus,
   AgentSessionInput,
   AgentSessionMcpLaunchConfig,
+  AgentSessionMcpToolPolicy,
   AgentSessionSkillDelivery,
   AgentSessionMcpServer,
   AgentSessionMcpService,

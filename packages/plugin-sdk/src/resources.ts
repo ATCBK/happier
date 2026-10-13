@@ -22,24 +22,6 @@ import type {
     PromptAssetTypeDescriptor,
     PromptAssetWriteBundleRequest,
     PromptAssetWriteDocRequest,
-    PromptRegistryAdapterDescriptorV1,
-    PromptRegistryConfiguredSourceV1,
-    PromptRegistryErrorCodeV1,
-    PromptRegistryErrorResponseV1,
-    PromptRegistryFetchItemRequestV1,
-    PromptRegistryFetchItemResponseV1,
-    PromptRegistryFetchedItemV1,
-    PromptRegistryInstallRequestV1,
-    PromptRegistryInstallResponseV1,
-    PromptRegistryInstallTargetV1,
-    PromptRegistryItemSummaryV1,
-    PromptRegistryListAdaptersResponseV1,
-    PromptRegistryListSourcesRequestV1,
-    PromptRegistryListSourcesResponseV1,
-    PromptRegistryScanSourceRequestV1,
-    PromptRegistryScanSourceResponseV1,
-    PromptRegistrySourceDescriptorV1,
-    PromptRegistrySourcesV1,
 } from '@happier-dev/protocol';
 
 import type { PluginCancellationOptions } from './lifecycle.js';
@@ -87,24 +69,6 @@ export type PromptAssetListTypesResult = PromptAssetListTypesResponseV1;
 export type PromptAssetDiscoverResult = PromptAssetDiscoverResponseV1;
 export type PromptAssetReadResult = PromptAssetReadResponseV1;
 
-export type PromptRegistryConfiguredSource = PromptRegistryConfiguredSourceV1;
-export type PromptRegistrySources = PromptRegistrySourcesV1;
-export type PromptRegistryAdapterDescriptor = PromptRegistryAdapterDescriptorV1;
-export type PromptRegistrySourceDescriptor = PromptRegistrySourceDescriptorV1;
-export type PromptRegistryItemSummary = PromptRegistryItemSummaryV1;
-export type PromptRegistryFetchedItem = PromptRegistryFetchedItemV1;
-export type PromptRegistryListSourcesRequest = PromptRegistryListSourcesRequestV1;
-export type PromptRegistryScanSourceRequest = PromptRegistryScanSourceRequestV1;
-export type PromptRegistryFetchItemRequest = PromptRegistryFetchItemRequestV1;
-export type PromptRegistryInstallTarget = PromptRegistryInstallTargetV1;
-export type PromptRegistryInstallRequest = PromptRegistryInstallRequestV1;
-export type PromptRegistryErrorCode = PromptRegistryErrorCodeV1;
-export type PromptRegistryErrorResult = PromptRegistryErrorResponseV1;
-export type PromptRegistryListAdaptersResult = PromptRegistryListAdaptersResponseV1;
-export type PromptRegistryListSourcesResult = PromptRegistryListSourcesResponseV1;
-export type PromptRegistryScanSourceResult = PromptRegistryScanSourceResponseV1;
-export type PromptRegistryFetchItemResult = PromptRegistryFetchItemResponseV1;
-export type PromptRegistryInstallResult = PromptRegistryInstallResponseV1;
 
 export interface PromptAssetAdapter {
     readonly descriptor: PromptAssetTypeDescriptor;

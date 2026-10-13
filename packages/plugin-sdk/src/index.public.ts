@@ -13,6 +13,7 @@ export type { PluginDragSourceContributionV1, PluginDropTargetContributionV1 } f
 export type { PluginProjectNativeAdapterContributionV1 } from './manifest.js';
 export type { PluginInputTypeReferenceV1 } from './manifest.js';
 export type { PluginAtmospherePictureContributionV1 } from './manifest.js';
+export type { PluginRegistrySourceContributionV1 } from './manifest.js';
 export { MAX_PLUGIN_SEARCH_ITEM_COMMAND_UTF8_BYTES_V1 } from './searchProviders.js';
 export { PluginSearchItemV1Schema } from './searchProviders.js';
 export { PluginSearchQueryV1Schema } from './searchProviders.js';

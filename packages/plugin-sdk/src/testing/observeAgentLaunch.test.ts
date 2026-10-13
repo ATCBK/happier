@@ -1,4 +1,4 @@
-import { mkdtempSync, mkdirSync, rmSync, symlinkSync, writeFileSync, unlinkSync } from 'node:fs';
+import { chmodSync, mkdtempSync, mkdirSync, rmSync, symlinkSync, writeFileSync, unlinkSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { describe, expect, it } from 'vitest';
@@ -11,22 +11,32 @@ describe('Agent launch boundary observer', () => {
             mkdirSync(join(home, '.claude'));
             const changed = join(home, '.claude', 'settings.json');
             const removed = join(home, '.claude', 'removed');
+            const nested = join(home, '.claude', 'skills', 'fixture', 'scripts', 'nested.txt');
+            const executable = join(home, '.claude', 'executable');
+            mkdirSync(join(home, '.claude', 'skills', 'fixture', 'scripts'), { recursive: true });
             writeFileSync(changed, '{}');
             writeFileSync(removed, 'existing');
+            writeFileSync(nested, 'before');
+            writeFileSync(executable, 'same bytes', { mode: 0o600 });
             if (process.platform !== 'win32') symlinkSync(home, join(home, '.claude', 'cycle'));
             const observer = createAgentLaunchObserver({ home });
             const boundaries = observer.boundaries as AgentLaunchObserverBoundaries;
             boundaries.recordLaunch({ argv: ['--plugin-dir', '/session/skills'], env: { HOME: home, ABSENT: undefined } });
-            boundaries.recordAppServerRequest('skills/extraRoots/set', { extraRoots: ['/session/skills'] });
+            const request = { extraRoots: ['/session/skills'] };
+            boundaries.recordAppServerRequest('skills/extraRoots/set', request);
+            request.extraRoots.push('/later-mutation');
             boundaries.recordAcpSessionNew({ cwd: home });
             boundaries.recordRuntimeEvent({ kind: 'commands-changed' });
-            writeFileSync(changed, '{"changed":true}');
+            writeFileSync(changed, '[]');
+            writeFileSync(nested, 'edited');
+            if (process.platform !== 'win32') chmodSync(executable, 0o700);
             unlinkSync(removed);
             expect(observer.observeLaunch()).toEqual({
                 argv: ['--plugin-dir', '/session/skills'], env: { HOME: home },
                 acpSessionNew: { cwd: home },
                 appServerRequests: [{ method: 'skills/extraRoots/set', params: { extraRoots: ['/session/skills'] } }],
-                runtimeEvents: [{ kind: 'commands-changed' }], filesWritten: [removed, changed].sort(),
+                runtimeEvents: [{ kind: 'commands-changed' }],
+                filesWritten: [removed, changed, nested, ...(process.platform === 'win32' ? [] : [executable])].sort(),
             });
             boundaries.reset();
             expect(observer.observeLaunch().filesWritten).toEqual([]);

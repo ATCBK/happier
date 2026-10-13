@@ -1,10 +1,11 @@
-import { mkdir, mkdtemp, readFile, rm, writeFile } from 'node:fs/promises';
+import { lstat, mkdir, mkdtemp, readFile, realpath, rm, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
-import { join, relative, isAbsolute } from 'node:path';
+import { join, relative, isAbsolute, sep } from 'node:path';
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 import type { AgentContribution } from '../agents.js';
 import type { AgentSessionOpenRequest, AgentSessionRuntime, AgentSessionSkillDelivery } from '../agentRuntime/session.js';
 import type { ObservedAgentLaunch } from './observeAgentLaunch.js';
+import { AgentSessionRuntimeEventSchema } from '@happier-dev/protocol/runtime/agentSessionV1';
 
 export type AgentSkillDeliveryContractInput = Readonly<{
     agent: AgentContribution;
@@ -35,9 +36,44 @@ function isWithin(path: string, root: string): boolean {
     return child === '' || (!isAbsolute(child) && child !== '..' && !child.startsWith(`..${process.platform === 'win32' ? '\\' : '/'}`));
 }
 
+function readOwnPath(value: unknown, path: readonly string[]): unknown {
+    for (const key of path) {
+        if (!value || typeof value !== 'object' || !Object.hasOwn(value, key)) return undefined;
+        value = Reflect.get(value, key);
+    }
+    return value;
+}
+
+function ownsPrivateHome(launch: ObservedAgentLaunch): boolean {
+    const privateHome = launch.env.GEMINI_CLI_HOME;
+    return Boolean(privateHome && launch.env.HOME === privateHome
+        && launch.env.XDG_CONFIG_HOME && isWithin(launch.env.XDG_CONFIG_HOME, privateHome));
+}
+
+function comparableLaunch(launch: ObservedAgentLaunch): unknown {
+    const privateHome = launch.env.GEMINI_CLI_HOME;
+    // Private-home launches allocate a new directory even without skills.
+    // Compare the shared root identity while retaining every relative path.
+    const normalize = (value: unknown): unknown => {
+        if (privateHome && ownsPrivateHome(launch) && typeof value === 'string'
+            && (value === privateHome || value.startsWith(`${privateHome}${sep}`))) {
+            return `<private-home>${value.slice(privateHome.length)}`;
+        }
+        if (Array.isArray(value)) return value.map(normalize);
+        if (value && typeof value === 'object') {
+            return Object.fromEntries(Object.entries(value).map(([key, child]) => [key, normalize(child)]));
+        }
+        return value;
+    };
+    return normalize({ argv: launch.argv, env: launch.env, acpSessionNew: launch.acpSessionNew,
+        appServerRequests: launch.appServerRequests });
+}
+
 /** Register the manifest's observable launch contracts; the plugin supplies genuine boundary adapters. */
 export function runAgentSkillDeliveryContract(input: AgentSkillDeliveryContractInput): void {
-    const capability = input.agent.capabilities.skills;
+    const capability = 'skills' in input.agent.capabilities ? input.agent.capabilities.skills : undefined;
+    const acpDefinition = 'runtime' in input.agent && input.agent.runtime.kind === 'acp' ? input.agent.runtime.definition : undefined;
+    const acpDelivery = acpDefinition?.skills?.sessionDelivery;
     describe(`${input.agent.id} skill delivery contract`, () => {
         let directory: string;
         let skills: AgentSessionSkillDelivery;
@@ -46,13 +82,59 @@ export function runAgentSkillDeliveryContract(input: AgentSkillDeliveryContractI
             kind: 'create', sessionId: 'skill-delivery-contract', cwd: directory,
             ...(delivery ? { skills: delivery } : {}),
         });
+        const assertNativeHomePreserved = (delivery?: AgentSessionSkillDelivery) => {
+            const launch = input.observeLaunch();
+            const home = launch.env.HOME;
+            const privateHome = ownsPrivateHome(launch);
+            const nativeRoots = home && !privateHome ? [
+                ...['.claude', '.agents', '.codex', '.config/opencode', '.copilot', '.gemini', '.pi', '.qwen']
+                    .map(path => join(home, path)),
+                ...(capability?.nativeRoots?.user ?? []).map(parts => join(home, ...parts)),
+            ] : [];
+            expect(launch.filesWritten.filter(path => nativeRoots.some(root => isWithin(path, root))),
+                'K5: native folders and configuration are immutable during launch').toEqual([]);
+            const privateRoots = [...(delivery ? [delivery.pluginRoot] : []), ...Object.entries(launch.env)
+                .filter(([key]) => key.endsWith('_CONFIG_DIR') || key === 'XDG_CONFIG_HOME' || key === 'GEMINI_CLI_HOME')
+                .map(([, value]) => value)
+                // An inherited config directory inside HOME is native, not private.
+                // Gemini's actual fresh private-home relation is the narrow exception.
+                .filter(root => home && (!isWithin(root, home) || privateHome))];
+            expect(launch.filesWritten.filter(path => !privateRoots.some(root => isWithin(path, root))),
+                'K5: launch must not write the native fixture home').toEqual([]);
+        };
         const open = async (factory: AgentSkillDeliveryContractInput['openSession'], delivery?: AgentSessionSkillDelivery) => {
             const runtime = await factory(request(delivery));
             runtimes.push(runtime);
+            // Check every launch: an adapter resetting its observer between cases
+            // must not hide a native configuration write made only on first use.
+            assertNativeHomePreserved(delivery);
             return runtime;
         };
         const assertDelivery = async () => {
-            const strings = launchStrings(input.observeLaunch());
+            const launch = input.observeLaunch();
+            if (acpDelivery?.kind === 'native_config_skills_dir') {
+                const nativeConfig = acpDefinition?.mcp?.nativeSessionConfig;
+                if (!nativeConfig) throw new Error('Native skill delivery requires its declared config root.');
+                const key = process.platform === 'win32' ? nativeConfig.configRootEnvKey.win32 : nativeConfig.configRootEnvKey.posix;
+                const root = launch.env[key];
+                expect(root, 'K1: the declared private config root reaches the actual launch').toBeTruthy();
+                const deliveredRoot = join(root!, nativeConfig.directory, acpDelivery.subdirectory);
+                const directory = await lstat(deliveredRoot);
+                expect(directory.isDirectory() && !directory.isSymbolicLink(), 'K1: the native skill directory stays private and real').toBe(true);
+                expect(await realpath(join(deliveredRoot, 'contract-skill'))).toBe(await realpath(join(skills.skillsRoot, 'contract-skill')));
+                expect(await readFile(join(deliveredRoot, 'contract-skill', 'SKILL.md'), 'utf8')).toContain('Contract skill');
+                expect(await readFile(join(deliveredRoot, 'contract-skill', 'scripts', 'nested.txt'), 'utf8')).toBe('supporting file');
+                return;
+            }
+            const strings = launchStrings(launch);
+            if (acpDelivery?.kind === 'defaults_file_env') {
+                const file = launch.env[acpDelivery.envKey];
+                expect(file, 'K1: the declared defaults file reaches the actual launch').toBeTruthy();
+                const parsed: unknown = JSON.parse(await readFile(file!, 'utf8'));
+                const directories = readOwnPath(parsed, acpDelivery.directoriesKeyPath);
+                expect(Array.isArray(directories), 'K1: the real defaults file contains its declared directories list').toBe(true);
+                if (Array.isArray(directories)) strings.push(...directories.filter((value): value is string => typeof value === 'string'));
+            }
             // Match the longer skills root first: it already includes pluginRoot.
             const roots = [skills.skillsRoot, skills.pluginRoot].sort((a, b) => b.length - a.length);
             const references = strings.flatMap(value => {
@@ -108,29 +190,37 @@ export function runAgentSkillDeliveryContract(input: AgentSkillDeliveryContractI
             runtimes.splice(runtimes.indexOf(delivered), 1);
             await open(input.openSession);
             const after = input.observeLaunch();
-            expect({ argv: after.argv, env: after.env, acpSessionNew: after.acpSessionNew, appServerRequests: after.appServerRequests })
-                .toEqual({ argv: before.argv, env: before.env, acpSessionNew: before.acpSessionNew, appServerRequests: before.appServerRequests });
+            expect(comparableLaunch(after)).toEqual(comparableLaunch(before));
         });
         it('K3 applies native disables iff the declaration supports them', async () => {
             await open(input.openSession, skills);
-            const observed = launchStrings(input.observeLaunch()).join('\n');
+            const launch = input.observeLaunch();
+            if (acpDelivery?.kind === 'defaults_file_env' && acpDelivery.disabledKeyPath) {
+                const parsed: unknown = JSON.parse(await readFile(launch.env[acpDelivery.envKey]!, 'utf8'));
+                const disabled = readOwnPath(parsed, acpDelivery.disabledKeyPath);
+                expect(Array.isArray(disabled) && disabled.includes('contract-native-blocked')).toBe(capability?.nativeDisable === 'supported');
+                return;
+            }
+            const strings = launchStrings(launch);
+            const observed = strings.join('\n');
             const disabled = observed.includes('contract-native-blocked');
             expect(disabled).toBe(capability?.nativeDisable === 'supported');
+            if (disabled) {
+                expect(strings.some(value => value.includes('contract-native-blocked')
+                    && (/"(?:off|deny)"/.test(value) || /enabled\s*[=:]\s*false/.test(value)
+                        || /"disabled(?:Extensions)?"/.test(value))), 'K3: a native selector must actually disable the skill').toBe(true);
+            }
         });
         it('K5 preserves the fixture native home byte-for-byte', async () => {
             await open(input.openSession, skills);
-            const launch = input.observeLaunch();
-            const privateRoots = [skills.pluginRoot, ...Object.entries(launch.env)
-                .filter(([key]) => key.endsWith('_CONFIG_DIR') || key === 'XDG_CONFIG_HOME' || key === 'GEMINI_CLI_HOME')
-                .map(([, value]) => value)];
-            expect(launch.filesWritten.filter(path => !privateRoots.some(root => isWithin(path, root))),
-                'K5: launch must not write the native fixture home').toEqual([]);
+            assertNativeHomePreserved(skills);
         });
         it('K6 implements and acknowledges declared live reload', async () => {
             const runtime = await open(input.openSession, skills);
             if (capability?.liveReload !== 'supported') return;
             expect(runtime.refreshSkills).toBeTypeOf('function');
             expect(await runtime.refreshSkills!({ skills })).toEqual({ kind: 'applied' });
+            assertNativeHomePreserved(skills);
         });
         for (const variant of input.variants ?? []) {
             it(`K10 reports ${variant.id} truthfully`, async () => {
@@ -138,6 +228,11 @@ export function runAgentSkillDeliveryContract(input: AgentSkillDeliveryContractI
                 if (variant.expect === 'unsupported') {
                     expect(runtime.skillsDelivered).toBe(false);
                     expect(launchStrings(input.observeLaunch()).join('\n')).not.toContain(skills.pluginRoot);
+                    if (capability?.liveReload === 'supported') {
+                        expect(runtime.refreshSkills).toBeTypeOf('function');
+                        expect(await runtime.refreshSkills!({ skills })).toEqual({ kind: 'restart_required', reason: 'launch_path_unsupported' });
+                        assertNativeHomePreserved(skills);
+                    }
                     return;
                 }
                 expect(runtime.skillsDelivered).not.toBe(false);
@@ -145,6 +240,7 @@ export function runAgentSkillDeliveryContract(input: AgentSkillDeliveryContractI
                 if (variant.expect === 'restart_required') {
                     expect(runtime.refreshSkills).toBeTypeOf('function');
                     expect(await runtime.refreshSkills!({ skills })).toEqual({ kind: 'restart_required', reason: 'launch_path_unsupported' });
+                    assertNativeHomePreserved(skills);
                 }
             });
         }
@@ -152,12 +248,16 @@ export function runAgentSkillDeliveryContract(input: AgentSkillDeliveryContractI
             it('K13 emits native invocation evidence when declared', async () => {
                 expect(input.invokeSkill).toBeTypeOf('function');
                 const runtime = await open(input.openSession, skills);
+                const before = input.observeLaunch().runtimeEvents.length;
                 await input.invokeSkill!(runtime, 'contract-skill');
-                expect(input.observeLaunch().runtimeEvents.some(event => {
-                    if (!event || typeof event !== 'object' || !('kind' in event) || event.kind !== 'skill-usage' || !('skills' in event) || !Array.isArray(event.skills)) return false;
-                    return event.skills.some(skill => skill && typeof skill === 'object' && 'name' in skill
-                        && (skill.name === 'contract-skill' || skill.name === 'happier:contract-skill'));
-                })).toBe(true);
+                const usages = input.observeLaunch().runtimeEvents.slice(before)
+                    .filter(event => event !== null && typeof event === 'object' && 'kind' in event && event.kind === 'skill-usage')
+                    .map(event => AgentSessionRuntimeEventSchema.parse(event))
+                    .filter(event => event.kind === 'skill-usage');
+                expect(usages.every(event => event.sessionId === 'skill-delivery-contract'),
+                    'K13: invocation evidence belongs to the opened Session').toBe(true);
+                const matching = usages.flatMap(event => event.skills.filter(skill => skill.name === 'contract-skill' || skill.name === 'happier:contract-skill'));
+                expect(matching, 'K13: a native invocation is reported exactly once').toHaveLength(1);
             });
         }
     });

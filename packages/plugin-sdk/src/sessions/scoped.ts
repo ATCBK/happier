@@ -7,8 +7,6 @@ export type {
     SessionPermissionFollowUpPromptDeliveryV1,
     SessionPermissionFollowUpPromptIntentV1,
     SessionPermissionModeV1,
-    SessionPermissionPersistAllowRuleScopeV1,
-    SessionPermissionPersistAllowRuleV1,
     SessionPermissionsServiceV1,
     SessionStateFieldWriteRequestV1,
     SessionSystemRecordReadRequestV1,

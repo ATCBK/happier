@@ -116,6 +116,7 @@ export type { PluginProjectNativeFailureV1 } from './projectNativeAdapters.js';
 export type { PluginProjectNativeFileFactV1 } from './projectNativeAdapters.js';
 export type { PluginProjectNativeInspectionV1 } from './projectNativeAdapters.js';
 export type { PluginReference } from './identity.js';
+export type { PluginRegistrySourceContributionV1 } from './manifest.js';
 export type { PluginRemediationData } from './availability.js';
 export type { PluginRequestInterceptorDefinition } from './definePlugin.js';
 export type { PluginScopedInvocationContextV1 } from './invocation.js';

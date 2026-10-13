@@ -47,8 +47,6 @@ export type { SessionPermissionFollowUpPromptIntent } from '../services/sessions
 export type { SessionPermissionMode } from '../services/sessions.js';
 export type { SessionModeCatalog } from '../services/sessions.js';
 export { readSessionModesMetadata } from '../services/sessions.js';
-export type { SessionPermissionPersistAllowRule } from '../services/sessions.js';
-export type { SessionPermissionPersistAllowRuleScope } from '../services/sessions.js';
 export type { SessionPermissionsService } from '../services/sessions.js';
 export type { SessionRuntimeAuthRefreshRequest } from '../services/sessions.js';
 export type { SessionRuntimeAuthRefreshResult } from '../services/sessions.js';
@@ -100,5 +98,6 @@ export { hasSessionInputContentV1 } from '../services/sessions.js';
 export { readPendingLocalId } from '../services/sessions.js';
 export { readSlashCommandNames } from '../services/sessions.js';
 export { readStructuredInputMentionSourcesV1 } from '../services/sessions.js';
+export { resolveSessionMutationRetryDelayMs } from './sessionMutationBackoff.js';
 export { resolveTranscriptBodySessionMessageRole } from '../services/sessions.js';
 export { sanitizeHappierStructuredInputV1 } from '../services/sessions.js';

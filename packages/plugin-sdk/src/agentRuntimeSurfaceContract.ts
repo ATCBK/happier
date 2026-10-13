@@ -27,6 +27,7 @@ import type {
   AgentSessionHostServices,
   AgentSessionMcpServer,
   AgentSessionMcpLaunchConfig,
+  AgentSessionMcpToolPolicy,
   AgentSessionSkillDelivery,
   AgentSessionMcpService,
   AgentSessionRuntimeContext,
@@ -582,9 +583,21 @@ type _ConfigurationOptionsMustStayScalar = AssertTrue<
   >
 >;
 
+type _McpToolPolicyUsesTheCanonicalProtocolProjection = AssertTrue<
+  Equal<AgentSessionMcpToolPolicy, import('@happier-dev/protocol/mcp/servers/tools/resolveMcpToolDecisionV1').McpToolLaunchPolicyV1>
+>;
+type _SessionAndRunMcpPolicyUseOneCarrier = AssertTrue<
+  Equal<AgentSessionOpenRequest['mcpToolPolicy'], AgentExecutionRunOpenRequest['mcpToolPolicy']>
+>;
+type _ConfigurationUpdateMcpPolicyUsesTheOpenCarrier = AssertTrue<
+  Equal<AgentSessionConfigurationUpdate['mcpToolPolicy'], AgentSessionOpenRequest['mcpToolPolicy']>
+>;
+type _ConfigurationUpdateMcpPolicyUsesTheStrictProtocolCarrier = AssertTrue<
+  Equal<AgentSessionConfigurationUpdate['mcpToolPolicy'], import('@happier-dev/protocol/runtime/agentSessionV1').AgentSessionConfigurationUpdateV1['mcpToolPolicy']>
+>;
 type _ConfigurationUpdateMustReuseTheOneSnapshotShape = AssertTrue<
   Equal<
-    Omit<AgentSessionConfigurationUpdate, 'providerBinding'>,
+    Omit<AgentSessionConfigurationUpdate, 'providerBinding' | 'mcpToolPolicy'>,
     AgentSessionConfigurationSnapshot
   >
 >;
@@ -657,6 +670,7 @@ type _SessionHostServicesMustStayNarrowAndProviderNeutral = AssertTrue<
     | 'accountUsage'
     | 'mcp'
     | 'features'
+    | 'auth'
     | 'terminalHost'
     | 'models'
     | 'modes'

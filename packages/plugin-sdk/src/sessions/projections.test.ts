@@ -48,8 +48,6 @@ import type {
     SessionPermissionFollowUpPromptDelivery,
     SessionPermissionFollowUpPromptIntent,
     SessionPermissionMode,
-    SessionPermissionPersistAllowRule,
-    SessionPermissionPersistAllowRuleScope,
     SessionPermissionsService,
     SessionRuntimeAuthRefreshResult,
     SessionRuntimeAuthServices,
@@ -269,8 +267,6 @@ describe('General Sessions package-local projections', () => {
         expectTypeOf<SessionPermissionFollowUpPromptDelivery>().toEqualTypeOf<agents.SessionPermissionFollowUpPromptDeliveryV1>();
         expectTypeOf<SessionPermissionFollowUpPromptIntent>().toEqualTypeOf<agents.SessionPermissionFollowUpPromptIntentV1>();
         expectTypeOf<SessionPermissionMode>().toEqualTypeOf<agents.SessionPermissionModeV1>();
-        expectTypeOf<SessionPermissionPersistAllowRule>().toEqualTypeOf<agents.SessionPermissionPersistAllowRuleV1>();
-        expectTypeOf<SessionPermissionPersistAllowRuleScope>().toEqualTypeOf<agents.SessionPermissionPersistAllowRuleScopeV1>();
         expectTypeOf<SessionPermissionsService>().toEqualTypeOf<agents.SessionPermissionsServiceV1>();
         expectTypeOf<SessionRuntimeAuthRefreshResult>().toEqualTypeOf<agents.SessionRuntimeAuthRefreshResultV1>();
         expectTypeOf<SessionRuntimeAuthServices>().toEqualTypeOf<agents.SessionRuntimeAuthServicesV1>();

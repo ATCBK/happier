@@ -224,6 +224,7 @@ export type { AgentSessionLaunchHintsV1 } from '../../agentRuntime/projections.j
 export type { AgentSessionMcpLaunchConfig } from '../../agentRuntime/projections.js';
 export type { AgentSessionMcpServer } from '../../agentRuntime/projections.js';
 export type { AgentSessionMcpService } from '../../agentRuntime/projections.js';
+export type { AgentSessionMcpToolPolicy } from '../../agentRuntime/projections.js';
 export type { AgentSessionMcpTransport } from '../../agentRuntime/projections.js';
 export type { AgentSessionModel } from '../../agentRuntime/projections.js';
 export type { AgentSessionModelOption } from '../../agentRuntime/projections.js';
@@ -270,7 +271,7 @@ export { AgentSessionRuntimeEventSchema } from '../../agentRuntime/projections.j
 export type { AgentSessionRuntimeFactory } from '../../agentRuntime/projections.js';
 export type { AgentSessionSendRequest } from '../../agentRuntime/projections.js';
 export type { AgentSessionSendResult } from '../../agentRuntime/projections.js';
-export type { AgentSessionSkillCatalogItem } from '../../agentRuntime/projections.js';
+export type { AgentSessionSkillDelivery } from '../../agentRuntime/projections.js';
 export type { AgentSessionStartupContributionV1 } from '../../agentRuntime/projections.js';
 export type { AgentSessionStartupInstructions } from '../../agentRuntime/projections.js';
 export type { AgentSessionSubagentObservation } from '../../agentRuntime/projections.js';
@@ -358,7 +359,9 @@ export type { HandoffRuntimeLocalMetadataRequestV1 } from '../../agentRuntime/pr
 export type { HandoffRuntimeLocalMetadataV1 } from '../../agentRuntime/projections.js';
 export type { HandoffSurfaceV1 } from '../../agentRuntime/projections.js';
 export type { ListCheckpointsRequestV1 } from '../../agentRuntime/projections.js';
+export type { PluginAgentAcpMcpInputPolicyV2 } from '../../agentRuntime/projections.js';
 export type { PluginAgentAcpNativeSessionMcpConfigV2 } from '../../agentRuntime/projections.js';
+export type { PluginAgentAcpSkillsSessionDeliveryV2 } from '../../agentRuntime/projections.js';
 export type { ProviderBindingCanonicalJsonValue } from '../../agentRuntime/projections.js';
 export type { ProviderBoundModelRef } from '../../agentRuntime/projections.js';
 export type { ProviderTranscriptDispatchRequestV1 } from '../../agentRuntime/projections.js';

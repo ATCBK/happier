@@ -3,6 +3,17 @@ export type { ObservedAgentLaunch, AgentLaunchObserverBoundaries } from './obser
 export { createAgentLaunchObserver } from './observeAgentLaunch.js';
 export type { AgentSkillDeliveryContractInput } from './skillDeliveryContract.js';
 export { runAgentSkillDeliveryContract } from './skillDeliveryContract.js';
+export type {
+    AgentMcpToolPolicyControl,
+    AgentMcpToolPolicySetting,
+    AgentMcpToolPolicyFixture,
+    AgentMcpToolPolicyPermissionObservation,
+    AgentMcpToolPolicyCallObservation,
+    AgentMcpToolPolicyInvocation,
+    AgentMcpToolPolicyNativeObservation,
+    AgentMcpToolPolicyContractInput,
+} from './mcpToolPolicyContract.js';
+export { runAgentMcpToolPolicyContract } from './mcpToolPolicyContract.js';
 export type { AgentSessionRuntimeEventSubscriber } from './runtimeEvents.js';
 export type { AgentSessionRuntimeEventValidationFailure } from './runtimeEvents.js';
 export type { AgentSessionRuntimeHarness } from './runtimeEvents.js';

@@ -237,7 +237,7 @@ function fixtureService<K extends Exclude<keyof PluginServices, 'availability'>>
 
 function createActionTargetIndex(
     testkits: readonly PluginTestkit[] | undefined,
-): ReadonlyMap<string, TestkitActionTarget> {
+) {
     const targets = new Map<string, TestkitActionTarget>();
     for (const testkit of testkits ?? []) {
         const target = actionTargetsByTestkit.get(testkit);
@@ -465,6 +465,11 @@ export async function createPluginTestkit(
         options.actionTargets,
         fixtureContributorTestkits,
     ));
+    const contributesToSelf = fixtureContributionDeclarationsForManifest(manifest)
+        .some(declaration => declaration.target.pluginId === manifest.id);
+    if (contributesToSelf && actionTargets.has(manifest.id)) {
+        throw new TypeError(`Plugin Action target '${manifest.id}' was configured more than once`);
+    }
     const fixtureContributorTargets = fixtureContributorTestkits.map((testkit) => {
         const target = actionTargetsByTestkit.get(testkit);
         if (!target) {
@@ -1360,5 +1365,9 @@ export async function createPluginTestkit(
         dispose,
     });
     actionTargetsByTestkit.set(testkit, actionTarget);
+    if (contributesToSelf) {
+        actionTargets.set(manifest.id, actionTarget);
+        fixtureContributorTargets.push(actionTarget);
+    }
     return testkit;
 }

@@ -1,3 +1,5 @@
+import { isPermanentRequestError } from '../httpStatusError.js';
+
 import {
   buildAgentActivityEntryId,
   buildSessionAgentActivityHeadline,
@@ -97,6 +99,7 @@ const NON_RETRYABLE_WORKFLOW_RECORD_ERROR_CODES = new Set([
 ]);
 
 function isRetryableWorkflowActivityRecordWriteError(error: unknown): boolean {
+  if (isPermanentRequestError(error)) return false;
   const record = error && typeof error === 'object' ? error as Record<string, unknown> : null;
   const code = typeof record?.code === 'string'
     ? record.code

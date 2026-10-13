@@ -38,6 +38,65 @@ test('tuple-backed Action specs derive their keyed canonical input and output sc
   assert.equal(fieldType('ProcessesActionResultById', 'processes.stop', 'stopped'), ts.SyntaxKind.BooleanKeyword);
 });
 
+test('multi-argument family factories derive imported canonical schema maps without metadata evaluation', async t => {
+  const cache = resolve('packages/plugin-sdk/node_modules/.cache');
+  mkdirSync(cache, { recursive: true });
+  const root = mkdtempSync(resolve(cache, 'schema-action-family-factories-'));
+  t.after(() => rmSync(root, { recursive: true, force: true }));
+  const actions = resolve(root, 'packages/protocol/src/actions');
+  mkdirSync(actions, { recursive: true });
+  writeFileSync(resolve(actions, 'actionIds.ts'), `export const ACTION_ID_FAMILIES_V1 = {
+    registries: ['registries.sources.list'], skills: ['skills.create']
+  } as const;`);
+  writeFileSync(resolve(actions, 'pluginActionSurface.ts'), 'export const PLUGIN_SURFACE_EXCLUSION_REASONS = {} as const;');
+  writeFileSync(resolve(actions, 'actionSpecs.ts'), `import { REGISTRY_ACTION_SPECS_V1 } from './registries.js';
+    import { SKILL_ACTION_SPECS_V1 } from './skills.js';
+    export const ACTION_SPECS = [...REGISTRY_ACTION_SPECS_V1, ...SKILL_ACTION_SPECS_V1];`);
+  writeFileSync(resolve(actions, 'schemas.ts'), `import { z } from 'zod';
+    export const INPUTS = { 'registries.sources.list': z.object({ kind: z.string().optional() }).strict(),
+      'skills.create': z.object({ files: z.array(z.object({ path: z.string(), unixMode: z.number().optional() }).strict()) }).strict() };
+    export const OUTPUTS = { 'registries.sources.list': z.object({ revision: z.number() }).strict(),
+      'skills.create': z.object({ skillId: z.string() }).strict() };`);
+  writeFileSync(resolve(actions, 'registries.ts'), `import { INPUTS as inputs, OUTPUTS as outputs } from './schemas.js';
+    function registrySpec(id: keyof typeof inputs, title: string, options: { write?: boolean } = {}) {
+      throw new Error('Runtime spec metadata must never execute during derivation');
+      return { id, title, sideEffectClass: options.write ? 'write' : 'read', inputSchema: inputs[id], outputSchema: outputs[id] };
+    }
+    export const REGISTRY_ACTION_SPECS_V1 = [{ ...registrySpec('registries.sources.list', 'List sources') }];`);
+  writeFileSync(resolve(actions, 'skills.ts'), `import { INPUTS as inputs, OUTPUTS as outputs } from './schemas.js';
+    function skillSpec(id: keyof typeof inputs, title: string, read = false) {
+      throw new Error('Runtime spec metadata must never execute during derivation');
+      return { id, title, sideEffectClass: read ? 'read' : 'write', inputSchema: inputs[id], outputSchema: outputs[id] };
+    }
+    export const SKILL_ACTION_SPECS_V1 = [{ ...skillSpec('skills.create', 'Create skill', false) }];`);
+  const derived = await deriveActionDtoSchemas({ repoRoot: root, onlyFamilies: ['registries', 'skills'] });
+  const registry = derived.outputs.get(resolve(actions, 'registriesActionDtos.ts'));
+  const skill = derived.outputs.get(resolve(actions, 'skillsActionDtos.ts'));
+  assert.ok(registry, 'the registry factory derives its canonical DTO');
+  assert.ok(skill, 'the skills factory derives its canonical DTO');
+  assert.match(registry, /kind\?: string/u);
+  assert.match(registry, /revision: number/u);
+  assert.match(skill, /path: string/u);
+  assert.match(skill, /unixMode\?: number/u);
+  assert.match(skill, /skillId: string/u);
+});
+
+test('retained registry install publishes a concrete current author input', async () => {
+  const derived = await deriveActionDtoSchemas({ repoRoot: process.cwd(), onlyFamilies: ['prompt_library'] });
+  const dto = derived.outputs.get(resolve('packages/protocol/src/actions/promptLibraryActionDtos.ts'));
+  assert.ok(dto, 'the retained Action family must publish its canonical DTO');
+  const source = ts.createSourceFile('dto.ts', dto, ts.ScriptTarget.ES2022, true);
+  const input = source.statements
+    .find(node => ts.isTypeAliasDeclaration(node) && node.name.text === 'PromptLibraryActionInputById').type.members
+    .find(member => member.name.text === 'prompt_registry.install').type;
+  assert.equal(input.kind, ts.SyntaxKind.TypeLiteral);
+  for (const name of ['machineId', 'sourceId', 'itemId']) {
+    assert.equal(input.members.find(member => member.name.text === name)?.type.kind, ts.SyntaxKind.StringKeyword);
+  }
+  assert.equal(input.members.find(member => member.name.text === 'configuredSources'), undefined,
+    'released source declarations are ingress-only, not current author authority');
+});
+
 test('Account operand mapped keys stay lexical in public support projections', t => {
   const cache = resolve('packages/plugin-sdk/node_modules/.cache');
   mkdirSync(cache, { recursive: true });

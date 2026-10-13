@@ -14,8 +14,6 @@ import type {
     SessionPermissionFollowUpPromptDeliveryV1,
     SessionPermissionFollowUpPromptIntentV1,
     SessionPermissionModeV1,
-    SessionPermissionPersistAllowRuleScopeV1,
-    SessionPermissionPersistAllowRuleV1,
     SessionPermissionsServiceV1,
     SessionRuntimeAuthRefreshResultV1,
     SessionRuntimeAuthServicesV1,
@@ -97,7 +95,7 @@ export const SessionAuthoringCheckoutCreationDraftV1Schema:
 
 export type SessionServerStartSpawnDraftV1 = Omit<
     SessionSpawnNewInputV2,
-    'creationKey' | 'initialInput'
+    'creationKey' | 'initialInput' | 'environmentVariables' | 'attestedContext'
 >;
 /** Browser-safe server-start draft projected at the SDK author boundary. */
 export const SessionServerStartSpawnDraftV1Schema: SessionSchema<SessionServerStartSpawnDraftV1> = /* @__PURE__ */ projectProtocolValue(protocolSessionServerStartSpawnDraftV1Schema);
@@ -339,8 +337,6 @@ export type SessionPermissionDecision = SessionPermissionDecisionV1;
 export type SessionPermissionFollowUpPromptDelivery = SessionPermissionFollowUpPromptDeliveryV1;
 export type SessionPermissionFollowUpPromptIntent = SessionPermissionFollowUpPromptIntentV1;
 export type SessionPermissionMode = SessionPermissionModeV1;
-export type SessionPermissionPersistAllowRuleScope = SessionPermissionPersistAllowRuleScopeV1;
-export type SessionPermissionPersistAllowRule = SessionPermissionPersistAllowRuleV1;
 export type SessionPermissionsService = SessionPermissionsServiceV1;
 export type SessionRuntimeAuthRefreshResult = SessionRuntimeAuthRefreshResultV1;
 export type SessionRuntimeAuthServices = SessionRuntimeAuthServicesV1;

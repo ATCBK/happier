@@ -19,6 +19,7 @@ export { CONNECTED_ACCOUNT_REQUEST_AUTH_CAPABILITY_PATH_ENV } from './requestAut
 export type { PluginConnectedAccountAuthCompletionResult as ConnectedAccountAuthCompletionResult } from '../services/connectedAccounts.js';
 export type { ConnectedAccountAuthDiagnostic } from './projections.js';
 export type { ConnectedAccountAuthFailure } from './projections.js';
+export type { ConnectedAccountAuthFailureRequestV1 } from '../connectedAccounts.js';
 export type { PluginConnectedAccountAuthenticationAttempt as ConnectedAccountAuthenticationAttempt } from '../services/connectedAccounts.js';
 export type { ConnectedAccountAuthenticationContext } from '../connectedAccounts.js';
 export type { ConnectedAccountAuthenticationModeRuntime } from '../connectedAccounts.js';
@@ -45,6 +46,7 @@ export type { PluginConnectedAccountOAuthCompletion as ConnectedAccountOAuthComp
 export type { ConnectedAccountPurposeDeclaration } from '../connectedAccounts.js';
 export type { ConnectedAccountPurposeDeclarations } from './projections.js';
 export type { ConnectedAccountPurposeId } from '../connectedAccounts.js';
+export type { ConnectedAccountQuotaFailureRequestV1 } from '../connectedAccounts.js';
 export type { PluginConnectedAccountReadContext as ConnectedAccountReadContext } from '../services/connectedAccounts.js';
 export type { PluginConnectedAccountReconciliationResult as ConnectedAccountReconciliationResult } from '../services/connectedAccounts.js';
 export type { ConnectedAccountRef } from '../connectedAccounts.js';
@@ -64,6 +66,7 @@ export type { ConnectedServiceQuotaRecoveryCreditV1 } from '../connectedAccounts
 export type { CredentialRequirementOptions } from '../connectedAccounts.js';
 export { HAPPIER_CONNECTED_SERVICE_MATERIALIZED_ENV_KEYS_JSON_ENV } from '../connectedAccounts.js';
 export { HAPPIER_CONNECTED_SERVICE_SELECTIONS_JSON_ENV } from '../connectedAccounts.js';
+export type { OAuthBearerLeaseV1 } from '../connectedAccounts.js';
 export type { OauthAuthEntry } from '../connectedAccounts.js';
 export type { OauthCredentialRecord } from '../connectedAccounts.js';
 export type { OauthCredentialRecordWithExpiry } from '../connectedAccounts.js';
@@ -78,12 +81,14 @@ export type { ProviderAccountSubscriptionV1 } from '../connectedAccounts.js';
 export type { ProviderAccountUsageQuotaScopeV1 } from '../connectedAccounts.js';
 export type { ProviderResetTextEvidenceParser } from '../connectedAccounts.js';
 export type { ProviderResetTiming } from '../connectedAccounts.js';
+export type { QualifiedConnectedAccountPurposeV1 } from '../connectedAccounts.js';
 export type { QualifiedConnectedAccountRef } from '../connectedAccounts.js';
 export { QualifiedConnectedAccountRefJsonSchema } from '../connectedAccounts.js';
 export { QualifiedConnectedAccountRefSchema } from '../connectedAccounts.js';
 export type { QualifiedConnectedAccountServiceRef } from '../connectedAccounts.js';
 export { QuotaFetchError } from '../connectedAccounts.js';
 export type { QuotaFetchErrorCode } from '../connectedAccounts.js';
+export type { RequestAuthFailureOutcomeV1 } from '../connectedAccounts.js';
 export type { TokenCredentialRecord } from '../connectedAccounts.js';
 export type { UnsupportedAccountUsage } from '../connectedAccounts.js';
 export { addSafeEpochMilliseconds } from '../connectedAccounts.js';

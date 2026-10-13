@@ -946,6 +946,56 @@ describe('createPluginTestkit', () => {
     }
   });
 
+  it('executes a self-contributed operation within the target plugin current occurrence', async () => {
+    let kit: PluginTestkit;
+    let point: TargetedContributionPointRef;
+    const plugin = definePlugin({
+      id: 'acme.testkit.self-target', version: '1.0.0',
+      contributionPoints: {
+        providers: testkitTargetedOperationProtocol.point({ maxContributionsPerContributor: 1 }),
+      },
+      actions: {
+        send: { title: 'Use own contribution', surfaces: ['cli'], dangerLevel: 'safe',
+          async run(_input, context) {
+            const operation = kit.issueAdmittedTargetedOperation({
+              point,
+              contributor: { testkit: kit, contributionId: 'own' }, role: 'publish',
+            });
+            return (await context.services.actions.executeAdmittedTargetedOperationWithExecutionOrigin(
+              operation, { title: 'Ready' },
+            )).result;
+          } },
+        publish: { title: 'Own publisher', surfaces: ['plugin'], dangerLevel: 'safe',
+          inputSchema: testkitTargetedOperationInputSchema.jsonSchema,
+          resultSchema: testkitTargetedOperationResultSchema.jsonSchema,
+          async run(input, context) {
+            expect(context.caller).toMatchObject({ kind: 'plugin', pluginId: 'acme.testkit.self-target' });
+            return { accepted: testkitTargetedOperationInputSchema.parse(input).title === 'Ready' };
+          } },
+      },
+      contributesTo: { 'acme.testkit.self-target': { providers: {
+        own: testkitTargetedOperationProtocol.contribute({ operations: {
+          publish: testkitTargetedOperationProtocol.operations.publish.bind('publish'),
+        } }),
+      } } },
+    });
+    point = plugin.contributionPoints.providers;
+    kit = await createPluginTestkit({ manifest: plugin.manifest, module: plugin });
+    try {
+      const snapshot = kit.readTargetedContributionFixture(plugin.contributionPoints.providers);
+      expect(snapshot.contributions).toHaveLength(1);
+      expect(snapshot.contributions[0]?.contributor.occurrenceId).toBe(snapshot.occurrenceId);
+      await expect(kit.invokeAction('send', null)).resolves.toEqual({ accepted: true });
+    } finally { await kit.dispose(); }
+    await expect(createPluginTestkit({ manifest: plugin.manifest, module: {
+      activate(api) {
+        return plugin.activate({ ...api, actions: { ...api.actions, register(id, run) {
+          if (id !== 'publish') api.actions.register(id, run);
+        } } });
+      },
+    } })).rejects.toThrow(/actions\/publish/u);
+  });
+
   it('retains known targeted-operation roles while omitting an additive future role', async () => {
     const contributorDefinition = defineTargetedOperationContributor(
       'acme.testkit.additive-contributor',

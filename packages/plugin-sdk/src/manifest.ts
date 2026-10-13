@@ -51,6 +51,17 @@ export type PluginInputTypeContributionV1 = Readonly<{
   picker?: string | Readonly<{ pluginId: string; localId: string }>;
 }>;
 
+/** Data-only registry declaration; credentials are selected by the host. */
+export type PluginRegistrySourceContributionV1 = Readonly<{
+  id: string;
+  title: string;
+  format: 'git' | 'claude-marketplace' | 'mcp-registry' | 'acp-registry' | 'happier-catalog';
+  kinds: readonly ('skill' | 'mcpServer' | 'agent' | 'plugin')[];
+  url: string;
+  path?: string;
+  ref?: string;
+}>;
+
 /** Data-only author contract; the Protocol manifest owns runtime admission. */
 export type PluginAtmospherePictureContributionV1 = Readonly<{
   id: string;
@@ -615,6 +626,7 @@ export interface PluginManifest {
     workflows?: readonly PluginWorkflowContributionV1[];
     inputTypes?: readonly PluginInputTypeContributionV1[];
     atmospherePictures?: readonly PluginAtmospherePictureContributionV1[];
+    registrySources?: readonly PluginRegistrySourceContributionV1[];
     dragSources?: readonly PluginDragSourceContributionV1[];
     dropTargets?: readonly PluginDropTargetContributionV1[];
     /** Read-only role sources, overridable through the host's Roles settings. */
@@ -760,6 +772,7 @@ export type PluginContributes = Readonly<{
   workflows: NonNullable<NonNullable<PluginManifest['contributes']>['workflows']>;
   inputTypes: NonNullable<NonNullable<PluginManifest['contributes']>['inputTypes']>;
   atmospherePictures: NonNullable<NonNullable<PluginManifest['contributes']>['atmospherePictures']>;
+  registrySources: NonNullable<NonNullable<PluginManifest['contributes']>['registrySources']>;
   dragSources: NonNullable<NonNullable<PluginManifest['contributes']>['dragSources']>;
   dropTargets: NonNullable<NonNullable<PluginManifest['contributes']>['dropTargets']>;
   notifications: NonNullable<NonNullable<PluginManifest['contributes']>['notifications']>;

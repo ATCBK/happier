@@ -276,7 +276,6 @@ import type {
   AgentSessionRuntimeCapabilitySupportLevel,
   AgentSessionSendRequest,
   AgentSessionSendResult,
-  AgentSessionSkillCatalogItem,
   AgentSessionStartupContributionV1,
   AgentSessionStartupInstructions,
   AgentSessionTerminalComposerClearOutcome,

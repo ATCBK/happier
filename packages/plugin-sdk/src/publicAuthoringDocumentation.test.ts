@@ -141,7 +141,6 @@ describe('Plugin SDK public authoring documentation', () => {
         expect(versioningGuide).toContain('No\npublic version is established by the current source tree');
         expect(versioningGuide).toContain('Source declarations and host wiring establish source readiness, not external\navailability');
         expect(guide).toContain('## One `/resources` path, three resource workflows');
-        expect(guide).toContain('`PromptAsset*` and `PromptRegistry*`');
         expect(guide).toContain('`ResourcesService`');
         expect(guide).toContain('`@happier-dev/plugin-sdk/ui`');
         expect(guide).toContain('Host-only: do not import from an installed plugin');

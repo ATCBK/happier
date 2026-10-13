@@ -238,6 +238,7 @@ export type { AgentSessionNativeToolDescriptor } from '../../agentRuntime/projec
 export type { AgentSessionInFlightConfigurationOutcome } from '../../agentRuntime/projections.js';
 export type { AgentSessionInput } from '../../agentRuntime/projections.js';
 export type { AgentSessionMcpLaunchConfig } from '../../agentRuntime/projections.js';
+export type { AgentSessionMcpToolPolicy } from '../../agentRuntime/projections.js';
 export type { AgentSessionSkillDelivery } from '../../agentRuntime/projections.js';
 export type { AgentSessionMcpServer } from '../../agentRuntime/projections.js';
 export type { AgentSessionMcpService } from '../../agentRuntime/projections.js';
@@ -287,7 +288,6 @@ export { AgentSessionRuntimeEventSchema } from '../../agentRuntime/projections.j
 export type { AgentSessionRuntimeFactory } from '../../agentRuntime/projections.js';
 export type { AgentSessionSendRequest } from '../../agentRuntime/projections.js';
 export type { AgentSessionSendResult } from '../../agentRuntime/projections.js';
-export type { AgentSessionSkillCatalogItem } from '../../agentRuntime/projections.js';
 export type { AgentSessionStartupInstructions } from '../../agentRuntime/projections.js';
 export type { AgentSessionTerminalComposerClearOutcome } from '../../agentRuntime/projections.js';
 export type { AgentSessionUsageLimitRecoveryControl } from '../../agentRuntime/projections.js';

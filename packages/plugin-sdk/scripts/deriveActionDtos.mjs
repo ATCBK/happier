@@ -191,11 +191,11 @@ function selectSchemaRows(protocol, keys, readSource) {
       // a helper. Resolve only its keyed schema maps, without evaluating the
       // helper's runtime metadata or duplicating the family's schema owner.
       if (ts.isCallExpression(node) && ts.isIdentifier(node.expression)
-        && node.arguments.length === 1) {
+        && node.arguments.length >= 1) {
         const argument = unwrapped(node.arguments[0]);
         const helper = source(path).statements.find(statement => ts.isFunctionDeclaration(statement)
           && statement.name?.text === node.expression.text && statement.body);
-        const binding = helper?.parameters.length === 1 ? helper.parameters[0].name : null;
+        const binding = helper?.parameters.length >= 1 ? helper.parameters[0].name : null;
         if (binding) {
           for (const statement of helper.body?.statements ?? []) {
             if (!ts.isReturnStatement(statement) || !statement.expression) continue;
