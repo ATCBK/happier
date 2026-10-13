@@ -1,6 +1,6 @@
 import React from 'react';
 import renderer, { act } from 'react-test-renderer';
-import { beforeEach, describe, expect, it, vi } from 'vitest';
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { pressTestInstanceAsync, renderScreen } from '@/dev/testkit';
 import {
     connectedServicesModuleState,
@@ -86,7 +86,9 @@ vi.mock('@/components/ui/lists/ItemRowActions', () => {
 });
 
 describe('ConnectedServiceDetailView profile id validation', () => {
+  afterEach(() => { vi.unstubAllGlobals(); });
   beforeEach(() => {
+    vi.stubGlobal('fetch', vi.fn(async () => new Response(null, { status: 404 })));
     connectedServicesModuleState.routerBackSpy.mockClear();
     connectedServicesModuleState.routerPushSpy.mockClear();
     promptSpy.mockClear();
@@ -94,6 +96,16 @@ describe('ConnectedServiceDetailView profile id validation', () => {
     applySettingsSpy.mockClear();
     connectedServicesEnabled = true;
     quotasEnabled = false;
+    connectedServicesModuleState.searchParams = { serviceId: 'openai-codex' };
+  });
+
+  it('does not expose OAuth authoring for a new-service deep link until relay support is known', async () => {
+    connectedServicesModuleState.searchParams = { serviceId: 'antigravity' };
+    const { ConnectedServiceDetailView } = await import('./ConnectedServiceDetailView');
+    const screen = await renderScreen(<ConnectedServiceDetailView />);
+    expect(screen.tree.findAll((node) => String(node.props.testID ?? '').startsWith('connected-services-action:add-oauth-profile'))).toHaveLength(0);
+    expect(promptSpy).not.toHaveBeenCalled();
+    expect(connectedServicesModuleState.routerPushSpy).not.toHaveBeenCalled();
   });
 
   it('rejects invalid profile ids before navigating to oauth connect', async () => {

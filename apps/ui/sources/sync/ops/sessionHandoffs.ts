@@ -8,9 +8,11 @@ import {
     SessionHandoffStatusSchema,
     SessionHandoffTargetResumeResponseV2Schema,
     SPAWN_SESSION_ERROR_CODES,
+    readAcpConfiguredBackendV1FromMetadata,
 } from '@happier-dev/protocol';
 import type {
     AgentRuntimeDescriptorV1,
+    BackendTargetRefV1,
     SessionHandoffCommitResponse,
     SessionHandoffPrepareTargetResponse,
     SessionHandoffStartResponse,
@@ -20,6 +22,7 @@ import type {
     SessionHandoffWorkspaceTransfer,
 } from '@happier-dev/protocol';
 import { RPC_ERROR_CODES, RPC_METHODS } from '@happier-dev/protocol/rpc';
+import { resolveAgentIdFromSessionMetadata } from '@happier-dev/agents';
 
 import { buildCodexBackendTransportFields } from '../domains/session/codexBackendTransport';
 
@@ -49,6 +52,7 @@ import {
 import { resolveMachineTransferAvailability } from '../domains/transfers/runtime/resolveTransferAvailability';
 import { followUpSpawnedSessionWithServerScope } from '../runtime/orchestration/serverScopedRpc/followUpSpawnedSession';
 import { buildSessionHandoffMetadataPatch } from './buildSessionHandoffMetadataPatch';
+import { ConnectedServiceAuthSelectionUnsupportedError, machineRpcWithConnectedServiceAuthAdmission, requireMachineConnectedServiceAuthSelection } from './connectedServiceAuthSupport';
 
 type MetadataRecord = Metadata;
 type HandoffErrorResult = Readonly<{
@@ -872,6 +876,7 @@ async function requireSafeSessionHandoffV2Target(params: Readonly<{
 
 async function resumeSessionHandoffTargetV2(params: Readonly<{
     machineId: string;
+    backendTarget: BackendTargetRefV1;
     handoffId: string;
     sessionId: string;
     attemptId: string;
@@ -879,7 +884,7 @@ async function resumeSessionHandoffTargetV2(params: Readonly<{
     serverId?: string | null;
 }>): Promise<Readonly<{ ok: true }> | HandoffErrorResult> {
     try {
-        const raw = await machineRpcWithServerScope<unknown, unknown>({
+        const raw = await machineRpcWithConnectedServiceAuthAdmission({
             machineId: params.machineId,
             method: RPC_METHODS.DAEMON_SESSION_HANDOFF_TARGET_RESUME_V2,
             payload: {
@@ -891,6 +896,9 @@ async function resumeSessionHandoffTargetV2(params: Readonly<{
             serverId: normalizeId(params.serverId) || null,
             timeoutMs: resolveSessionHandoffRuntimeConfig().machineRpcTimeoutMs,
             preferScoped: true,
+        }, {
+            backendTarget: params.backendTarget,
+            connectedServices: params.connectedServices,
         });
         const error = readRawSessionHandoffError(raw);
         if (error) return { ok: false, errorCode: error.errorCode, errorMessage: error.errorMessage };
@@ -900,6 +908,7 @@ async function resumeSessionHandoffTargetV2(params: Readonly<{
         }
         return { ok: true };
     } catch (error) {
+        if (error instanceof ConnectedServiceAuthSelectionUnsupportedError) return unsupportedError(error.message);
         return { ok: false, errorCode: 'UNEXPECTED', errorMessage: error instanceof Error ? error.message : 'Failed to resume handoff target' };
     }
 }
@@ -983,6 +992,28 @@ export async function completeSessionHandoff(options: CompleteSessionHandoffOpti
         serverId: options.serverId,
     });
     if (!targetV2Capability.ok) return targetV2Capability;
+
+    const sourceMetadata = storage.getState().sessions?.[options.sessionId]?.metadata ?? options.sourceMetadata;
+    const configuredBackend = readAcpConfiguredBackendV1FromMetadata(sourceMetadata);
+    const sourceAgentId = resolveAgentIdFromSessionMetadata(sourceMetadata);
+    const sourceBackendTarget: BackendTargetRefV1 | null = configuredBackend
+        ? { kind: 'configuredAcpBackend', backendId: configuredBackend.backendId }
+        : sourceAgentId ? { kind: 'builtInAgent', agentId: sourceAgentId } : null;
+    if (sourceMetadata.connectedServices != null) {
+        if (!sourceBackendTarget) return unsupportedError('Cannot determine the connected account launch target for this handoff');
+        try {
+            // Refuse unsupported auth before source stop; the final send also admits the prepared target.
+            await requireMachineConnectedServiceAuthSelection({
+                machineId: options.targetMachineId,
+                serverId: options.serverId,
+                backendTarget: sourceBackendTarget,
+                connectedServices: sourceMetadata.connectedServices,
+            });
+        } catch (error) {
+            if (error instanceof ConnectedServiceAuthSelectionUnsupportedError) return unsupportedError(error.message);
+            throw error;
+        }
+    }
 
     const buildSourceRecovery = (handoffId: string) => buildSessionHandoffRecoveryPlan({
         handoffId,
@@ -1185,6 +1216,9 @@ export async function completeSessionHandoff(options: CompleteSessionHandoffOpti
     const targetAttemptId = `target_${started.response.handoffId}`;
     const resumeResult = await resumeSessionHandoffTargetV2({
         machineId: options.targetMachineId,
+        backendTarget: configuredBackend
+            ? { kind: 'configuredAcpBackend', backendId: configuredBackend.backendId }
+            : { kind: 'builtInAgent', agentId: preparedResponse.resume.agent },
         handoffId: started.response.handoffId,
         sessionId: options.sessionId,
         attemptId: targetAttemptId,
