@@ -77,7 +77,7 @@ export function projectCurrentSessionPresentationActionResult(
 }
 
 function readPresentationState(state: AgentState): CurrentSessionPresentationStateV1 | null {
-  const raw = (state as Record<string, unknown>)[CURRENT_SESSION_PRESENTATION_AGENT_STATE_KEY];
+  const raw = state[CURRENT_SESSION_PRESENTATION_AGENT_STATE_KEY];
   const parsed = CurrentSessionPresentationStateV1Schema.safeParse(raw);
   return parsed.success ? parsed.data : null;
 }
@@ -230,7 +230,7 @@ export function createCurrentSessionPresentationService(params: Readonly<{
         decodedBytes: Buffer.byteLength(JSON.stringify(output), 'utf8'),
         itemCount: output.statuses.length + output.widgets.length,
       });
-      return { ...state, [CURRENT_SESSION_PRESENTATION_AGENT_STATE_KEY]: output } as AgentState;
+      return { ...state, [CURRENT_SESSION_PRESENTATION_AGENT_STATE_KEY]: output };
     });
     if (!output) throw new Error('Presentation state update did not execute');
     for (const applied of appliedOwnerPurges) {
