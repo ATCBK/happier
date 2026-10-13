@@ -1,0 +1,50 @@
+import * as React from 'react';
+
+import { buildCapabilityHeaderMeta, type CapabilityFactsProps } from '@/components/capabilities/facts/CapabilityFacts';
+import { CapabilityStatusChip } from '@/components/capabilities/status/CapabilityStatusChip';
+import { presentCapabilityStatus, type CapabilityStatus } from '@/components/capabilities/status/capabilityStatusPresentation';
+import { PageHeader, type PageHeaderPrimaryAction } from '@/components/ui/layout/PageHeader';
+import { PageHeaderMenu, type PageHeaderMenuAction } from '@/components/ui/layout/PageHeaderEntityParts';
+import { PageHeaderMarkSlot } from '@/components/ui/layout/PageHeaderMarkSlot';
+
+/**
+ * A capability's detail header (P5 detail grammar): its mark, name and purpose, then the facts that
+ * distinguish it on the header's one meta line (source, transport, cost; a registry id in mono), a
+ * header-placement status only when it says something the page does not, and rare operations behind ⋯.
+ */
+export function CapabilityDetailHeader(props: Readonly<{
+    mark?: React.ReactNode;
+    title: string;
+    purpose?: string;
+    facts: Omit<CapabilityFactsProps, 'presentation'>;
+    status?: CapabilityStatus | null;
+    /** Rare operations behind ⋯ (Duplicate, Copy install link). */
+    menuItems?: readonly PageHeaderMenuAction[];
+    /** An identifier under the facts, in mono (a registry id). */
+    mono?: string;
+    /** Unsaved edits on the page (Save). */
+    primaryAction?: PageHeaderPrimaryAction;
+    testID: string;
+}>): React.ReactElement {
+    const meta = React.useMemo(() => {
+        const facts = buildCapabilityHeaderMeta(props.facts);
+        return props.mono ? [...facts, { key: 'mono', text: props.mono, mono: true }] : facts;
+    }, [props.facts, props.mono]);
+    const speaks = props.status ? presentCapabilityStatus(props.status, 'header').pill !== null : false;
+    return (
+        <PageHeader
+            testID={props.testID}
+            alwaysShowTitle
+            title={props.title}
+            description={props.purpose}
+            meta={meta}
+            leading={props.mark ? <PageHeaderMarkSlot>{props.mark}</PageHeaderMarkSlot> : undefined}
+            titleAccessory={speaks && props.status ? <CapabilityStatusChip status={props.status} placement="header" /> : undefined}
+            actions={props.menuItems && props.menuItems.length > 0
+                ? <PageHeaderMenu testID={`${props.testID}.menu`} actions={props.menuItems} />
+                : undefined}
+            actionsPlacement="page"
+            primaryAction={props.primaryAction}
+        />
+    );
+}

@@ -1,0 +1,114 @@
+import * as React from 'react';
+import { useUnistyles } from 'react-native-unistyles';
+import { StyleSheet } from 'react-native-unistyles';
+
+import { AgentNameRun } from '@/components/capabilities/identity/AgentNameRun';
+import { Icon } from '@/components/ui/icons/Icon';
+import { Item } from '@/components/ui/lists/Item';
+import { ItemGroup } from '@/components/ui/lists/ItemGroup';
+import { Text } from '@/components/ui/text/Text';
+import { t } from '@/text';
+import { formatLastSeen } from '@/utils/sessions/sessionUtils';
+
+export type CapabilityReachLegendRow = Readonly<{
+  machineId: string;
+  name: string;
+  offline: boolean;
+  lastSeenAt: number | null;
+  /** The Agents on it that can take these items (the words of "reach"). */
+  agentIds: readonly string[];
+  /** It has Agents, but none of them can take this kind of item (said in words, never as "no agents"). */
+  noSkillAgents?: boolean;
+  /** How many items reach it; last known for an offline machine. */
+  count: number;
+}>;
+
+/**
+ * The reach map's legend and its accessible content (P5 R4/C23): one row per Account machine with its
+ * device glyph, name, who gets something there and how many. Offline machines say so, dated. A row
+ * press filters the list to that machine.
+ */
+export const CapabilityReachLegend = React.memo(function CapabilityReachLegend(
+  props: Readonly<{
+    rows: readonly CapabilityReachLegendRow[];
+    /** While one item is previewed: the Agents that get it on each machine (the legend reads "who gets this one"). */
+    preview?: Readonly<Record<string, readonly string[]>> | null;
+    onMachinePress?: (machineId: string) => void;
+    /** Machines past the map's room: one quiet closing line, never a row per machine. */
+    more?: number;
+    testID: string;
+  }>,
+) {
+  const { theme } = useUnistyles();
+  return (
+    <ItemGroup header="none" surface="none" testID={props.testID}>
+      {props.rows.map((row) => {
+        const previewAgents = props.preview
+          ? (props.preview[row.machineId] ?? [])
+          : null;
+        const agents = previewAgents ?? row.agentIds;
+        const subtitle = row.offline ? (
+          row.lastSeenAt ? (
+            t('capabilities.skills.home.offlineLastKnown', {
+              time: formatLastSeen(row.lastSeenAt),
+            })
+          ) : (
+            t('capabilities.skills.home.offline')
+          )
+        ) : agents.length > 0 ? (
+          <AgentNameRun agentIds={agents} tone="primary" form="legend" />
+        ) : previewAgents ? (
+          '—'
+        ) : row.noSkillAgents ? (
+          t('capabilities.skills.home.noSkillAgents')
+        ) : (
+          t('capabilities.skills.home.noAgents')
+        );
+        return (
+          <Item
+            key={row.machineId}
+            testID={`${props.testID}.machine.${row.machineId}`}
+            title={row.name}
+            titleStyle={row.offline ? styles.offline : undefined}
+            subtitle={subtitle}
+            subtitleLines={1}
+            icon={
+              <Icon
+                name="desktop"
+                size={20}
+                color={theme.colors.text.secondary}
+              />
+            }
+            rightElement={
+              previewAgents ? null : (
+                <Text
+                  variant="label"
+                  style={[styles.count, row.offline ? styles.offline : null]}
+                >
+                  {String(row.count)}
+                </Text>
+              )
+            }
+            showChevron={false}
+            {...(props.onMachinePress
+              ? { onPress: () => props.onMachinePress?.(row.machineId) }
+              : {})}
+          />
+        );
+      })}
+      {props.more ? (
+        <Item
+          testID={`${props.testID}.more`}
+          title={t('capabilities.skills.home.moreMachines', { count: props.more })}
+          titleStyle={styles.offline}
+          showChevron={false}
+        />
+      ) : null}
+    </ItemGroup>
+  );
+});
+
+const styles = StyleSheet.create((theme) => ({
+  count: { color: theme.colors.text.primary, fontVariant: ['tabular-nums'] },
+  offline: { color: theme.colors.text.secondary },
+}));

@@ -1,0 +1,45 @@
+import * as React from 'react';
+import { afterEach, describe, expect, it, vi } from 'vitest';
+
+import { CapabilityMachineTruth } from './CapabilityMachineTruth';
+import { pressTestInstanceAsync, renderScreen, standardCleanup } from '@/dev/testkit';
+
+(globalThis as { IS_REACT_ACT_ENVIRONMENT?: boolean }).IS_REACT_ACT_ENVIRONMENT = true;
+
+vi.mock('react-native', async () => {
+    const { createReactNativeWebMock } = await import('@/dev/testkit/mocks/reactNative');
+    return createReactNativeWebMock();
+});
+vi.mock('react-native-unistyles', async () => {
+    const { createUnistylesMock } = await import('@/dev/testkit/mocks/unistyles');
+    return createUnistylesMock();
+});
+
+afterEach(() => {
+    standardCleanup();
+});
+
+const ROWS = [
+    { machineId: 'mbp', machineName: 'MacBook Pro', deviceIcon: 'laptop' as const, os: 'macOS', who: '41 tools · checked 10:31' },
+    { machineId: 'nl2', machineName: 'nl2', deviceIcon: 'desktop' as const, who: 'Could not start', status: { kind: 'error' as const, machineName: 'nl2' } },
+    { machineId: 'win', machineName: 'Windows desktop', deviceIcon: 'desktop' as const, who: '41 tools', offline: true,
+        status: { kind: 'offline' as const }, note: 'last known Oct 9' },
+];
+
+describe('CapabilityMachineTruth', () => {
+    it('reads as one summary closed, and one row per machine with its own status once opened', async () => {
+        const screen = await renderScreen(
+            <CapabilityMachineTruth testID="mt" rows={ROWS} summary="Ready on 1 · stopped on 1 · offline 1" />,
+        );
+        expect(screen.getTextContent()).toContain('Ready on 1 · stopped on 1 · offline 1');
+        expect(screen.findAllByTestId('mt:machine:mbp')).toHaveLength(0);
+
+        await pressTestInstanceAsync(screen.findByTestId('mt:summary'), 'summary');
+
+        expect(screen.findAllByTestId('mt:machine:mbp').length).toBeGreaterThan(0);
+        expect(screen.findAllByTestId('mt:machine:nl2:status').length).toBeGreaterThan(0);
+        expect(screen.findAllByTestId('mt:machine:mbp:status')).toHaveLength(0);
+        expect(screen.findByTestId('mt:machine:win:note')).not.toBeNull();
+        expect(screen.getTextContent()).toContain('last known Oct 9');
+    });
+});
