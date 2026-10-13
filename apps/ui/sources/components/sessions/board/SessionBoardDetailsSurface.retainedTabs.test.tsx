@@ -487,7 +487,7 @@ describe('retained Details Board tabs', () => {
         const { screen } = await mountBoard(noteItem('Plan', 'body'), actions.port);
 
         await act(async () => { await controller?.run({ kind: 'add', intent: 'note' }); });
-        editorHarness.pending.set('code-editor', 'Final answer');
+        editorHarness.pending.set('session-board-note-editor-body:source', 'Final answer');
 
         // A draft-replacing intent consults the ONE registered guard.
         await act(async () => { await controller?.run({ kind: 'add', intent: 'note' }); });
@@ -495,7 +495,7 @@ describe('retained Details Board tabs', () => {
         expect(alertHarness.prompts).toBe(1);
         const upserts = actions.calls.filter((call) => call.kind === 'upsert');
         expect(upserts).toHaveLength(1);
-        expect(JSON.stringify(upserts[0]?.input.item)).toContain('Final answer');
+        expect(upserts[0]?.input.item.source).toEqual({ kind: 'declarative', document: createSessionSurfaceNoteDocumentV1('Final answer') });
     });
 
     it('preserves the final character when the retained tab becomes the active one', async () => {
@@ -505,7 +505,7 @@ describe('retained Details Board tabs', () => {
         await act(async () => { await controller?.run({ kind: 'add', intent: 'note' }); });
         // The editor owns this value inside its debounce window. React state and
         // the shared continuity buffer have not observed it yet.
-        editorHarness.pending.set('code-editor', 'Final answer');
+        editorHarness.pending.set('session-board-note-editor-body:source', 'Final answer');
 
         await screen.update(
             <Harness
@@ -564,7 +564,7 @@ describe('retained Details Board tabs', () => {
         expect(alertHarness.prompts).toBe(1);
         const upserts = actions.calls.filter((call) => call.kind === 'upsert');
         expect(upserts).toHaveLength(1);
-        expect(JSON.stringify(upserts[0]?.input.item)).toContain('<main>after handoff</main>');
+        expect(upserts[0]?.input.item.source).toMatchObject({ kind: 'hostedHtml', source: artifactHtmlBundleFromBodyV1('<main>after handoff</main>') });
     });
 
     it('offers Keep Editing / Save / Discard before removing the interactive view being edited', async () => {
@@ -596,7 +596,7 @@ describe('retained Details Board tabs', () => {
 
         expect(actions.calls.map((call) => call.kind)).toEqual(['upsert', 'remove']);
         const upsert = actions.calls[0];
-        expect(upsert?.kind === 'upsert' && JSON.stringify(upsert.input.item)).toContain('<main>final</main>');
+        expect(upsert?.kind === 'upsert' && upsert.input.item.source).toMatchObject({ kind: 'hostedHtml', source: artifactHtmlBundleFromBodyV1('<main>final</main>') });
         expect(screen.findAllHostsByTestId('session-board-hosted-html-editor')).toHaveLength(0);
     });
 });

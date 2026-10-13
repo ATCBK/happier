@@ -224,8 +224,10 @@ describe('SessionBoardNoteEditorCard', () => {
                 latestRevision={null}
                 latestBody={null}
                 reachable
-                actions={realBoardActions(async (_path, init) => {
+                actions={realBoardActions(async (path, init) => {
                     if (init?.method === 'PUT') throw new Error('Stale editor must not write');
+                    // Visual admission also reads the layout at its exact address.
+                    if (new URL(path, 'https://home-1.test').searchParams.get('kind') === 'layout.v1') return Response.json({ record: null });
                     return Response.json({ record: {
                         id: 'note-row',
                         address: { owner: 'host', namespace: 'surface', kind: 'item.v1', localId: 'note-1' },

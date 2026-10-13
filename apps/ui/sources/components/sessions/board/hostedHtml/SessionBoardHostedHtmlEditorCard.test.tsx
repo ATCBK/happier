@@ -105,7 +105,9 @@ describe('SessionBoardHostedHtmlEditorCard', () => {
     it('shows the authoritative HTML only after review and then applies the retained local draft', async () => {
         const upserts: Array<ReturnType<typeof SessionBoardMutationV1Schema.parse>> = [];
         let attempt = 0;
-        const actions = realBoardActions(async (_path, init) => {
+        const actions = realBoardActions(async (path, init) => {
+            // The current visual review reads layout and item through separate addresses.
+            if (init?.method !== 'PUT' && new URL(path, 'https://home-1.test').searchParams.get('kind') === 'layout.v1') return Response.json({ record: null });
             if (init?.method !== 'PUT') return Response.json({ record: {
                 id: 'html-row',
                 address: { owner: 'host', namespace: 'surface', kind: 'item.v1', localId: 'interactive-1' },

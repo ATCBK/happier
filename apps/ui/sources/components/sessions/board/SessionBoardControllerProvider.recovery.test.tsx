@@ -11,7 +11,9 @@ import { storage } from '@/sync/domains/state/storage';
 import { getActiveServerSnapshot, setActiveServer } from '@/sync/domains/server/serverRuntime';
 import { removeServerProfile, upsertServerProfile } from '@/sync/domains/server/serverProfiles';
 import { setRuntimeFetch } from '@/utils/system/runtimeFetch';
-import { SessionSystemRecordStoredSchema, type SessionSystemRecordStored } from '@happier-dev/protocol';
+import { disconnectActiveServerConnection } from '@/sync/runtime/orchestration/connectionManager';
+import { SessionCurrentProjectionRecordV1Schema, SessionSystemRecordStoredSchema, type SessionSystemRecordStored } from '@happier-dev/protocol';
+import { SessionBoardLayoutV1Schema, SessionSurfaceItemV1Schema } from '@happier-dev/protocol/sessions/board';
 
 installDisconnectedServerSocketBoundary();
 
@@ -76,7 +78,7 @@ function record(localId: string, kind: string, value: unknown): SessionSystemRec
 
 function sessionWire(id: string) {
     const fixture = createSessionFixture({ id });
-    return {
+    return SessionCurrentProjectionRecordV1Schema.parse({
         id, seq: 1, createdAt: 1, updatedAt: 1, active: false, activeAt: 1,
         encryptionMode: harness.layoutLocked ? 'e2ee' : 'plain', dataEncryptionKey: null,
         metadataLayoutVersion: 0, metadataVersion: 1,
@@ -84,7 +86,8 @@ function sessionWire(id: string) {
         agentState: null, agentStateVersion: 1, share: null,
         effectiveAccess: { v: 1, level: 'owner', sources: [{ kind: 'owner' }], audienceContext: null,
             capabilities: fixture.access!.capabilities },
-    };
+        responsibleAccountId: null, responsibleAccount: null,
+    });
 }
 
 // Only HTTP is substituted. Credentials, scoped Sync, the repository, codec,
@@ -96,17 +99,19 @@ async function request(input: RequestInfo | URL): Promise<Response> {
         features: { sessions: { board: { enabled: true } } },
     }));
     if (path.endsWith('/system-records')) {
-        const layout = record('layout', 'layout.v1', { v: 1, tabs: harness.removalMode === 'none' ? [] : [{
+        // A lone Board view has no tab strip; focus-return tests need a real multi-view Board.
+        const layout = record('layout', 'layout.v1', SessionBoardLayoutV1Schema.parse({ v: 1, tabs: harness.removalMode === 'none' ? [] : [
+            { id: 'overview', title: 'Overview', items: [] }, {
             id: 'research', title: 'Research', items: harness.removalMode === 'populated'
                 ? [{ itemId: 'item-1', width: 'medium' }] : [],
-        }] });
+        }] }));
         if (harness.layoutLocked) layout.content = { t: 'encrypted', c: 'encrypted-layout' };
-        return Response.json({ records: [layout, record('item-1', 'item.v1', {
+        return Response.json({ records: [layout, record('item-1', 'item.v1', SessionSurfaceItemV1Schema.parse({
             v: 1, title: 'Status', frame: 'card', height: { mode: 'auto', fallback: 'regular' },
             source: { kind: 'widget', instance: { v: 1, id: 'instance-1', definition: {
                 kind: 'installed', surface: { pluginId: 'acme.board', localId: 'status' },
             }, bindings: {} } },
-        })], nextCursor: null, hasNext: false });
+        }))], nextCursor: null, hasNext: false });
     }
     if (path === '/v1/account/encryption/currentness') return Response.json({
         mode: 'plain', version: 1, signingKeyFingerprint: null, contentKeyFingerprint: null, updatedAt: 1,
@@ -121,7 +126,15 @@ async function request(input: RequestInfo | URL): Promise<Response> {
 
 let connection: Awaited<ReturnType<typeof restoreServerAccountForTest>> | undefined;
 beforeAll(loadSyncSingletonForTests);
-afterEach(async () => { standardCleanup(); await connection?.dispose(); connection = undefined; });
+afterEach(async () => {
+    standardCleanup();
+    await connection?.dispose();
+    // These scenarios change/remove their Home, so the captured fixture's generation
+    // guard can intentionally leave the connection they switched to alive.
+    await disconnectActiveServerConnection();
+    storage.setState(storage.getInitialState(), true);
+    connection = undefined;
+});
 
 function AuthorizedBoard(props: React.PropsWithChildren<{ serverId?: string; sessionId?: string }>): React.ReactElement {
     return <InjectedAuthProvider credentials={connection!.credentials}>
@@ -131,14 +144,16 @@ function AuthorizedBoard(props: React.PropsWithChildren<{ serverId?: string; ses
     </InjectedAuthProvider>;
 }
 
-import { SessionBoardControllerProvider, useMountedSessionBoardController } from './SessionBoardControllerProvider';
+import { SessionBoardControllerProvider, useMountedSessionBoardController, type MountedSessionBoardController } from './SessionBoardControllerProvider';
 import { SessionBoardPane } from './SessionBoardPane';
 import type { SessionBoardController } from './useSessionBoardController';
 
 let observedController: SessionBoardController | null = null;
+let observedBoard: MountedSessionBoardController | null = null;
 
 function ControllerProbe(): React.ReactElement | null {
-    observedController = useMountedSessionBoardController({ serverId: harness.homeId, sessionId: 'session-1' })?.controller ?? null;
+    observedBoard = useMountedSessionBoardController({ serverId: harness.homeId, sessionId: 'session-1' });
+    observedController = observedBoard?.controller ?? null;
     return null;
 }
 
@@ -174,6 +189,7 @@ describe('mounted Board recovery navigation', () => {
     beforeEach(async () => {
         standardCleanup();
         observedController = null;
+        observedBoard = null;
         harness.layoutLocked = false;
         harness.removalMode = 'none';
         harness.push.mockReset();
@@ -229,6 +245,7 @@ describe('mounted Board recovery navigation', () => {
         await mountBoard();
         await flushHookEffects({ cycles: 30 });
         await setActiveServer({ serverId: harness.secondHomeId, scope: 'device' });
+        expect(observedBoard?.binding).toMatchObject({ status: 'ready' });
         let navigatedHome: string | undefined;
         harness.push.mockImplementation(() => { navigatedHome = getActiveServerSnapshot().serverId; });
 
@@ -281,6 +298,8 @@ describe('mounted Board recovery navigation', () => {
         const renderOwner = (serverId: string) => (
             <AuthorizedBoard sessionId="session-1" serverId={serverId}>
                 <Probe serverId={serverId} />
+                <SessionBoardPane sessionId="session-1" serverId={serverId} host="details"
+                    resolvePrimaryHost={() => 'details'} density="full" layout="grid" />
             </AuthorizedBoard>
         );
         const screen = await renderScreen(renderOwner(harness.homeId));

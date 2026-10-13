@@ -40,6 +40,10 @@ import { encodeBase64 } from '@/encryption/base64';
 import { SessionWidgetHost } from './SessionWidgetHost';
 import { createSessionBoardSourceAvailabilityResolver } from './sessionBoardItemPresentation';
 
+// Static mounted-host imports reach Sync; install its external Socket boundary during collection.
+vi.mock('socket.io-client', async importOriginal =>
+    (await import('@/dev/testkit/harness/serverAccountConnectionHarness')).createSocketIoClientBoundary(importOriginal));
+
 /**
  * The shared widget shell's installed arm across placements.
  *

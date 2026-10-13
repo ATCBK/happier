@@ -41,6 +41,7 @@ describe('Board frame styles through the real Board Actions', () => {
         };
         const adapter = createSessionBoardActionAdapter({ scope, session, request,
             repository: createSessionSystemRecordRepository({ scope, request }), contentContext: { mode: 'plain' },
+            boardEnabled: true,
             capabilities: { readTranscript: true, editSessionRecords: true },
         });
         // Unrelated host delivery ports are genuine boundaries; fail if this Board journey reaches one.
