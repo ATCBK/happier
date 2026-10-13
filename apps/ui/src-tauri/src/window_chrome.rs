@@ -795,6 +795,12 @@ pub async fn desktop_get_window_state(window: Window) -> Result<DesktopWindowSta
 
 #[cfg(desktop)]
 #[tauri::command]
+pub async fn desktop_set_window_title(window: Window, title: String) -> Result<(), String> {
+    window.set_title(&title).map_err(|error| error.to_string())
+}
+
+#[cfg(desktop)]
+#[tauri::command]
 pub async fn desktop_minimize_window(window: Window) -> Result<bool, String> {
     let policy = resolve_desktop_window_chrome_runtime_policy(
         window.label(),

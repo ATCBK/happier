@@ -16,11 +16,11 @@ import { resolveDependencyRefreshMarkerPath } from '../../stack/scripts/utils/pr
 /** Reuse the universal UI artifact compiler and inventory owner without publishing
  * package dist or compiler projections. Callers publish a consumer-owned inventory
  * beside retained input roots, never the shared source-tree projection. */
-export async function prepareSourcePluginUiArtifacts({ repoRoot, outputDir, plugins, resolveSourceImport, sourceImportConditions = [], artifactOutputDirs = {}, outputPath = join(outputDir, 'inventory.js') }) {
+export async function prepareSourcePluginUiArtifacts({ repoRoot, outputDir, plugins, resolveSourceImport, sourceImportConditions = [], artifactOutputDirs = {}, outputPath = join(outputDir, 'inventory.js'), retainedInventoryPath = outputPath }) {
   const artifactRoots = {};
   const pluginManifests = {};
   const compilationFailures = [];
-  const retainedRoots = resolveBundledPluginUiArtifactsRetainedRoots(outputPath);
+  const retainedRoots = resolveBundledPluginUiArtifactsRetainedRoots(retainedInventoryPath);
   const producerRoots = resolveBundledPluginUiArtifactsRetainedRoots(resolveBundledPluginUiArtifactsOutputPath(repoRoot));
   const compilerRepo = fileURLToPath(new URL('../../../', import.meta.url));
   const compilerFiles = await readSourcePluginUiBuildInputs({ repoDir: compilerRepo, compiler: true });
@@ -52,7 +52,7 @@ export async function prepareSourcePluginUiArtifacts({ repoRoot, outputDir, plug
         break;
       }
       if (artifactRoots[directory]) {
-        successfulInputs.set(directory, { options, inputFingerprint });
+        successfulInputs.set(directory, { options, inputFingerprint, reusedRoot: artifactRoots[directory] });
         continue;
       }
       const { artifactsRoot } = await buildUniversalPluginUiArtifacts(projectRoot, manifestPath,
@@ -82,6 +82,9 @@ export async function prepareSourcePluginUiArtifacts({ repoRoot, outputDir, plug
     const files = await readSourcePluginUiBuildInputs({ repoDir: repoRoot, pluginDirectory: directory, packages });
     if (await readBuildInputIdentity({ sourceDir: repoRoot, files, options: input.options }) !== input.inputFingerprint) continue;
     const root = artifactOutputDirs[directory] ?? artifactRoots[directory];
+    // Cache admission borrows producer-owned retained roots. Only a new
+    // compilation or a freshly materialized native destination gets a stamp.
+    if (input.reusedRoot && resolve(root) === input.reusedRoot) continue;
     const record = await readJsonIfExists(join(root, WORKSPACE_PACKAGE_BUILD_INPUT_RECORD));
     if (record?.version === 2 && record.fingerprint === input.inputFingerprint) continue;
     await writeJsonAtomic(join(root, WORKSPACE_PACKAGE_BUILD_INPUT_RECORD), { version: 2, fingerprint: input.inputFingerprint });

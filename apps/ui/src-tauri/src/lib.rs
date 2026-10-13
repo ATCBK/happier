@@ -133,6 +133,7 @@ pub fn run() {
                 system_tasks::respond_system_task_prompt,
                 window_chrome::desktop_get_window_chrome_policy,
                 window_chrome::desktop_get_window_state,
+                window_chrome::desktop_set_window_title,
                 window_chrome::desktop_get_glass_state,
                 window_chrome::desktop_apply_glass_material,
                 window_chrome::desktop_open_reduce_transparency_settings,

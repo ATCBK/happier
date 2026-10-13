@@ -41,6 +41,7 @@
     "allow-respond-system-task-prompt",
     "allow-desktop-get-window-chrome-policy",
     "allow-desktop-get-window-state",
+    "allow-desktop-set-window-title",
     "allow-desktop-get-glass-state",
     "allow-desktop-apply-glass-material",
     "allow-desktop-open-reduce-transparency-settings",

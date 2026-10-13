@@ -31,6 +31,7 @@ const APP_TAURI_COMMANDS: &[&str] = &[
     "respond_system_task_prompt",
     "desktop_get_window_chrome_policy",
     "desktop_get_window_state",
+    "desktop_set_window_title",
     "desktop_get_glass_state",
     "desktop_apply_glass_material",
     "desktop_open_reduce_transparency_settings",

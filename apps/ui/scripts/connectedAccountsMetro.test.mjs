@@ -18,13 +18,16 @@ test('Connected Account authoring bundles in browser and native without its host
         await writeFile(entry, `import {
             CONNECTED_ACCOUNT_REQUEST_AUTH_CAPABILITY_PATH_ENV,
             buildConnectedAccountRequestAuthClientSource,
-            ConnectedAccountPurposeDeclarationsV1Schema,
+            QualifiedConnectedAccountRefSchema,
         } from '@happier-dev/plugin-sdk/connected-accounts';
         globalThis.connectedAccountAuthoring = {
             source: buildConnectedAccountRequestAuthClientSource({
                 capabilityPathEnv: CONNECTED_ACCOUNT_REQUEST_AUTH_CAPABILITY_PATH_ENV,
             }),
-            purposes: ConnectedAccountPurposeDeclarationsV1Schema.parse([]),
+            account: QualifiedConnectedAccountRefSchema.parse({
+                service: { pluginId: 'happier.connected-account.test', localId: 'subscription' },
+                accountId: 'fixture',
+            }),
         };`);
         const config = require(join(uiRoot, 'metro.config.js'));
         config.watchFolders = [...config.watchFolders, fixture];
@@ -47,7 +50,7 @@ test('Connected Account authoring bundles in browser and native without its host
             sandbox.global = sandbox;
             new Script(bundle.code).runInNewContext(sandbox);
             assert.match(sandbox.connectedAccountAuthoring.source, /function lookupConnectedAccountRequestAuth/);
-            assert.equal(sandbox.connectedAccountAuthoring.purposes.length, 0);
+            assert.equal(sandbox.connectedAccountAuthoring.account.accountId, 'fixture');
             console.log(JSON.stringify({ platform, modules: paths.length, bytes: Buffer.byteLength(bundle.code) }));
         }
     } finally {

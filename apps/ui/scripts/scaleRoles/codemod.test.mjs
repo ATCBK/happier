@@ -5,6 +5,26 @@ import { join } from 'node:path';
 import { test } from 'node:test';
 import { analyzeFile, applyEdits, repoRoot } from './codemod.mjs';
 
+test('D8 keeps code text metrics outside code folders while migrating surrounding chrome', async () => {
+  const directory = await mkdtemp(join(tmpdir(), 'scale-roles-u5-'));
+  const path = join(directory, 'CommandView.tsx');
+  try {
+    await writeFile(path, `function style(theme) { return {
+  promptText: { fontFamily: resolveCodeMonoFontFamily(), fontSize: 14, lineHeight: 20, fontWeight: '600' },
+  codeText: { fontFamily: 'Menlo', fontSize: 13, lineHeight: 18, fontWeight: '400' },
+  title: { ...Typography.default('semiBold'), fontSize: 15 },
+}; }\n`);
+    const first = await analyzeFile(path);
+    const transformed = applyEdits(first.text, first.edits);
+    assert.match(transformed, /promptText: \{ fontFamily: resolveCodeMonoFontFamily\(\), fontSize: 14, lineHeight: 20, fontWeight: '600' \}/);
+    assert.match(transformed, /codeText: \{ fontFamily: 'Menlo', fontSize: 13, lineHeight: 18, fontWeight: '400' \}/);
+    assert.match(transformed, /Typography\.variant\('heading'\)/);
+    assert.equal(first.sites.filter(site => site.kind === 'font' && site.status === 'flagged' && site.reason === 'domain scale').length, 2);
+  } finally {
+    await rm(directory, { recursive: true, force: true });
+  }
+});
+
 test('Inter numeric weights select a real face, including weight-only and existing-role styles, idempotently', async () => {
   const directory = await mkdtemp(join(tmpdir(), 'scale-roles-u2-'));
   const path = join(directory, 'Controls.tsx');

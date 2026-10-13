@@ -6,14 +6,38 @@ import { dirname, join, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import test from 'node:test';
 
-import { prepareUiTypecheckProjects } from './deriveTypecheckProjects.mjs';
+import { deriveUiTypecheckProjects, prepareUiTypecheckProjects } from './deriveTypecheckProjects.mjs';
 
 const uiDir = fileURLToPath(new URL('..', import.meta.url));
 const require = createRequire(join(uiDir, 'package.json'));
 const { requireContext } = require('expo-router/internal/testing');
 const { EXPO_ROUTER_CTX_IGNORE } = require('expo-router/_ctx-shared');
 const { getTypedRoutesDeclarationFile } = require('@expo/router-server/build/typed-routes/generate');
-const names = ['foundation', 'core', 'source', 'test'];
+const names = ['foundation', 'core', 'source', 'test-components', 'test-other'];
+
+test('UI partitions own current and explicit test roots once across separate test programs', async t => {
+  const packageDir = await mkdtemp(join(tmpdir(), 'happier-ui-partition-'));
+  t.after(() => rm(packageDir, { recursive: true, force: true }));
+  const roots = ['src/core.ts', 'sources/components/new.test.ts', 'sources/domain/new.spec.ts', 'examples/authoring.ts'];
+  for (const path of roots) {
+    await mkdir(dirname(join(packageDir, path)), { recursive: true });
+    await writeFile(join(packageDir, path), 'export const value = 1;\n');
+  }
+  await writeFile(join(packageDir, 'tsconfig.json'), JSON.stringify({ include: ['src/**/*.ts', 'sources/**/*.ts'] }));
+  for (const name of ['foundation', 'core', 'source', 'test']) await writeFile(join(packageDir, `tsconfig.${name}.json`), JSON.stringify({
+    extends: './tsconfig.json', files: name === 'test' ? ['examples/authoring.ts'] : ['src/core.ts'], include: [],
+  }));
+  for (const name of ['test-components', 'test-other']) await writeFile(join(packageDir, `tsconfig.${name}.json`), JSON.stringify({
+    extends: './tsconfig.test.json', include: [],
+  }));
+  const inventory = await deriveUiTypecheckProjects(packageDir);
+  assert.deepEqual(inventory.map(item => item.project), ['foundation', 'core', 'source', 'test-components', 'test-other']);
+  const configs = await Promise.all(inventory.map(async ({ configPath }) => JSON.parse(await readFile(configPath, 'utf8'))));
+  for (const path of roots) assert.equal(configs.filter(config => config.files.includes(resolve(packageDir, path))).length, 1, path);
+  assert.ok(configs[3].files.includes(resolve(packageDir, 'sources/components/new.test.ts')));
+  assert.ok(configs[4].files.includes(resolve(packageDir, 'sources/domain/new.spec.ts')));
+  assert.ok(configs[4].files.includes(resolve(packageDir, 'examples/authoring.ts')), 'explicit authoring fixture remains a test root');
+});
 
 test('UI compiler preparation regenerates configured routes using the runtime Metro exclusions', async t => {
   const packageDir = await mkdtemp(join(tmpdir(), 'happier-ui-route-preparation-'));
@@ -46,6 +70,7 @@ test('UI compiler preparation regenerates configured routes using the runtime Me
   for (const name of names) await write(join(packageDir, `tsconfig.${name}.json`), JSON.stringify({
     extends: './tsconfig.json', files: ['.expo/types/router.d.ts'], include: [],
   }));
+  await write(join(packageDir, 'tsconfig.test.json'), JSON.stringify({ extends: './tsconfig.json', files: ['.expo/types/router.d.ts'], include: [] }));
   const inventory = await prepareUiTypecheckProjects(names.map(name => ({ project: `tsconfig.${name}.json` })), packageDir);
   const declaration = await readFile(declarationPath, 'utf8');
   assert.ok(declaration.includes('pathname: `/settings`'), 'finite compiler preparation restores current runtime routes');

@@ -1,5 +1,5 @@
 import { defineConfig } from 'vitest/config'
-import { resolve as resolvePath } from 'node:path'
+import { dirname, resolve as resolvePath } from 'node:path'
 import { fileURLToPath } from 'node:url'
 
 import { resolveVitestFeatureTestExcludeGlobs } from '../../scripts/testing/featureTestGating'
@@ -14,6 +14,25 @@ const repoRoot = fileURLToPath(new URL('../..', import.meta.url));
 const packageRoot = fileURLToPath(new URL('.', import.meta.url));
 // Vitest's --root does not change process.cwd(); aliases and setup belong to this package.
 const resolve = (...paths: string[]) => resolvePath(packageRoot, ...paths);
+
+// Opt-in browser gates use Metro's two Voice mic source choices without
+// async vi.mock factories that self-wait through the real UI import cycle.
+function resolveBrowserVoiceMicSource(id: string, importer?: string): string | null {
+    if (process.env.HAPPIER_UI_TEST_VOICE_MIC_PLATFORM !== 'web') return null;
+    const sourceId = id.startsWith('@/')
+        ? resolve('./sources', id.slice(2))
+        : id.startsWith('.') && importer
+            ? resolvePath(dirname(importer.split('?')[0]!), id)
+            : id;
+    const extensionlessId = sourceId.split('?')[0]!.replace(/\.(?:ts|js)$/, '');
+    if (extensionlessId === resolve('./sources/voice/runtime/mic/createLiveMicSession')) {
+        return resolve('./sources/voice/runtime/mic/createLiveMicSession.web.ts');
+    }
+    if (extensionlessId === resolve('./sources/voice/runtime/mic/createRealtimeMicSession')) {
+        return resolve('./sources/voice/runtime/mic/createRealtimeMicSession.web.ts');
+    }
+    return null;
+}
 
 function resolveExpoNodeModuleStub(id: string, importer?: string): string | null {
     if (
@@ -101,6 +120,10 @@ const workspacePackages: readonly WorkspacePackageSpec[] = [
         packageSourceRoot: resolve('../../packages/plugin-sdk/src'),
     },
     {
+        packageName: '@happier-dev/sdk',
+        packageSourceRoot: resolve('../../packages/sdk/src'),
+    },
+    {
         packageName: '@happier-dev/peer-mediation',
         packageSourceRoot: resolve('../../packages/peer-mediation/src'),
     },
@@ -128,7 +151,8 @@ const expoNodeModuleStubsPlugin = {
     name: 'happier-vitest-expo-node-module-stubs',
     enforce: 'pre' as const,
     resolveId(id: string, importer?: string) {
-        return workspaceSourcesPlugin.resolveId(id, importer)
+        return resolveBrowserVoiceMicSource(id, importer)
+            ?? workspaceSourcesPlugin.resolveId(id, importer)
             ?? resolveExpoNodeModuleStub(id, importer);
     },
 };
@@ -251,6 +275,9 @@ export default defineConfig({
             // `expo-video` uses native/web view modules that Vitest cannot parse under Node.
             { find: 'expo-video', replacement: resolve('./sources/dev/expoVideoStub.ts') },
             { find: 'expo-router/drawer', replacement: resolve('./sources/dev/expoRouterDrawerStub.ts') },
+            // Expo's Route-node SDK publishes JSX in .js; mounted native scenes
+            // supply their local module identity through this platform boundary.
+            { find: /^expo-router\/build\/Route(?:\.js)?$/, replacement: resolve('./sources/dev/expoRouterRouteStub.ts') },
             // `expo-router` pulls in RN internals via its native dev-server helpers.
             { find: /^expo-router$/, replacement: resolve('./sources/dev/expoRouterStub.ts') },
             // `react-native-gesture-handler` imports React Native internals (Flow syntax) in node.

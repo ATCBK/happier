@@ -54,6 +54,14 @@ function animatedOrMeasured(node) {
   }
   return false;
 }
+function codeTextMetrics(node, source) {
+  // D8 is a text-domain boundary, not a folder convention: CommandView also
+  // renders code outside the code/terminal trees. UI mono modifiers still snap.
+  return ts.isObjectLiteralExpression(node.parent) && node.parent.properties.some(property =>
+    ts.isPropertyAssignment(property) && propertyName(property, source) === 'fontFamily'
+    && (ts.isCallExpression(property.initializer) && property.initializer.expression.getText(source) === 'resolveCodeMonoFontFamily'
+      || ts.isStringLiteral(property.initializer) && property.initializer.text === 'Menlo'));
+}
 function nearestRole(size, weight, line) {
   size = Math.floor(size);
   if (size >= 26) return { role: 'display', flag: size > 34 };
@@ -142,8 +150,8 @@ export async function analyzeFile(path) {
         if (value === null) {
           // A platform fork maps by its default branch; an area visual pass owns collapsing it.
           addSite(node, 'font', node.initializer.getText(source), 'flagged', 'computed or platform-forked size');
-        } else if (special || animatedOrMeasured(node) || /(?:emoji|glyph|avatar|icon|initials)/i.test(node.parent.parent?.getText(source).split('{')[0] ?? '')) {
-          addSite(node, 'font', value, 'flagged', special ? 'domain scale' : animatedOrMeasured(node) ? 'animation or measured layout' : 'glyph or avatar text');
+        } else if (special || codeTextMetrics(node, source) || animatedOrMeasured(node) || /(?:emoji|glyph|avatar|icon|initials)/i.test(node.parent.parent?.getText(source).split('{')[0] ?? '')) {
+          addSite(node, 'font', value, 'flagged', special || codeTextMetrics(node, source) ? 'domain scale' : animatedOrMeasured(node) ? 'animation or measured layout' : 'glyph or avatar text');
         } else {
           const object = node.parent;
           const props = ts.isObjectLiteralExpression(object) ? object.properties : [];
