@@ -242,4 +242,60 @@ describe('AppRail Bots', () => {
     await flushHookEffects({ cycles: 1, advanceTimersMs: 0 });
     expect(screen.findByTestId(`app-rail-more:${pinId}`)).not.toBeNull();
   });
+
+  it.each(['overflow', 'hidden'] as const)(
+    'stands an explicit Bot pin in the rail while the Bots entry itself is %s',
+    async (placement) => {
+      const entries = railWithPinnedBot();
+      const screen = await renderScreen(
+        <BotsRosterRuntimeProvider>
+          <InjectedAuthProvider credentials={null}>
+            <InboxSummaryProvider>
+              <AppRailSurface
+                entries={entries}
+                activeId={null}
+                onOpen={() => {}}
+                preferences={{ orderedIds: [], placements: { bots: placement } }}
+                renderFooter={(item) => <View testID={item.id} />}
+              />
+            </InboxSummaryProvider>
+          </InjectedAuthProvider>
+        </BotsRosterRuntimeProvider>,
+      );
+      await act(async () =>
+        screen.findByTestId('app-rail')?.props.onLayout?.(layout(810)),
+      );
+      const pinId = entries.bots[0]!.id;
+      expect(screen.findByTestId(`app-rail:${pinId}`)).not.toBeNull();
+      expect(screen.findByTestId('app-rail:bots')).toBeNull();
+    },
+  );
+
+  it('keeps an explicit Bot pin reachable in More when the Bots entry is in overflow and the rail is short', async () => {
+    vi.useFakeTimers({ toFake: ['setTimeout', 'clearTimeout'] });
+    const entries = railWithPinnedBot();
+    const screen = await renderScreen(
+      <BotsRosterRuntimeProvider>
+        <InjectedAuthProvider credentials={null}>
+          <InboxSummaryProvider>
+            <AppRailSurface
+              entries={entries}
+              activeId={null}
+              onOpen={() => {}}
+              preferences={{ orderedIds: [], placements: { bots: 'overflow' } }}
+              renderFooter={(item) => <View testID={item.id} />}
+            />
+          </InboxSummaryProvider>
+        </InjectedAuthProvider>
+      </BotsRosterRuntimeProvider>,
+    );
+    await act(async () =>
+      screen.findByTestId('app-rail')?.props.onLayout?.(layout(140)),
+    );
+    const pinId = entries.bots[0]!.id;
+    expect(screen.findByTestId(`app-rail:${pinId}`)).toBeNull();
+    await screen.pressByTestIdAsync('app-rail-more.trigger');
+    await flushHookEffects({ cycles: 1, advanceTimersMs: 0 });
+    expect(screen.findByTestId(`app-rail-more:${pinId}`)).not.toBeNull();
+  });
 });

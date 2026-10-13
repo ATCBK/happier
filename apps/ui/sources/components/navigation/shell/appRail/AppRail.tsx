@@ -144,13 +144,16 @@ export const AppRailSurface = React.memo(function AppRailSurface(props: Readonly
     }, []);
     const items = React.useMemo(() => buildAppRailPlacementItems(entries, props.updatesVisible === true), [entries, props.updatesVisible]);
     const placements = resolveNavigationPlacements(items, props.preferences);
-    // Bots pinned to the rail stand right under the one Bots entry, in the person's order (60s3).
-    const top: AppRailTopItem[] = placements.pinned.filter(item => item.group !== 'account').flatMap((item): AppRailTopItem[] =>
-        item.kind === 'destination' && item.entry.activation === 'botsRoster'
-            // The Bots entry and its pins stand apart, a hairline above them (lab `b-rail A`).
-            ? [{ ...item, group: 'bots' as const },
-                ...entries.bots.map((bot): AppRailTopItem => ({ kind: 'botPin', id: bot.id, group: 'bots', bot }))]
-            : [item]);
+    // Bots pinned to the rail stand right under the one Bots entry, in the person's order (60s3). A pin
+    // is its own explicit placement: when the Bots entry is in overflow or hidden, the pins close the top.
+    const botPins = entries.bots.map((bot): AppRailTopItem => ({ kind: 'botPin', id: bot.id, group: 'bots', bot }));
+    const isBotsEntry = (item: AppRailPlacementItem) => item.kind === 'destination' && item.entry.activation === 'botsRoster';
+    const topItems = placements.pinned.filter(item => item.group !== 'account');
+    const top: AppRailTopItem[] = [
+        // The Bots entry and its pins stand apart, a hairline above them (lab `b-rail A`).
+        ...topItems.flatMap((item): AppRailTopItem[] => isBotsEntry(item) ? [{ ...item, group: 'bots' as const }, ...botPins] : [item]),
+        ...(topItems.some(isBotsEntry) ? [] : botPins),
+    ];
     const bottom = placements.pinned.filter(item => item.group === 'account');
     // The anchored group has priority when space is short. Giving it the first top group's
     // geometry avoids counting a divider between the footer and the top: only top groups divide.
