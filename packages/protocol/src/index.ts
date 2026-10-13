@@ -2,6 +2,9 @@ export const HAPPY_PROTOCOL_PACKAGE = '@happier-dev/protocol';
 export { buildRecoveryCreditConsumeIdempotencyKey } from './connect/recoveryCreditConsumeIdempotencyKey.js';
 
 export { PROVIDER_ACCOUNT_SUBSCRIPTION_ACCEPT, ProviderAccountSubscriptionV1Schema, mergeProviderAccountSubscription, type ProviderAccountSubscriptionV1 } from './connect/accountSubscription.js';
+export { ConnectedServiceImportSourceV1Schema, ConnectedServiceImportRequestV1Schema, ConnectedServiceImportResponseV1Schema, ConnectedServiceImportErrorCodeV1Schema } from './connect/connectedServiceImport.js';
+export type { ConnectedServiceImportSourceV1, ConnectedServiceImportRequestV1, ConnectedServiceImportResponseV1 } from './connect/connectedServiceImport.js';
+
 export {
   compareConnectedServiceQuotaObservationRecency,
   isConnectedServiceQuotaObservationAtOrBeforeNow,
@@ -570,6 +573,7 @@ export {
   projectProviderAccountUsageToConnectedServiceQuotaSnapshot,
   sealProviderAccountUsageSnapshotCiphertext,
   splitProviderAccountUsageSubscription,
+  splitProviderAccountUsageSupplementalFacets,
   sealProviderAccountUsageSnapshot,
   openSealedProviderAccountUsageSnapshot,
   type ProviderAccountSubjectRefV1,
@@ -587,7 +591,6 @@ export {
 
 export {
   CONNECTED_SERVICE_AUTO_QUOTA_RESET_HEADER,
-  CONNECTED_SERVICE_AUTH_GROUP_SWITCH_REASON_HEADER,
   CONNECTED_SERVICE_AUTO_QUOTA_RESET_HEADER_VALUE,
   CONNECTED_SERVICE_AUTO_DISABLE_PLAN_INVALID_QUERY_KEY,
   CONNECTED_SERVICE_POOL_QUOTA_LIMIT_SELECTION_QUERY_KEY,
@@ -642,6 +645,8 @@ export {
   ConnectedServiceQuotaRecoveryCreditStatusV1Schema,
   ConnectedServiceQuotaRecoveryCreditV1Schema,
   ConnectedServiceQuotaRecoveryCreditsV1Schema,
+  ConnectedServiceQuotaRecoveryCreditDetailsV1Schema,
+  ConnectedServiceQuotaRecoveryCreditDetailsByIdV1Schema,
   ConnectedServiceQuotaSnapshotV1Schema,
   ConnectedServiceQuotaSourceV1Schema,
   ConnectedServiceQuotaUnitV1Schema,
@@ -700,6 +705,8 @@ export {
   type ConnectedServiceQuotaRecoveryCreditStatusV1,
   type ConnectedServiceQuotaRecoveryCreditV1,
   type ConnectedServiceQuotaRecoveryCreditsV1,
+  type ConnectedServiceQuotaRecoveryCreditDetailsV1,
+  type ConnectedServiceQuotaRecoveryCreditDetailsByIdV1,
   type ConnectedServiceQuotaSnapshotV1,
   type ConnectedServiceQuotaSourceV1,
   type ConnectedServiceQuotaUnitV1,
@@ -745,6 +752,7 @@ export {
   normalizeConnectedServiceOauthCredentialRawMetadata,
   type ConnectedServiceOauthCredentialRawMetadata,
 } from './connect/buildConnectedServiceCredentialRecord.js';
+export { parseOauthAuthorizationResponse, type OauthAuthorizationResponse } from './connect/oauthAuthorizationResponse.js';
 
 export { parseBooleanEnv, parseOptionalBooleanEnv } from './env/parseBooleanEnv.js';
 export type { ServerRetentionCapabilities } from './features/payload/capabilities/serverRetentionCapabilities.js';
@@ -1039,6 +1047,7 @@ export {
 export {
   TranscriptRawRecordV1Schema,
   ConnectedServiceRuntimeAuthRecoveryTranscriptStatusV1Schema,
+  isConnectedServiceRuntimeAuthRecoveryCancellation,
   ConnectedServiceSwitchAttemptedContinuityModeV1Schema,
   ConnectedServiceSwitchAttemptOutcomeActionV1Schema,
   ConnectedServiceSwitchAttemptOutcomeV1Schema,
@@ -2400,6 +2409,7 @@ export {
   ExecutionRunRequestedConfigurationSchema,
   projectExecutionRunRequestedConfiguration,
   ExecutionRunPublicStateSchema,
+  isExecutionRunActive,
   ExecutionRunReplaySeedRequestSchema,
   ExecutionRunStartRequestSchema,
   ExecutionRunStartResponseSchema,
@@ -2628,6 +2638,8 @@ export {
 
 export {
   SessionHandoffAbortRequestSchema,
+  SessionHandoffCapabilityV2Schema,
+  type SessionHandoffCapabilityV2,
   SessionHandoffAbortRequestV2Schema,
   SessionHandoffAbortResponseSchema,
   SessionHandoffAbortResponseV2Schema,
@@ -3452,6 +3464,10 @@ export {
   AccountSettingsV2UpdateRequestSchema,
   AccountSettingsV2UpdateResponseSchema,
   ConnectedServicesDefaultAuthByAgentIdV1Schema,
+  ConnectedServicesAdditionalDefaultAuthByAgentIdV1Schema,
+  readConnectedServicesDefaultAuthSettings,
+  buildConnectedServicesDefaultAuthSettingsPatch,
+  type ConnectedServicesDefaultAuthSettings,
   ConnectedServicesProviderConfigSharingModeV1Schema,
   ConnectedServicesProviderStateSharingModeV1Schema,
   ConnectedServicesProviderStateSharingPolicyV1Schema,
@@ -3622,3 +3638,13 @@ export { formatPermissionRequestSummary } from './activity/agentRequestSummary.j
 export { summarizeToolInputForNotification, type RequestNotificationLabels } from './activity/agentRequestNotificationContent.js';
 export { extractShellCommand, stripShellCommandPreludeForDisplay } from './activity/shellCommand.js';
 export { maybeParseJson } from './activity/parseJson.js';
+export {
+  CONNECTED_SERVICE_READER_SUPPORT_QUERY_KEY,
+  CONNECTED_SERVICE_READER_SUPPORT_SOCKET_AUTH_FIELD,
+  RELEASED_CONNECTED_SERVICE_IDS,
+  readConnectedServiceReaderSupport,
+  projectConnectedServiceProfileForReader,
+  projectSessionRuntimeIssueForReader,
+  supportsConnectedServiceOperation,
+  withConnectedServiceReaderSupport,
+} from './connect/connectedServiceReaderSupport.js';
