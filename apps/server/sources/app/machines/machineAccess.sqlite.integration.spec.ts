@@ -8,6 +8,7 @@ import { createLightSqliteHarness, type LightSqliteHarness } from '@/testkit/lig
 import { createSignedAccountContentBinding } from '@/testkit/accountEncryption';
 import * as access from './machineAccess';
 import { ACTION_OPERATION_RPC_METHODS_V1, ACTION_OPERATION_RPC_METHODS_V2 } from '@happier-dev/protocol/actions/operations/v1';
+import { RPC_METHODS } from '@happier-dev/protocol/rpc';
 
 describe('Machine current access (real SQLite)', () => {
     let harness: LightSqliteHarness;
@@ -29,6 +30,31 @@ describe('Machine current access (real SQLite)', () => {
         return { owner, machine, key };
     }
     const grant = (actorAccountId: string, machineId: string, accountId: string, level: 'view' | 'admin' = 'view') => inTx(tx => access.setMachineAccessGrantInTx(tx, { actorAccountId, machineId, principal: { kind: 'account', accountId }, level }));
+
+    it('admits the requester-owned spawn Action for Can use while refusing raw private spawn RPCs', async () => {
+        const f = await fixture();
+        const requester = await account();
+        const outsider = await account();
+        await grant(f.owner.id, f.machine.id, requester.id);
+        const actor = { actorAccountId: requester.id, machineId: f.machine.id };
+        for (const actionId of ['session.spawn_new', 'session.open']) {
+            expect(await access.resolveMachineAdmission({ ...actor, actionId })).toMatchObject({
+                kind: 'admitted', actorAccountId: requester.id, custodianAccountId: f.owner.id, role: 'use',
+            });
+        }
+        for (const rpcMethod of [RPC_METHODS.SPAWN_HAPPY_SESSION, RPC_METHODS.SPAWN_HAPPY_SESSION_PROVIDER_SAFE, RPC_METHODS.SESSION_SPAWN_NEW]) {
+            expect(await access.resolveMachineAdmission({ ...actor, rpcMethod }))
+                .toEqual({ kind: 'denied', code: 'unsupported_operation' });
+            expect(await access.resolveMachineAdmission({ ...actor, actionId: 'session.spawn_new', rpcMethod }))
+                .toEqual({ kind: 'denied', code: 'unsupported_operation' });
+        }
+        expect(await access.resolveMachineAdmission({ actorAccountId: outsider.id, machineId: f.machine.id, actionId: 'session.spawn_new' }))
+            .toEqual({ kind: 'denied', code: 'access_denied' });
+        await inTx(tx => access.removeMachineAccessGrantInTx(tx, { actorAccountId: f.owner.id, machineId: f.machine.id,
+            principal: { kind: 'account', accountId: requester.id } }));
+        expect(await access.resolveMachineAdmission({ ...actor, actionId: 'session.spawn_new' }))
+            .toEqual({ kind: 'denied', code: 'access_denied' });
+    });
 
     it('excludes revoked owned Machines from discovery while retaining explicit historical candidates', async () => {
         const f = await fixture();

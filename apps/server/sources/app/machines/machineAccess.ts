@@ -211,11 +211,14 @@ export async function resolveMachineAdmissionInTx(tx: Tx, input: MachineAdmissio
     let requiredRole = input.requiredRole ?? 'use';
     let method = input.rpcMethod;
     if (input.actionId && !method) {
-        const { getActionSpec, PublicActionIdSchema } = await import('@happier-dev/protocol/actions');
-        const actionId = PublicActionIdSchema.safeParse(input.actionId);
+        const { getActionSpec, SignedRootActionIdSchema } = await import('@happier-dev/protocol/actions');
+        const actionId = SignedRootActionIdSchema.safeParse(input.actionId);
         const spec = actionId.success ? getActionSpec(actionId.data) : null;
-        method = spec?.bindings?.rpcMethod;
-        if (!method && !access.owned && !isRequesterProjectExecutionActionV1(input.actionId)) {
+        // Session creation/resume uses admitted requester custody at the Action ingress.
+        // Its private raw RPC binding remains custodian-only when requested directly.
+        const requesterSessionLifecycle = spec?.id === 'session.spawn_new' || spec?.id === 'session.open';
+        method = requesterSessionLifecycle ? undefined : spec?.bindings?.rpcMethod;
+        if (!method && !access.owned && !requesterSessionLifecycle && !isRequesterProjectExecutionActionV1(input.actionId)) {
             return { kind: 'denied', code: 'unsupported_operation' };
         }
     }
