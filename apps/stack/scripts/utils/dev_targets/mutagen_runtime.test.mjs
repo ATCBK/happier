@@ -229,12 +229,37 @@ test('Mutagen list parsing rejects nonterminal scan and transition problems incl
   ]) {
     const result = parseMutagenSyncList(base(problem), 'happier-mac');
     assert.equal(result.state, 'unhealthy', JSON.stringify(problem));
+    assert.equal(result.recovery, undefined, JSON.stringify(problem));
   }
 
   const excludedAlone = parseMutagenSyncList(base({
     alpha: { excludedScanProblems: 2, scanProblems: [{ path: 'a.txt' }] },
   }), 'happier-mac');
   assert.equal(excludedAlone.state, 'unhealthy');
+  assert.equal(excludedAlone.recovery, undefined);
+});
+
+test('Mutagen scan races recover before the first cycle but never mask unsafe scan evidence', () => {
+  const race = { path: 'source.ts', error: 'hashed size mismatch: 847308 != 28672' };
+  for (const cycles of [0, 7]) {
+    const session = {
+      name: 'happier-linux', paused: false, status: 'waiting-for-rescan', successfulCycles: cycles,
+      alpha: { connected: true, scanned: cycles > 0, scanProblems: [race] },
+      beta: { connected: true, scanned: cycles > 0 },
+    };
+    const inspect = value => parseMutagenSyncList(JSON.stringify([value]), session.name);
+    assert.equal(inspect(session).recovery, 'rescan');
+    for (const unsafe of [
+      { ...session.alpha, scanProblems: [race, { path: 'secret', error: 'permission denied' }] },
+      { ...session.alpha, excludedScanProblems: 1 },
+      { ...session.alpha, scanProblems: [{ path: 'source.ts', error: 'modified during scan' }] },
+      { ...session.alpha, scanProblems: [{ path: 'source.ts', error: 'hashed size mismatch: invalid' }] },
+      { ...session.alpha, scanProblems: [{ path: 'source.ts' }] },
+    ]) assert.equal(inspect({ ...session, alpha: unsafe }).recovery, undefined);
+    const transition = { path: 'source.ts', error: 'unable to validate existing file: modification detected' };
+    assert.equal(inspect({ ...session, beta: { ...session.beta, transitionProblems: [transition] } }).recovery, 'rescan');
+    assert.equal(inspect({ ...session, beta: { ...session.beta, scanProblems: [{ path: 'secret', error: 'permission denied' }], transitionProblems: [transition] } }).recovery, undefined);
+  }
 });
 
 test('Mutagen list parsing requires connected and scanned endpoints for readiness', () => {

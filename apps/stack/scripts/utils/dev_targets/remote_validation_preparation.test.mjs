@@ -1,20 +1,66 @@
 import assert from 'node:assert/strict';
 import test from 'node:test';
-import { spawn, spawnSync } from 'node:child_process';
+import { spawnSync } from 'node:child_process';
 import { mkdirSync, readFileSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
-import { fileURLToPath, pathToFileURL } from 'node:url';
-import { resolveYarnCommandInvocation } from '../../../../../scripts/workspaces/execYarnCommand.mjs';
+import { fileURLToPath } from 'node:url';
 
 import { createTempFixture } from '../../testkit/core/temp_fixture.mjs';
 import { ensureWorkspacePackagesBuiltForComponent } from '../../../../../scripts/workspaces/ensureWorkspacePackagesBuilt.mjs';
+import { withWorkspaceBundleLock } from '../../../../../packages/cli-common/workspaceBundleLock.mjs';
+import { resolveWorkspacePackageBuildLockPath } from '../../../../../scripts/workspaces/workspacePackageBuildLock.mjs';
 
 import { prepareRemoteValidationWorkspace } from './remote_validation_preparation.mjs';
 import { resolveCliBundledWorkspacePackageNames } from '../../../../cli/scripts/buildSharedDeps.mjs';
-import { ensureSourceServerWorkspacePackagesBuilt, spawnSourceServerScript } from '../server/source_server_workspace_deps.mjs';
 
-test('finite validation preparation retains coherent output after exhausted drift', async t => {
-  for (const scenario of ['typecheck', 'runtime', 'emit-only', 'dev-server', 'cold', 'damaged', 'compiler-error', 'release', 'artifact', 'strict-build']) await t.test(scenario, async t => {
+test('typecheck readers consume last-green declarations while publication leases remain held', async t => {
+  const { root } = await createTempFixture(t, { prefix: 'hstack-typecheck-held-publication-' });
+  writeFileSync(join(root, 'package.json'), JSON.stringify({ private: true, workspaces: ['apps/*', 'packages/*'] }));
+  writeFileSync(join(root, 'yarn.lock'), '# fixture\n');
+  const metadata = { name: '@happier-dev/protocol', type: 'module', main: './dist/index.js', types: './dist/index.d.ts',
+    scripts: { build: 'fixture-compiler' } };
+  const dependency = join(root, 'packages/protocol');
+  mkdirSync(join(dependency, 'src'), { recursive: true });
+  writeFileSync(join(dependency, 'package.json'), JSON.stringify(metadata));
+  writeFileSync(join(dependency, 'src/index.ts'), 'export const value = "green";\n');
+  const env = { ...process.env, HAPPIER_STACK_REPO_DIR: root, HAPPIER_STACK_RUNTIME_IDENTITY_REPO_DIR: root,
+    HAPPIER_WORKSPACE_DIST_BUILD_LOCK_HELD: '', HAPPIER_WORKSPACE_DIST_BUILD_LOCK_LEASES: '[]',
+    HAPPIER_BUILD_DEPENDENCY_CUSTODY: '', HAPPIER_WORKSPACE_DIST_BUILD_LOCK_WAIT_ALLOWED: '0' };
+  for (const component of ['cli', 'ui', 'server']) {
+    const dir = join(root, 'apps', component);
+    mkdirSync(dir, { recursive: true });
+    writeFileSync(join(dir, 'package.json'), JSON.stringify({ name: `@fixture/${component}`,
+      dependencies: { '@happier-dev/protocol': 'workspace:*' } }));
+  }
+  await ensureWorkspacePackagesBuiltForComponent(join(root, 'apps/server'), { env,
+    workspaceBuildBoundary: {
+      prepareEnv: async (_dir, value) => value,
+      // Only the compiler process is replaced. Publication, fingerprints,
+      // dependency admission and retained-output validation remain real.
+      runPackageBuild: async (dir, { env }) => {
+        writeFileSync(join(env.HAPPIER_WORKSPACE_DIST_OUTPUT_DIR, 'index.js'), readFileSync(join(dir, 'src/index.ts')));
+        writeFileSync(join(env.HAPPIER_WORKSPACE_DIST_OUTPUT_DIR, 'index.d.ts'), 'export declare const value: string;');
+      },
+    },
+  });
+  const record = readFileSync(join(dependency, 'dist/.happier-build-inputs.json'), 'utf8');
+  writeFileSync(join(dependency, 'src/index.ts'), 'export const value = "moving";\n');
+  await withWorkspaceBundleLock(async () => {
+    await withWorkspaceBundleLock(async () => {
+      for (const component of ['cli', 'ui', 'server']) {
+        const result = await prepareRemoteValidationWorkspace({ repoDir: root,
+          componentRelativeDir: `apps/${component}`, validationKind: 'typecheck', env });
+        assert.deepEqual(result.built, []);
+        assert.deepEqual(result.skipped, ['workspace-typecheck-reader']);
+      }
+      assert.equal(readFileSync(join(dependency, 'dist/.happier-build-inputs.json'), 'utf8'), record);
+      assert.equal(readFileSync(join(dependency, 'dist/index.js'), 'utf8'), 'export const value = "green";\n');
+    }, { lockPath: resolveWorkspacePackageBuildLockPath(dependency, metadata) });
+  }, { lockPath: join(root, '.project/tmp/cli-dist-build.lock') });
+});
+
+test('runtime preparation publishes captured inputs and preserves last-green after compiler failure', async t => {
+  for (const scenario of ['warm', 'cold', 'damaged', 'compiler-error']) await t.test(scenario, async t => {
     const { root } = await createTempFixture(t, { prefix: 'hstack-finite-preparation-drift-' });
     writeFileSync(join(root, 'package.json'), JSON.stringify({ private: true, workspaces: ['apps/*', 'packages/*'] }));
     for (const app of ['cli', 'ui', 'server']) {
@@ -31,8 +77,8 @@ test('finite validation preparation retains coherent output after exhausted drif
     const output = join(sdk, 'dist/index.js');
     writeFileSync(source, 'export const value = "green";\n');
     let moving = false, attempts = 0;
-    // Replace only the compiler process. Real preparation, captures, trailing
-    // convergence, retained-output integrity and publication stay live.
+    // Replace only the compiler process. Captures, output integrity and
+    // publication remain real, including an edit during compilation.
     const workspaceBuildBoundary = {
       prepareEnv: async (_dir, env) => ({ ...env }),
       runPackageBuild: async (dir, { env }) => {
@@ -40,92 +86,47 @@ test('finite validation preparation retains coherent output after exhausted drif
         if (moving && scenario === 'compiler-error') throw Object.assign(new Error('src/index.ts(1,1): error TS2322: incompatible value'), { code: 'EEXIT', exitCode: 1 });
         writeFileSync(join(env.HAPPIER_WORKSPACE_DIST_OUTPUT_DIR, 'index.js'), readFileSync(join(dir, 'src/index.ts')));
         writeFileSync(join(env.HAPPIER_WORKSPACE_DIST_OUTPUT_DIR, 'index.d.ts'), 'export declare const value: string;\n');
-        if (moving) writeFileSync(join(dir, 'src/index.ts'), `export const value = "moving-${attempts}";\n`);
+        if (moving) writeFileSync(source, `export const value = "moving-${attempts}";\n`);
       },
     };
     const env = { ...process.env, HAPPIER_WORKSPACE_BUILD_MODE: 'strict',
       HAPPIER_STACK_REPO_DIR: root, HAPPIER_STACK_RUNTIME_IDENTITY_REPO_DIR: root };
     if (scenario !== 'cold') await ensureWorkspacePackagesBuiltForComponent(join(root, 'apps/server'), {
-      env, workspaceBuildBoundary, ...(scenario === 'emit-only' ? { buildMode: 'source-dev' } : {}),
+      env, workspaceBuildBoundary,
     });
     const greenRecord = scenario === 'cold' ? null : JSON.parse(readFileSync(receipt, 'utf8'));
     if (scenario === 'damaged') writeFileSync(output, 'damaged retained output');
     writeFileSync(source, 'export const value = "next";\n');
     moving = true;
     attempts = 0;
-    const prepare = () => scenario === 'dev-server'
-      ? ensureSourceServerWorkspacePackagesBuilt({ serverDir: join(root, 'apps/server'), env: { ...env, HAPPIER_WORKSPACE_BUILD_MODE: 'source-dev' } }, {
-        ensureWorkspacePackagesBuiltForComponentImpl: (dir, options) => ensureWorkspacePackagesBuiltForComponent(dir, { ...options, workspaceBuildBoundary }),
-      }).then(value => value.result)
-      : scenario === 'strict-build'
-      ? ensureWorkspacePackagesBuiltForComponent(join(root, 'apps/server'), { env, workspaceBuildBoundary })
-      : prepareRemoteValidationWorkspace({ repoDir: root, componentRelativeDir: 'apps/server',
-        validationKind: scenario === 'runtime' ? 'runtime' : 'typecheck',
-        env: { ...env, ...(scenario === 'release' ? { npm_lifecycle_event: 'prepack' } : {}) },
+    const prepare = () => prepareRemoteValidationWorkspace({ repoDir: root, componentRelativeDir: 'apps/server',
+        validationKind: 'runtime',
+        env,
         loadWorkspaceBuildOwner: async () => ({
           ensureWorkspacePackagesBuiltForComponent: (dir, options) => ensureWorkspacePackagesBuiltForComponent(dir, {
-            ...options, workspaceBuildBoundary, ...(scenario === 'artifact' ? { publicationMode: 'artifact' } : {}),
+            ...options, workspaceBuildBoundary,
           }),
         }),
       });
-    if (scenario !== 'typecheck' && scenario !== 'runtime' && scenario !== 'emit-only' && scenario !== 'dev-server') {
-      await assert.rejects(prepare(), scenario === 'compiler-error' ? { code: 'EEXIT' }
-        : { code: 'BUILD_INPUTS_CHANGED', trailingPassExhausted: true });
-      assert.equal(attempts, scenario === 'compiler-error' ? 1 : 2);
+    if (scenario === 'compiler-error') {
+      await assert.rejects(prepare(), { code: 'EEXIT' });
+      assert.equal(attempts, 1);
+      assert.equal(readFileSync(output, 'utf8'), 'export const value = "green";\n');
+      assert.deepEqual(JSON.parse(readFileSync(receipt, 'utf8')), greenRecord);
       return;
     }
     const result = await prepare();
-    assert.equal(attempts, 2, 'retain output only after the existing trailing pass');
-    assert.deepEqual(result.built, []);
-    assert.equal(readFileSync(output, 'utf8'), 'export const value = "green";\n');
-    assert.equal(result.stalePackages.length, 1);
-    const retained = result.stalePackages[0];
-    assert.equal(retained.packageName, '@happier-dev/plugin-sdk');
-    assert.deepEqual(retained.lastGreenBuildRecord, greenRecord);
-    assert.equal(retained.lastGreenBuiltAt, greenRecord.builtAt);
-    assert.match(retained.outputIdentity, /^[a-f0-9]{64}$/);
-    assert.match(retained.diagnosticSummary, /inputs changed while building/);
-    if (scenario === 'dev-server') {
-      // The package-manager process is the boundary. Keep source admission
-      // real and start an isolated HTTP service importing the retained SDK.
-      let child;
-      t.after(async () => {
-        if (child && child.exitCode === null && child.signalCode === null) {
-          const ended = new Promise(resolve => child.once('exit', resolve));
-          child.kill('SIGTERM');
-          await ended;
-        }
-      });
-      await spawnSourceServerScript({ serverDir: join(root, 'apps/server'), script: 'start',
-        env: { ...env, HAPPIER_WORKSPACE_BUILD_MODE: 'source-dev' }, quiet: true }, {
-        // The watch/reload owner owns refresh during actual dev startup.
-        ensureWorkspacePackagesBuiltForComponentImpl: (dir, options) => ensureWorkspacePackagesBuiltForComponent(dir, { ...options, refresh: null, workspaceBuildBoundary }),
-        pmSpawnScriptImpl: async () => {
-          child = spawn(process.execPath, ['--input-type=module', '-e',
-            `import {value} from ${JSON.stringify(pathToFileURL(output).href)}; import http from 'node:http'; const server=http.createServer((req,res)=>res.end(value)); server.listen(0,'127.0.0.1',()=>console.log(server.address().port));`],
-            { stdio: ['ignore', 'pipe', 'pipe'] });
-          return child;
-        },
-      });
-      const port = await new Promise((resolve, reject) => {
-        child.once('error', reject);
-        child.once('exit', code => reject(new Error(`retained-output service exited before readiness: ${code}`)));
-        child.stdout.once('data', data => resolve(Number(data.toString().trim())));
-      });
-      const response = await fetch(`http://127.0.0.1:${port}/`);
-      assert.equal(response.status, 200);
-      assert.equal(await response.text(), 'green', 'initial service starts on retained output without another source edit');
-    }
-    if (scenario === 'typecheck') {
-      const repeated = await prepare();
-      assert.equal(repeated.stalePackages[0].outputIdentity, retained.outputIdentity);
-      assert.deepEqual(repeated.stalePackages[0].lastGreenBuildRecord, greenRecord);
-    }
+    assert.equal(attempts, 1, 'a captured compiler input does not need a trailing pass');
+    assert.deepEqual(result.built, ['@happier-dev/plugin-sdk']);
+    assert.equal(readFileSync(output, 'utf8'), 'export const value = "next";\n');
+    assert.equal(readFileSync(source, 'utf8'), 'export const value = "moving-1";\n');
+    const capturedRecord = readFileSync(receipt, 'utf8');
     moving = false;
     const recovered = await prepare();
     assert.deepEqual(recovered.built, ['@happier-dev/plugin-sdk']);
     assert.equal(recovered.stalePackages?.length ?? 0, 0);
-    assert.equal(readFileSync(output, 'utf8'), 'export const value = "next";\n');
+    assert.equal(readFileSync(output, 'utf8'), 'export const value = "moving-1";\n');
+    assert.notEqual(readFileSync(receipt, 'utf8'), capturedRecord, 'the later source edit is prepared by the next producer invocation');
   });
 });
 
@@ -162,7 +163,7 @@ if (result.error) throw result.error; process.exit(result.status ?? 1);`);
 const root = process.argv[process.argv.indexOf('--root') + 1];
 const dist = readFileSync(root + '/packages/plugins/claude/dist/index.js', 'utf8');
 writeFileSync(root + '/published-plugin', dist);`);
-  const prepare = () => prepareRemoteValidationWorkspace({ repoDir: root, componentRelativeDir: 'apps/cli', validationKind: 'typecheck' });
+  const prepare = () => prepareRemoteValidationWorkspace({ repoDir: root, componentRelativeDir: 'apps/cli', validationKind: 'runtime' });
   assert.deepEqual(resolveCliBundledWorkspacePackageNames({ repoRoot: root }), ['plugins-claude']);
   await prepare();
   assert.equal(readFileSync(join(root, 'published-plugin'), 'utf8'), 'export const generation = 1;\n');
@@ -171,7 +172,7 @@ writeFileSync(root + '/published-plugin', dist);`);
   assert.equal(readFileSync(join(root, 'published-plugin'), 'utf8'), 'export const generation = 2;\n');
 });
 
-test('source-test preparation does not admit emitted outputs on cold, current or stale replicas', async (t) => {
+test('source-test and typecheck readers leave cold, current and stale outputs to their producers', async (t) => {
   const { root } = await createTempFixture(t, { prefix: 'hstack-source-preparation-' });
   writeFileSync(join(root, 'package.json'), JSON.stringify({ private: true, workspaces: ['apps/*', 'packages/*'] }));
   writeFileSync(join(root, 'yarn.lock'), '# fixture\n');
@@ -190,7 +191,9 @@ test('source-test preparation does not admit emitted outputs on cold, current or
   writeFileSync(source, 'export const value = 1;\n');
   const prepare = async () => {
     for (const componentRelativeDir of ['apps/cli', 'apps/ui', 'packages/plugin-sdk']) {
-      await prepareRemoteValidationWorkspace({ repoDir: root, componentRelativeDir, validationKind: 'source-test' });
+      for (const validationKind of ['source-test', 'typecheck']) {
+        await prepareRemoteValidationWorkspace({ repoDir: root, componentRelativeDir, validationKind });
+      }
     }
   };
   await prepare();
@@ -207,6 +210,7 @@ test('source-test collection follows Protocol source edits and rejects malformed
   const { root } = await createTempFixture(t, { prefix: 'hstack-source-collection-' });
   const repoRoot = fileURLToPath(new URL('../../../../../', import.meta.url));
   const vitestEntry = fileURLToPath(import.meta.resolve('vitest'));
+  const vitestCli = fileURLToPath(import.meta.resolve('vitest/vitest.mjs'));
   const source = join(root, 'protocol/src');
   mkdirSync(source, { recursive: true });
   writeFileSync(join(root, 'protocol/package.json'), JSON.stringify({
@@ -219,8 +223,9 @@ export default { plugins: [createWorkspacePackageSourcesPlugin([{ packageName: '
     writeFileSync(join(source, 'index.ts'), `export const value = ${value};\n`);
     writeFileSync(join(root, 'owner.test.ts'), `import { test, expect } from ${JSON.stringify(vitestEntry)}; import { value } from '@happier-dev/protocol'; test('current source', () => expect(value).toBe(${value}));`);
   };
-  const invocation = resolveYarnCommandInvocation(['-s', 'vitest', 'run', `--root=${root}`, `--config=${config}`]);
-  const collect = () => spawnSync(invocation.command, invocation.args, {
+  // This isolated resolver fixture already runs beneath the containing native
+  // test's admission. A second package dispatch would prepare unrelated dist.
+  const collect = () => spawnSync(process.execPath, [vitestCli, 'run', `--root=${root}`, `--config=${config}`], {
     cwd: join(repoRoot, 'apps/cli'), env: process.env, encoding: 'utf8',
   });
   writeSourceAndExpectation(1);
@@ -233,76 +238,6 @@ export default { plugins: [createWorkspacePackageSourcesPlugin([{ packageName: '
   result = collect();
   assert.notEqual(result.status, 0);
   assert.match(`${result.stdout}\n${result.stderr}`, /Failed Suites|Transform failed/);
-});
-
-test('remote typecheck preparation admits current component declarations without preparing CLI-only runtime dependencies', async (t) => {
-  const { root } = await createTempFixture(t, { prefix: 'hstack-typecheck-declarations-' });
-  writeFileSync(join(root, 'package.json'), JSON.stringify({ private: true, workspaces: ['apps/*', 'packages/*'] }));
-  writeFileSync(join(root, 'yarn.lock'), '# fixture\n');
-  for (const name of ['ui', 'cli', 'server']) {
-    const dir = join(root, 'apps', name);
-    mkdirSync(dir, { recursive: true });
-    writeFileSync(join(dir, 'package.json'), JSON.stringify({
-      name: `@fixture/${name}`, dependencies: {
-        '@fixture/protocol': 'workspace:*',
-        ...(name === 'cli' ? { '@fixture/cli-runtime': 'workspace:*' } : {}),
-      },
-    }));
-  }
-  const protocol = join(root, 'packages', 'protocol');
-  mkdirSync(join(protocol, 'src'), { recursive: true });
-  writeFileSync(join(protocol, 'package.json'), JSON.stringify({
-    name: '@fixture/protocol', scripts: { build: 'fixture-compiler' },
-    main: './dist/index.js', types: './dist/index.d.ts',
-  }));
-  const source = join(protocol, 'src', 'index.ts');
-  writeFileSync(source, 'export type Value = "first";\n');
-  const cliRuntime = join(root, 'packages', 'cli-runtime');
-  mkdirSync(join(cliRuntime, 'src'), { recursive: true });
-  writeFileSync(join(cliRuntime, 'package.json'), JSON.stringify({
-    name: '@fixture/cli-runtime', scripts: { build: 'fixture-compiler' },
-    main: './dist/index.js', types: './dist/index.d.ts',
-  }));
-  writeFileSync(join(cliRuntime, 'src', 'index.ts'), 'export declare const runtimeOnly: true;\n');
-  let builds = 0;
-  let editDuringBuild = false;
-  const prepare = () => prepareRemoteValidationWorkspace({
-    repoDir: root,
-    componentRelativeDir: 'apps/ui',
-    validationKind: 'typecheck',
-    // The fixture is its own physical/identity checkout, not the executor's mirror.
-    env: { ...process.env, HAPPIER_STACK_REPO_DIR: root, HAPPIER_STACK_RUNTIME_IDENTITY_REPO_DIR: root },
-    loadWorkspaceBuildOwner: async () => ({
-      ensureWorkspacePackagesBuiltForComponent: (dir, options) => ensureWorkspacePackagesBuiltForComponent(dir, {
-        ...options,
-        // Replace only the compiler/package-manager process boundary; digest admission is real.
-        workspaceBuildBoundary: {
-          prepareEnv: async (_dir, env) => ({ ...env }),
-          runPackageBuild: async (packageDir, { env }) => {
-            builds += 1;
-            if (editDuringBuild) writeFileSync(source, `export type Value = "later-${builds}";\n`);
-            writeFileSync(join(env.HAPPIER_WORKSPACE_DIST_OUTPUT_DIR, 'index.js'), 'export {};\n');
-            writeFileSync(join(env.HAPPIER_WORKSPACE_DIST_OUTPUT_DIR, 'index.d.ts'), readFileSync(join(packageDir, 'src', 'index.ts')));
-          },
-        },
-      }),
-    }),
-  });
-  await prepare();
-  assert.equal(readFileSync(join(protocol, 'dist', 'index.d.ts'), 'utf8'), 'export type Value = "first";\n');
-  await prepare();
-  assert.equal(builds, 1, 'unchanged declarations reuse content-digest admission');
-  writeFileSync(source, 'export type Value = "second";\n');
-  await prepare();
-  assert.equal(builds, 2);
-  assert.equal(readFileSync(join(protocol, 'dist', 'index.d.ts'), 'utf8'), 'export type Value = "second";\n');
-  writeFileSync(source, 'export type Value = "captured";\n');
-  editDuringBuild = true;
-  await prepare();
-  assert.equal(builds, 3, 'moving source must not exhaust the trailing pass before the checker runs');
-  assert.equal(readFileSync(join(protocol, 'dist', 'index.d.ts'), 'utf8'), 'export type Value = "captured";\n');
-  assert.throws(() => readFileSync(join(cliRuntime, 'dist', 'index.js')), { code: 'ENOENT' });
-  assert.throws(() => readFileSync(join(cliRuntime, 'dist', 'index.d.ts')), { code: 'ENOENT' });
 });
 
 test('artifact-consuming preparation publishes cold outputs, reuses current outputs and rebuilds stale outputs', async (t) => {
@@ -402,7 +337,7 @@ test('remote development validation isolates an optional plugin at the real pack
     name: '@happier-dev/plugins-inspector', main: './dist/index.js', scripts: { build: 'fixture-compiler' },
   }));
   const result = await prepareRemoteValidationWorkspace({
-    repoDir: root, componentRelativeDir: 'apps/ui', validationKind: 'typecheck',
+    repoDir: root, componentRelativeDir: 'apps/ui', validationKind: 'runtime',
     loadWorkspaceBuildOwner: async () => ({
       ensureWorkspacePackagesBuiltForComponent: (dir, options) => ensureWorkspacePackagesBuiltForComponent(dir, {
         ...options, quiet: true,

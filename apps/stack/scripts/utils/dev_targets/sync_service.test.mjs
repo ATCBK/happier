@@ -48,7 +48,8 @@ test('sync startup seeds an unscanned no-watch session once through the canonica
     '}',
     'if (family === "sync" && action === "list") {',
     '  const seeded = fs.existsSync(marker);',
-    '  const session = {name,paused:false,status:"watching",successfulCycles:seeded?1:0,alpha:{connected:true,scanned:seeded,watch:{mode:"no-watch"}},beta:{connected:true,scanned:seeded,watch:{mode:"no-watch"}}};',
+    '  const race = !seeded && process.env.HSTACK_TEST_SYNC_SCAN_RACE === "1";',
+    '  const session = {name,paused:false,status:race?"waiting-for-rescan":"watching",successfulCycles:seeded?1:0,alpha:{connected:true,scanned:seeded,watch:{mode:"no-watch"},scanProblems:race?[{path:"source.ts",error:"hashed size mismatch: 1 != 2"}]:[]},beta:{connected:true,scanned:seeded,watch:{mode:"no-watch"}}};',
     '  if (template === "{{json .}}") console.log(JSON.stringify([session]));',
     '  else console.log(`${name}|Watching|false|true|${seeded?1:0}|0/0|0/0|true|${seeded?1:0}|0/0|0/0|active|${seeded?1:0}|ok|0|0`);',
     '}',
@@ -66,6 +67,11 @@ test('sync startup seeds an unscanned no-watch session once through the canonica
   assert.equal(await readFile(marker, 'utf8'), '1');
   assert.equal((await start()).statuses[0].status.state, 'ready');
   assert.equal(await readFile(marker, 'utf8'), '1', 'resuming an already seeded session must not scan again');
+  env.HSTACK_TEST_SYNC_STATE = fixture.path('scan-race-seed');
+  env.HSTACK_TEST_SYNC_SCAN_RACE = '1';
+  assert.equal((await start()).statuses[0].status.state, 'ready');
+  assert.equal(await readFile(env.HSTACK_TEST_SYNC_STATE, 'utf8'), '1', 'an initial scan race must seed through the canonical flush');
+  delete env.HSTACK_TEST_SYNC_SCAN_RACE;
   env.HSTACK_TEST_SYNC_STATE = fixture.path('failed-seed');
   env.HSTACK_TEST_SYNC_FLUSH_FAILED = '1';
   await assert.rejects(start(), /Mutagen initial flush failed/);

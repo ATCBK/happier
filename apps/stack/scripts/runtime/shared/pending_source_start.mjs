@@ -5,7 +5,7 @@ import { join } from 'node:path';
 
 import { readJsonIfExists, writeJsonAtomic } from '../../utils/fs/json.mjs';
 import { withJsonOwnerFileLock } from '../../utils/proc/jsonOwnerFileLock.mjs';
-import { isPidAlive } from '../../utils/proc/pids.mjs';
+import { isPidAlive, observePidLiveness } from '../../utils/proc/pids.mjs';
 
 const preparationPhases = new Set(['preparing', 'queued', 'building', 'prepared', 'checking']);
 const phaseEventPrefix = 'HSTACK_SOURCE_PREPARATION_PHASE=';
@@ -91,7 +91,8 @@ export async function beginPendingSourceStart({ stackBaseDir, onPhase, requestId
     // A delegated half participates in the existing start; its publication and
     // cleanup must not replace or retire the parent's preparation custody.
     if (inheritedRequestId && current?.requestId === requestId) return;
-    if (inheritedRequestId && current && !replacePending) throw supersededError();
+    if (inheritedRequestId && current && !replacePending
+      && observePidLiveness(current.pid).status !== 'dead') throw supersededError();
     await writeJsonAtomic(markerPath, { requestId, pid: process.pid, phase: 'preparing' });
     ownsMarker = true;
   }, { lockPath });

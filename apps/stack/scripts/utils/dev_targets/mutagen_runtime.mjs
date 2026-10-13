@@ -11,9 +11,9 @@ export const DEV_TARGET_MUTAGEN_RUNTIME_OWNER = 'stack-dev-targets';
 // Endpoint/error/conflict validation belongs to each transport boundary; these
 // rules decide when clean connected evidence can enter the causal flush.
 const SYNC_READINESS_RULES = [
-  { when: { transientTransitionProblems: true }, state: 'rescan' },
-  { when: { scanProblems: true, scanned: true, completed: true }, state: 'rescan' },
+  { when: { scanProblems: true, transientScanProblems: true }, state: 'rescan' },
   { when: { scanProblems: true }, state: 'unhealthy' },
+  { when: { transientTransitionProblems: true }, state: 'rescan' },
   { when: { cyclesValid: false }, state: 'synchronizing' },
   { when: { watching: true, noWatch: true, completed: false }, state: 'needs-flush' },
   { when: { scanned: false }, state: 'synchronizing' },
@@ -30,6 +30,11 @@ const TRANSIENT_TRANSITION_ERRORS = [
   'unable to set staged file permissions: .*(: no such file or directory|: The system cannot find the file specified\\.)$',
 ];
 const transientTransitionError = new RegExp(TRANSIENT_TRANSITION_ERRORS.join('|'), 'i');
+
+// Mutagen 0.18.1 core/scan.go emits this when a file changes size while hashed.
+// Other scanner failures do not establish a concurrent-edit race.
+const TRANSIENT_SCAN_ERRORS = ['^hashed size mismatch: [0-9]+ != [0-9]+$'];
+const transientScanError = new RegExp(TRANSIENT_SCAN_ERRORS.join('|'), 'i');
 
 export function classifyCleanMutagenReadiness(facts) {
   return SYNC_READINESS_RULES.find(({ when }) => (
@@ -51,6 +56,10 @@ export function renderNativeSyncReadinessPolicy() {
     '}',
     'classify_transient_mutagen_transition_errors() {',
     `  printf '%s\\n' "$1" | grep -Eiv '${TRANSIENT_TRANSITION_ERRORS.join('|')}' >/dev/null`,
+    '  case "$?" in 1) return 0 ;; *) return 1 ;; esac',
+    '}',
+    'classify_transient_mutagen_scan_errors() {',
+    `  printf '%s\\n' "$1" | grep -Eiv '${TRANSIENT_SCAN_ERRORS.join('|')}' >/dev/null`,
     '  case "$?" in 1) return 0 ;; *) return 1 ;; esac',
     '}',
     '',
@@ -223,6 +232,7 @@ export function parseMutagenSyncList(raw, sessionName) {
   const scanDetails = [];
   const transitionDetails = [];
   let transientTransitions = true;
+  let transientScans = true;
   for (const [endpointName, endpoint] of [['alpha', alpha], ['beta', beta]]) {
     const scanProblems = endpoint.scanProblems == null ? [] : endpoint.scanProblems;
     const excludedScan = endpoint.excludedScanProblems == null ? 0 : endpoint.excludedScanProblems;
@@ -257,6 +267,9 @@ export function parseMutagenSyncList(raw, sessionName) {
       ));
     }
     if (scanProblems.length > 0 || hasExcludedScan) {
+      transientScans &&= !hasExcludedScan && scanProblems.every(problem => (
+        typeof problem?.error === 'string' && transientScanError.test(problem.error)
+      ));
       const detail = scanProblems.map(problem => `${String(problem?.path ?? '')}: ${String(problem?.error ?? '')}`).join('; ');
       scanDetails.push(`${endpointName} has ${scanProblems.length + excludedScan} scan problems${detail ? ` (${detail})` : ''}`);
     }
@@ -264,6 +277,7 @@ export function parseMutagenSyncList(raw, sessionName) {
   const cycles = session.successfulCycles === undefined ? 0 : session.successfulCycles;
   const readiness = classifyCleanMutagenReadiness({
     transientTransitionProblems: transitionDetails.length > 0 && transientTransitions,
+    transientScanProblems: scanDetails.length > 0 && transientScans,
     watching: status === 'watching',
     noWatch: alpha.watch?.mode === 'no-watch' && beta.watch?.mode === 'no-watch',
     scanned: alpha.scanned === true && beta.scanned === true,

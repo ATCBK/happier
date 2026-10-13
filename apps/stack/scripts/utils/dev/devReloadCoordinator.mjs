@@ -1,17 +1,21 @@
 import { join, relative, resolve, sep } from 'node:path';
+import { existsSync } from 'node:fs';
 import { readSourceComponentBuildInputs } from '../fs/workspaceBuildInputs.mjs';
 import { resolveDevReloadPollIntervalMs } from './reloadPollInterval.mjs';
-import { resolveDependencyRefreshMarkerPath } from '../proc/dependency_refresh.mjs';
+import { inspectDependencyRefresh, resolveDependencyRefreshMarkerPath } from '../proc/dependency_refresh.mjs';
+import { ensureDepsInstalled } from '../proc/pm.mjs';
 
 import { watchDebounced } from '../proc/watch.mjs';
 
 export function requestInitialDevRefreshes({
   reloadWatcher,
+  dependencyReloadEnabled = false,
   serverReloadEnabled = false,
   daemonReloadEnabled = false,
 } = {}) {
   if (!reloadWatcher?.requestReload) return [];
   const pending = [];
+  if (dependencyReloadEnabled) pending.push(reloadWatcher.requestReload('dependencies'));
   if (serverReloadEnabled) pending.push(reloadWatcher.requestReload('server'));
   if (daemonReloadEnabled) pending.push(reloadWatcher.requestReload('daemon'));
   return pending;
@@ -31,7 +35,21 @@ export {
   readDevReloadWatchChangeSignatureAsync,
 } from './watchSignature.mjs';
 
-const RESTART_ORDER = ['server', 'daemon', 'expo'];
+const RESTART_ORDER = ['dependencies', 'server', 'daemon', 'expo'];
+
+export async function createDevDependencyReload({ repoDir, env = process.env }) {
+  const { inputPaths } = await inspectDependencyRefresh({ installDir: repoDir });
+  const paths = [...new Set([...inputPaths, join(repoDir, 'patches')])].filter(path => existsSync(path));
+  return {
+    descriptor: { id: 'dependencies', target: 'dependencies', paths },
+    executor: {
+      target: 'dependencies',
+      build: () => ensureDepsInstalled(repoDir, 'development stack', {
+        env, quiet: true, prepareComponentOutputs: false,
+      }),
+    },
+  };
+}
 
 // Source preparation reports child-build exits or canonical UI admission
 // failures. Unknown configuration/OS errors retain their fail-fast behavior.

@@ -595,7 +595,7 @@ export async function killProcessGroupOwnedByStack(
       processInstanceFingerprint: admission.processInstanceFingerprint,
     });
     if (!terminated.ok) {
-      return { killed: false, reason: 'kill_timeout', signal: terminated.signal ?? 'SIGKILL' };
+      return { killed: false, reason: terminated.reason ?? 'kill_timeout', signal: terminated.signal ?? 'SIGKILL' };
     }
     return { killed: true, reason: 'killed_tree', signal: terminated.signal ?? 'SIGKILL' };
   }
@@ -630,7 +630,7 @@ export async function killProcessGroupOwnedByStack(
     processInstanceFingerprint: admission.processInstanceFingerprint,
   });
   if (!terminated.ok) {
-    return { killed: false, reason: 'kill_timeout', pgid, signal: terminated.signal ?? 'SIGKILL' };
+    return { killed: false, reason: terminated.reason ?? 'kill_timeout', pgid, signal: terminated.signal ?? 'SIGKILL' };
   }
   return { killed: true, reason: 'killed_pgid', pgid, signal: terminated.signal ?? 'SIGKILL' };
 }

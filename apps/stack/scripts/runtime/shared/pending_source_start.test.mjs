@@ -39,6 +39,52 @@ test('a delegated process shares its parent start without superseding or retirin
   await successor.publish(async () => {});
 });
 
+test('a delegated remote start replaces abandoned preparation and keeps its retry in the same request', async (t) => {
+  const fixture = await createTempFixture(t, { prefix: 'hstack-pending-source-abandoned-', registerCleanup: false });
+  const moduleUrl = new URL('./pending_source_start.mjs', import.meta.url).href;
+  let current;
+  let retry;
+  t.after(async () => { await retry?.dispose(); await current?.dispose(); await fixture.cleanup(); });
+  const abandoned = await runNodeCapture(['--input-type=module', '-e', `
+    import { beginPendingSourceStart } from ${JSON.stringify(moduleUrl)};
+    const start = await beginPendingSourceStart({ stackBaseDir: ${JSON.stringify(fixture.root)},
+      requestId: 'previous-controller' });
+    await start.setPhase({ phase: 'queued', component: 'server' });
+    // Exiting the process without cleanup models a lost remote worker.
+  `]);
+  assert.equal(abandoned.code, 0, abandoned.stderr);
+  current = await beginPendingSourceStart({ stackBaseDir: fixture.root, requestId: 'current-controller' });
+  await current.retainPreparation(fixture.path('current-prepared'));
+  retry = await beginPendingSourceStart({ stackBaseDir: fixture.root, requestId: current.requestId });
+  await retry.publish(async () => writeFile(fixture.path('retry-published'), 'yes'));
+  await retry.dispose();
+  assert.equal(current.signal.aborted, false);
+  assert.equal(JSON.parse(await readFile(fixture.path('source-runtime/start.pending.json'), 'utf8')).requestId,
+    current.requestId, 'retry publication must retain the current owner claim');
+  await assert.rejects(beginPendingSourceStart({ stackBaseDir: fixture.root, requestId: 'previous-controller' }),
+    { code: 'ESOURCESTARTSUPERSEDED' }, 'an old worker must not overwrite a live successor');
+  await current.publish(async () => writeFile(fixture.path('current-published'), 'yes'));
+  assert.equal(await readFile(fixture.path('current-published'), 'utf8'), 'yes');
+});
+
+test('a delegated start cannot replace a marker when its owner liveness is inconclusive', async (t) => {
+  const fixture = await createTempFixture(t, { prefix: 'hstack-pending-source-unknown-', registerCleanup: false });
+  const owner = await beginPendingSourceStart({ stackBaseDir: fixture.root });
+  t.after(async () => { await owner.dispose(); await fixture.cleanup(); });
+  const markerPath = fixture.path('source-runtime/start.pending.json');
+  const marker = { requestId: owner.requestId, pid: 12345, phase: 'queued' };
+  await writeFile(markerPath, JSON.stringify(marker));
+  const realKill = process.kill.bind(process);
+  // The OS signal probe is the external boundary; keep claim/lock logic real.
+  t.mock.method(process, 'kill', (pid, signal) => {
+    if (pid === marker.pid) throw Object.assign(new Error('probe unavailable'), { code: 'EIO' });
+    return realKill(pid, signal);
+  });
+  await assert.rejects(beginPendingSourceStart({ stackBaseDir: fixture.root, requestId: 'contender' }),
+    { code: 'ESOURCESTARTSUPERSEDED' });
+  assert.deepEqual(JSON.parse(await readFile(markerPath, 'utf8')), marker);
+});
+
 test('a newer process cancels only its stack pending start and prevents stale publication', async (t) => {
   const fixture = await createTempFixture(t, { prefix: 'hstack-pending-source-start-', registerCleanup: false });
   const first = await beginPendingSourceStart({ stackBaseDir: fixture.path('same-stack') });

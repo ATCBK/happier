@@ -52,12 +52,16 @@ export function resolveSourcePluginUiBuildInputPaths(repoDir) {
   return readWorkspaceBuildInputs(root, { sourceRoots: ['scripts'] }).map(path => join(root, path));
 }
 
-/** Plugin UI is a source product, not a host/CLI or test dependency product.
- * Use the canonical package membership and closure owners for its identity. */
+/** Plugin UI can bundle declared build dependencies as well as runtime ones.
+ * Host applications are not plugin source inputs; their test dependencies must
+ * not make a CLI-only edit rebuild every UI artifact. */
 export async function readSourcePluginUiBuildInputs({ repoDir, pluginDirectory, compiler = false, packages }) {
   packages ??= await readWorkspacePackages(repoDir);
   const roots = compiler ? ['@happier-dev/plugin-sdk'] : [`@happier-dev/plugins-${pluginDirectory}`];
-  const closure = workspaceSourcePackageClosure(packages, roots, { includeDevDependencies: false });
+  // Remove host nodes before traversal: a CLI test dependency must not visit
+  // the CLI's bundled-plugin census and pull every sibling into this input set.
+  const sourcePackages = new Map([...packages].filter(([, { root }]) => relative(repoDir, root).split(sep)[0] !== 'apps'));
+  const closure = workspaceSourcePackageClosure(sourcePackages, roots);
   const files = new Set();
   for (const name of closure) {
     const { root } = packages.get(name);

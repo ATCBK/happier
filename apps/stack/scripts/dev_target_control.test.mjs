@@ -87,20 +87,37 @@ test('dispatch recovery rescans transient scan problems and rejects persistent o
     'case "$2" in',
     '  flush) printf cycle >> "$marker"; exit 0 ;;',
     '  list)',
-    '    scan=1/0; transition=0/0; conflicts=0',
+    '    scan=1/0; transition=0/0; conflicts=0; scanned=0; cycles=0',
     '    if [ -e "$marker" ] && [ "$PROBLEM_MODE" = transient ]; then scan=0/0; fi',
-    '    if [ "$PROBLEM_MODE" = transition ]; then transition=1/0; fi',
+    '    if [ "$PROBLEM_MODE" = postflush ] && [ ! -e "$marker" ]; then scan=0/0; fi',
+    '    if [ "$PROBLEM_MODE" = postflush ] && [ "$(cat "$marker" 2>/dev/null)" = cyclecycle ]; then scan=0/0; fi',
+    '    if [ "$PROBLEM_MODE" = excluded ]; then scan=1/1; fi',
+    '    if [ -e "$marker" ]; then scanned=1; cycles=2; fi',
+    '    if [ "$PROBLEM_MODE" = transition ] || [ "$PROBLEM_MODE" = mixed ]; then transition=1/0; fi',
     '    if [ "$PROBLEM_MODE" = conflict ]; then conflicts=1; fi',
-    '    printf "%s|Watching|false|true|1|%s|%s|true|1|0/0|0/0|active|2|ok|%s|0\\n" "$3" "$scan" "$transition" "$conflicts" ;;',
+    '    printf "%s|Watching|false|true|%s|%s|%s|true|%s|0/0|0/0|active|%s|ok|%s|0\\n" "$3" "$scanned" "$scan" "$transition" "$scanned" "$cycles" "$conflicts"',
+    '    if [ "$PROBLEM_MODE" = transition ]; then printf "%s\\n" "apply failed"; fi',
+    '    if [ "$PROBLEM_MODE" = mixed ]; then printf "%s\\n" "unable to validate existing file: modification detected"; fi',
+    // The Mutagen boundary only emits scan errors if production requests them.
+    '    case "$5" in *"{{range .Alpha.ScanProblems}}"*) [ "$scan" = 0/0 ] || printf "%s\\n" "$SCAN_ERROR" ;; esac ;;',
     'esac',
   ].join('\n'));
   const env = { ...process.env, PATH: `${binDir}:${process.env.PATH ?? ''}`,
     MUTAGEN_DATA_DIRECTORY: join(root, 'mutagen', 'data'), DBUS_SESSION_BUS_ADDRESS: '' };
-  const recover = (mode) => spawnSync(controlExecutable, ['--sync-check', 'happier-linux'], {
-    env: { ...env, PROBLEM_MODE: mode }, encoding: 'utf8',
+  const recover = (mode, error = 'hashed size mismatch: 847308 != 28672') => spawnSync(controlExecutable, ['--sync-check', 'happier-linux'], {
+    env: { ...env, PROBLEM_MODE: mode, SCAN_ERROR: error }, encoding: 'utf8',
   });
   for (const mode of ['transition', 'conflict']) {
     assert.notEqual(recover(mode).status, 0);
+    await assert.rejects(readFile(flushed), { code: 'ENOENT' });
+  }
+  for (const [mode, error] of [
+    ['transient', 'unable to open file: permission denied'],
+    ['mixed', 'unable to open file: permission denied'],
+    ['excluded', 'hashed size mismatch: 1 != 2'],
+    ['transient', 'hashed size mismatch: 1 != 2\npermission denied'],
+  ]) {
+    assert.notEqual(recover(mode, error).status, 0);
     await assert.rejects(readFile(flushed), { code: 'ENOENT' });
   }
   const transient = recover('transient');
@@ -113,6 +130,12 @@ test('dispatch recovery rescans transient scan problems and rejects persistent o
   await rm(flushed);
   assert.equal(recover('transient').status, 0);
   assert.equal(await readFile(flushed, 'utf8'), 'cycle');
+  await rm(flushed);
+  const postflush = spawnSync(controlExecutable, ['--sync-flush', 'happier-linux', '--', 'mutagen', 'sync', 'flush', 'happier-linux'], {
+    env: { ...env, PROBLEM_MODE: 'postflush', SCAN_ERROR: 'hashed size mismatch: 1 != 2' }, encoding: 'utf8',
+  });
+  assert.equal(postflush.status, 0, postflush.stderr);
+  assert.equal(await readFile(flushed, 'utf8'), 'cyclecycle', 'a scan race during the causal flush gets the existing fresh retry');
 });
 
 test('the causal barrier retries known transient transition problems once and requires clean final evidence', {
@@ -161,7 +184,7 @@ test('the causal barrier retries known transient transition problems once and re
   assert.notEqual(run('persistent', errors[0]).status, 0);
   assert.equal(await readFile(marker, 'utf8'), 'cycle', 'persistent problems cannot cause an unbounded retry');
   await rm(marker);
-  for (const [mode, error] of [['persistent', 'unable to set staged file permissions: permission denied'], ['excluded', errors[0]]]) {
+  for (const [mode, error] of [['persistent', 'unable to set staged file permissions: permission denied'], ['excluded', errors[0]], ['persistent', `${errors[0]}\npermission denied`]]) {
     assert.equal(inspect(error, mode === 'excluded' ? 1 : 0).recovery, undefined);
     assert.notEqual(run(mode, error).status, 0);
     await assert.rejects(readFile(marker), { code: 'ENOENT' });
@@ -459,11 +482,11 @@ test('native sync admission rejects every problem-bearing public-model fact and 
     ['happier-linux|Disconnected|true|false|X|X|X|false|X|X|X|paused|0|ok|0|0', /paused/u],
     ['happier-linux|Disconnected|false|false|X|X|X|false|X|X|X|active|2|ok|0|0', /status is not clean/u],
     ['happier-linux|Watching|false|true|0|0\/0|0\/0|true|1|0\/0|0\/0|active|2|ok|0|0', /synchronizing/u],
-    ['happier-linux|Watching|false|true|1|1\/0|0\/0|true|1|0\/0|0\/0|active|2|ok|0|0', /fresh scan/u],
-    ['happier-linux|Watching|false|true|1|0\/2|0\/0|true|1|0\/0|0\/0|active|2|ok|0|0', /fresh scan/u],
+    ['happier-linux|Watching|false|true|1|1\/0|0\/0|true|1|0\/0|0\/0|active|2|ok|0|0', /scan problems/u],
+    ['happier-linux|Watching|false|true|1|0\/2|0\/0|true|1|0\/0|0\/0|active|2|ok|0|0', /scan problems/u],
     ['happier-linux|Watching|false|true|1|0\/0|1\/0|true|1|0\/0|0\/0|active|2|ok|0|0', /transition problems/u],
     ['happier-linux|Watching|false|true|1|0\/0|0\/3|true|1|0\/0|0\/0|active|2|ok|0|0', /transition problems/u],
-    ['happier-linux|Watching|false|true|1|0\/0|0\/0|true|1|1\/0|0\/0|active|2|ok|0|0', /fresh scan/u],
+    ['happier-linux|Watching|false|true|1|0\/0|0\/0|true|1|1\/0|0\/0|active|2|ok|0|0', /scan problems/u],
     ['happier-linux|Watching|false|true|1|0\/0|0\/0|true|1|0\/0|0\/4|active|2|ok|0|0', /transition problems/u],
     ['happier-linux|Watching|false|true|1|0\/0|0\/0|true|1|0\/0|0\/0|active|2|error|0|0', /recorded error/u],
     ['happier-linux|Watching|false|true|1|0\/0|0\/0|true|1|0\/0|0\/0|active|2|ok|1|0', /unresolved conflicts/u],

@@ -11,7 +11,7 @@ import { coerceHappyMonorepoRootFromPath, getDefaultAutostartPaths, getHappyStac
 import { resolveInstalledPath, resolveInstalledCliRoot } from '../paths/runtime.mjs';
 import { expandHome } from '../paths/canonical_home.mjs';
 import { resolveCliDistBuildLockPath, withCliDistBuildLock } from './cliDistBuildLock.mjs';
-import { assertDependenciesReady, inspectDependencyRefresh, resolveDependencyInstallRoot, withDependencyConsumption, withDependencyRefresh } from './dependency_refresh.mjs';
+import { assertDependenciesReady, inspectDependencyRefresh, resolveDependencyInstallRoot, withDependencyRefresh } from './dependency_refresh.mjs';
 export { resolveDependencyInstallRoot } from './dependency_refresh.mjs';
 import { ensureUiPostinstallOutputs as prepareUiPostinstallOutputs, inspectUiPostinstallOutputs } from './ui_postinstall.mjs';
 import { createWorkspaceBuildWaitNotifier } from './workspaceBuildWaitNotifier.mjs';
@@ -654,9 +654,19 @@ export async function applyStackCacheEnv(baseEnv) {
   return env;
 }
 
-const reportedDevDependencyDrift = new Set();
+export async function ensureDepsInstalled(dir, label, options = {}) {
+  try {
+    return await ensureComponentDependenciesInstalled(dir, label, options);
+  } catch (error) {
+    const env = options.env ?? process.env;
+    if (String(env.HAPPIER_STACK_DEV_AUTO_REFRESH_DEPS ?? '').trim() !== '1'
+      || error?.code !== 'HAPPIER_DEPENDENCY_METRO_RESTART_REQUIRED') throw error;
+    console.warn(`[local] ${label} dependency refresh is blocked by a serving Expo consumer; continuing with installed bytes. Will retry on the next dependency input change or startup.\n${error.message}`);
+    return { admitted: false, required: true, reason: error.code };
+  }
+}
 
-export async function ensureDepsInstalled(
+async function ensureComponentDependenciesInstalled(
   dir,
   label,
   {
@@ -677,19 +687,6 @@ export async function ensureDepsInstalled(
   }
 
   const installDir = resolveDependencyInstallRoot(componentDir);
-  if (String(envIn.HAPPIER_STACK_DEV_READ_ONLY_DEPENDENCIES ?? '').trim() === '1') {
-    try {
-      return await assertDependenciesReady({ installDir, componentDir, env: envIn });
-    } catch (error) {
-      if (error?.code !== 'HAPPIER_DEPENDENCIES_NEED_REFRESH') throw error;
-      if (!reportedDevDependencyDrift.has(installDir)) {
-        reportedDevDependencyDrift.add(installDir);
-        const action = `import(${JSON.stringify(import.meta.url)}).then(({ensureDepsInstalled}) => ensureDepsInstalled(${JSON.stringify(componentDir)}, ${JSON.stringify(label)}, {env: {...process.env, HAPPIER_STACK_DEV_READ_ONLY_DEPENDENCIES: "0", HAPPIER_STACK_SKIP_REFRESH_DEPS: "0", HAPPIER_STACK_DISABLE_REFRESH_DEPS: "0", HAPPIER_STACK_ALLOW_REFRESH_DEPS: "1"}}))`;
-        console.warn(`[local] development dependencies/patches have drifted (${error.reason}); continuing with installed bytes.\nRefresh explicitly (reapplies and verifies patches): node --input-type=module -e '${action.replaceAll("'", "'\\''")}'`);
-      }
-      return { admitted: false, required: true, reason: error.reason };
-    }
-  }
   const nodeModules = join(installDir, 'node_modules');
   const stdio = quiet ? 'ignore' : 'inherit';
   const env = await preparePmEnv(installDir, envIn);
@@ -786,9 +783,9 @@ export async function ensureDepsInstalled(
         // Startup is not a dependency mutation merely because it also prepares
         // first-party component outputs. Healthy installed bytes are verified
         // read-only; the component's existing generation owner remains separate.
-        await withDependencyConsumption({ installDir, env }, async custody => {
-          await assertDependenciesReady({ installDir, componentDir, env: custody });
-        });
+        // Inspection does not consume installed modules. Builders and Metro
+        // hold their own read custody; this readiness check stays non-queuing.
+        await assertDependenciesReady({ installDir, componentDir, env });
         if (prepareComponentOutputs) await ensureComponentPrerequisites(componentDir, label, { quiet, env, pm });
         return;
       }

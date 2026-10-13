@@ -168,17 +168,54 @@ function dependencyInputIdentityPath({ installDir, componentDir, inputPath }) {
   throw new Error(`Dependency freshness input is outside its installation and component roots: ${inputPath}`);
 }
 
+// Yarn Classic 1.22.22: install.fetchRequestFromCwd/workspace resolution,
+// package-linker (bins/bundled dependencies/peers), package-compatibility,
+// normalize-manifest (directories.bin), and PackageInstallScripts.INSTALL_STAGES.
+// Root lifecycle also runs prepare/prepublish.
+// Keep the package-manager declarations requested by the install contract too.
+const manifestInstallFields = [
+  'name', 'version', 'private', 'dependencies', 'devDependencies', 'optionalDependencies',
+  'peerDependencies', 'peerDependenciesMeta', 'bin', 'workspaces', 'resolutions', 'overrides',
+  'packageManager', 'engines', 'os', 'cpu', 'flat', 'bundleDependencies', 'bundledDependencies',
+];
+
+function stableJson(value) {
+  if (Array.isArray(value)) return value.map(stableJson);
+  if (value && typeof value === 'object') {
+    return Object.fromEntries(Object.keys(value).sort().map(key => [key, stableJson(value[key])]));
+  }
+  return value;
+}
+
+function manifestInstallDigest(bytes, { root = false } = {}) {
+  const manifest = JSON.parse(bytes.toString('utf8'));
+  const inputs = Object.fromEntries(manifestInstallFields
+    .filter(field => Object.hasOwn(manifest, field)).map(field => [field, manifest[field]]));
+  if (manifest.directories?.bin != null) inputs.directories = { bin: manifest.directories.bin };
+  const scripts = Object.fromEntries(['preinstall', 'install', 'postinstall', ...(root ? ['prepublish', 'prepare'] : [])]
+    .filter(stage => Object.hasOwn(manifest.scripts ?? {}, stage)).map(stage => [stage, manifest.scripts[stage]]));
+  if (Object.keys(scripts).length) inputs.scripts = scripts;
+  return createHash('sha256').update(JSON.stringify(stableJson(inputs))).digest('hex');
+}
+
 async function readInputSnapshot({ inputPaths, installDir, componentDir }) {
+  const monorepoRoot = coerceHappyMonorepoRootFromPath(componentDir);
+  const workspaceManifests = new Set(monorepoRoot && resolve(installDir) === resolve(monorepoRoot)
+    ? (await collectWorkspacePackageJsonPaths(monorepoRoot)).map(path => resolve(path)) : []);
+  const rootManifestPath = resolve(join(installDir, 'package.json'));
   const snapshot = [];
   const visit = async (inputPath) => {
     try {
       const stats = await lstat(inputPath);
       const identityPath = dependencyInputIdentityPath({ installDir, componentDir, inputPath });
       if (stats.isFile()) {
+        const bytes = await readFile(inputPath);
         snapshot.push({
           path: identityPath,
           kind: 'file',
-          digest: createHash('sha256').update(await readFile(inputPath)).digest('hex'),
+          digest: createHash('sha256').update(bytes).digest('hex'),
+          ...(resolve(inputPath) === rootManifestPath || workspaceManifests.has(resolve(inputPath))
+            ? { installDigest: manifestInstallDigest(bytes, { root: resolve(inputPath) === rootManifestPath }) } : {}),
         });
       } else if (stats.isDirectory()) {
         snapshot.push({ path: identityPath, kind: 'directory' });
@@ -246,7 +283,10 @@ function snapshotsMatch(before, after) {
     const candidate = after[index];
     return entry.path === candidate?.path
       && entry.kind === candidate.kind
-      && entry.digest === candidate.digest
+      // v6 raw-only admissions still prove unchanged bytes. Once the installer
+      // records projected inputs, runtime-only manifest edits remain fresh.
+      && (entry.installDigest != null && candidate.installDigest != null
+        ? entry.installDigest === candidate.installDigest : entry.digest === candidate.digest)
       && entry.targetDigest === candidate.targetDigest
       && entry.size === candidate.size;
   });
@@ -297,14 +337,17 @@ export async function inspectDependencyRefresh({ installDir, componentDir = inst
     && dependencyIdentitySatisfies(markerState.identity, dependencyIdentity)
     && Array.isArray(markerState.inputs)
   ) {
+    const inputsMatch = snapshotsMatch(markerState.inputs, inputSnapshot);
     return {
       admitted: nodeModulesPresent && selfReferentialNodeModulesLinkPath === null && markerState.superseded !== true,
       admittedState: nodeModulesPresent && selfReferentialNodeModulesLinkPath === null && markerState.superseded !== true
-        ? markerState : null,
+        // A warm prerequisite action may publish the proven projection without
+        // installation. Stale raw admissions never acquire a current baseline.
+        ? { ...markerState, inputs: inputsMatch ? inputSnapshot : markerState.inputs } : null,
       required: !nodeModulesPresent
         || selfReferentialNodeModulesLinkPath !== null
         || markerState.superseded === true
-        || !snapshotsMatch(markerState.inputs, inputSnapshot),
+        || !inputsMatch,
       inputPaths,
       inputSnapshot,
       dependencyIdentity,

@@ -106,7 +106,8 @@ export async function bootstrapRemoteDependencies({
   const onDependenciesReady = async () => await prepareInitialUiOutputs({ repoDir, env, force: refreshed });
   if (sourceToolsOnly) {
     // Source validation does not consume the Stack owner's compiled closure.
-    // Typecheck declarations are admitted by component preparation afterward.
+    // Typecheck compilers read published declarations and prepare their own
+    // project declarations without acquiring workspace publication leases.
     // The readiness verifier and postinstall tools resolve source directly;
     // retain patched dependency preparation without publishing workspace dist.
     return await withDependencyRefreshImpl(

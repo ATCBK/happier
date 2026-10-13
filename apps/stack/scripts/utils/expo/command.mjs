@@ -231,7 +231,7 @@ export async function expoExec({
   const workspaceDepsDir = projectDir ?? runnerDir;
   env = { ...(env ?? process.env) };
   const developmentStart = args?.[0] === 'start';
-  if (developmentStart) env.HAPPIER_STACK_DEV_READ_ONLY_DEPENDENCIES = '1';
+  if (developmentStart) env.HAPPIER_STACK_DEV_AUTO_REFRESH_DEPS = '1';
   await withExpoPreparationEnv(env, async (preparationEnv) => {
     await ensureDepsInstalled(runnerDir, ensureDepsLabel, { quiet, env: preparationEnv });
     await ensureExpoWorkspacePrepared({ projectDir: workspaceDepsDir, quiet, env: preparationEnv, startup: developmentStart });
@@ -279,19 +279,19 @@ export async function expoSpawn({
   const workspaceDepsDir = projectDir ?? runnerDir;
   env = { ...(env ?? process.env) };
   const developmentStart = args?.[0] === 'start';
-  if (developmentStart) env.HAPPIER_STACK_DEV_READ_ONLY_DEPENDENCIES = '1';
+  if (developmentStart) env.HAPPIER_STACK_DEV_AUTO_REFRESH_DEPS = '1';
   await withExpoPreparationEnv(env, async (preparationEnv) => {
-    await ensureDepsInstalled(runnerDir, ensureDepsLabel, {
-      quiet,
-      env: preparationEnv,
-      refreshExisting: !workspacePrepared,
-      // `workspacePrepared` means the caller already owns the potentially
-      // expensive dependency/workspace refresh. Cheap component readiness is
-      // still required before every spawn: postinstall-owned files may be
-      // absent from a newly synchronized dev-target dependency tree even when
-      // the last-green workspace build is reusable.
-      prepareComponentOutputs: true,
-    });
+    // Managed development already prepared dependencies before taking read
+    // custody. It must not upgrade that custody to a writer while spawning.
+    // Other commands still prepare mandatory component outputs here.
+    if (!workspacePrepared || !developmentStart) {
+      await ensureDepsInstalled(runnerDir, ensureDepsLabel, {
+        quiet,
+        env: preparationEnv,
+        refreshExisting: !workspacePrepared,
+        prepareComponentOutputs: true,
+      });
+    }
     if (!workspacePrepared) {
       try {
         await ensureExpoWorkspacePrepared({ projectDir: workspaceDepsDir, quiet, env: preparationEnv, startup: developmentStart });

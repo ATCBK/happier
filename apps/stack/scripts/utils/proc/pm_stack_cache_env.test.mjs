@@ -54,7 +54,7 @@ test('healthy stack startup verifies dependencies without requesting a refresh b
   } finally { release(); await Promise.allSettled([reader, startup]); }
 });
 
-test('read-only development startup leaves stale dependencies untouched and reports an explicit refresh', async t => {
+test('development startup automatically admits stale dependencies through the refresh owner', async t => {
   const root = await mkdtemp(join(tmpdir(), 'hs-pm-dev-read-only-'));
   t.after(() => rm(root, { recursive: true, force: true }));
   await mkdir(join(root, 'node_modules'));
@@ -64,14 +64,11 @@ test('read-only development startup leaves stale dependencies untouched and repo
   const outputPath = join(root, 'argv.txt');
   await writeYarnArgDumpStub({ binDir, outputPath });
   const env = { ...process.env, PATH: `${binDir}:/usr/bin:/bin`, OUTPUT_PATH: outputPath,
-    HAPPIER_STACK_HOME_DIR: root, HAPPIER_STACK_ENV_FILE: '', HAPPIER_STACK_DEV_READ_ONLY_DEPENDENCIES: '1' };
-  let warning = '';
-  t.mock.method(console, 'warn', message => { warning += message; });
+    HAPPIER_STACK_HOME_DIR: root, HAPPIER_STACK_ENV_FILE: '', HAPPIER_STACK_DEV_AUTO_REFRESH_DEPS: '1' };
   await ensureDepsInstalled(root, 'fixture', { env });
   const invocations = await readFile(outputPath, 'utf8').catch(() => '');
-  assert.equal(/install|postinstall/.test(invocations), false, 'dev start may only inspect dependencies');
-  await assert.rejects(readFile(join(root, 'node_modules/.happier-stack-dependencies-ready')), { code: 'ENOENT' });
-  assert.match(warning, /ensureDepsInstalled/);
+  assert.match(invocations, /install/);
+  assert.equal((await inspectDependencyRefresh({ installDir: root })).required, false);
 });
 
 test('CLI concurrent-build token follows verified closure bytes rather than manifest mtime', async (t) => {
@@ -1935,6 +1932,7 @@ test('ensureDepsInstalled retries a failed refresh even when yarn touched node_m
     OUTPUT_PATH: outputPath,
     STATE_PATH: statePath,
     HAPPIER_STACK_ENV_FILE: null,
+    HAPPIER_STACK_DEV_AUTO_REFRESH_DEPS: '1',
   });
 
   await assert.rejects(

@@ -214,6 +214,7 @@ export async function runWorkspaceBuildAdmissionWorker(argv) {
   const observation = eventMode ? admissionChangeObservation(locks, process.env) : null;
   let waitSnapshot;
   let running = false;
+  let reportedBusy = false;
   const acquire = mode === '--standalone' || mode === '--worker'
     ? run => withWorkspaceBuildResources({ locks, env: process.env, signal: cancellation.signal }, run)
     : run => withLocks(locks, process.env, cancellation.signal, run);
@@ -260,7 +261,8 @@ export async function runWorkspaceBuildAdmissionWorker(argv) {
       } catch (error) {
         if (mode !== '--worker-events' || ![WORKSPACE_BUNDLE_LOCK_BUSY_ERROR_CODE, JSON_OWNER_FILE_LOCK_BUSY_ERROR_CODE].includes(error?.code)) throw error;
         // All scopes have unwound before native code marks this head busy.
-        console.error(error.message);
+        if (!reportedBusy) console.error(error.message);
+        reportedBusy = true;
         writeSync(3, 'busy\n');
       }
       if (!eventMode || running) break;

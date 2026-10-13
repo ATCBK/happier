@@ -44,6 +44,8 @@ for (const legacy of [false, true]) test(`fresh event admission readers cannot o
       { env, stdio: ['ignore', 'ignore', 'pipe', 'pipe', 'pipe'] });
       const exit = new Promise(resolve => child.once('close', resolve));
       children.push({ child, exit });
+      let diagnostics = '';
+      child.stderr.on('data', chunk => { diagnostics += chunk; });
       const lines = createInterface({ input: child.stdio[3] });
       const events = lines[Symbol.asyncIterator]();
       assert.equal((await events.next()).value, 'busy', 'fresh worker must refuse the pending writer');
@@ -57,6 +59,8 @@ for (const legacy of [false, true]) test(`fresh event admission readers cannot o
       assert.equal(current.createdAtMs, identity.createdAtMs, 'writer retains its ticket across admission retries');
       child.stdio[4].end();
       await exit;
+      assert.equal(diagnostics.split('dependency refresh lock is busy:').length - 1, 1,
+        'notification retries must not repeat the same busy diagnostic');
       lines.close();
     }
     assert.equal(writerEntered, false);

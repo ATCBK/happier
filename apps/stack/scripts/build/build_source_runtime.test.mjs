@@ -145,7 +145,8 @@ test('source plugin UI preparation reuses unchanged plugins and rebuilds only ch
   assert.deepEqual(compiled, [], 'unchanged plugins must not enter the compiler');
   assert.deepEqual(resolveBundledPluginUiArtifactsInputPaths(outputPath).slice(1), firstPaths);
   await mkdir(join(repoRoot, 'apps/cli/src'), { recursive: true });
-  await writeFile(join(repoRoot, 'apps/cli/package.json'), JSON.stringify({ name: '@happier-dev/cli', version: '0.0.0' }));
+  await writeFile(join(repoRoot, 'apps/cli/package.json'), JSON.stringify({ name: '@happier-dev/cli', version: '0.0.0',
+    dependencies: { '@happier-dev/plugins-alpha': '0.0.0', '@happier-dev/plugins-beta': '0.0.0' } }));
   await writeFile(join(repoRoot, 'apps/cli/src/host.ts'), 'export const changedCliOnly = true;');
   await prepare();
   assert.deepEqual(compiled, [], 'a CLI-only edit is not a plugin UI input');
@@ -965,8 +966,18 @@ esac
 });
 
 test('source daemon owns its UI graph and bytes after checkout artifacts change', async context => {
+  const { resolveBundledPluginUiArtifactsRetainedRoots } = await import('../../../ui/scripts/generateBundledPluginUiArtifacts.mjs');
   const fixture = await createTempFixture(context, {prefix:'happier-source-ui-custody-', registerCleanup:false});
-  context.after(async () => { await makeFixtureWritable(fixture.root); await rm(fixture.root, {recursive:true,force:true}); });
+  let live;
+  context.after(async () => {
+    if (live && live.exitCode === null) {
+      const retired = new Promise(resolve => live.once('exit', resolve));
+      live.kill();
+      await retired;
+    }
+    await makeFixtureWritable(fixture.root);
+    await rm(fixture.root, {recursive:true,force:true});
+  });
   const repoDir = fixture.path('repo');
   const canonicalRepo = fileURLToPath(new URL('../../../../', import.meta.url));
   await captureSourceWebBuildInputs({ repoDir: canonicalRepo, outputDir: repoDir });
@@ -984,7 +995,7 @@ test('source daemon owns its UI graph and bytes after checkout artifacts change'
     dependencies:{'@happier-dev/plugins-fixture':'0.0.0','@happier-dev/plugin-sdk':'0.0.0'},
     bundledDependencies:['@happier-dev/plugins-fixture']}));
   await writeFile(join(cliDir,'tsconfig.json'),'{}');
-  await writeFile(join(cliDir,'src/index.ts'),'export const ready = true;');
+  await writeFile(join(cliDir,'src/index.ts'),'export const ready = true; if (process.env.HAPPIER_TEST_RETAIN_SOURCE_UI === "1") { console.log("ready"); setInterval(() => {}, 1000); }');
   const manifest = {schemaVersion:2,id:'happier.fixture',version:'0.0.0',displayName:'Fixture',runtime:{apiVersion:1},hostAccess:{required:[],optional:[]},
     entrypoints:{daemon:'./dist/index.js'},contributes:{ui:{renderers:[{id:'panel',kind:'reactNative',artifact:'panel'}]}}};
   await writeFile(join(pluginDir,'package.json'),JSON.stringify({name:'@happier-dev/plugins-fixture',version:'0.0.0',type:'module',exports:{
@@ -999,12 +1010,33 @@ test('source daemon owns its UI graph and bytes after checkout artifacts change'
   await writeFile(join(repoDir,'apps/ui/package.json'),JSON.stringify({name:'@happier-dev/app',dependencies:{'@happier-dev/plugins-fixture':'0.0.0'}}));
   await writeFile(join(cliDir,'src/plugins/projection/registry/sources/generatedBundledPluginManifests.ts'),
     `export const BUNDLED_FIRST_PARTY_PLUGIN_LOCATORS=${JSON.stringify([{daemonEntryPath:'./dist/index.js',sourceSpec:{locator:'@happier-dev/plugins-fixture'},manifest}])};`);
-  const runtime = await buildSourceRuntimeBundle({repoDir,outputDir:fixture.path('retained'),component:'daemon'});
+  const stackBaseDir = fixture.path('stacks/consumer');
+  const runtime = await buildSourceRuntimeBundle({repoDir,stackBaseDir,component:'daemon'});
+  live = spawn(process.execPath, [runtime.entrypoint], {
+    env: { ...process.env, ...runtime.env, HAPPIER_TEST_RETAIN_SOURCE_UI: '1' }, stdio: ['ignore', 'pipe', 'inherit'],
+  });
+  await new Promise((resolve, reject) => {
+    live.once('error', reject);
+    live.stdout.once('data', resolve);
+    live.once('exit', code => reject(new Error(`source runtime exited before readiness (${code})`)));
+  });
   const retainedRoot = join(runtime.runtimeDir,'../../packages/plugins/fixture/dist/happier-plugin-ui');
   const graph = JSON.parse(await readFile(join(retainedRoot,'ui-artifacts.json'),'utf8')).entries[0];
   const retainedBytes = await readFile(join(retainedRoot,graph.entry));
   assert.ok(retainedBytes.includes('retained-source-panel'));
-  const record = JSON.parse(await readFile(fixture.path('retained/source-bundle.json'), 'utf8'));
+  const retainedPluginUiInventoryPath = join(runtime.runtimeDir, 'plugin-ui-inventory.js');
+  assert.ok(existsSync(retainedPluginUiInventoryPath), 'the native graph retains the canonical UI inventory for its next preparation');
+  assert.equal(resolveBundledPluginUiArtifactsRetainedRoots(retainedPluginUiInventoryPath).get(manifest.id), retainedRoot);
+  await writeFile(join(pluginDir, 'src/panel.ts'), 'import {readFile} from "node:fs/promises"; export function renderSurface() { return readFile("fixture"); }');
+  const broken = await buildSourceRuntimeBundle({ repoDir, stackBaseDir, component: 'daemon' });
+  const brokenRoot = join(broken.runtimeDir, '../../packages/plugins/fixture/dist/happier-plugin-ui');
+  assert.deepEqual(await readFile(join(brokenRoot, graph.entry)), retainedBytes, 'a native UI compiler failure serves the incumbent plugin graph');
+  assert.equal(resolveBundledPluginUiArtifactsRetainedRoots(join(broken.runtimeDir, 'plugin-ui-inventory.js')).get(manifest.id), brokenRoot,
+    'the next build owns its retained inventory and assets independently of the incumbent');
+  assert.equal((await buildSourceRuntimeBundle({ repoDir, stackBaseDir, component: 'daemon' })).entrypoint, broken.entrypoint,
+    'unchanged broken source reuses its validated last-green graph');
+  await writeFile(join(pluginDir,'src/panel.ts'),'import {migrationMarker} from "./collections/migrate"; export function renderSurface() { return "retained-source-panel" + migrationMarker; }');
+  const record = JSON.parse(await readFile(join(runtime.runtimeDir, '../../source-bundle.json'), 'utf8'));
   for (const path of ['packages/plugins/fixture/src/panel.ts', 'packages/plugins/fixture/src/collections/migrate.ts']) {
     assert.match(record.sourceInputDigests[path] ?? '', /^[a-f0-9]{64}$/,
       'separately compiled Plugin UI and migration inputs participate in source reuse');
@@ -1018,7 +1050,7 @@ test('source daemon owns its UI graph and bytes after checkout artifacts change'
   // The plugin's daemon module did not change. UI-only changes must still
   // select different emitted code, while the incumbent's bytes remain intact.
   await writeFile(join(pluginDir,'src/panel.ts'),'export function renderSurface() { return "new-source-panel"; }');
-  const newer = await buildSourceRuntimeBundle({repoDir,outputDir:fixture.path('newer'),component:'daemon'});
+  const newer = await buildSourceRuntimeBundle({repoDir,stackBaseDir,component:'daemon'});
   const newerRoot = join(newer.runtimeDir,'../../packages/plugins/fixture/dist/happier-plugin-ui');
   const newerGraph = JSON.parse(await readFile(join(newerRoot,'ui-artifacts.json'),'utf8')).entries[0];
   assert.notEqual(newer.identity,runtime.identity);
@@ -1891,10 +1923,10 @@ test('source bundle freezes source exports and a lazy entry without consuming di
     writeFileSync(${JSON.stringify(admissionEvidence)},JSON.stringify({pid:process.pid,admissionClass}));
     export const BUNDLED_FIRST_PARTY_PLUGIN_LOCATORS=[];
   `);
-  // Observe this builder's class rather than the enclosing test runner's
-  // already-admitted validation reservation.
+  // The builder escalates an authenticated parent reservation in place.
+  // Removing that identity queues another source-bundle reservation behind
+  // the enclosing test runner's reservation.
   const buildEnv = {...process.env};
-  for (const key of Object.keys(buildEnv)) if (key.startsWith('HAPPIER_HEAVYWEIGHT_ADMISSION_')) delete buildEnv[key];
   const result = await buildSourceRuntimeBundle({ repoDir, outputDir: join(repoDir, 'output'), component: 'daemon', env:buildEnv });
   const admitted = JSON.parse(await readFile(admissionEvidence, 'utf8'));
   assert.notEqual(admitted.pid, process.pid, 'source preparation is finite, not part of the long-lived caller');

@@ -22,6 +22,7 @@ import {
   flushDevTargetSync,
   INDEPENDENT_DEV_TARGET_SYNC_OWNER,
   releaseIndependentDevTargetSyncProject,
+  resumeDevTargetSync,
   runDevTargetControlProcess,
 } from './sync_project.mjs';
 import { startDevTargetRuntime } from './managed_runtime.mjs';
@@ -52,18 +53,6 @@ async function defaultReadPreparationState({ stackBaseDir, env }) {
     return parsed?.version === 1 ? parsed : null;
   } catch {
     return null;
-  }
-}
-
-async function defaultResumeSync({ target, env }) {
-  const result = await spawnProc(
-    `sync:${target.name}`,
-    'mutagen',
-    ['sync', 'resume', resolveMutagenSessionName(target.name, env?.HAPPIER_STACK_SYNC_SOURCE_DIR)],
-    env,
-  ).completion;
-  if (result?.code !== 0) {
-    throw new Error(`[dev-targets] ${target.name} synchronization resume failed`);
   }
 }
 
@@ -199,7 +188,7 @@ export async function startDevTargetSyncService(
   {
     ensureProject = ensureDevTargetSyncProject,
     inspectSync = inspectDevTargetSync,
-    resumeSync = defaultResumeSync,
+    resumeSync = resumeDevTargetSync,
     spawnMonitor = defaultSpawnMonitor,
     repairSync = repairRecoverableDevTargetSyncConflicts,
     startTargetRuntime = startDevTargetRuntime,
@@ -337,7 +326,7 @@ export async function prepareDevTargetCommandSync({ stackBaseDir, sourceDir, tar
   });
   const pending = targets.filter(target => !unchanged || state?.targets?.[target.name]?.state !== 'ready');
   const results = await Promise.allSettled(pending.map(async target => {
-    await defaultResumeSync({ target, env: project.env });
+    await resumeDevTargetSync({ target, env: project.env });
     await flushDevTargetSync({ target, env: project.env });
   }));
   const prepared = { ...(unchanged ? state?.targets : {}) };

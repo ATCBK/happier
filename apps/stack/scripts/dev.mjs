@@ -7,7 +7,7 @@ import { killPortListeners, observeTcpPortAvailability } from './utils/net/ports
 import { fetchHappierHealth, getServerComponentName } from './utils/server/server.mjs';
 import { resolveServerShutdownGraceMs } from './utils/server/shutdown_grace.mjs';
 import { ensureSourceServerWorkspacePackagesBuilt } from './utils/server/source_server_workspace_deps.mjs';
-import { requireDir } from './utils/proc/pm.mjs';
+import { ensureDepsInstalled, requireDir } from './utils/proc/pm.mjs';
 import { dirname, join, resolve } from 'node:path';
 import { existsSync } from 'node:fs';
 import { setTimeout as delay } from 'node:timers/promises';
@@ -44,11 +44,13 @@ import {
 import {
   decideDevStartupTopology,
   observeDevServerStartupTopology,
+  reclaimDevServerStartupOrphan,
   resolveDevWatchEnabled,
   shouldResolveAdoptedServerRuntimePid,
   shouldExitAdoptedDevRuntime,
 } from './utils/dev/devStartupTopology.mjs';
 import {
+  createDevDependencyReload,
   prepareDevComponent,
   requestInitialDevRefreshes,
   resolveDevReloadPollIntervalMs,
@@ -244,9 +246,7 @@ async function main() {
 	  const cliBin = join(cliDir, 'bin', 'happier.mjs');
   const autostart = getDefaultAutostartPaths();
   const baseEnv = { ...process.env };
-  // Development startup observes the installed tree. Only the explicit PM
-  // refresh owner may install dependencies or repair third-party patches.
-  baseEnv.HAPPIER_STACK_DEV_READ_ONLY_DEPENDENCIES = '1';
+  baseEnv.HAPPIER_STACK_DEV_AUTO_REFRESH_DEPS = '1';
   const repoDir = getRepoDir(rootDir, baseEnv);
   const parentServerRestartPreflightAlreadyDone = String(
     baseEnv.HAPPIER_STACK_SERVER_RESTART_PREFLIGHT_ALREADY_DONE ?? '',
@@ -443,9 +443,10 @@ async function main() {
   const serverAlreadyRunning = serverHealthObservation?.ok === true;
   let serverRuntimeProxyAlreadyOwned = false;
   let serverTopology = 'absent';
+  let serverTopologyObservation = null;
   if (startServer) {
     const topologyScope = createListenerOwnershipCommandScope();
-    const serverTopologyObservation = await observeDevServerStartupTopology({
+    serverTopologyObservation = await observeDevServerStartupTopology({
       serverRequested: true, stackMode, serverPort, serverHealthObservation,
       ownershipArgs: { env: baseEnv, port: serverPort, stackName, runtimeStatePath, listenerObservationScope: topologyScope },
     }, {
@@ -488,12 +489,26 @@ async function main() {
     expoRunning: expoAlreadyRunning,
     restart,
   });
+  await reclaimDevServerStartupOrphan({
+    topologyObservation: serverTopologyObservation, serverPort, stackName, envPath, env: baseEnv,
+  });
   const priorRuntimeServer = startServer && startupDecision.startServer
     ? await resolveDevPriorRuntimeServer({
         stackBaseDir: autostart.baseDir,
         serverComponentName,
       })
     : { admitted: false, reason: 'not_requested', detail: null };
+
+  const reportStartupFailure = (component, error) => {
+    console.error(`[local] ${component} startup failed; keeping other components running. `
+      + (error instanceof Error ? error.message : String(error)));
+    return { ok: false, skipped: true, reason: 'startup_failed' };
+  };
+  // Admit dependencies even when startup adopts an already-running Stack,
+  // and before cold source preparation can wait for those inputs.
+  await ensureDepsInstalled(repoDir, 'development stack', {
+    env: baseEnv, prepareComponentOutputs: false,
+  }).catch(error => reportStartupFailure('dependencies', error));
 
   if (shouldExitAdoptedDevRuntime({
     serviceTargetCount: servicePlans.targets.length,
@@ -592,11 +607,6 @@ async function main() {
   // before the source server proves a replacement is buildable. Keep that
   // independently available boundary ahead of server and daemon source work.
   let expoResEarly = null;
-  const reportStartupFailure = (component, error) => {
-    console.error(`[local] ${component} startup failed; keeping other components running. `
-      + (error instanceof Error ? error.message : String(error)));
-    return { ok: false, skipped: true, reason: 'startup_failed' };
-  };
   const ensureExpoAvailable = async () => {
     if (expoResEarly) return expoResEarly;
     await requireDir('happier-ui', uiDir);
@@ -878,8 +888,9 @@ async function main() {
     }
   }
 
-  const reloadDescriptors = [];
-  const reloadExecutors = [];
+  const dependencyReload = await createDevDependencyReload({ repoDir, env: baseEnv });
+  const reloadDescriptors = [dependencyReload.descriptor];
+  const reloadExecutors = [dependencyReload.executor];
   const daemonReloadEnabled =
     startDaemon
     && daemonStartGate({ env: baseEnv, cliHomeDir, serverUrl: internalServerUrl }).ok;
@@ -977,6 +988,7 @@ async function main() {
   if (reloadWatcher) watchers.push(reloadWatcher);
   const initialRefreshes = requestInitialDevRefreshes({
     reloadWatcher,
+    dependencyReloadEnabled: true,
     serverReloadEnabled,
     daemonReloadEnabled: daemonRefreshEnabled,
   });

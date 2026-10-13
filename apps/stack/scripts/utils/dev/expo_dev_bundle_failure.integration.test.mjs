@@ -79,7 +79,7 @@ process.on('SIGTERM', async () => { listener?.close(); await metro?.end(); proce
   result = await ensureDevExpoServer({ startUi: true, uiDir,
     autostart: { baseDir: fixture.root }, baseEnv: { ...sanitizeStackTestRunnerEnv(process.env, { isolatedStackRoot: fixture.root }),
       HAPPIER_STACK_STACK: 'qa-dev-expo-reliability', HAPPIER_STACK_ENV_FILE: fixture.path('env'),
-      HAPPIER_STACK_DEV_READ_ONLY_DEPENDENCIES: '1', HAPPIER_STACK_EXPO_HOST: 'localhost',
+      HAPPIER_STACK_SKIP_REFRESH_DEPS: '1', HAPPIER_STACK_EXPO_HOST: 'localhost',
       HAPPIER_STACK_EXPO_METRO_WAIT_INTERVAL_MS: '25' },
     apiServerUrl: 'http://127.0.0.1:1', stackMode: true,
     stackName: 'qa-dev-expo-reliability', envPath: fixture.path('env'), runtimeStatePath: fixture.path('runtime.json'),
@@ -170,6 +170,8 @@ require('node:http').createServer((req, res) => {
   result = await ensureDevExpoServer({ startUi: true, uiDir, autostart: { baseDir: fixture.root },
     baseEnv: { ...sanitizeStackTestRunnerEnv(process.env, { isolatedStackRoot: fixture.root }),
       HAPPIER_STACK_STACK: 'qa-dev-expo-quiet-heap', HAPPIER_STACK_ENV_FILE: fixture.path('env'),
+      // This fixture owns a synthetic installed Expo bin, not a Yarn install.
+      HAPPIER_STACK_SKIP_REFRESH_DEPS: '1',
       HAPPIER_STACK_EXPO_MAX_OLD_SPACE_SIZE_MB: '64',
       HAPPIER_STACK_EXPO_RESTART_BASE_DELAY_MS: '10', HAPPIER_STACK_EXPO_RESTART_MAX_DELAY_MS: '10' },
     apiServerUrl: 'http://127.0.0.1:1', stackMode: true, stackName: 'qa-dev-expo-quiet-heap',

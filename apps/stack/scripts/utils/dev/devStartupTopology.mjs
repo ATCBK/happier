@@ -1,4 +1,8 @@
-const EXACT_SERVER_TOPOLOGIES = new Set(['absent', 'exact-owned-direct', 'exact-owned-proxy']);
+import { killPidOwnedByStack } from '../proc/ownership.mjs';
+import { waitForTcpPortFree } from '../net/ports.mjs';
+import { resolveServerShutdownGraceMs } from '../server/shutdown_grace.mjs';
+
+const EXACT_SERVER_TOPOLOGIES = new Set(['absent', 'exact-owned-direct', 'exact-owned-proxy', 'exact-owned-orphan']);
 const DEFAULT_STARTUP_PORT_OBSERVATION_TIMEOUT_MS = 3_000;
 
 export function resolveDevWatchEnabled({
@@ -59,7 +63,7 @@ export async function observeDevServerStartupTopology({
   }
   try {
     const proxyObservation = await observeRuntimePortOwnedByStackDevProxyImpl(ownershipArgs);
-    if (proxyObservation === true || proxyObservation?.owned === true) return Object.freeze({
+    if ((proxyObservation === true || proxyObservation?.owned === true) && proxyObservation?.runtimeOwnerGone !== true) return Object.freeze({
       topology: 'exact-owned-proxy', proxyOwned: true,
       proxyPid: Number(proxyObservation?.proxyPid) || null,
       listenerPid: Number(proxyObservation?.listenerPid) || null,
@@ -69,6 +73,9 @@ export async function observeDevServerStartupTopology({
       ?? coerceRuntimePid(await resolveStackOwnedServerListenPidImpl(ownershipArgs));
     if (!listenerPid) {
       return Object.freeze({ topology: 'foreign', proxyOwned: false, proxyPid: null, listenerPid: null, availability });
+    }
+    if (proxyObservation?.runtimeOwnerGone === true) {
+      return Object.freeze({ topology: 'exact-owned-orphan', proxyOwned: false, listenerPid, availability });
     }
     const proxyPid = coerceRuntimePid(proxyObservation?.proxyPid);
     const serverPid = coerceRuntimePid(proxyObservation?.serverPid);
@@ -86,6 +93,34 @@ export async function observeDevServerStartupTopology({
     return Object.freeze({ topology: 'inconclusive', proxyOwned: false, proxyPid, listenerPid, availability });
   } catch {
     return Object.freeze({ topology: 'inconclusive', proxyOwned: false, listenerPid: null, availability });
+  }
+}
+
+export async function reclaimDevServerStartupOrphan({
+  topologyObservation,
+  serverPort,
+  stackName,
+  envPath,
+  env = process.env,
+} = {}) {
+  if (topologyObservation?.topology !== 'exact-owned-orphan') return;
+  // The listener has exact Stack bindings and its lifecycle owner is gone.
+  // Recheck ownership and incarnation at the destructive boundary; neither
+  // a port number nor missing runtime metadata alone authorizes termination.
+  const result = await killPidOwnedByStack(topologyObservation.listenerPid, {
+    stackName, envPath, label: 'orphan server listener',
+    graceMs: resolveServerShutdownGraceMs(env),
+  });
+  if (!result.killed) {
+    const error = new Error(`[local] orphan server listener could not be reclaimed (${result.reason}).`);
+    error.code = 'ESERVERORPHANCLEANUPINCOMPLETE';
+    throw error;
+  }
+  const availability = await waitForTcpPortFree(serverPort);
+  if (availability.status !== 'free') {
+    const error = new Error(`[local] server port release after orphan cleanup is ${availability.status}.`);
+    error.code = 'ESERVERORPHANPORTRELEASEINCOMPLETE';
+    throw error;
   }
 }
 

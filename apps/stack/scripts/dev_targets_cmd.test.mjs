@@ -815,6 +815,10 @@ test('dev-targets sync-service detached owns continuous synchronization independ
       '#!/bin/sh',
       'if [ "$1 $2" = "sync list" ]; then',
       '  printf \'[{"name":"happier-linux","paused":false,"status":"watching","successfulCycles":2,"alpha":{"connected":true,"scanned":true},"beta":{"connected":true,"scanned":true}}]\\n\'',
+      'elif [ "$1" = "version" ]; then',
+      '  printf "fixture Mutagen version\\n"',
+      'elif [ "$1 $2" = "sync resume" ]; then',
+      '  printf "fixture synchronization resumed\\n"',
       'fi',
       'exit 0',
       '',
@@ -834,11 +838,15 @@ test('dev-targets sync-service detached owns continuous synchronization independ
     ], root);
     const commandEnv = { PATH: `${binDir}:${process.env.PATH}` };
 
-    const started = await run(
-      ['sync-service', 'start', '--detached', '--stack=repo-test'],
+    const startResult = await runRaw(
+      ['sync-service', 'start', '--detached', '--stack=repo-test', '--json'],
       root,
       commandEnv,
     );
+    assert.equal(startResult.code, 0, startResult.stderr);
+    const started = JSON.parse(startResult.stdout);
+    assert.match(startResult.stderr, /fixture Mutagen version/);
+    assert.match(startResult.stderr, /fixture synchronization resumed/);
     assert.equal(started.detached, true);
     assert.equal(started.statuses[0].status.state, 'ready');
 

@@ -98,6 +98,17 @@ Details (secure context, phone instructions, automation knobs): `[docs/remote-ac
 
 ## Development (worktrees, stacks, contributor workflows)
 
+In 0.3 development source, `hstack dev` automatically refreshes stale dependencies
+at startup and when dependency inputs change in watch mode. Refresh briefly stops
+only that Stack's Expo process; its supervisor brings Expo back while the server
+and daemon keep their last-green processes. If another Stack's Expo uses the same
+installed tree, development warns and keeps the installed bytes, then retries on
+the next dependency input change or startup. `HAPPIER_STACK_SKIP_REFRESH_DEPS=1`
+and `HAPPIER_STACK_DISABLE_REFRESH_DEPS=1` suppress refresh of an existing tree.
+Service mode still requires explicit refresh permission. Local validation checks
+dependency readiness without installing; worker mirrors keep their explicit
+remote bootstrap.
+
 If you want to **develop Happier** (worktrees, multiple stacks, upstream PR workflows), you can install hstack for development with:
 
 ### Setup (guided)

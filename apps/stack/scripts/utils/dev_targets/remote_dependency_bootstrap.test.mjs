@@ -328,8 +328,10 @@ test('runtime worker bootstrap emits package prerequisites by default while expl
   await writeFile(join(packageDir, 'src/index.ts'), 'export const value: string = 2;\n');
   await prepareRemoteValidationWorkspace({ repoDir, componentRelativeDir: 'apps/stack', env });
   assert.match(await readFile(join(packageDir, 'dist/index.js'), 'utf8'), /value = 2/);
-  await assert.rejects(prepareRemoteValidationWorkspace({ repoDir, componentRelativeDir: 'apps/stack',
-    validationKind: 'typecheck', env }), { code: 'EEXIT' });
+  const reader = await prepareRemoteValidationWorkspace({ repoDir, componentRelativeDir: 'apps/stack',
+    validationKind: 'typecheck', env });
+  assert.deepEqual(reader.built, []);
+  assert.match(await readFile(join(packageDir, 'dist/index.js'), 'utf8'), /value = 2/);
   await assert.rejects(bootstrap({ [WORKSPACE_BUILD_MODE_ENV]: 'strict' }), { code: 'EEXIT' });
   await assert.rejects(bootstrap({ npm_lifecycle_event: 'prepack' }), { code: 'EEXIT' });
   assert.match(await readFile(join(packageDir, 'dist/index.js'), 'utf8'), /value = 2/);
@@ -640,7 +642,7 @@ if (args[0] === '--version') {
     },
   });
   await assert.rejects(stat(join(protocolDir, 'dist')), { code: 'ENOENT' },
-    'typecheck bootstrap leaves declaration publication to component preparation');
+    'typecheck bootstrap leaves declaration consumption to the compiler');
   assert.equal((await inspectDependencyRefresh({
     installDir: repoDir, installMode: SCRIPTLESS_DEPENDENCY_INSTALL_MODE,
   })).required, false);

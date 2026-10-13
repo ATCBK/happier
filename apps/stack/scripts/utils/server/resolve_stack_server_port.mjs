@@ -1,6 +1,8 @@
 import { resolveStablePortStart } from '../expo/metro_ports.mjs';
+import { stat } from 'node:fs/promises';
 import { pickNextFreeTcpPort, waitForTcpPortFree } from '../net/ports.mjs';
 import { isPidAlive, readStackRuntimeStateFile } from '../stack/runtime_state.mjs';
+import { observePidLiveness } from '../proc/pids.mjs';
 import { resolveActiveStackEnvFilePath } from '../paths/paths.mjs';
 import {
   createListenerOwnershipCommandScope,
@@ -57,7 +59,14 @@ export async function observeRuntimePortOwnedByStackDevProxy({
 }) {
   const ownershipScope = listenerObservationScope ?? createListenerOwnershipCommandScope();
   const runtime = runtimeStatePath ? await readStackRuntimeStateFile(runtimeStatePath) : null;
-  if (!runtime) return { owned: false, proxyPid: null, serverPid: null, listenerPid: null };
+  if (!runtime) {
+    let runtimeOwnerGone = false;
+    if (runtimeStatePath) {
+      try { await stat(runtimeStatePath); }
+      catch (error) { runtimeOwnerGone = error?.code === 'ENOENT'; }
+    }
+    return { owned: false, proxyPid: null, serverPid: null, listenerPid: null, runtimeOwnerGone };
+  }
 
   const runtimeStackName = String(runtime.stackName ?? '').trim();
   if (runtimeStackName && runtimeStackName !== stackName) return { owned: false, proxyPid: null, serverPid: null, listenerPid: null };
@@ -65,6 +74,9 @@ export async function observeRuntimePortOwnedByStackDevProxy({
 
   const proxyPid = coercePositiveInt(runtime?.processes?.proxyPid);
   const serverPid = coercePositiveInt(runtime?.processes?.serverPid);
+  const ownerPid = Number(runtime.ownerPid);
+  const runtimeOwnerGone = Number.isInteger(ownerPid) && ownerPid > 1
+    && observePidLiveness(ownerPid).status === 'dead';
   const envPath = resolveActiveStackEnvFilePath(stackName, env);
   const listenPid = await resolveStackOwnedListenPid(
     { port, stackName, envPath },
@@ -78,6 +90,7 @@ export async function observeRuntimePortOwnedByStackDevProxy({
     proxyPid,
     serverPid,
     listenerPid: listenPid,
+    runtimeOwnerGone,
   };
 }
 

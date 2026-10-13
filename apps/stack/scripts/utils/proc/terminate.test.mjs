@@ -266,3 +266,29 @@ test('terminateProcessGroup rechecks identity before completing cleanup after th
   assert.equal(result.reason, 'process_instance_changed_before_group_cleanup');
   assert.deepEqual(signals, ['SIGINT']);
 });
+
+test('terminateProcessGroup waits for remaining group exit within the existing stop budget after leader exit', async () => {
+  let leaderAlive = true;
+  let groupAlive = true;
+  const signals = [];
+  const result = await terminateProcessGroup(4242, {
+    processInstanceFingerprint: 'expected', graceMs: 100,
+    boundary: {
+      platform: 'linux',
+      isPidAlive: () => leaderAlive,
+      readProcessInstanceFingerprint: () => leaderAlive ? 'expected' : null,
+      kill: (_pid, signal) => {
+        if (signal === 0) {
+          if (groupAlive) return;
+          throw Object.assign(new Error('group exited'), { code: 'ESRCH' });
+        }
+        signals.push(signal);
+        leaderAlive = false;
+        setTimeout(() => { groupAlive = false; }, 180);
+      },
+    },
+  });
+  assert.equal(result.ok, true, 'leader exit must not prematurely fail verified group cleanup');
+  assert.equal(groupAlive, false);
+  assert.deepEqual(signals, ['SIGINT'], 'never escalate after the verified leader exits');
+});

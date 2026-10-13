@@ -158,7 +158,7 @@ native_command_policy_base() {
     policy_kind='runtime'
     policy_componentOverride='apps/stack'
   fi
-  if { [ "$policy_command" = 'node' ] || [ "$policy_command" = 'nodejs' ]; } && { [ "$policy_nativeTest" = '1' ]; } && { [ "$policy_nativeTestPath" = 'apps/stack/scripts/utils/dev_targets/remote_dependency_bootstrap.test.mjs' ] || [ "$policy_nativeTestPath" = 'apps/stack/scripts/utils/dev_targets/remote_commands.test.mjs' ] || [ "$policy_nativeTestPath" = 'apps/stack/scripts/build/build_source_runtime.test.mjs' ]; }; then
+  if { [ "$policy_command" = 'node' ] || [ "$policy_command" = 'nodejs' ]; } && { [ "$policy_nativeTest" = '1' ]; } && { [ "$policy_nativeTestPath" = 'apps/stack/scripts/utils/dev_targets/remote_dependency_bootstrap.test.mjs' ] || [ "$policy_nativeTestPath" = 'apps/stack/scripts/utils/dev_targets/remote_validation_preparation.test.mjs' ] || [ "$policy_nativeTestPath" = 'apps/stack/scripts/utils/proc/workspace_build_admission.test.mjs' ] || [ "$policy_nativeTestPath" = 'apps/stack/scripts/utils/dev_targets/remote_commands.test.mjs' ] || [ "$policy_nativeTestPath" = 'apps/stack/scripts/build/build_source_runtime.test.mjs' ]; }; then
     policy_kind='source-test'
   fi
   if { [ "$policy_command" = 'node' ] || [ "$policy_command" = 'nodejs' ]; } && { [ "$policy_nativeTest" = '1' ]; } && { [ "$policy_sourceCondition" = '1' ]; } && { [ "$policy_nativeTestPath" = 'apps/stack/scripts/utils/dev/expo_dev_crash_supervision.test.mjs' ] || [ "$policy_nativeTestPath" = 'apps/stack/scripts/preferred_execution_launcher.test.mjs' ] || [ "$policy_nativeTestPath" = 'apps/stack/scripts/utils/dev_targets/service_placement.test.mjs' ] || [ "$policy_nativeTestPath" = 'apps/stack/scripts/dev_targets_cmd.test.mjs' ] || [ "$policy_nativeTestPath" = 'apps/stack/scripts/daemon_start_verification.integration.test.mjs' ] || [ "$policy_nativeTestPath" = 'apps/stack/scripts/stack/stack_daemon_command.test.mjs' ] || [ "$policy_nativeTestPath" = 'apps/stack/scripts/stack/stack_daemon_runtime_provenance.test.mjs' ] || [ "$policy_nativeTestPath" = 'apps/stack/scripts/stack_daemon_cmd.integration.test.mjs' ] || [ "$policy_nativeTestPath" = 'apps/stack/scripts/utils/stack/daemonControlClient.test.mjs' ]; }; then
@@ -177,12 +177,13 @@ native_command_policy_base() {
     policy_heavyClass='validation'
     policy_kind='source-test'
   fi
-  if { [ "$policy_command" = 'node' ] || [ "$policy_command" = 'nodejs' ]; } && { [ "$policy_nativeTest" = '0' ]; } && { [ "$policy_entryPath" = 'apps/stack/scripts/runtime/launch/prepareSourceRuntimeReload.mjs' ]; }; then
+  if { [ "$policy_command" = 'node' ] || [ "$policy_command" = 'nodejs' ]; } && { [ "$policy_nativeTest" = '0' ]; } && { [ "$policy_entryRepositoryPath" = 'apps/stack/scripts/runtime/launch/prepareSourceRuntimeReload.mjs' ]; }; then
     policy_validation='1'
     policy_bootstrap='1'
     policy_heavyClass='source-bundle'
     policy_kind='source-test'
     policy_componentOverride='apps/stack'
+    policy_selfPublisher='1'
   fi
   if { [ "$policy_command" = 'node' ]; } && { [ "$policy_stripTypes" = '1' ]; } && { [ "$policy_entryPath" = 'apps/cli/scripts/build-owned/generateBundledPluginEntries.ts' ] || [ "$policy_entryPath" = 'scripts/build-owned/generateBundledPluginEntries.ts' ]; }; then
     policy_generator='1'
@@ -317,7 +318,7 @@ native_command_policy_finish() {
   if { [ "$policy_kind" = 'runtime' ]; } && { [ "$policy_component" = 'apps/cli' ]; } && { [ "$policy_script" = 'test' ] || [ "$policy_script" = 'test:local' ] || [ "$policy_script" = 'test:unit' ] || [ "$policy_script" = 'test:unit:local' ] || [ "$policy_script" = 'test:unit:vitest' ] || [ "$policy_script" = 'test:unit:vitest:local' ]; } && { [ "$policy_config" = 'vitest.config.ts' ]; } && { [ "$policy_resolverOverride" = '0' ]; }; then
     policy_kind='source-test'
   fi
-  if { [ "$policy_kind" = 'runtime' ]; } && { [ "$policy_runnerKnown" = '1' ]; } && { [ "$policy_component" = 'apps/cli' ] || [ "$policy_component" = 'apps/ui' ] || [ "$policy_component" = 'packages/plugin-ui' ] || [ "$policy_component" = 'packages/plugins/triage' ] || [ "$policy_component" = 'packages/channels-protocol' ] || [ "$policy_component" = 'packages/email-transports-protocol' ] || [ "$policy_component" = 'packages/plugins/channels' ] || [ "$policy_component" = 'packages/plugins/channel-email' ] || [ "$policy_component" = 'packages/plugins/channel-telegram' ] || [ "$policy_component" = 'packages/plugins/channel-discord' ] || [ "$policy_component" = 'packages/plugins/scm-github' ]; } && { [ "$policy_config" = 'vitest.config.ts' ]; } && { [ "$policy_resolverOverride" = '0' ]; }; then
+  if { [ "$policy_kind" = 'runtime' ]; } && { [ "$policy_runnerKnown" = '1' ]; } && { [ "$policy_component" = 'apps/cli' ] || [ "$policy_component" = 'apps/ui' ] || [ "$policy_component" = 'packages/sdk' ] || [ "$policy_component" = 'packages/plugin-ui' ] || [ "$policy_component" = 'packages/plugins/triage' ] || [ "$policy_component" = 'packages/channels-protocol' ] || [ "$policy_component" = 'packages/email-transports-protocol' ] || [ "$policy_component" = 'packages/plugins/channels' ] || [ "$policy_component" = 'packages/plugins/channel-email' ] || [ "$policy_component" = 'packages/plugins/channel-telegram' ] || [ "$policy_component" = 'packages/plugins/channel-discord' ] || [ "$policy_component" = 'packages/plugins/scm-github' ]; } && { [ "$policy_config" = 'vitest.config.ts' ]; } && { [ "$policy_resolverOverride" = '0' ]; }; then
     policy_kind='source-test'
   fi
   if { [ "$policy_kind" = 'runtime' ]; } && { [ "$policy_runnerKnown" = '1' ]; } && { [ "$policy_component" = 'apps/cli' ]; } && { [ "$policy_config" = 'vitest.source.integration.config.ts' ]; } && { [ "$policy_resolverOverride" = '0' ]; }; then

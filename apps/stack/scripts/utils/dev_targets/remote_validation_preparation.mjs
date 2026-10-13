@@ -36,6 +36,12 @@ export async function prepareRemoteValidationWorkspace({
   if (validationKind === 'source-test') {
     return { ok: true, built: [], skipped: ['workspace-source-test'] };
   }
+  if (validationKind === 'typecheck') {
+    // The compiler reads published dependency declarations and owns its
+    // project declarations. A reader must not republish plugins or dist before
+    // it can run; missing declarations remain visible compiler diagnostics.
+    return { ok: true, built: [], skipped: ['workspace-typecheck-reader'] };
+  }
   env = resolveRemoteValidationPreparationEnv(env, validationKind);
   const livePluginHost = normalizedComponentPath === 'apps/cli' || normalizedComponentPath === 'apps/ui';
   const buildOptions = { env, ...(livePluginHost ? { isolatePluginFailures: true } : {}) };
@@ -63,13 +69,6 @@ export async function prepareRemoteValidationWorkspace({
       // check can still detect drift in the authoritative checkout bytes.
       bundledPluginArtifactPublication: { mode: 'write', targetOwnedOnly: true },
     });
-  }
-  // Declaration consumers still invoke dependency package builds, including
-  // staged plugin UI artifacts that require the publisher's packed manifests.
-  // Typechecks stop at their own component's dependency admission instead of
-  // adding the CLI component dependency pass below.
-  if (validationKind === 'typecheck') {
-    return await ensureWorkspacePackagesBuiltForComponent(componentDir, buildOptions);
   }
   const result = await ensureWorkspacePackagesBuiltForComponent(componentDir, buildOptions);
   if (normalizedComponentPath === 'apps/ui') {
@@ -101,7 +100,7 @@ if (entryPath && pathToFileURL(resolve(entryPath)).href === import.meta.url) {
   const executorRepoRoot = fileURLToPath(new URL('../../../../../', import.meta.url));
   if (repo && resolve(repoDir) !== resolve(executorRepoRoot)) {
     const kind = readValidationKind(process.argv.slice(2));
-    if (kind !== 'source-test') {
+    if (kind !== 'source-test' && kind !== 'typecheck') {
       // The selected checkout owns its package graph and emitted output.
       const { ensureWorkspacePackagesBuiltForComponent } = await import(pathToFileURL(resolve(repoDir, 'scripts/workspaces/ensureWorkspacePackagesBuilt.mjs')).href);
       await ensureWorkspacePackagesBuiltForComponent(resolveComponentDir(repoDir, readComponentRelativeDir(process.argv.slice(2))).componentDir, { env: resolveRemoteValidationPreparationEnv(process.env, kind) });

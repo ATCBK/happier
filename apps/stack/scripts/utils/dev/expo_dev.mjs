@@ -32,7 +32,7 @@ import {
 } from '../expo/command.mjs';
 import { pathExists } from '../fs/fs.mjs';
 import { killProcessTree } from '../proc/proc.mjs';
-import { prepareWorkspaceComponentStartup } from '../proc/pm.mjs';
+import { ensureDepsInstalled, prepareWorkspaceComponentStartup } from '../proc/pm.mjs';
 import { resolveMobileExpoConfig } from '../mobile/config.mjs';
 import { resolveMobileReachableServerUrl } from '../server/mobile_api_url.mjs';
 import { getTailscaleStatus } from '../tailscale/ip.mjs';
@@ -273,7 +273,7 @@ export async function ensureDevExpoServer({
     expoTailscaleIp,
     expoPublicHost: expoTailscaleIp,
   });
-  env.HAPPIER_STACK_DEV_READ_ONLY_DEPENDENCIES = '1';
+  env.HAPPIER_STACK_DEV_AUTO_REFRESH_DEPS = '1';
 
   // Mobile config is needed for `--scheme` and for the app's environment.
   let scheme = '';
@@ -293,6 +293,9 @@ export async function ensureDevExpoServer({
   const tmpDir = resolveExpoTmpDir({ env, defaultTmpDir: paths.tmpDir, kind: 'expo-dev', projectDir });
   await ensureExpoIsolationEnv({ env, stateDir: paths.stateDir, expoHomeDir: paths.expoHomeDir, tmpDir });
   env.HAPPIER_UI_PLUGIN_ARTIFACT_INVENTORY = join(paths.stateDir, 'plugin-ui', 'inventory.js');
+  // Refresh may replace an owned incumbent. Prepare before observing its PID
+  // and before acquiring spawn read custody, so both observations stay valid.
+  await ensureDepsInstalled(uiDir, 'happier-ui', { env, quiet });
   const running = await isStateProcessRunning(paths.statePath);
   const alreadyRunning = Boolean(running.running);
   let metroConfigInspection = null;
@@ -760,7 +763,6 @@ export async function ensureDevExpoServer({
           // Before PID publication, this is still our own spawn admission lock;
           // an early child failure must consume the ordinary crash budget.
           const dependencyTransition = admissionPublished
-            && (signal === 'SIGTERM' || signal === 'SIGKILL' || process.platform === 'win32')
             && isDependencyRefreshMutationActive({ installDir: resolveDependencyInstallRoot(uiDir), env });
           void (async () => {
             await clearRuntimeIfCurrent(proc.pid);

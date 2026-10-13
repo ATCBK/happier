@@ -123,10 +123,22 @@ export function resolveQaBrowserUrl(url, extraUrls = []) {
   return url;
 }
 
-export async function runQaBrowserWorker({ sessionName, proxy = false, trustSpki = '', fakeAudio = '', gpu = false, input = process.stdin, env = process.env,
+function workerLoopbackOrigin(value) {
+  if (!value) return null;
+  const url = new URL(value);
+  if (url.protocol !== 'http:' || !['127.0.0.1', '[::1]'].includes(url.hostname)
+    || !url.port || url.username || url.password) {
+    throw new Error('[dev-targets] browser --worker-loopback-url requires an explicit HTTP loopback listener port without credentials');
+  }
+  return url.origin;
+}
+
+export async function runQaBrowserWorker({ sessionName, proxy = false, trustSpki = '', fakeAudio = '', gpu = false,
+  workerLoopbackUrl, input = process.stdin, env = process.env,
   writeReady = value => process.stdout.write(`${READY_MARKER}${JSON.stringify(value)}\n`),
 }, { capture = runCaptureResult, signalSource = process } = {}) {
   requireSessionName(sessionName);
+  const localOrigin = workerLoopbackOrigin(workerLoopbackUrl ?? env.HAPPIER_STACK_QA_BROWSER_WORKER_LOOPBACK_URL);
   const profile = await mkdtemp(join(tmpdir(), 'hstack-qa-browser-'));
   const session = `hstack-${sessionName}-${randomUUID()}`;
   const browserEnv = { ...env, AGENT_BROWSER_SESSION: session, AGENT_BROWSER_RESTORE_SAVE: 'never',
@@ -165,10 +177,12 @@ export async function runQaBrowserWorker({ sessionName, proxy = false, trustSpki
     // OpenSSH's reverse SOCKS route resolves destinations on the controller,
     // where the canonical Stack/Expo ingress already lives. Chromium must also
     // proxy loopback addresses; its default bypass would reach the worker instead.
+    // A colocated daemon's explicitly observed peer listener is worker-local.
+    // Bypass only that exact origin, retaining controller custody for Home/Expo.
     const launchArgs = ['--remote-debugging-port=0', '--no-sandbox',
       ...(gpu ? ['--disable-software-rasterizer'] : []),
       ...(trustSpki ? [`--ignore-certificate-errors-spki-list=${trustSpki}`] : []), ...(proxy ? [
-      `--proxy-server=socks5://127.0.0.1:${proxyPort}`, '--proxy-bypass-list=<-loopback>',
+      `--proxy-server=socks5://127.0.0.1:${proxyPort}`, `--proxy-bypass-list=<-loopback>${localOrigin ? `;${localOrigin}` : ''}`,
     ] : [])];
     opened = true; // A failed open can still have created its own daemon.
     // agent-browser 0.34's --args parser splits commas even inside a switch.
@@ -283,7 +297,7 @@ export async function stopStackQaBrowsers({ stackName, baseDir, sourceDir, env }
     warnings: results.filter(result => result.value.warning).map(result => result.value.warning) };
 }
 
-export async function runQaBrowserSession({ target, stackName, stackBaseDir, sessionName, url, extraUrls = [], trustCertPath, fakeAudio = false, gpu = false,
+export async function runQaBrowserSession({ target, stackName, stackBaseDir, sessionName, url, extraUrls = [], workerLoopbackUrl, trustCertPath, fakeAudio = false, gpu = false,
   env = process.env, onReady = value => process.stdout.write(`${JSON.stringify(value)}\n`),
 }, { signalSource = process, capture = runCaptureResult, spawnProcess = spawnProc,
   stopProcess = child => killProcessTree(child, 'SIGINT', { graceMs: 2_000 }),
@@ -292,6 +306,14 @@ export async function runQaBrowserSession({ target, stackName, stackBaseDir, ses
   requireSessionName(sessionName);
   if (!target || target.platform !== 'posix') throw new Error('[dev-targets] QA browser requires a selected remote POSIX host');
   url = resolveQaBrowserUrl(url, extraUrls);
+  const localOrigin = workerLoopbackOrigin(workerLoopbackUrl);
+  if (localOrigin) {
+    const page = new URL(url);
+    const controllerUrls = [url, ...extraUrls, ...['server', 'serverUrl'].flatMap(key => page.searchParams.get(key) ? [page.searchParams.get(key)] : [])];
+    if (controllerUrls.some(value => new URL(value).origin === localOrigin)) {
+      throw new Error('[dev-targets] worker loopback listener must not replace a controller Home or Expo origin');
+    }
+  }
   let audioBytes;
   if (typeof fakeAudio === 'string') {
     try { audioBytes = await readFile(fakeAudio); }
@@ -340,7 +362,8 @@ export async function runQaBrowserSession({ target, stackName, stackBaseDir, ses
   let workerFinished = false;
   const paths = resolveRemoteStackStatePaths(target, { stackName, runtimeMode: 'controlled' });
   const workerEnv = { HAPPIER_STACK_STACK: stackName, HAPPIER_STACK_ENV_FILE: paths.stackEnvPath,
-    HAPPIER_STACK_PROCESS_KIND: 'browser' };
+    HAPPIER_STACK_PROCESS_KIND: 'browser',
+    ...(localOrigin ? { HAPPIER_STACK_QA_BROWSER_WORKER_LOOPBACK_URL: localOrigin } : {}) };
   const onLine = ({ line }) => {
     if (!line.startsWith(READY_MARKER)) { process.stderr.write(`${line}\n`); return; }
     if (readyTask) return;

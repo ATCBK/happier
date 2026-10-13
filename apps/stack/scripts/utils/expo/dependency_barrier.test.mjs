@@ -12,11 +12,35 @@ import { ensureMinimalMonorepoLayout } from '../../testkit/core/minimal_monorepo
 import { sanitizeStackTestRunnerEnv } from '../test/test_env.mjs';
 import { ensureDevExpoServer } from '../dev/expo_dev.mjs';
 import { withDependencyRefresh, withDependencyRefreshLock } from '../proc/dependency_refresh.mjs';
+import { ensureDepsInstalled } from '../proc/pm.mjs';
 import { withJsonOwnerFileLock } from '../proc/jsonOwnerFileLock.mjs';
-import { killProcessTree } from '../proc/proc.mjs';
+import { killProcessTree, run } from '../proc/proc.mjs';
 import { getExpoStatePaths, writePidState } from './expo.mjs';
 import { expoExec, expoSpawn } from './command.mjs';
 import { EXPO_DEPENDENCY_BARRIER_VERSION } from './dependency_barrier.mjs';
+
+for (const invocation of ['spawn', 'exec']) test(`development Metro automatically refreshes stale installed dependencies (${invocation})`, async t => {
+  const fixture = await fixtureFor(t);
+  delete fixture.env.HAPPIER_STACK_SKIP_REFRESH_DEPS;
+  const callsPath = fixture.path('installs');
+  await writeFile(fixture.env.npm_execpath, [
+    "const fs = require('node:fs');",
+    "if (process.argv[2] === '--version') console.log('1.22.22');",
+    `else fs.appendFileSync(${JSON.stringify(callsPath)}, process.argv.slice(2).join(' ') + '\\n');`,
+  ].join('\n'));
+  await writeFile(fixture.path('yarn.lock'), '# new dependencies\n');
+  const expoPath = fixture.path('node_modules', '.bin', 'expo');
+  await writeFile(expoPath, `#!${process.execPath}\nconsole.log('served');\n`);
+  await chmod(expoPath, 0o755);
+  const options = { dir: fixture.uiDir, projectDir: fixture.uiDir,
+    args: ['start', '--web'], env: fixture.env, quiet: true, options: { silent: true } };
+  if (invocation === 'spawn') {
+    const child = await expoSpawn(options);
+    assert.equal((await child.completion).code, 0);
+  } else await expoExec(options);
+  assert.match(await readFile(callsPath, 'utf8').catch(() => ''), /install/,
+    'development startup must refresh stale dependencies through the package manager');
+});
 
 async function waitFor(predicate) {
   const deadline = Date.now() + 10_000;
@@ -66,6 +90,35 @@ async function fixtureFor(t, { baseEnv = process.env } = {}) {
   return { ...fixture, uiDir, env, baseDir, envPath, stackName, patchOutput };
 }
 
+test('managed development prepares dependencies before acquiring spawn read custody', { timeout: 10000 }, async t => {
+  const fixture = await fixtureFor(t);
+  const executable = fixture.path('node_modules', '.bin', 'expo');
+  await writeFile(executable, `#!${process.execPath}\nsetInterval(() => {}, 1000);\n`);
+  await chmod(executable, 0o755);
+  // A child isolates the lock owner: cancellation can terminate a regressed
+  // read-to-writer deadlock without leaving a live reader in the test runner.
+  const script = `
+    import { ensureDevExpoServer } from ${JSON.stringify(new URL('../dev/expo_dev.mjs', import.meta.url).href)};
+    import { killProcessTree } from ${JSON.stringify(new URL('../proc/proc.mjs', import.meta.url).href)};
+    const children = [];
+    let stopping = false;
+    const result = await ensureDevExpoServer({ startUi: true,
+      uiDir: ${JSON.stringify(fixture.uiDir)}, autostart: { baseDir: ${JSON.stringify(fixture.baseDir)} },
+      baseEnv: process.env, apiServerUrl: 'http://127.0.0.1:1', stackMode: true,
+      stackName: ${JSON.stringify(fixture.stackName)}, envPath: ${JSON.stringify(fixture.envPath)},
+      runtimeStatePath: ${JSON.stringify(join(fixture.baseDir, 'runtime.json'))},
+      children, isShuttingDown: () => stopping, quiet: true, spawnOptions: { silent: true } });
+    if (!result.ok || children.length !== 1) throw new Error('managed Metro did not start');
+    stopping = true;
+    await result.close();
+    for (const child of children) await killProcessTree(child, 'SIGTERM');
+    await Promise.all(children.map(child => child.completion));
+  `;
+  await run(process.execPath, ['--input-type=module', '-e', script], {
+    env: fixture.env, signal: t.signal, ownedProcessGroup: true, stdio: 'ignore', captureFailureDiagnostic: true,
+  });
+});
+
 test('cold dependency bootstrap imports and refreshes from source with no compiled workspace closure', async (t) => {
   const fixture = await createTempFixture(t, {
     prefix: 'happier-cold-dependency-owner-', parentDir: tmpdir(),
@@ -94,11 +147,10 @@ test('cold dependency bootstrap imports and refreshes from source with no compil
   assert.equal(result.refreshed, true);
 });
 
-for (const invocation of ['spawn', 'exec']) test(`Metro starts with dependency and patch drift without an implicit install or repair (${invocation})`, async t => {
+for (const invocation of ['spawn', 'exec']) test(`Metro honors explicit dependency refresh suppression (${invocation})`, async t => {
   const fixture = await fixtureFor(t);
   const markerPath = fixture.path('node_modules', '.happier-stack-dependencies-ready');
   const marker = await readFile(markerPath, 'utf8');
-  await unlink(fixture.patchOutput);
   await writeFile(join(fixture.uiDir, 'package.json'), JSON.stringify({
     name: '@happier-dev/app', dependencies: { 'new-mid-edit-package': '1.0.0' },
     scripts: { 'postinstall:real': 'node tools/postinstall.mjs' },
@@ -114,7 +166,7 @@ for (const invocation of ['spawn', 'exec']) test(`Metro starts with dependency a
     assert.equal((await child.completion).code, 0);
   } else await expoExec(options);
   assert.equal(await readFile(markerPath, 'utf8'), marker, 'startup must not withdraw or republish install admission');
-  await assert.rejects(readFile(fixture.patchOutput), { code: 'ENOENT' });
+  assert.equal(await readFile(fixture.patchOutput, 'utf8'), 'export {};');
 });
 
 for (const cancel of [false, true]) test(`Metro keeps serving its last-good process while replacement waits for dependency custody (shutdown=${cancel})`, async t => {
@@ -241,15 +293,35 @@ test(`dependency mutation cannot borrow another stack identity to stop its servi
   assert.equal(mutated, false, 'shared installed bytes must remain unchanged while another stack is serving them');
   assert.equal(await readFile(markerPath, 'utf8'), priorMarker, 'rejected refresh must retain existing admission');
   for (const child of consumers) assert.equal(child.exitCode ?? child.signalCode, null, 'validate all consumers before stopping any');
+  let warning = '';
+  t.mock.method(console, 'warn', message => { warning += message; });
+  const devEnv = { ...fixture.env, HAPPIER_STACK_SKIP_REFRESH_DEPS: '0', HAPPIER_STACK_DEV_AUTO_REFRESH_DEPS: '1' };
+  const result = await ensureDepsInstalled(fixture.uiDir, 'development stack', { env: devEnv, quiet: true });
+  assert.equal(result.reason, 'HAPPIER_DEPENDENCY_METRO_RESTART_REQUIRED');
+  assert.match(warning, /continuing with installed bytes/);
+  assert.equal(await readFile(markerPath, 'utf8'), priorMarker);
+  for (const child of consumers) assert.equal(child.exitCode ?? child.signalCode, null);
 });
 }
 
-test('managed Metro stops during dependency mutation and resumes installed bytes after a failed refresh', async (t) => {
+for (const gracefulExit of [false, true]) test(`managed Metro stops during dependency mutation and resumes installed bytes after a failed refresh (graceful=${gracefulExit})`, async (t) => {
   const fixture = await fixtureFor(t);
+  fixture.env.HAPPIER_STACK_EXPO_RESTART_BASE_DELAY_MS = '7';
+  fixture.env.HAPPIER_STACK_EXPO_RESTART_MAX_DELAY_MS = '28';
+  const restartDelays = [];
+  const realSetTimeout = globalThis.setTimeout;
+  // Observe the OS timer boundary while retaining real scheduling and the
+  // complete supervisor/installer path. Planned exits must not grow backoff.
+  t.mock.method(globalThis, 'setTimeout', (callback, milliseconds, ...args) => {
+    if ([7, 14, 28].includes(milliseconds)) restartDelays.push(milliseconds);
+    return realSetTimeout(callback, milliseconds, ...args);
+  });
   const children = [];
   let shuttingDown = false;
+  let result;
   t.after(async () => {
     shuttingDown = true;
+    await result?.close?.();
     for (const child of children) await killProcessTree(child, 'SIGTERM', { graceMs: 500 });
   });
   const readerScript = fixture.path('metro-reader.cjs');
@@ -259,6 +331,7 @@ test('managed Metro stops during dependency mutation and resumes installed bytes
   await writeFile(dependencyPath, 'patched');
   await writeFile(readerScript, [
     "const fs = require('node:fs');",
+    ...(gracefulExit ? ["process.on('SIGTERM', () => process.exit(0));"] : []),
     `fs.appendFileSync(${JSON.stringify(runsPath)}, process.pid + '\\n');`,
     'setInterval(() => {',
     `  if (fs.readFileSync(${JSON.stringify(dependencyPath)}, 'utf8') !== 'patched') {`,
@@ -271,7 +344,7 @@ test('managed Metro stops during dependency mutation and resumes installed bytes
     ? `@echo off\r\n"${process.execPath}" "${readerScript}" %*\r\n`
     : `#!/bin/sh\nexec '${process.execPath.replaceAll("'", "'\\''")}' '${readerScript.replaceAll("'", "'\\''")}' "$@"\n`);
   await chmod(expoBin, 0o755);
-  const result = await ensureDevExpoServer({
+  result = await ensureDevExpoServer({
     startUi: true, startMobile: false, uiDir: fixture.uiDir,
     autostart: { baseDir: fixture.baseDir }, baseEnv: fixture.env,
     apiServerUrl: 'http://127.0.0.1:1', restart: false, stackMode: true,
@@ -302,14 +375,14 @@ test('managed Metro stops during dependency mutation and resumes installed bytes
   await waitFor(async () => (await readFile(runsPath, 'utf8')).trim().split('\n').length === 2);
   assert.equal(await readFile(observationsPath, 'utf8').catch(() => ''), '');
   const second = children[1];
-  await unlink(fixture.patchOutput);
-  await withDependencyRefresh({
-    installDir: fixture.root, env: fixture.env,
-    onDependenciesReady: async () => {
-      assert.notEqual(second.exitCode ?? second.signalCode, null);
-      await writeFile(fixture.patchOutput, 'export {};');
-    },
-  }, async () => assert.fail('a second warm repair must not reinstall'));
+  // Exercise automatic PM admission with the real supervisor and ownership
+  // barrier too; only the package-manager process is a fixture boundary.
+  await writeFile(fixture.env.npm_execpath,
+    "if (process.argv[2] === '--version') console.log('1.22.22');\n");
+  await writeFile(fixture.path('yarn.lock'), '# automatic owning refresh\n');
+  await ensureDepsInstalled(fixture.uiDir, 'development stack', { quiet: true,
+    env: { ...fixture.env, HAPPIER_STACK_SKIP_REFRESH_DEPS: '0', HAPPIER_STACK_DEV_AUTO_REFRESH_DEPS: '1' } });
+  assert.notEqual(second.exitCode ?? second.signalCode, null, 'automatic refresh must stop its owned consumer');
   await waitFor(async () => (await readFile(runsPath, 'utf8')).trim().split('\n').length === 3);
   const third = children[2];
   await unlink(fixture.patchOutput);
@@ -326,6 +399,8 @@ test('managed Metro stops during dependency mutation and resumes installed bytes
   }, async () => {}), /patch failed/);
   await waitFor(async () => children.length === 4);
   assert.equal(children[3].exitCode, null, 'a failed refresh must not leave the Metro runner permanently unavailable');
+  assert.equal(Math.max(...restartDelays), 7,
+    'repeated dependency replacements must retain the base restart delay even when Expo handles SIGTERM and exits with code 0');
 });
 
 test('a child killed during its own admission publication still consumes the crash budget', async (t) => {

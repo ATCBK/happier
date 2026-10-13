@@ -79,7 +79,7 @@ import { resolveServerRuntimeLaunchSpec } from './runtime/launch/resolveServerRu
 import { spawnRuntimeServerAfterMigration } from './runtime/launch/runServerRuntimeMigration.mjs';
 import { spawnStackOwnerDeathWatchdog } from './utils/stack/owner_death_watchdog.mjs';
 import { completeInterruptedStackStopBeforeStart } from './utils/stack/stop.mjs';
-import { decideDevStartupTopology, observeDevServerStartupTopology } from './utils/dev/devStartupTopology.mjs';
+import { decideDevStartupTopology, observeDevServerStartupTopology, reclaimDevServerStartupOrphan } from './utils/dev/devStartupTopology.mjs';
 import { resolveDevServerConnection } from './utils/dev/resolveDevServerConnection.mjs';
 import { isBorrowedExpoConsumer, resolveSourceQaUiMode } from './runtime/shared/borrowed_expo.mjs';
 import { resolveServerMigrationsEnabled } from '@happier-dev/cli-common/firstPartyRuntime/selfHostServerEnv';
@@ -528,6 +528,9 @@ async function main() {
     expoRequested: startOwnedExpo,
     expoRunning: false,
     restart: restart && (!reuseSourceRuntime || preparedSourceReload),
+  });
+  await reclaimDevServerStartupOrphan({
+    topologyObservation: serverTopologyObservation, serverPort, stackName, envPath, env: baseEnv,
   });
 
   if (daemonStartAdmission.skipReason) {

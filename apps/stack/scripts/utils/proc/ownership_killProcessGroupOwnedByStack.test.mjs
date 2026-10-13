@@ -7,6 +7,7 @@ import { join } from 'node:path';
 
 import { isPidAlive } from './pids.mjs';
 import { killPidOwnedByStack, killProcessGroupOwnedByStack, observePsEnvLine } from './ownership.mjs';
+import { terminateProcessGroup } from './terminate.mjs';
 import { spawnDetachedTestProcess } from '../../testkit/core/spawn_test_process.mjs';
 
 test('process identity observation classifies failed ps for an exited pid as not found', async () => {
@@ -201,6 +202,38 @@ function killGroup(pid) {
     // ignore
   }
 }
+
+for (const failure of ['changed', 'exited']) test(`owned group cleanup preserves ${failure} identity failure from real termination`, async (t) => {
+  if (process.platform === 'win32') return t.skip('POSIX group cleanup with real Stack ownership');
+  const directory = await mkdtemp(join(tmpdir(), 'hstack-kill-identity-failure-'));
+  const envPath = join(directory, 'env');
+  const child = spawnDetachedTestProcess(process.execPath, ['-e', 'setInterval(() => {}, 1000)'], {
+    env: { ...process.env, HAPPIER_STACK_STACK: 't', HAPPIER_STACK_ENV_FILE: envPath, HAPPIER_STACK_PROCESS_KIND: 'infra' },
+  });
+  t.after(async () => { killGroup(child.pid); await rm(directory, { recursive: true, force: true }); });
+  await new Promise((resolve, reject) => { child.once('spawn', resolve); child.once('error', reject); });
+  const signals = [];
+  const result = await killProcessGroupOwnedByStack(child.pid, {
+    stackName: 't', envPath, json: true, graceMs: 50,
+    // Keep admission and termination real; bridge the existing OS boundary
+    // injection so identity loss can be exercised without killing a reused PID.
+    terminateProcessGroupImpl: (pid, options) => {
+      let signalled = false;
+      return terminateProcessGroup(pid, { ...options, boundary: {
+        platform: process.platform,
+        isPidAlive: () => failure !== 'exited' || !signalled,
+        readProcessInstanceFingerprint: () => !signalled ? options.processInstanceFingerprint : failure === 'changed' ? 'replacement' : null,
+        kill: (_pid, signal) => {
+          if (signal !== 0) { signals.push(signal); signalled = true; }
+        },
+      } });
+    },
+  });
+  assert.equal(result.killed, false, 'a remaining group without identity proof must not be admitted as stopped');
+  assert.equal(result.reason, failure === 'changed'
+    ? 'process_instance_changed_before_group_cleanup' : 'identity_exited_before_group_cleanup');
+  assert.deepEqual(signals, ['SIGTERM'], 'identity loss must never escalate signals');
+});
 
 test('killProcessGroupOwnedByStack allows graceful exit before SIGKILL', async (t) => {
   if (process.platform === 'win32') {

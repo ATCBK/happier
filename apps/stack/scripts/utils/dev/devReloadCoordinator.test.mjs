@@ -13,6 +13,7 @@ import { run } from '../proc/proc.mjs';
 import { BuildInputDriftError } from '../../../../../scripts/workspaces/buildInputConvergence.mjs';
 
 import {
+  createDevDependencyReload,
   isDevStartupSourceDrift,
   prepareDevComponent,
   prepareSourceComponent,
@@ -23,6 +24,75 @@ import { watchDebounced } from '../proc/watch.mjs';
 import { createHappyCliReloadDescriptors } from './daemon.mjs';
 import { createDevServerReloadDescriptors, createDevServerReloadExecutor } from './server.mjs';
 import { readHappyCliRuntimeInputFreshness } from '../proc/cli_runtime_inputs.mjs';
+import { inspectDependencyRefresh, withDependencyRefresh } from '../proc/dependency_refresh.mjs';
+import { sanitizeStackTestRunnerEnv } from '../test/test_env.mjs';
+
+test('development input changes refresh installed dependencies before source builds through the reload owner', async t => {
+  const fixture = await createMinimalMonorepoFixture(t, { prefix: 'hstack-dev-auto-deps-' });
+  await fs.writeFile(fixture.path('package.json'), JSON.stringify({ private: true, workspaces: ['apps/*'] }));
+  await fs.writeFile(fixture.path('yarn.lock'), '# initial\n');
+  await fs.mkdir(fixture.path('node_modules'));
+  await fs.mkdir(fixture.path('patches'));
+  const yarn = fixture.path('yarn.cjs');
+  const installed = fixture.path('installed');
+  await fs.writeFile(yarn, [
+    "const fs = require('node:fs');",
+    "if (process.argv[2] === '--version') console.log('1.22.22');",
+    `else fs.appendFileSync(${JSON.stringify(installed)}, process.argv.slice(2).join(' ') + '\\n');`,
+  ].join('\n'));
+  const env = { ...sanitizeStackTestRunnerEnv(process.env, { isolatedStackRoot: fixture.root }),
+    npm_execpath: yarn, HAPPIER_STACK_DEV_AUTO_REFRESH_DEPS: '1' };
+  await withDependencyRefresh({ installDir: fixture.root, env }, async () => {});
+  await fs.writeFile(fixture.path('yarn.lock'), '# stale at startup\n');
+  let watcher;
+  let sourceBuilds = 0;
+  const failures = [];
+  const paths = [fixture.path('yarn.lock'), fixture.path('package.json'),
+    join(fixture.serverDir, 'package.json'), fixture.path('patches')];
+  const dependencyReload = await createDevDependencyReload({ repoDir: fixture.root, env });
+  const coordinator = startDevReloadCoordinator({
+    descriptors: [dependencyReload.descriptor, { id: 'server:inputs', target: 'server', paths }],
+    executors: [
+      dependencyReload.executor,
+      { target: 'server', async build() {
+        assert.equal((await inspectDependencyRefresh({ installDir: fixture.root })).required, false,
+          'source builds must see the freshly admitted installation');
+        sourceBuilds++;
+      } },
+    ],
+    logger: { log() {}, warn() {}, error(message) { failures.push(message); } },
+  }, { watchDebouncedImpl(options) { watcher = options; return { close() {} }; } });
+  t.after(() => coordinator.close());
+  await Promise.all(requestInitialDevRefreshes({ reloadWatcher: coordinator,
+    dependencyReloadEnabled: true, serverReloadEnabled: true }));
+  for (const [path, bytes] of [
+    [fixture.path('yarn.lock'), '# changed\n'],
+    [fixture.path('package.json'), JSON.stringify({ private: true, workspaces: ['apps/*'], dependencies: { fresh: '1' } })],
+    [join(fixture.serverDir, 'package.json'), JSON.stringify({ name: '@fixture/server', dependencies: { fresh: '2' } })],
+    [fixture.path('patches/new.patch'), 'new patch'],
+  ]) {
+    await fs.writeFile(path, bytes);
+    await watcher.onChange({ eventType: 'change', filename: path });
+  }
+  assert.deepEqual(failures, []);
+  assert.equal(sourceBuilds, 5);
+  assert.equal((await fs.readFile(installed, 'utf8')).trim().split('\n').filter(line => line.startsWith('install')).length, 5);
+  await watcher.onChange({ eventType: 'poll', filename: null });
+  assert.equal(sourceBuilds, 5, 'unchanged inputs do not trigger another refresh');
+  await coordinator.close();
+
+  // UI-only/no-watch startup must also perform real dependency admission.
+  await fs.writeFile(fixture.path('yarn.lock'), '# UI-only startup\n');
+  const uiReload = await createDevDependencyReload({ repoDir: fixture.root, env });
+  const uiCoordinator = startDevReloadCoordinator({ observeChanges: false,
+    descriptors: [uiReload.descriptor], executors: [uiReload.executor],
+    logger: { log() {}, warn() {}, error(message) { failures.push(message); } },
+  });
+  t.after(() => uiCoordinator.close());
+  await Promise.all(requestInitialDevRefreshes({ reloadWatcher: uiCoordinator, dependencyReloadEnabled: true }));
+  assert.equal((await inspectDependencyRefresh({ installDir: fixture.root })).required, false);
+  assert.deepEqual(failures, []);
+});
 
 test('no-watch startup refresh uses the reload owner without installing source watchers', async t => {
   const fixture = await createTempFixture(t, { prefix: 'hstack-once-refresh-' });

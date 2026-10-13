@@ -348,10 +348,11 @@ async function main() {
         '  hstack dev-targets doctor [NAME] [--stack=NAME]',
         '  hstack dev-targets status NAME [--stack=NAME]',
         '  hstack dev-targets qa setup NAME --stack=QA_STACK [--json]',
-        '  hstack dev-targets browser start SESSION --stack=QA_STACK --url=QA_UI_URL [--target=NAME] [--gpu] [--forward-url=LOOPBACK_URL] [--trust-cert=PEM_PATH] [--fake-audio[=WAV_PATH]]',
+        '  hstack dev-targets browser start SESSION --stack=QA_STACK --url=QA_UI_URL [--target=NAME] [--gpu] [--forward-url=LOOPBACK_URL] [--worker-loopback-url=HTTP_LOOPBACK_URL] [--trust-cert=PEM_PATH] [--fake-audio[=WAV_PATH]]',
         '    Keeps the lane browser and CDP forward alive; Ctrl+C closes only this session.',
         '    --gpu requires --target: headed Chromium on a host with an active GPU display, without software rasterization.',
         '    --trust-cert pins the supplied certificate SPKI for this browser lifetime.',
+        '    --worker-loopback-url routes one observed listener on the selected browser host directly, while Home/Expo use the controller route.',
         '    --fake-audio uses a synthetic microphone; =WAV_PATH copies controller speech to the worker. Permission is still required.',
         '  hstack dev-targets capacity show NAME [--stack=NAME]',
         '  hstack dev-targets capacity set NAME shared|dedicated [--shared-cpus=N --shared-memory-gib=N --dedicated-cpus=N --dedicated-memory-gib=N] [--force] [--stack=NAME]',
@@ -423,6 +424,9 @@ async function main() {
     if (flags.has('--trust-cert') && !kv.get('--trust-cert')) {
       throw new Error('[dev-targets] browser --trust-cert requires a certificate path');
     }
+    if (flags.has('--worker-loopback-url') && !kv.get('--worker-loopback-url')) {
+      throw new Error('[dev-targets] browser --worker-loopback-url requires an HTTP loopback URL');
+    }
     const { env: stackEnv } = await readStackEnvObject(stackName);
     const browserEnv = { ...process.env, ...stackEnv };
     const controlled = await resolveControlledQaBrowserTarget({ stackName, targetName, env: browserEnv });
@@ -431,6 +435,7 @@ async function main() {
     if (!url) throw new Error('[dev-targets] browser start requires --url from the QA stack UI endpoint');
     await runQaBrowserSession({ target, stackName, stackBaseDir: controlled.authority.producerStackBaseDir,
       sessionName: positionals[2], url, extraUrls: kv.get('--forward-url') ? [kv.get('--forward-url')] : [],
+      workerLoopbackUrl: kv.get('--worker-loopback-url'),
       trustCertPath: kv.get('--trust-cert'), fakeAudio: kv.has('--fake-audio') ? kv.get('--fake-audio') : flags.has('--fake-audio'), gpu, env: browserEnv });
     return;
   }

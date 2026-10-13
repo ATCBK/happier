@@ -37,8 +37,8 @@ function observeProcessInstance(identityPid, expectedFingerprint, boundary) {
 }
 
 async function waitForExit(pid, timeoutMs, boundary, identity) {
-  const end = nowMs() + Math.max(0, Number(timeoutMs) || 0);
-  while (nowMs() < end) {
+  let end = nowMs() + Math.max(0, Number(timeoutMs) || 0);
+  for (;;) {
     const targetAlive = identity.isTargetAlive(pid, boundary);
     const processInstance = observeProcessInstance(
       identity.identityPid,
@@ -50,26 +50,19 @@ async function waitForExit(pid, timeoutMs, boundary, identity) {
         ? processInstance
         : { status: 'exited' };
     }
-    if (processInstance.status === 'exited') return { status: 'identity_exited' };
-    if (processInstance.status !== 'same') return processInstance;
+    // Once the leader exits, only observation is safe. Descendants may take
+    // longer than one signal's grace to release the group; use the remaining
+    // stop budget without sending another signal or extending that budget.
+    if (processInstance.status !== 'same' && processInstance.status !== 'exited') return processInstance;
+    if (processInstance.status === 'exited' && identity.groupExitDeadline != null) {
+      end = Math.max(end, identity.groupExitDeadline);
+    }
+    if (nowMs() >= end) {
+      return { status: processInstance.status === 'exited' ? 'identity_exited' : 'timeout' };
+    }
     // eslint-disable-next-line no-await-in-loop
     await new Promise((r) => setTimeout(r, 40));
   }
-  const targetAlive = identity.isTargetAlive(pid, boundary);
-  const processInstance = observeProcessInstance(
-    identity.identityPid,
-    identity.processInstanceFingerprint,
-    boundary,
-  );
-  if (!targetAlive) {
-    return processInstance.status === 'changed' || processInstance.status === 'unavailable'
-      ? processInstance
-      : { status: 'exited' };
-  }
-  if (processInstance.status === 'exited') return { status: 'identity_exited' };
-  return processInstance.status === 'same'
-    ? { status: 'timeout' }
-    : processInstance;
 }
 
 function killGroup(pid, signal, boundary) {
@@ -275,6 +268,8 @@ export async function terminateProcessGroup(pid, {
   const sequence = [startSignal, 'SIGINT', 'SIGTERM', 'SIGKILL'].filter(
     (sig, index, arr) => arr.indexOf(sig) === index
   );
+  const signalGraceMs = (sig) => sig === 'SIGKILL' ? Math.min(400, perSignalMs) : perSignalMs;
+  const groupExitDeadline = nowMs() + sequence.reduce((budget, sig) => budget + signalGraceMs(sig), 0);
 
   let lastSignal = null;
   for (const sig of sequence) {
@@ -293,16 +288,20 @@ export async function terminateProcessGroup(pid, {
     killGroup(n, sig, boundary);
     lastSignal = sig;
     // eslint-disable-next-line no-await-in-loop
-    const exited = await waitForExit(n, sig === 'SIGKILL' ? Math.min(400, perSignalMs) : perSignalMs, boundary, {
+    const exited = await waitForExit(n, signalGraceMs(sig), boundary, {
       identityPid: identityPidNum,
       processInstanceFingerprint: expectedFingerprint,
       isTargetAlive,
+      groupExitDeadline,
     });
     if (exited.status === 'exited') return { ok: true, signal: sig };
     if (exited.status === 'changed') {
       return { ok: false, signal: sig, reason: 'process_instance_changed_before_group_cleanup' };
     }
-    if (exited.status === 'unavailable' || exited.status === 'identity_exited') {
+    if (exited.status === 'identity_exited') {
+      return { ok: false, signal: sig, reason: 'identity_exited_before_group_cleanup' };
+    }
+    if (exited.status === 'unavailable') {
       return { ok: false, signal: sig, reason: 'process_instance_unavailable' };
     }
   }

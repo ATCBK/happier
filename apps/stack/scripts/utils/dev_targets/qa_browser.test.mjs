@@ -124,6 +124,7 @@ for (const ownerSignal of ['SIGINT', 'SIGKILL']) test(`${ownerSignal} owner exit
 const fs=require('node:fs');const path=require('node:path');const a=process.argv.slice(2);
 if(a.includes('open')){
 require('node:assert/strict').ok(a[a.indexOf('--args')+1].split(',').includes(${JSON.stringify(`--ignore-certificate-errors-spki-list=${spkiHash}`)}),'controller certificate trust must reach Chromium launch');
+require('node:assert/strict').ok(a[a.indexOf('--args')+1].split(',').includes('--proxy-bypass-list=<-loopback>;http://127.0.0.1:33807'),'controller worker-loopback intent must reach the real worker launch');
 fs.writeFileSync(path.join(a[a.indexOf('--profile')+1],'DevToolsActivePort'),${JSON.stringify(`${chromePort}\n/devtools/browser/fixture-browser\n`)});
 }
 else setTimeout(()=>fs.writeFileSync(${JSON.stringify(closeMarker)},'closed'),2500);
@@ -141,7 +142,7 @@ await runQaBrowserSession({
       repoDir: ${JSON.stringify(fileURLToPath(new URL('../../../../../', import.meta.url)))}, cliHomeDir: ${JSON.stringify(root)},
       remotePath: ${JSON.stringify([binDir, dirname(process.execPath)])} },
     stackName: 'agent-qa-browser', stackBaseDir: ${JSON.stringify(root)}, sessionName: 'graceful-close', url: 'http://localhost:3025',
-    trustCertPath: ${JSON.stringify(trustCertPath)},
+    trustCertPath: ${JSON.stringify(trustCertPath)}, workerLoopbackUrl: 'http://127.0.0.1:33807/peer-mediation/v2/rpc',
     env: { ...process.env, TMPDIR: ${JSON.stringify(root)} },
     onReady: value => { ready = value; console.log('CONTROLLER_READY='+JSON.stringify(value)); },
   }, {
@@ -600,19 +601,19 @@ test('each QA browser lifetime preserves canonical Home origins through its own 
     }
     return { ok: true, exitCode: 0, out: '', err: '' };
   };
-  const start = () => {
+  const start = (workerLoopbackUrl) => {
     const input = new PassThrough();
     const signals = new EventEmitter();
     let resolveReady, rejectReady;
     const ready = new Promise((resolve, reject) => { resolveReady = resolve; rejectReady = reject; });
-    const completion = runQaBrowserWorker({ sessionName: 'same-lane-name', input, proxy: true,
+    const completion = runQaBrowserWorker({ sessionName: 'same-lane-name', input, proxy: true, workerLoopbackUrl,
       writeReady: value => { resolveReady(value); } }, { capture, signalSource: signals });
     completion.catch(rejectReady);
     t.after(async () => { signals.emit('SIGINT'); await completion; });
     return { input, ready, completion, signals };
   };
   const first = start();
-  const second = start();
+  const second = start('http://127.0.0.1:33807/peer-mediation/v2/rpc');
   const [a, b] = await Promise.all([first.ready, second.ready]);
   assert.equal(instances.length, 2, 'both QA browser launches must configure the desktop input environment');
   closed.length = 0; // Executable-discovery browsers have already closed before readiness.
@@ -633,13 +634,26 @@ test('each QA browser lifetime preserves canonical Home origins through its own 
   await second.completion;
   await assert.rejects(access(b.profile), { code: 'ENOENT' });
   assert.deepEqual(closed, [a.session, b.session]);
+  assert.deepEqual(instances.map(instance => instance.launchArgs.find(arg => arg.startsWith('--proxy-bypass-list='))).sort(),
+    ['--proxy-bypass-list=<-loopback>', '--proxy-bypass-list=<-loopback>;http://127.0.0.1:33807'],
+    'only the explicitly selected worker listener bypasses the controller route; Home origins still use SOCKS');
   for (const instance of instances) {
-    assert.ok(instance.launchArgs.includes('--proxy-bypass-list=<-loopback>'),
-      'canonical localhost Home addresses must not bypass the controller route');
     assert.ok(instance.proxyPort, 'use native origin-preserving transport rather than rewriting the Home URL');
   }
   assert.deepEqual(instances.map(instance => instance.proxyPort).sort(), [a.proxyPort, b.proxyPort].sort());
   assert.notEqual(a.proxyPort, b.proxyPort);
+});
+
+test('worker loopback routing rejects remote endpoints and controller Home collisions before launching SSH', async () => {
+  for (const workerLoopbackUrl of ['http://example.com:33807', 'http://user@127.0.0.1:33807', 'http://127.0.0.1:3025']) {
+    await assert.rejects(runQaBrowserSession({
+      target: { name: 'absent', platform: 'posix', ssh: 'absent', repoDir: '/mirror', cliHomeDir: '/fixture' },
+      stackName: 'agent-qa-browser', sessionName: 'loopback-validation', stackBaseDir: '/fixture',
+      url: 'http://localhost:19364/?server=http%3A%2F%2F127.0.0.1%3A3025', workerLoopbackUrl,
+    }, {
+      capture: async () => { assert.fail('invalid worker routing must fail before SSH'); },
+    }), /loopback/);
+  }
 });
 
 for (const fileBacked of [false, true]) test(`opt-in fake audio ${fileBacked ? 'copies speech into the worker profile' : 'uses Chromium devices'} without granting permission`, { skip: process.platform === 'win32' }, async t => {

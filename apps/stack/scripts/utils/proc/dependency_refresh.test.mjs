@@ -220,6 +220,78 @@ test('source edits during and after installation preserve dependency readiness',
     'lockfile changes still require an explicit dependency refresh');
 });
 
+for (const scope of ['workspace', 'root']) test(`${scope} dependency freshness ignores runtime exports and commands but observes install inputs`, async (t) => {
+  const root = await mkdtemp(join(tmpdir(), 'happier-dependency-workspace-projection-'));
+  t.after(() => rm(root, { recursive: true, force: true }));
+  for (const component of ['ui', 'cli', 'server']) {
+    await mkdir(join(root, 'apps', component), { recursive: true });
+    await writeFile(join(root, 'apps', component, 'package.json'), JSON.stringify({ name: `fixture-${component}` }));
+  }
+  await mkdir(join(root, 'node_modules'), { recursive: true });
+  await mkdir(join(root, 'packages', 'fixture'), { recursive: true });
+  await writeFile(join(root, 'package.json'), JSON.stringify({ name: 'fixture', private: true, workspaces: ['apps/*', 'packages/*'] }));
+  await writeFile(join(root, 'yarn.lock'), '# fixture\n');
+  const manifestPath = scope === 'root' ? join(root, 'package.json') : join(root, 'packages', 'fixture', 'package.json');
+  const manifest = { name: 'workspace-fixture', version: '1.0.0', dependencies: { a: '1', b: '2' },
+    ...(scope === 'root' ? { private: true, workspaces: ['apps/*', 'packages/*'] } : {}),
+    scripts: { postinstall: 'patch-fixture', test: 'old-test', ...(scope === 'root' ? { prepare: 'prepare-fixture', prepublish: 'publish-fixture' } : {}) },
+    exports: { '.': './src/index.js' } };
+  await writeFile(manifestPath, JSON.stringify(manifest));
+  await withDependencyRefresh({ installDir: root }, async () => {
+    await writeFile(manifestPath, JSON.stringify({ ...manifest, exports: { '.': './dist/index.js' } }));
+  });
+  assert.equal((await inspectDependencyRefresh({ installDir: root })).required, false,
+    'exports advancing during installation do not supersede admitted install inputs');
+  const changed = { ...manifest, exports: { '.': './dist/index.js', './new': './dist/new.js' }, main: './dist/index.js',
+    types: './dist/index.d.ts', scripts: { ...manifest.scripts, test: 'new-test', build: 'build-fixture' },
+    dependencies: { b: '2', a: '1' } };
+  await writeFile(manifestPath, JSON.stringify(changed, null, 2));
+  assert.equal((await inspectDependencyRefresh({ installDir: root })).required, false,
+    'runtime entry points, non-install commands, formatting and dependency map order do not require installation');
+  await withDependencyRefresh({ installDir: root }, async () => assert.fail('exports-only edits must not install'));
+  const mutations = [
+    { name: 'renamed-fixture' }, { version: '2.0.0' }, { dependencies: { a: '2', b: '2' } },
+    { devDependencies: { c: '1' } }, { optionalDependencies: { c: '1' } }, { peerDependencies: { c: '1' } },
+    { peerDependenciesMeta: { c: { optional: true } } }, { bin: './cli.js' }, { directories: { bin: './bin' } },
+    { workspaces: ['nested/*'] }, { resolutions: { c: '1' } }, { overrides: { c: '1' } },
+    { packageManager: 'yarn@1.22.22' }, { engines: { node: '>=24' } }, { os: ['linux'] }, { cpu: ['x64'] },
+    { flat: true }, { bundledDependencies: ['a'] }, { bundleDependencies: ['b'] },
+    ...['preinstall', 'install', 'postinstall', ...(scope === 'root' ? ['prepare', 'prepublish'] : [])]
+      .map(stage => ({ scripts: { ...changed.scripts, [stage]: 'changed-install' } })),
+  ];
+  for (const mutation of mutations) {
+    await writeFile(manifestPath, JSON.stringify({ ...changed, ...mutation }));
+    assert.equal((await inspectDependencyRefresh({ installDir: root })).required, true,
+      `install-relevant change ${Object.keys(mutation)[0]} must remain stale`);
+  }
+});
+
+test('workspace projection re-evaluates admitted raw v6 inputs without invalidating an unchanged install', async (t) => {
+  const root = await mkdtemp(join(tmpdir(), 'happier-dependency-workspace-admission-'));
+  t.after(() => rm(root, { recursive: true, force: true }));
+  for (const component of ['ui', 'cli', 'server']) {
+    await mkdir(join(root, 'apps', component), { recursive: true });
+    await writeFile(join(root, 'apps', component, 'package.json'), JSON.stringify({ name: `fixture-${component}` }));
+  }
+  await mkdir(join(root, 'node_modules'), { recursive: true });
+  await writeFile(join(root, 'package.json'), JSON.stringify({ name: 'fixture', private: true, workspaces: ['apps/*'] }));
+  await writeFile(join(root, 'yarn.lock'), '# fixture\n');
+  await withDependencyRefresh({ installDir: root }, async () => {});
+  const before = await inspectDependencyRefresh({ installDir: root });
+  const marker = JSON.parse(await readFile(before.markerPath, 'utf8'));
+  const legacyInputs = marker.inputs.map(({ installDigest, ...input }) => input);
+  await writeFile(before.markerPath, JSON.stringify({ ...marker, inputs: legacyInputs }));
+  assert.equal((await inspectDependencyRefresh({ installDir: root })).required, false);
+  await withDependencyRefresh({ installDir: root, onDependenciesReady: async () => {} },
+    async () => assert.fail('an admitted unchanged v6 tree must stay valid'));
+  await writeFile(join(root, 'apps', 'cli', 'package.json'), JSON.stringify({ name: 'fixture-cli', exports: { '.': './new.js' } }));
+  assert.equal((await inspectDependencyRefresh({ installDir: root })).required, false,
+    'warm prerequisite completion re-evaluates the proven v6 admission as projected inputs without reinstalling');
+  await writeFile(join(root, 'apps', 'cli', 'package.json'), JSON.stringify({ name: 'fixture-cli', dependencies: { newDep: '1' } }));
+  assert.equal((await inspectDependencyRefresh({ installDir: root })).required, true,
+    'raw-only admission cannot silently certify changed install fields');
+});
+
 test('dependency refresh reclaims a lock whose owner exited', async (t) => {
   const fixtureRoot = await mkdtemp(join(tmpdir(), 'happier-dependency-lock-exited-owner-'));
   t.after(async () => {

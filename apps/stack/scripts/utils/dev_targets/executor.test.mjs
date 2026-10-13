@@ -115,6 +115,10 @@ function readyListResult(sessionName = 'happier-linux') {
 test('explicit sync rescans scan-only problems through the existing flush before admission', async () => {
   const initial = readyListResult();
   const sessions = JSON.parse(initial.out);
+  sessions[0].successfulCycles = 0;
+  sessions[0].status = 'waiting-for-rescan';
+  sessions[0].alpha.scanned = false;
+  sessions[0].beta.scanned = false;
   sessions[0].alpha.scanProblems = [{ path: 'apps/ui/sources/text/translations/es.ts', error: 'hashed size mismatch: 847308 != 28672' }];
   initial.out = JSON.stringify(sessions);
   let flushed = false;
@@ -126,6 +130,21 @@ test('explicit sync rescans scan-only problems through the existing flush before
   });
   assert.equal(flushed, true);
   assert.equal(result.state, 'ready');
+});
+
+test('explicit sync rejects genuine scan failures before attempting a flush', async () => {
+  const initial = readyListResult();
+  const sessions = JSON.parse(initial.out);
+  sessions[0].alpha.scanProblems = [{ path: 'source.ts', error: 'permission denied' }];
+  initial.out = JSON.stringify(sessions);
+  let flushed = false;
+  await assert.rejects(syncDevTarget({ target, stackBaseDir: '/tmp/stack', env: {} }, {
+    runCaptureResult: async ({ args }) => {
+      if (args.includes('flush')) flushed = true;
+      return initial;
+    },
+  }), /permission denied/);
+  assert.equal(flushed, false);
 });
 
 test('explicit sync recovers a staged relocation collision through the existing flush', async () => {
@@ -548,35 +567,38 @@ test('the Windows adapter inspects fresh post-flush state and blocks a transitio
   );
   assert.equal(sshLaunched, false, 'no SSH dispatch after a problem-bearing post-flush inspection');
   assert.equal(listCalls, 2, 'the Windows adapter performs the fresh post-flush inspection');
-  for (const persistent of [false, true]) {
-    let flushes = 0;
-    let launched = false;
-    const dispatch = () => runDevTargetCommand(
-      { target, stackBaseDir: '/tmp/stack', commandArgs: ['rg', '-n', 'needle'], env: {} },
-      {
-        runCaptureResult: async ({ args }) => {
-          if (args.includes('flush')) flushes += 1;
-          if (args.includes('list')) {
-            const result = readyListResult();
-            if (flushes === 1 || (persistent && flushes > 0)) {
-              const sessions = JSON.parse(result.out);
-              sessions[0].beta.transitionProblems = [{ path: 'source', error: 'unable to validate existing file: modification detected' }];
-              result.out = JSON.stringify(sessions);
+  for (const problemFamily of ['transitionProblems', 'scanProblems']) {
+    for (const persistent of [false, true]) {
+      let flushes = 0;
+      let launched = false;
+      const dispatch = () => runDevTargetCommand(
+        { target, stackBaseDir: '/tmp/stack', commandArgs: ['rg', '-n', 'needle'], env: {} },
+        {
+          runCaptureResult: async ({ args }) => {
+            if (args.includes('flush')) flushes += 1;
+            if (args.includes('list')) {
+              const result = readyListResult();
+              if (flushes === 1 || (persistent && flushes > 0)) {
+                const sessions = JSON.parse(result.out);
+                sessions[0].beta[problemFamily] = [{ path: 'source', error: problemFamily === 'scanProblems'
+                  ? 'hashed size mismatch: 1 != 2' : 'unable to validate existing file: modification detected' }];
+                result.out = JSON.stringify(sessions);
+              }
+              return result;
             }
-            return result;
-          }
-          return { ok: true, exitCode: 0, out: '', err: '' };
+            return { ok: true, exitCode: 0, out: '', err: '' };
+          },
+          spawnProcess: () => {
+            launched = true;
+            return { completion: Promise.resolve({ code: 0, signal: null }) };
+          },
         },
-        spawnProcess: () => {
-          launched = true;
-          return { completion: Promise.resolve({ code: 0, signal: null }) };
-        },
-      },
-    );
-    if (persistent) await assert.rejects(dispatch, /synchronization is unhealthy/);
-    else await dispatch();
-    assert.equal(flushes, 2, 'the native-less adapter allows only one fresh retry');
-    assert.equal(launched, !persistent, 'dispatch requires clean final evidence');
+      );
+      if (persistent) await assert.rejects(dispatch, /synchronization is unhealthy/);
+      else await dispatch();
+      assert.equal(flushes, 2, 'the native-less adapter allows only one fresh retry');
+      assert.equal(launched, !persistent, 'dispatch requires clean final evidence');
+    }
   }
 });
 

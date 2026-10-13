@@ -7,8 +7,11 @@ import { join } from 'node:path';
 import { tmpdir } from 'node:os';
 import { setTimeout as delay } from 'node:timers/promises';
 
-import { resolveLocalServerPortForStack } from './resolve_stack_server_port.mjs';
+import { observeRuntimePortOwnedByStackDevProxy, resolveLocalServerPortForStack } from './resolve_stack_server_port.mjs';
 import { createListenerOwnershipCommandScope } from './listener_ownership.mjs';
+import { observeDevServerStartupTopology, decideDevStartupTopology, reclaimDevServerStartupOrphan } from '../dev/devStartupTopology.mjs';
+import { observeTcpPortAvailability } from '../net/ports.mjs';
+import { resolveStackOwnedServerListenPid } from '../dev/server.mjs';
 
 test('pinned stack port retries typed bind availability without requiring listener discovery', async () => {
   let waitOptions = null;
@@ -213,6 +216,70 @@ async function spawnStackOwnedMaintenanceServer({ stackName, envPath }) {
   await delay(50);
   return { child, port };
 }
+
+test('startup can recover its own orphan listener before a runtime PID was published', {
+  skip: process.platform === 'win32' && 'Stack environment ownership is unsupported on Windows',
+}, async () => {
+  const tmp = await mkdtemp(join(tmpdir(), 'hstack-orphan-topology-'));
+  const stackName = 'repo-test-orphan';
+  const envPath = join(tmp, 'env');
+  const runtimeStatePath = join(tmp, 'stack.runtime.json');
+  const { child, port } = await spawnStackOwnedMaintenanceServer({ stackName, envPath });
+  try {
+    const observe = async () => {
+      const scope = createListenerOwnershipCommandScope();
+      return await observeDevServerStartupTopology({
+        serverRequested: true, stackMode: true, serverPort: port,
+        ownershipArgs: {
+          env: { HAPPIER_STACK_ENV_FILE: envPath }, port, stackName, runtimeStatePath,
+          listenerObservationScope: scope,
+        },
+      }, {
+        observeTcpPortAvailabilityImpl: observeTcpPortAvailability,
+        observeRuntimePortOwnedByStackDevProxyImpl: observeRuntimePortOwnedByStackDevProxy,
+        resolveStackOwnedServerListenPidImpl: () => resolveStackOwnedServerListenPid(
+          { serverPort: port, stackName, envPath }, { observationScope: scope },
+        ),
+      });
+    };
+    await writeFile(runtimeStatePath, JSON.stringify({
+      stackName, ports: { server: port }, ownerPid: process.pid,
+    }));
+    const active = await observe();
+    assert.throws(() => decideDevStartupTopology({ serverRequested: true, serverTopology: active.topology }),
+      (error) => error?.code === 'ESERVERTOPOLOGYINCONCLUSIVE');
+    await writeFile(runtimeStatePath, JSON.stringify({
+      stackName, ports: { server: port }, ownerPid: 1,
+    }));
+    const invalidOwner = await observe();
+    assert.throws(() => decideDevStartupTopology({ serverRequested: true, serverTopology: invalidOwner.topology }),
+      (error) => error?.code === 'ESERVERTOPOLOGYINCONCLUSIVE');
+    await writeFile(runtimeStatePath, '{');
+    const unreadable = await observe();
+    assert.throws(() => decideDevStartupTopology({ serverRequested: true, serverTopology: unreadable.topology }),
+      (error) => error?.code === 'ESERVERTOPOLOGYINCONCLUSIVE');
+    await rm(runtimeStatePath);
+    const observation = await observe();
+    assert.equal(observation.listenerPid, child.pid);
+    assert.equal(decideDevStartupTopology({
+      serverRequested: true, serverTopology: observation.topology,
+    }).startServer, true);
+    const formerOwner = await spawnStackOwnedIdleProcess({ stackName, envPath });
+    await stopChild(formerOwner);
+    await writeFile(runtimeStatePath, JSON.stringify({
+      stackName, ports: { server: port }, ownerPid: formerOwner.pid,
+    }));
+    const deadOwner = await observe();
+    assert.equal(decideDevStartupTopology({
+      serverRequested: true, serverTopology: deadOwner.topology,
+    }).startServer, true);
+    await reclaimDevServerStartupOrphan({ topologyObservation: deadOwner, serverPort: port, stackName, envPath });
+    assert.equal((await observeTcpPortAvailability(port)).status, 'free');
+  } finally {
+    await stopChild(child);
+    await rm(tmp, { recursive: true, force: true });
+  }
+});
 
 async function stopChild(child) {
   if (!child || child.exitCode !== null || child.signalCode !== null) return;

@@ -49,7 +49,9 @@ export function buildDevTargetControlLaunch({ command, args, syncFlushSession = 
 export async function runDevTargetControlProcess(input, { capture = runCaptureResult } = {}) {
   return await runDevTargetSshProcess(input, async ({ label, command, args, env, syncFlushSession = null }) => {
     const launch = buildDevTargetControlLaunch({ command, args, syncFlushSession });
-    const result = await capture(launch.command, launch.args, { env, streamLabel: label });
+    const result = await capture(launch.command, launch.args, {
+      env, streamLabel: label, stdoutDiagnosticStream: process.stderr,
+    });
     return { ...result, code: result.exitCode };
   });
 }
@@ -246,7 +248,7 @@ async function ensureDevTargetSyncProjectUnlocked(
     if (error.code === 'ENOENT') return '';
     throw error;
   })).trim();
-  const listed = await runProcess({ label: 'sync', command: 'mutagen',
+  const listed = await runProcess({ label: '', command: 'mutagen',
     args: ['sync', 'list', '--template', MUTAGEN_SYNC_LIST_JSON_TEMPLATE], env: mutagenRuntime.env });
   requireSuccessful(listed, 'Mutagen repository session inventory');
   const sessions = JSON.parse(listed.out || '[]');

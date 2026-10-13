@@ -525,6 +525,12 @@ async function prepareSharedSourceRuntimeBundle({repoDir, stackBaseDir, componen
   const fingerprint = admittedFingerprint ?? await sourceBundleFingerprint(inputs);
   const cached = await adoptReusableSourceRuntimeBundle({stackBaseDir, bundleRoot, ...inputs, env, signal});
   if (cached) return cached;
+  // The selected graph already has Stack retention. Borrow its inventory only
+  // as a candidate; the canonical UI owner revalidates and materializes bytes
+  // into this replacement, never leaving a link to the incumbent's output.
+  const incumbent = component === 'daemon' ? await withSourceBundlePublication({ stackBaseDir, signal }, () =>
+    readSelectedSourceRuntimeBundle({ stackBaseDir, component, required: false })) : null;
+  const retainedPluginUiInventoryPath = incumbent && join(incumbent.runtimeDir, 'plugin-ui-inventory.js');
   if (preparationRequestId) await updatePendingSourcePreparationPhase({ stackBaseDir, requestId: preparationRequestId,
     phase: 'building', component, signal });
   await mkdir(bundleRoot, {recursive:true});
@@ -536,7 +542,7 @@ async function prepareSharedSourceRuntimeBundle({repoDir, stackBaseDir, componen
   try {
     // This worker inherits dependency custody and owns fingerprint custody and compiler admission.
     // There is no second launch/admission for the same finite graph.
-    const {sourceInputDigests, inputIdentity, ...built} = await buildSourceRuntimeBundleInProcess({...inputs, outputDir, env, signal});
+    const {sourceInputDigests, inputIdentity, ...built} = await buildSourceRuntimeBundleInProcess({...inputs, outputDir, retainedPluginUiInventoryPath, env, signal});
     signal?.throwIfAborted();
     if (component === 'daemon') await probeCliDistRuntimeImport(built.entrypoint, { cwd: built.cliDir, env, signal });
     return await publishSourceRuntimeBundle({stackBaseDir, bundleRoot, component, built, signal, reuseSelected, pendingRequestId,
@@ -587,12 +593,12 @@ export async function admitSourceRuntimeReload({ stackBaseDir, components, ui = 
     staleAfterMs: Infinity, signal: pending.signal, errorLabel: 'source-bundle publication lock' })) };
 }
 
-async function buildSourceRuntimeBundleInProcess({ repoDir, outputDir, component, serverComponent, dbProvider, env = process.env, signal }) {
+async function buildSourceRuntimeBundleInProcess({ repoDir, outputDir, component, serverComponent, dbProvider, retainedPluginUiInventoryPath, env = process.env, signal }) {
   return await withBuildInputDependencies({ sourceDir: repoDir, env, signal }, env =>
-    consumeSourceRuntimeBuildInputs({ repoDir, outputDir, component, serverComponent, dbProvider, env, signal }));
+    consumeSourceRuntimeBuildInputs({ repoDir, outputDir, component, serverComponent, dbProvider, retainedPluginUiInventoryPath, env, signal }));
 }
 
-async function consumeSourceRuntimeBuildInputs({ repoDir, outputDir, component, serverComponent, dbProvider, env, signal }) {
+async function consumeSourceRuntimeBuildInputs({ repoDir, outputDir, component, serverComponent, dbProvider, retainedPluginUiInventoryPath, env, signal }) {
   if (component !== 'daemon' && component !== 'server') throw new Error(`Unsupported source runtime component: ${component}`);
   repoDir = resolve(repoDir);
   outputDir = resolve(outputDir);
@@ -614,7 +620,7 @@ async function consumeSourceRuntimeBuildInputs({ repoDir, outputDir, component, 
   process.once('SIGTERM', interrupt);
   try {
     const built = await emitSourceRuntimeBundle({ repoDir, sourceRepoDir, capturedFiles: captured.files,
-      outputDir, component, serverComponent, dbProvider, projectDir, runtimeDir, manifest, requireFromProject, esbuild, env, signal });
+      outputDir, component, serverComponent, dbProvider, retainedPluginUiInventoryPath, projectDir, runtimeDir, manifest, requireFromProject, esbuild, env, signal });
     const inputIdentity = await sourceBundleFingerprint({ repoDir, identityRepoDir: sourceRepoDir,
       component, serverComponent, dbProvider, consumedPaths: Object.keys(built.sourceInputDigests) });
     return { ...built, inputIdentity };
@@ -656,7 +662,7 @@ if (process.argv[1] && resolve(process.argv[1]) === fileURLToPath(import.meta.ur
   }
 }
 
-async function emitSourceRuntimeBundle({ repoDir, sourceRepoDir, capturedFiles, outputDir, component, serverComponent, dbProvider,
+async function emitSourceRuntimeBundle({ repoDir, sourceRepoDir, capturedFiles, outputDir, component, serverComponent, dbProvider, retainedPluginUiInventoryPath,
   projectDir, runtimeDir, manifest, requireFromProject, esbuild, env, signal }) {
   const { transform } = esbuild;
   const sourceInputDigests = {};
@@ -773,6 +779,7 @@ async function emitSourceRuntimeBundle({ repoDir, sourceRepoDir, capturedFiles, 
   const retainedCodeFiles = Object.keys(result.metafile.outputs).map((file) => resolve(repoDir, file));
   if (pluginMetadata.some(item => item.manifest.contributes !== undefined)) {
     const preparationDir = await mkdtemp(join(runtimeDir, '.source-plugin-ui-'));
+    const inventoryPath = join(runtimeDir, 'plugin-ui-inventory.js');
     try {
       // The same source compiler used by native CLI construction owns these
       // graphs. Checkout dist can be republished while this daemon is serving.
@@ -781,7 +788,8 @@ async function emitSourceRuntimeBundle({ repoDir, sourceRepoDir, capturedFiles, 
         join(repoDir, 'apps/ui/scripts/prepareSourcePluginUiArtifacts.mjs')], {
         cwd: repoDir, env, signal, stdio: ['ignore', 'ignore', 'inherit'], captureFailureDiagnostic: true,
         input: JSON.stringify({
-          repoRoot: repoDir, outputDir: preparationDir,
+          repoRoot: repoDir, outputDir: preparationDir, outputPath: inventoryPath,
+          retainedInventoryPath: retainedPluginUiInventoryPath ?? inventoryPath,
           plugins: pluginMetadata.map(item => ({
             directory: item.package.name.slice('@happier-dev/plugins-'.length), manifest: item.manifest,
           })),
@@ -790,6 +798,7 @@ async function emitSourceRuntimeBundle({ repoDir, sourceRepoDir, capturedFiles, 
           ])),
         }),
       });
+      retainedCodeFiles.push(inventoryPath);
       const collect = async directory => {
         for (const entry of await readdir(directory, { withFileTypes: true })) {
           const path = join(directory, entry.name);

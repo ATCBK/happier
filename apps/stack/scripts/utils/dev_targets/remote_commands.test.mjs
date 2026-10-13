@@ -68,16 +68,42 @@ test('finite compiler projections retain their package envelope in both dispatch
 });
 
 
-test('source reload preparation uses the canonical source-bundle admission in both command dispatchers', () => {
+test('source reload preparation delegates admission to finite producers in both command dispatchers', () => {
   const root = fileURLToPath(new URL('../../../../../', import.meta.url)).replace(/\/$/u, '');
   const args = ['node', './apps/stack/scripts/runtime/launch/prepareSourceRuntimeReload.mjs', '--worker', '{}'];
   const policy = resolveRemoteCommandPolicy(args, { cwd: root });
   assert.equal(policy.kind, 'source-test');
   assert.equal(policy.heavyClass, 'source-bundle');
+  assert.equal(policy.selfPublisher, '1', 'reload coordination must not charge capacity while its finite producer waits for a lease');
   const artifact = fileURLToPath(new URL('./native_command_policy.sh', import.meta.url));
-  const native = spawnSync('/bin/sh', ['-c', '. "$1"; repo_root=$2; invoked_cwd=$2; shift 2; resolve_native_command_policy "$@"; printf "%s,%s" "$policy_kind" "$policy_heavyClass"', 'policy', artifact, root, ...args], { encoding: 'utf8' });
+  const native = spawnSync('/bin/sh', ['-c', '. "$1"; repo_root=$2; invoked_cwd=$2; shift 2; resolve_native_command_policy "$@"; printf "%s,%s,%s" "$policy_kind" "$policy_heavyClass" "$policy_selfPublisher"', 'policy', artifact, root, ...args], { encoding: 'utf8' });
   assert.equal(native.status, 0, native.stderr);
-  assert.equal(native.stdout, 'source-test,source-bundle');
+  assert.equal(native.stdout, 'source-test,source-bundle,1');
+  const target = { name: 'worker', platform: 'linux', repoDir: root, cliHomeDir: '/tmp/reload-worker-home' };
+  const dispatched = buildRemoteExecCommand(target, { commandArgs: args, admissionClass: 'source-bundle', executionId });
+  assert.doesNotMatch(dispatched, /--heavyweight-admission/, 'the real remote transport must leave admission to the finite producer');
+  const lookalike = ['node', './fixture/apps/stack/scripts/runtime/launch/prepareSourceRuntimeReload.mjs', '--worker', '{}'];
+  assert.equal(resolveRemoteCommandPolicy(lookalike, { cwd: root }).selfPublisher, '0');
+});
+
+test('Docs content coordination delegates admission to its finite reference producers', async () => {
+  const root = fileURLToPath(new URL('../../../../../', import.meta.url)).replace(/\/$/u, '');
+  const args = ['node', './apps/docs/scripts/checkContent.mjs'];
+  const policy = resolveRemoteCommandPolicy(args, { cwd: root });
+  assert.equal(policy.selfPublisher, '1', 'reference preparation must wait for foreign leases before reserving compiler capacity');
+  const publicPolicy = await commandPolicy.resolveCommandPublisherPolicy(
+    ['corepack', 'yarn', '--cwd', 'apps/docs', '-s', 'check:content'], { repoRoot: root, cwd: root },
+  );
+  assert.equal(publicPolicy.selfPublisher, '1', 'the real public manifest must reach the same producer-owned admission');
+  assert.equal(publicPolicy.heavyClass, 'runtime-build', 'placement must fit the existing Protocol reference producer envelope');
+  const target = { name: 'worker', platform: 'linux', repoDir: root, cliHomeDir: '/tmp/docs-content-worker-home' };
+  const dispatched = buildRemoteExecCommand(target, { commandArgs: args, admissionClass: 'runtime-build', executionId });
+  assert.doesNotMatch(dispatched, /--heavyweight-admission/);
+  const artifact = fileURLToPath(new URL('./native_command_policy.sh', import.meta.url));
+  const native = spawnSync('/bin/sh', ['-c', '. "$1"; repo_root=$2; invoked_cwd=$2; shift 2; resolve_native_command_policy "$@"; printf "%s" "$policy_selfPublisher"', 'policy', artifact, root, ...args], { encoding: 'utf8' });
+  assert.equal(native.status, 0, native.stderr);
+  assert.equal(native.stdout, '1');
+  assert.equal(resolveRemoteCommandPolicy(['node', './fixture/apps/docs/scripts/checkContent.mjs'], { cwd: root }).selfPublisher, '0');
 });
 
 test('native test preparation follows reachable source imports rather than the package runtime closure', async t => {
@@ -126,7 +152,7 @@ test('Channels source Vitest skips emitted publication while alternate configs r
   const fixture = await createTempFixture(t, { prefix: 'channels-source-policy-' });
   const artifact = fixture.path('policy.sh');
   await writeFile(artifact, renderNativeCommandPolicy());
-  for (const component of ['packages/channels-protocol', 'packages/email-transports-protocol', 'packages/plugins/channels', 'packages/plugins/channel-email', 'packages/plugins/channel-telegram', 'packages/plugins/channel-discord', 'packages/plugins/scm-github']) {
+  for (const component of ['packages/sdk', 'packages/channels-protocol', 'packages/email-transports-protocol', 'packages/plugins/channels', 'packages/plugins/channel-email', 'packages/plugins/channel-telegram', 'packages/plugins/channel-discord', 'packages/plugins/scm-github']) {
     const args = ['node', 'node_modules/vitest/vitest.mjs', 'run', '--config', 'vitest.config.ts', 'src/ingress.test.ts'];
     assert.equal(resolveRemoteCommandPolicy(args, { repoRoot: root, cwd: join(root, component) }).kind, 'source-test');
     if (process.platform !== 'win32') {
@@ -909,6 +935,8 @@ test('native source tests and generator checks use their real preparation contra
   // isolated fixtures; they do not consume Stack's emitted package closure.
   for (const path of [
     'apps/stack/scripts/utils/dev_targets/remote_dependency_bootstrap.test.mjs',
+    'apps/stack/scripts/utils/dev_targets/remote_validation_preparation.test.mjs',
+    'apps/stack/scripts/utils/proc/workspace_build_admission.test.mjs',
     'apps/stack/scripts/utils/dev_targets/remote_commands.test.mjs',
     'apps/stack/scripts/build/build_source_runtime.test.mjs',
   ]) {

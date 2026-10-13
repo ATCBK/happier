@@ -19,7 +19,7 @@ export { resolveHeavyweightPressureRetryMilliseconds } from './heavyweight_press
 // while argv and path normalization remain thin transport adapters.
 export const REMOTE_COMMAND_CLASSIFICATION = Object.freeze({
   packageManagerCommands: Object.freeze(['npm', 'npx', 'pnpm', 'yarn']),
-  sourceTestComponents: Object.freeze(['apps/cli', 'apps/ui', 'packages/plugin-ui', 'packages/plugins/triage', 'packages/channels-protocol', 'packages/email-transports-protocol', 'packages/plugins/channels', 'packages/plugins/channel-email', 'packages/plugins/channel-telegram', 'packages/plugins/channel-discord', 'packages/plugins/scm-github']),
+  sourceTestComponents: Object.freeze(['apps/cli', 'apps/ui', 'packages/sdk', 'packages/plugin-ui', 'packages/plugins/triage', 'packages/channels-protocol', 'packages/email-transports-protocol', 'packages/plugins/channels', 'packages/plugins/channel-email', 'packages/plugins/channel-telegram', 'packages/plugins/channel-discord', 'packages/plugins/scm-github']),
   sourceTestConfigs: Object.freeze(['vitest.config.ts']),
   sourceTestScripts: Object.freeze(['vitest', 'vitest:local']),
 });
@@ -126,6 +126,8 @@ const COMMAND_RULES = [
   // construct isolated dependency fixtures, not Stack's emitted runtime closure.
   { when: { command: ['node', 'nodejs'], nativeTest: ['1'], nativeTestPath: [
     'apps/stack/scripts/utils/dev_targets/remote_dependency_bootstrap.test.mjs',
+    'apps/stack/scripts/utils/dev_targets/remote_validation_preparation.test.mjs',
+    'apps/stack/scripts/utils/proc/workspace_build_admission.test.mjs',
     'apps/stack/scripts/utils/dev_targets/remote_commands.test.mjs',
     'apps/stack/scripts/build/build_source_runtime.test.mjs',
   ] }, set: { kind: 'source-test' } },
@@ -144,8 +146,11 @@ const COMMAND_RULES = [
   ] }, set: { kind: 'source-test' } },
   { when: { command: ['node', 'nodejs'], nativeTest: ['0'], workerRequest: ['1'], entryPath: ['apps/stack/scripts/build/remote_runtime_build.mjs'] }, set: { ...validation, kind: 'source-test', componentOverride: 'apps/stack' } },
   { when: { command: ['node', 'nodejs'], nativeTest: ['0'], workerRequest: ['1'], entryPath: ['scripts/build/remote_runtime_build.mjs'], component: ['apps/stack'] }, set: { ...validation, kind: 'source-test' } },
-  { when: { command: ['node', 'nodejs'], nativeTest: ['0'], entryPath: ['apps/stack/scripts/runtime/launch/prepareSourceRuntimeReload.mjs'] },
-    set: { ...validation, kind: 'source-test', componentOverride: 'apps/stack', heavyClass: 'source-bundle' } },
+  // Reload coordinates completed lookup, finite production and activation.
+  // Its producers jointly admit their own leases; charging the coordinator
+  // first makes ordinary foreign-lease contention an admission-order refusal.
+  { when: { command: ['node', 'nodejs'], nativeTest: ['0'], entryRepositoryPath: ['apps/stack/scripts/runtime/launch/prepareSourceRuntimeReload.mjs'] },
+    set: { ...validation, kind: 'source-test', componentOverride: 'apps/stack', heavyClass: 'source-bundle', selfPublisher: '1' } },
   { when: { command: ['node'], stripTypes: ['1'], entryPath: ['apps/cli/scripts/build-owned/generateBundledPluginEntries.ts', 'scripts/build-owned/generateBundledPluginEntries.ts'] }, set: { generator: '1', workerTool: 'bundled-plugin-generator', heavyClass: 'validation', placement: 'primary-only' } },
   { when: { command: ['node'], stripTypes: ['1'], entryPath: ['apps/cli/scripts/build-owned/generateBundledPluginEntries.ts', 'scripts/build-owned/generateBundledPluginEntries.ts'], mode: ['check'] }, set: { ...validation, placement: 'worker-eligible', generatorCheck: '1', componentOverride: 'apps/cli' } },
   { when: { command: ['node'], stripTypes: ['1'], sourceCondition: ['1'], entryPath: ['apps/cli/scripts/build-owned/generateBundledPluginEntries.ts', 'scripts/build-owned/generateBundledPluginEntries.ts'], mode: ['check'] }, set: { kind: 'source-test' } },
