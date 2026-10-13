@@ -1,6 +1,5 @@
 import {
   PromptBundleBodyV1Schema,
-  PromptBundleSchemaIdV1Schema,
   projectPromptBundleActionEntriesV1,
   type PromptBundleBodyV1,
   type PromptBundleCreateActionInputV1,
@@ -11,7 +10,10 @@ import {
   type PromptLibraryStoredArtifact,
 } from '@happier-dev/protocol/prompts/library/promptLibraryActionOperations';
 import { ArtifactOrganizationMutationFailureV1, ArtifactOrganizationMutationFailureDetailsV1Schema, readArtifactOrganizationV1 } from '@happier-dev/protocol/prompts/library/promptFolderActionsV1';
-import { PromptDocRevisionV1Schema } from '@happier-dev/protocol/prompts/library/promptDocV2';
+import { decodeSkillRevisionV1, encodeSkillRevisionV1, readSkillFrontmatterV1 } from '@happier-dev/protocol/prompts/library/skills/skillLibraryItemV1';
+import { SKILL_ACTION_OUTPUT_SCHEMAS_V1, SkillInstallAcknowledgedEffectsV1Schema,
+  type SkillInstallAcknowledgedEffectsV1, type SkillLibraryActionIdV1 } from '@happier-dev/protocol/prompts/library/skills/skillActionSchemasV1';
+import { ArtifactFolderMutationResultV1Schema } from '@happier-dev/protocol/prompts/library/promptFolderActionSchemasV1';
 import type { ActionExecuteResult } from '@happier-dev/protocol/actions/actionExecutionResult';
 
 import { encodeBase64, decodeBase64 } from '@/encryption/base64';
@@ -25,8 +27,18 @@ type PromptBundleActionOptions = Readonly<{
   executeAction?: MountedAuthoringActionExecute;
 }>;
 
+/** An acknowledged content effect is not a retryable draft, even without readable revision data. */
+export class SkillAcknowledgedEffectsFailureV1 extends Error {
+  constructor(readonly code: string, readonly details: SkillInstallAcknowledgedEffectsV1) {
+    super(code); this.name = 'SkillAcknowledgedEffectsFailureV1';
+  }
+}
+
 function readPromptBundleActionOutput(result: ActionExecuteResult): unknown {
   if (!result.ok) {
+    const effects = SkillInstallAcknowledgedEffectsV1Schema.safeParse(result.details);
+    if (effects.success && effects.data.skillIds.length > 0)
+      throw new SkillAcknowledgedEffectsFailureV1(result.errorCode ?? 'skill_content_acknowledged', effects.data);
     if (result.errorCode === 'artifact_organization_failed') {
       const details = ArtifactOrganizationMutationFailureDetailsV1Schema.safeParse(result.details);
       if (details.success) throw new ArtifactOrganizationMutationFailureV1(details.data);
@@ -127,15 +139,6 @@ export function removePromptBundleEntry(
   return entries.filter((entry) => entry.path !== path);
 }
 
-function readPromptBundleArtifactTitle(
-  artifact: { header?: Readonly<Record<string, unknown>> | null } | null,
-): string {
-  const headerTitle =
-    typeof artifact?.header?.title === 'string' ? artifact.header.title : null;
-  if (headerTitle && headerTitle.trim().length > 0) return headerTitle;
-  return '';
-}
-
 export function readSkillMarkdownFromPromptBundleBody(
   body: PromptBundleBodyV1,
 ): string | null {
@@ -159,59 +162,80 @@ function normalizeNewSkillPromptMarkdown(value: string): string {
     : DEFAULT_SKILL_PROMPT_MARKDOWN;
 }
 
-export async function createPromptBundleArtifact(
-  params: PromptBundleCreateActionInputV1 & PromptBundleActionOptions,
-): Promise<string> {
-  const { serverId, expectedAccountId, signal, executeAction, ...request } = params;
-  const result = executeAction ? await executeAction('prompt_bundle.create', request, { signal })
-    : await (await import('@/sync/ops/actions/defaultActionExecutor')).createDefaultActionExecutor().execute('prompt_bundle.create', request,
-      { surface: 'ui', serverId: serverId ?? undefined, expectedAccountId, signal });
-  const output = readPromptBundleActionOutput(result);
-  if (!output || typeof output !== 'object' || !('ok' in output) || output.ok !== true
-    || !('artifactId' in output) || typeof output.artifactId !== 'string') {
-    throw Object.assign(new Error('action_not_completed'), { code: 'action_not_completed', result });
-  }
-  return output.artifactId;
-}
-
 export async function createSkillPromptBundle(
   params: Omit<PromptBundleCreateActionInputV1, 'bundleSchemaId' | 'entries'> & Readonly<{
     skillMarkdown: string;
   }> & PromptBundleActionOptions,
 ): Promise<string> {
-  const { skillMarkdown, ...request } = params;
-  return await createPromptBundleArtifact({
-    ...request,
-    bundleSchemaId: 'skills.skill_md_v1',
-    entries: upsertSkillMdEntry(
-      [],
-      normalizeNewSkillPromptMarkdown(skillMarkdown),
-    ),
-    folderId: params.folderId ?? null,
-    tags: params.tags ?? [],
-  });
+  const markdown = normalizeNewSkillPromptMarkdown(params.skillMarkdown);
+  const output = SKILL_ACTION_OUTPUT_SCHEMAS_V1['skills.create'].parse(await executeSkillAction('skills.create', {
+    name: readSkillFrontmatterV1(markdown).name ?? params.title,
+    files: projectPromptBundleActionEntriesV1(upsertSkillMdEntry([], markdown)),
+  }, params));
+  await saveSkillOrganization(output.skillId, params, decodeSkillRevisionV1(output.revision));
+  return output.skillId;
 }
 
-async function updatePromptBundleArtifact(
-  params: PromptBundleUpdateActionInputV1 & PromptBundleActionOptions,
-): Promise<PromptLibraryStoredArtifact['revision']> {
-  const artifactId = String(params.artifactId ?? '').trim();
-  if (!artifactId) throw new Error('invalid_artifact_id');
-  const { serverId, expectedAccountId, signal, executeAction, ...request } = params;
-  const result = executeAction ? await executeAction('prompt_bundle.update', { ...request, artifactId }, { signal })
-    : await (await import('@/sync/ops/actions/defaultActionExecutor')).createDefaultActionExecutor().execute('prompt_bundle.update', { ...request, artifactId },
-      { surface: 'ui', serverId: serverId ?? undefined, expectedAccountId, signal });
+async function executeSkillAction(actionId: SkillLibraryActionIdV1, input: unknown, options: PromptBundleActionOptions) {
+  const result = options.executeAction ? await options.executeAction(actionId, input, { signal: options.signal })
+    : await (await import('@/sync/ops/actions/defaultActionExecutor')).createDefaultActionExecutor().execute(actionId, input,
+      { surface: 'ui', authority: 'present_user', serverId: options.serverId ?? undefined,
+        expectedAccountId: options.expectedAccountId, signal: options.signal });
   const output = readPromptBundleActionOutput(result);
-  const revision = output && typeof output === 'object' && 'revision' in output
-    ? PromptDocRevisionV1Schema.safeParse(output.revision) : null;
-  if (!revision?.success) throw new Error('prompt_bundle_update_receipt_unavailable');
-  return revision.data;
+  if (output && typeof output === 'object' && 'ok' in output && output.ok === false) {
+    const code = 'code' in output && typeof output.code === 'string' ? output.code : 'skill_operation_failed';
+    throw Object.assign(new Error(code), { code, result });
+  }
+  return output;
+}
+
+async function saveSkillOrganization(artifactId: string, params: Pick<PromptBundleCreateActionInputV1, 'folderId' | 'tags' | 'createFolder'> & PromptBundleActionOptions,
+  contentRevision: PromptLibraryStoredArtifact['revision']) {
+  if (params.folderId === undefined && params.tags === undefined && params.createFolder === undefined) return;
+  await withUiPromptLibraryArtifactStore(async (store, account) => {
+    if (!store.organization) throw new Error('artifact_organization_unavailable');
+    const execute = params.executeAction ?? (async (actionId, input, options) => {
+      const { executeDefaultActionInCapturedAccount } = await import('@/sync/ops/actions/defaultActionExecutor');
+      return executeDefaultActionInCapturedAccount(account, actionId, input, { surface: 'ui', authority: 'present_user',
+        serverId: account.serverId, expectedAccountId: account.accountId, signal: options?.signal });
+    }) satisfies MountedAuthoringActionExecute;
+    const requireOrganization = (value: unknown) => {
+      const receipt = ArtifactFolderMutationResultV1Schema.parse(value);
+      if (receipt.status !== 'updated') throw new ArtifactOrganizationMutationFailureV1({ artifactId, contentRevision, organization: receipt });
+    };
+    if (params.createFolder) requireOrganization(readPromptBundleActionOutput(await execute('artifact.folders.create', params.createFolder, { signal: params.signal })));
+    const read = await readArtifactOrganizationV1({ port: store.organization, artifactId, signal: params.signal });
+    if (read.status !== 'ready') throw new ArtifactOrganizationMutationFailureV1({ artifactId, contentRevision,
+      organization: { status: 'unavailable', reason: read.reason } });
+    requireOrganization(readPromptBundleActionOutput(await execute('artifact.folder.set', { artifactId, expectedRevision: read.revision,
+      ...(params.folderId === undefined ? {} : { folderId: params.folderId }), ...(params.tags === undefined ? {} : { tags: params.tags }) }, { signal: params.signal })));
+  }, params);
 }
 
 export async function updateSkillPromptBundle(
   params: Extract<PromptBundleUpdateActionInputV1, { skillMarkdown: string }> & PromptBundleActionOptions,
 ): Promise<PromptLibraryStoredArtifact['revision']> {
-  return updatePromptBundleArtifact(params);
+  if (!params.expectedRevision) {
+    return withUiPromptLibraryArtifactStore(async (store, account) => {
+      const artifact = await store.read(params.artifactId, { signal: params.signal });
+      if (!artifact || artifact.header?.kind !== 'prompt_bundle.v2') throw new Error('prompt_bundle_invalid_kind');
+      return updateSkillPromptBundle({ ...params, expectedRevision: artifact.revision,
+        serverId: account.serverId, expectedAccountId: account.accountId,
+        executeAction: params.executeAction ?? (async (actionId, input, options) => {
+          const { executeDefaultActionInCapturedAccount } = await import('@/sync/ops/actions/defaultActionExecutor');
+          return executeDefaultActionInCapturedAccount(account, actionId, input, { surface: 'ui', authority: 'present_user',
+            serverId: account.serverId, expectedAccountId: account.accountId, signal: options?.signal });
+        }),
+      });
+    }, params);
+  }
+  const output = SKILL_ACTION_OUTPUT_SCHEMAS_V1['skills.update'].parse(await executeSkillAction('skills.update', {
+    skillId: params.artifactId, expectedRevision: encodeSkillRevisionV1(params.expectedRevision),
+    files: [{ kind: 'upsert', file: { path: 'SKILL.md', contentKind: 'utf8', contentBase64: encodeUtf8Base64(params.skillMarkdown) } }],
+  }, params));
+  const revision = decodeSkillRevisionV1(output.revision);
+  await saveSkillOrganization(params.artifactId, params, revision);
+  return revision;
 }
 
 export async function duplicatePromptBundle(
@@ -228,30 +252,22 @@ export async function duplicatePromptBundle(
     const parsed = PromptBundleBodyV1Schema.safeParse(JSON.parse(bodyRaw));
     if (!parsed.success) throw new Error('prompt_bundle_invalid_body');
 
-    const baseTitle =
-      typeof existing?.header?.title === 'string' ? existing.header.title : '';
     if (!store.organization) throw Object.assign(new Error('artifact_organization_unavailable'), { code: 'artifact_organization_unavailable' });
     const organization = await readArtifactOrganizationV1({ port: store.organization, artifactId, signal: options?.signal });
     if (organization.status !== 'ready') throw Object.assign(new Error(organization.reason), { code: organization.reason });
 
-    return await createPromptBundleArtifact(
-      {
-        title: `${baseTitle || 'Skill'} Copy`,
-        bundleSchemaId: PromptBundleSchemaIdV1Schema.parse(existing.header.bundleSchemaId),
-        entries: projectPromptBundleActionEntriesV1(parsed.data.entries),
-        folderId: organization.header.folderId ?? null,
-        tags: organization.header.tags ?? [],
-        serverId: account.serverId,
-        expectedAccountId: account.accountId,
-        signal: options?.signal,
+    const admission = {
+        serverId: account.serverId, expectedAccountId: account.accountId, signal: options?.signal,
         executeAction: options?.executeAction ?? (async (actionId, request, execution) => {
           const { executeDefaultActionInCapturedAccount } = await import('@/sync/ops/actions/defaultActionExecutor');
           return executeDefaultActionInCapturedAccount(account, actionId, request, {
-            surface: 'ui', serverId: account.serverId, expectedAccountId: account.accountId, signal: execution?.signal,
+            surface: 'ui', authority: 'present_user', serverId: account.serverId, expectedAccountId: account.accountId, signal: execution?.signal,
           });
         }),
-      },
-    );
+    } satisfies PromptBundleActionOptions;
+    const output = SKILL_ACTION_OUTPUT_SCHEMAS_V1['skills.duplicate'].parse(await executeSkillAction('skills.duplicate', { skillId: artifactId }, admission));
+    await saveSkillOrganization(output.skillId, { ...admission, folderId: organization.header.folderId ?? null, tags: organization.header.tags ?? [] }, decodeSkillRevisionV1(output.revision));
+    return output.skillId;
   }, options);
 }
 
@@ -294,11 +310,8 @@ async function mutatePromptBundleEntries(
     const parsed = PromptBundleBodyV1Schema.safeParse(JSON.parse(bodyRaw));
     if (!parsed.success) throw new Error('prompt_bundle_invalid_body');
 
-    return updatePromptBundleArtifact({
+    const admission = {
       artifactId,
-      title: readPromptBundleArtifactTitle(artifact),
-      entries: projectPromptBundleActionEntriesV1(change(parsed.data.entries)),
-      expectedRevision: params.expectedRevision ?? artifact.revision,
       serverId: account.serverId,
       expectedAccountId: account.accountId,
       signal: params.signal,
@@ -308,6 +321,15 @@ async function mutatePromptBundleEntries(
           surface: 'ui', serverId: account.serverId, expectedAccountId: account.accountId, signal: execution?.signal,
         });
       }),
-    });
+    } satisfies PromptBundleActionOptions & { artifactId: string };
+    const nextEntries = change(parsed.data.entries);
+    const output = SKILL_ACTION_OUTPUT_SCHEMAS_V1['skills.update'].parse(await executeSkillAction('skills.update', {
+      skillId: artifactId, expectedRevision: encodeSkillRevisionV1(params.expectedRevision ?? artifact.revision),
+      files: [
+        ...projectPromptBundleActionEntriesV1(nextEntries).map(file => ({ kind: 'upsert' as const, file })),
+        ...parsed.data.entries.filter(file => !nextEntries.some(next => next.path === file.path)).map(file => ({ kind: 'remove' as const, path: file.path })),
+      ],
+    }, admission));
+    return decodeSkillRevisionV1(output.revision);
   }, params);
 }

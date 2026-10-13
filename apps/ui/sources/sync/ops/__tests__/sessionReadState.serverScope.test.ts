@@ -3,6 +3,7 @@ import type { SessionViewerProjectionV1 } from '@happier-dev/protocol';
 import type { Session } from '@/sync/domains/state/storageTypes';
 import type { SessionListRenderableSession } from '@/sync/domains/session/listing/sessionListRenderable';
 import { loadSyncSingletonForTests } from '@/dev/testkit/harness/syncSingletonLoader';
+import { SessionReadStateRouteForbiddenResponseV1Schema } from '@happier-dev/protocol';
 
 describe('sessionSetManualReadStateWithServerScope (real Action and scoped transport)', () => {
     let boundary: Awaited<ReturnType<typeof import('@/dev/testkit/harness/sessionOpsNetworkBoundary').installSessionOpsNetworkBoundary>>;
@@ -67,8 +68,10 @@ describe('sessionSetManualReadStateWithServerScope (real Action and scoped trans
         // Apply the real connection lifecycle signed out, then seed its mounted Account projection.
         // No bootstrap or focused-account encryption keys are needed for this Plain HTTP corridor.
         const { TokenStorage } = await import('@/auth/storage/tokenStorage');
-        vi.mocked(TokenStorage.getCredentialsForServerUrl).mockResolvedValueOnce(null);
+        expect(await TokenStorage.removeCredentialsForServerUrl(home.serverUrl, { serverId: home.id })).toBe(true);
+        expect(await TokenStorage.getCredentialsForServerUrl(home.serverUrl, { serverId: home.id })).toBeNull();
         await (await import('@/sync/runtime/orchestration/connectionManager')).switchConnectionToActiveServer();
+        await boundary.setAccount(home.serverUrl, home.accountId);
         storage.setState({ profileScope: { serverId: home.id, accountId: home.accountId },
             settingsScope: { serverId: home.id, accountId: home.accountId } });
         const { captureActiveServerAccountScopeLifetime } = await import('@/sync/domains/scope/activeServerAccountScope');
@@ -88,7 +91,7 @@ describe('sessionSetManualReadStateWithServerScope (real Action and scoped trans
     });
     afterAll(async () => {
         await (await import('@/sync/runtime/connectivity/serverReachabilitySupervisorPool')).resetServerReachabilitySupervisors();
-        boundary?.dispose();
+        await boundary?.dispose();
     });
 
     it('enters the shared Action policy before the domain transport', async () => {
@@ -166,7 +169,7 @@ describe('sessionSetManualReadStateWithServerScope (real Action and scoped trans
     it('does not apply a private response after switching Accounts on the same Home', async () => {
         const original = seedSession();
         reply = async () => {
-            boundary.setAccount(home.serverUrl, 'bob');
+            await boundary.setAccount(home.serverUrl, 'bob');
             storage.setState({ profileScope: { serverId: home.id, accountId: 'bob' } });
             return Response.json({ success: true, state: 'unread', lastViewedSessionSeq: 6, didChange: true });
         };
@@ -177,7 +180,7 @@ describe('sessionSetManualReadStateWithServerScope (real Action and scoped trans
 
     it('denies a same-Home credential for a different mounted Account before the mutation', async () => {
         const original = seedSession();
-        boundary.setAccount(home.serverUrl, 'bob');
+        await boundary.setAccount(home.serverUrl, 'bob');
         await expect(setReadState('sid-1', 'read', { serverId: home.id }))
             .resolves.toEqual({ success: false, message: 'unavailable' });
         expect(mutations).toEqual([]);
@@ -262,7 +265,7 @@ describe('sessionSetManualReadStateWithServerScope (real Action and scoped trans
 
     it('returns a structured failure without applying local state', async () => {
         const original = seedSession();
-        reply = async () => Response.json({ error: 'forbidden' }, { status: 403 });
+        reply = async () => Response.json(SessionReadStateRouteForbiddenResponseV1Schema.parse({ error: 'Forbidden' }), { status: 403 });
         await expect(setReadState('sid-1', 'unread', { serverId: home.id }))
             .resolves.toEqual({ success: false, message: 'forbidden' });
         expect(storage.getState().sessions['sid-1']).toBe(original);

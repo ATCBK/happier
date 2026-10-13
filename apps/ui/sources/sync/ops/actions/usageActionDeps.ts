@@ -1,5 +1,6 @@
 import type { UsageActionPorts } from '@happier-dev/protocol/actions/executor/usageActions';
 import type { UsageQueryBatchResult } from '@happier-dev/protocol/usage/resolveUsagePageAggregation';
+import { projectNativeJsonValueForTransport } from '@happier-dev/protocol/json/strictJsonValue';
 import { decodeUsageQueryResource, getUsageQueryResourceStore, readUiUsageModelPrices, type UsageQueryAccountContext } from '@/sync/api/account/usageQueryResource';
 import type { LazyActionAccountContext } from './actionAccountContext';
 import { HappyError } from '@/utils/errors/errors';
@@ -33,7 +34,7 @@ export function createUiUsageActionPorts(account: UsageQueryAccountContext & Pic
         // A one-shot Action returns its current truthful snapshot; it does not
         // harvest every optional source. This exact Resource also belongs to
         // mounted consumers, whose subscriptions own subsequent progression.
-        const entry = getUsageQueryResourceStore(account).getEntry({ hostRead: 'usage.query', input });
+        const entry = getUsageQueryResourceStore(account).getEntry({ hostRead: 'usage.query', input: projectNativeJsonValueForTransport(input) });
         const result = await new Promise<UsageQueryBatchResult>((resolve, reject) => {
           const inspect = () => {
             try {

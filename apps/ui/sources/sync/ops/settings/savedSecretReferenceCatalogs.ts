@@ -26,6 +26,10 @@ import { applyAcknowledgedConnectedAccountCatalog } from '@/sync/store/settings/
 import { applyAcknowledgedNotificationChannelCatalog } from '@/sync/store/settings/notificationChannelCatalogSnapshot';
 import { applyAcknowledgedRemoteHostCatalog } from '@/sync/store/settings/remoteHostCatalogSnapshot';
 import { fireAndForget } from '@/utils/system/fireAndForget';
+import { openPromptLibraryContentV1 } from '@happier-dev/protocol/prompts/library/promptLibraryRowsV1';
+import { readPromptLibraryRowInContext, preparePromptLibraryRecordMutationInContext } from '@/sync/api/account/apiPromptLibraryCatalog';
+import { applyPromptLibraryCatalogAcknowledgedRecord } from '@/sync/store/settings/promptLibraryCatalogSnapshot';
+import { listSavedSecretReferenceCatalogRefsV1 } from '@happier-dev/protocol/account/settings/savedSecretMutationOwner';
 
 export type SavedSecretReferenceCatalogKey = keyof SavedSecretCatalogRevisionsV1;
 export type SavedSecretReferenceCatalogFacets = Pick<SavedSecretReferenceCatalogsV1, SavedSecretReferenceCatalogKey>;
@@ -36,12 +40,13 @@ type CapturedCatalogStoredContents = {
     providerConnections?: PresentStoredContent<Awaited<ReturnType<typeof readProviderCatalogRowInContext>>>;
     connectedConfigurations?: PresentStoredContent<Awaited<ReturnType<typeof readConnectedAccountCatalogRowInContext>>>;
     connectedPurposes?: PresentStoredContent<Awaited<ReturnType<typeof readConnectedAccountCatalogRowInContext>>>;
+    registrySources?: PresentStoredContent<Awaited<ReturnType<typeof readPromptLibraryRowInContext>>>;
 };
 type CapturedCatalogs = Readonly<{ catalogs: SavedSecretReferenceCatalogFacets; revisions: Partial<SavedSecretCatalogRevisionsV1>;
     storedContents: CapturedCatalogStoredContents }>;
 type CompleteCapturedCatalogs = Readonly<{ catalogs: SavedSecretReferenceCatalogFacets; revisions: SavedSecretCatalogRevisionsV1;
     storedContents: CapturedCatalogStoredContents }>;
-const catalogKeys = ['mcp', 'acp', 'providerConnections', 'connectedConfigurations', 'connectedPurposes'] as const;
+const catalogKeys = ['mcp', 'acp', 'providerConnections', 'connectedConfigurations', 'connectedPurposes', 'registrySources'] as const;
 
 /** Publish only explicit receipt revisions; revalidate the exact submitted mutation intent. */
 export function publishAcknowledgedSavedSecretReferenceCatalogsInContext(context: ProfileAccountContext, input: Readonly<{
@@ -55,6 +60,12 @@ export function publishAcknowledgedSavedSecretReferenceCatalogsInContext(context
     const revisions = input.receipt.catalogRevisions;
     const refresh = (promise: Promise<unknown>) => fireAndForget(promise, { tag: 'savedSecretCatalog.afterAcknowledgedReferenceMutation' });
     try {
+        if (input.mutation.catalogMutations?.registrySources) {
+            if (typeof revisions?.registrySources === 'number' && input.catalogs.registrySources)
+                applyPromptLibraryCatalogAcknowledgedRecord(scope, { key: 'registry-sources', value: input.catalogs.registrySources }, revisions.registrySources, true);
+            refresh(import('@/sync/engine/settings/promptLibraryCatalogEngine').then(engine =>
+                engine.invalidatePromptLibraryCatalogAfterAcknowledgedMutation(scope, context.assertAccountCurrent)));
+        }
         if (input.mutation.catalogMutations?.mcp) {
             if (typeof revisions?.mcp === 'number' && input.catalogs.mcp)
                 applyAcknowledgedMcpServerCatalog(scope, input.catalogs.mcp, revisions.mcp, true);
@@ -113,7 +124,7 @@ async function assertAccountMode(context: ProfileAccountContext, mode: 'plain' |
     if (storage.mode !== mode) throw new Error('saved_secret_account_mode_changed');
 }
 
-/** Notification authority belongs to the full census, not the five-domain numeric batch. */
+/** Notification authority belongs to the full census, not the numeric catalog batch. */
 export async function captureSavedSecretNotificationChannelsInContext(context: ProfileAccountContext,
     mode: 'plain' | 'e2ee'): Promise<Readonly<{
         catalog: SavedSecretReferenceCatalogsV1['notificationChannels'];
@@ -152,6 +163,16 @@ export async function captureSavedSecretReferenceCatalogsInContext(context: Prof
         const storedContents: CapturedCatalogStoredContents = {};
         await Promise.all([...new Set(keys ?? catalogKeys)].map(async key => {
             switch (key) {
+                case 'registrySources': {
+                    const row = await readPromptLibraryRowInContext(context, 'registry-sources');
+                    if (row.status === 'absent') { revisions.registrySources = 'absent'; return; }
+                    if (row.status === 'deleted') { catalogs.registrySources = null; revisions.registrySources = row.revision; return; }
+                    if (row.status !== 'present') throw new Error('saved_secret_reference_catalog_unavailable');
+                    const opened = openPromptLibraryContentV1({ key: 'registry-sources', content: row.content, mode, material });
+                    if (opened.status !== 'opened' || opened.record.key !== 'registry-sources') throw new Error('saved_secret_reference_catalog_incomplete');
+                    storedContents.registrySources = row.content;
+                    catalogs.registrySources = opened.record.value; revisions.registrySources = row.revision; return;
+                }
                 case 'mcp': {
                     const row = await readMcpServerCatalogRowInContext(context);
                     if (row.status === 'absent') { revisions.mcp = 'absent'; return; }
@@ -225,11 +246,13 @@ export async function prepareSavedSecretReferenceCatalogMutationsInContext(conte
     const providerConnections = changed('providerConnections') ? input.catalogs.providerConnections : undefined;
     const connectedConfigurations = changed('connectedConfigurations') ? input.catalogs.connectedConfigurations : undefined;
     const connectedPurposes = changed('connectedPurposes') ? input.catalogs.connectedPurposes : undefined;
+    const registrySources = changed('registrySources') ? input.catalogs.registrySources : undefined;
     const references = [
         ...(mcp ? listMcpServerCatalogSavedSecretRefsV1(mcp) : []),
         ...(acp ? listAcpCatalogSavedSecretRefsV1(acp) : []),
         ...(providerConnections ? listProviderConnectionsCatalogSavedSecretRefsV1(providerConnections) : []),
         ...(connectedConfigurations ? listConnectedConfigurationCatalogSavedSecretRefsV1(connectedConfigurations) : []),
+        ...(registrySources ? listSavedSecretReferenceCatalogRefsV1({ profileRecords: [], registrySources }) : []),
     ].map(reference => reference.secretId);
     const pendingResourceIds = input.pendingResourceIds?.filter(id => references.includes(
         formatSavedSecretCatalogReferenceV1({ kind: 'shared_resource', id })));
@@ -250,6 +273,8 @@ export async function prepareSavedSecretReferenceCatalogMutationsInContext(conte
             { record: { key: 'configurations', value: connectedConfigurations }, ...common('connectedConfigurations') }) } : {}),
         ...(connectedPurposes ? { connectedPurposes: await prepareConnectedAccountCatalogMutationInContext(context,
             { record: { key: 'purposes', value: connectedPurposes }, ...common('connectedPurposes') }) } : {}),
+        ...(registrySources ? { registrySources: await preparePromptLibraryRecordMutationInContext(context,
+            { record: { key: 'registry-sources', value: registrySources }, ...common('registrySources'), pendingResourceIds }) } : {}),
     };
     await assertAccountMode(context, input.accountMode);
     return SavedSecretCatalogMutationsV1Schema.parse(mutations);

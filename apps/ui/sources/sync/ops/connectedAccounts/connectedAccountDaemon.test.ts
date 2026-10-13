@@ -115,6 +115,77 @@ describe('connected-account daemon machine RPC', () => {
             params: { v: 1, machineId: 'machine-1', command: beginConnect } }]);
         expect(homes.requestsFor('/v1/machines/machine-1')[0]?.serverId).toBe(serverId);
     });
+    it('completes the MCP callback on its exact pending machine through the real Action and socket owners', async () => {
+        const { completeMcpOAuthCallback } = await import('./mcpOAuthCallback');
+        const { MCP_OAUTH_CALLBACK_URL_V1 } = await import('@happier-dev/protocol/mcp/oauth/mcpOAuthClientIdentityV1');
+        homes.answer(serverId, '/v1/machines/machine-2', { body: { machine: {
+            id: 'machine-2', kind: 'persistent', dataEncryptionKey: MACHINE_PLAIN_DATA_KEY_MARKER,
+        } } });
+        const attempt = { attemptId: 'attempt.with.dots', kind: 'oauth', modeId: 'oauth', intent: 'connect',
+            phase: 'awaitingOAuth', createdAtMs: 1, expiresAtMs: 100 };
+        answers.push(
+            { status: 'pendingAttempts', attempts: [{ ...attempt, attemptId: 'decoy' }] },
+            { status: 'pendingAttempts', attempts: [attempt] },
+            { status: 'awaitingOAuth', attemptId: attempt.attemptId, callbackUrl: MCP_OAUTH_CALLBACK_URL_V1 },
+            { status: 'connected', attemptId: attempt.attemptId,
+                account: { service: { pluginId: 'happier', localId: 'mcp-sign-in' }, accountId: 'server-id' } },
+        );
+        let stripped = false;
+        const callbackUrl = `${MCP_OAUTH_CALLBACK_URL_V1}?code=code-1&state=attempt.with.dots.nonce&iss=https%3A%2F%2Fissuer.example`;
+        const outcome = await completeMcpOAuthCallback({ callbackUrl, browser: {
+            replaceUrl: path => { expect(path).toBe('/oauth/mcp/callback'); stripped = true; }, close() {},
+        }, account: { serverId, expectedAccountId: 'account-a', assertCurrent() {
+            expect(stripped).toBe(true);
+        }, returnTo: 'https://foreign.example', readMachines: async () => [
+            { id: 'offline', active: false }, { id: 'machine-1', active: true }, { id: 'machine-2', active: true },
+        ] } });
+        expect(outcome).toEqual({ kind: 'connected', machineId: 'machine-2', returnTo: '/settings/mcp/server-id' });
+        const issued = outgoing.filter(request => request.method.endsWith(CONNECTED_ACCOUNT_AUTHENTICATION_COMMAND_RPC_METHOD)
+            || request.method.endsWith(CONNECTED_ACCOUNT_CONTROL_COMMAND_RPC_METHOD));
+        expect(issued).toMatchObject([
+            { method: `machine-1:${CONNECTED_ACCOUNT_CONTROL_COMMAND_RPC_METHOD}` },
+            { method: `machine-2:${CONNECTED_ACCOUNT_CONTROL_COMMAND_RPC_METHOD}` },
+            { method: `machine-2:${CONNECTED_ACCOUNT_AUTHENTICATION_COMMAND_RPC_METHOD}`, params: { command: {
+                operation: 'read', attemptId: 'attempt.with.dots', restoreKind: 'oauth',
+            } } },
+            { method: `machine-2:${CONNECTED_ACCOUNT_AUTHENTICATION_COMMAND_RPC_METHOD}`, params: { command: {
+                operation: 'completeOAuth', attemptId: 'attempt.with.dots', completion: {
+                    code: 'code-1', state: 'attempt.with.dots.nonce', iss: 'https://issuer.example', callbackUrl: MCP_OAUTH_CALLBACK_URL_V1,
+                },
+            } } },
+        ]);
+    });
+    it('uses the original attempt machine without rediscovery and preserves its internal return destination', async () => {
+        const { completeMcpOAuthCallback } = await import('./mcpOAuthCallback');
+        const { MCP_OAUTH_CALLBACK_URL_V1, MCP_SIGN_IN_CONNECTED_SERVICE_REF_V1 } = await import('@happier-dev/protocol/mcp/oauth/mcpOAuthClientIdentityV1');
+        answers.push(
+            { status: 'awaitingOAuth', attemptId: 'retained-attempt', callbackUrl: MCP_OAUTH_CALLBACK_URL_V1 },
+            { status: 'connected', attemptId: 'retained-attempt',
+                account: { service: MCP_SIGN_IN_CONNECTED_SERVICE_REF_V1, accountId: 'server-id' } },
+        );
+        expect(await completeMcpOAuthCallback({
+            callbackUrl: `${MCP_OAUTH_CALLBACK_URL_V1}?code=code&state=retained-attempt.nonce`,
+            account: { serverId, expectedAccountId: 'account-a', machineId: 'machine-1', assertCurrent() {},
+                returnTo: '/session/session-1?capabilities=open',
+                async readMachines() { throw new Error('retained_machine_must_not_rediscover'); } },
+        })).toEqual({ kind: 'connected', machineId: 'machine-1', returnTo: '/session/session-1?capabilities=open' });
+        const issued = outgoing.filter(request => request.method.endsWith(CONNECTED_ACCOUNT_AUTHENTICATION_COMMAND_RPC_METHOD)
+            || request.method.endsWith(CONNECTED_ACCOUNT_CONTROL_COMMAND_RPC_METHOD));
+        expect(issued).toHaveLength(2);
+        expect(issued[1]).toMatchObject({ params: { command: { operation: 'completeOAuth',
+            attemptId: 'retained-attempt', completion: { code: 'code', state: 'retained-attempt.nonce', callbackUrl: MCP_OAUTH_CALLBACK_URL_V1 } } } });
+    });
+    it('keeps the full callback for paste when no machine owns the pending attempt', async () => {
+        const { completeMcpOAuthCallback } = await import('./mcpOAuthCallback');
+        const { MCP_OAUTH_CALLBACK_URL_V1 } = await import('@happier-dev/protocol/mcp/oauth/mcpOAuthClientIdentityV1');
+        const callbackUrl = `${MCP_OAUTH_CALLBACK_URL_V1}?code=code&state=missing-attempt.nonce&iss=https%3A%2F%2Fissuer.example`;
+        answers.push({ status: 'pendingAttempts', attempts: [] });
+        expect(await completeMcpOAuthCallback({ callbackUrl,
+            account: { serverId, expectedAccountId: 'account-a', assertCurrent() {},
+                async readMachines() { return [{ id: 'machine-1', active: true }]; } },
+        })).toEqual({ kind: 'paste', callbackUrl });
+        expect(outgoing.filter(request => request.method.endsWith(CONNECTED_ACCOUNT_AUTHENTICATION_COMMAND_RPC_METHOD))).toEqual([]);
+    });
     it('approves live manual custody through the canonical human decision and sends the original private fields only to the daemon', async () => {
         const { runConnectedAccountAuthenticationAction } = await import('./connectedAccountDaemon');
         const { createDefaultActionExecutor } = await import('@/sync/ops/actions/defaultActionExecutor');

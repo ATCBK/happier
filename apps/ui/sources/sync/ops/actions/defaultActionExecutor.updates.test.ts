@@ -1,6 +1,9 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { RPC_METHODS } from '@happier-dev/protocol/rpc';
 import { ActionApprovalRequestCreatedResultSchema } from '@happier-dev/protocol/actions/actionExecutionResult';
+import { UpdatesSnapshotResultSchema } from '@happier-dev/protocol/actions/updatesActionFamily';
+import { act } from 'react-test-renderer';
+import { createMachineFixture, flushHookEffects, renderHook } from '@/dev/testkit';
 import { standardCleanup } from '@/dev/testkit/cleanup/standardCleanup';
 import { createHomeGovernanceHarness, installHomeGovernanceBoundaries } from '@/dev/testkit/harness/homeGovernanceHarness';
 import type { UpdateItem } from '@/updates/items/updateItem';
@@ -29,6 +32,9 @@ installHomeGovernanceBoundaries(homes);
 const { createDefaultActionExecutor } = await import('./defaultActionExecutor');
 const { registerUpdatesActionOwner } = await import('@/updates/updatesActionRuntime');
 const { runMachineItemUpdate, readMachineUpdateRuns, observeMachineUpdateRun } = await import('@/updates/machineUpdateRuns');
+const { useUpdatesContentModel } = await import('@/updates/useUpdatesContentModel');
+const { storage } = await import('@/sync/domains/state/storageStore');
+const initialStorage = storage.getState();
 let unregister: (() => void) | undefined;
 let webLocks: ReturnType<typeof installWebLockManagerMock>;
 beforeEach(async () => {
@@ -46,7 +52,7 @@ afterEach(async () => {
     await homes.reset();
     const { resetRuntimeFetch } = await import('@/utils/system/runtimeFetch');
     resetRuntimeFetch();
-    webLocks.restore(); standardCleanup();
+    webLocks.restore(); standardCleanup(); storage.setState(initialStorage, true);
 });
 
 const cli: UpdateItem = {
@@ -83,6 +89,59 @@ async function installOwner() {
 const starts = () => rpc.mock.calls.filter(([request]) => request.method === RPC_METHODS.CAPABILITIES_INVOKE);
 
 describe('Updates Actions through current UI update owners', () => {
+    it('reads the mounted model, admits a selected batch, and stops after the in-flight machine task', async () => {
+        const { scope } = await installOwner();
+        unregister?.(); unregister = undefined;
+        const base = createMachineFixture();
+        const machine = createMachineFixture({ id: 'studio', activeAt: Date.now(), storageMode: 'plain', metadata: {
+            ...base.metadata!, happyCliVersion: '0.2.12', cliUpdate: { currentVersion: '0.2.12', latestVersion: '0.2.13',
+                channel: 'stable', installSource: 'managed', updateCommand: 'happier self update', canUpdateRemotely: true,
+                lastUpdate: null },
+        } });
+        storage.setState(state => ({ profileScope: scope, profile: { ...state.profile, id: scope.accountId },
+            machines: { [machine.id]: machine }, machineListByServerId: { [scope.serverId]: [machine] },
+            machineListStatusByServerId: { [scope.serverId]: 'idle' } }));
+        let releasePoll!: () => void;
+        const pendingPoll = new Promise<void>(resolve => { releasePoll = resolve; });
+        let enterPoll!: () => void;
+        const pollEntered = new Promise<void>(resolve => { enterPoll = resolve; });
+        const normalRpc = rpc.getMockImplementation()!;
+        rpc.mockImplementation(async request => {
+            if (request.method === RPC_METHODS.CAPABILITIES_INVOKE && request.payload?.method === 'poll') {
+                enterPoll(); await pendingPoll;
+            }
+            return normalRpc(request);
+        });
+        const hook = await renderHook(() => useUpdatesContentModel());
+        try {
+            await flushHookEffects();
+            const executor = createDefaultActionExecutor();
+            const context = { surface: 'ui' as const, serverId: scope.serverId, expectedAccountId: scope.accountId };
+            const readSnapshot = async () => {
+                const response = await executor.execute('updates.get', {}, context);
+                if (!response.ok) throw new Error(response.errorCode);
+                return UpdatesSnapshotResultSchema.parse(response.result);
+            };
+            const item = (await readSnapshot()).groups.find(group => group.groupId === 'machine:studio')?.items
+                .find(row => row.itemId === 'studio:happier-cli');
+            expect(item).toMatchObject({ state: 'available', batchEligible: true, subject: { kind: 'happier-cli' } });
+            const admitted = await executor.execute('updates.batch.start', {
+                groupId: 'machine:studio', itemIds: [item!.itemId],
+            }, context);
+            if (!admitted.ok) throw new Error(admitted.errorCode);
+            const approval = ActionApprovalRequestCreatedResultSchema.parse(admitted.result);
+            expect(starts()).toEqual([]);
+            const replay = executor.execute('approval.request.decide', { artifactId: approval.artifactId, decision: 'approve' }, context);
+            await pollEntered;
+            expect((await readSnapshot()).batch).toMatchObject({ done: 0, total: 1, stopping: false });
+            expect(await executor.execute('updates.batch.stop', {}, context)).toEqual({ ok: true, result: { status: 'requested' } });
+            expect((await readSnapshot()).batch?.stopping).toBe(true);
+            releasePoll();
+            expect(await replay).toMatchObject({ ok: true, result: { status: 'executed', execution: { ok: true, result: { status: 'requested' } } } });
+            expect(starts().map(([request]) => [request.serverId, request.accountId, request.machineId, request.payload.method]))
+                .toEqual([[scope.serverId, scope.accountId, machine.id, 'start'], [scope.serverId, scope.accountId, machine.id, 'poll']]);
+        } finally { releasePoll(); await act(() => hook.unmount()); }
+    });
     it('reads exact current selectors and refuses an unmounted owner', async () => {
         const { scope } = await installOwner();
         const executor = createDefaultActionExecutor();

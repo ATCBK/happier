@@ -103,7 +103,7 @@ describe('machine contribution registry projection ops', () => {
         const { resetScopedMachineTransportCacheForTests } = await import('@/sync/runtime/orchestration/serverScopedRpc/serverScopedRpcPool');
         serverScopedRpcSocketPool.resetForTests();
         resetScopedMachineTransportCacheForTests();
-        network.dispose();
+        await network.dispose();
     });
 
     async function installReactNativeRuntimeMocks(platform: 'ios' | 'android' | 'web') {
@@ -436,7 +436,7 @@ describe('machine contribution registry projection ops', () => {
             machineContributionRegistryProjectionDescribe('machine-1', { serverId: 'server-a', accountLifetime: handle('account-a') }),
         ];
         await vi.waitFor(() => expect(pendingResolvers).toHaveLength(1));
-        network.setAccount('https://server-a', 'account-b');
+        await network.setAccount('https://server-a', 'account-b');
         reads.push(machineContributionRegistryProjectionDescribe('machine-1', { serverId: 'server-a', accountLifetime: handle('account-b') }));
         await vi.waitFor(() => expect(pendingResolvers.length).toBeGreaterThanOrEqual(2));
         expect(machineRpcWithServerScopeMock).toHaveBeenCalledTimes(2);

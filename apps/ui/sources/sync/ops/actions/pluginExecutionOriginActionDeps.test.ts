@@ -1,6 +1,7 @@
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import { act } from 'react-test-renderer';
 import { AccountSettingsV2UpdateRequestSchema } from '@happier-dev/protocol/account/settings/accountSettingsApiV2';
+import { PluginExecutionOriginActionOutputSchemas } from '@happier-dev/protocol/actions/pluginExecutionOriginActionFamily';
 import { artifactHtmlBundleFromBodyV1 } from '@happier-dev/protocol/artifacts/artifactHtmlV1';
 import { normalizePluginUiDestinationBindingV1, PluginUiDestinationBindingV1Schema } from '@happier-dev/protocol/plugins/ui';
 import { createMachineFixture, renderHook, standardCleanup } from '@/dev/testkit';
@@ -110,12 +111,22 @@ describe('answering-client plugin origin preferences', () => {
         const owner = createPluginExecutionOriginActionDeps(account).pluginExecutionOriginAction;
         if (!owner) throw new Error('Action owner missing');
         const invoke = (actionId: Parameters<typeof owner>[0]['actionId'], input: unknown) => owner({ actionId, input, context: { surface: 'ui' } });
+        const { createDefaultActionExecutor } = await import('./defaultActionExecutor');
+        const registeredExecutor = createDefaultActionExecutor();
+        const invokeRegistered = async (actionId: keyof typeof PluginExecutionOriginActionOutputSchemas, input: unknown) => {
+            const execution = await registeredExecutor.execute(actionId, input, {
+                surface: 'ui', serverId: scope.serverId, expectedAccountId: scope.accountId,
+            });
+            expect(execution.ok).toBe(true);
+            if (!execution.ok) throw new Error('Registered plugin Action was not executed');
+            return PluginExecutionOriginActionOutputSchemas[actionId].parse(execution.result);
+        };
         const origin = { serverIdentityId: 'srv_origin', sourceRef: { machineId: machine.id, pluginId,
             sourceCustody: { kind: 'development' as const, registeredRootId: 'root' } } };
         try {
-            expect(await invoke('plugins.execution_origin.list', { pluginId })).toMatchObject({ status: 'available',
+            expect(await invokeRegistered('plugins.execution_origin.list', { pluginId })).toMatchObject({ status: 'available',
                 settingsVersion: 1, candidates: [{ origin, version: '1.0.0', selectable: true }] });
-            expect(await invoke('plugins.execution_origin.set', { pluginId, origin, expectedSettingsVersion: version }), JSON.stringify({
+            expect(await invokeRegistered('plugins.execution_origin.set', { pluginId, origin, expectedSettingsVersion: version }), JSON.stringify({
                 requestPaths, scope, currentScope: storage.getState().settingsScope, lifetimeCurrent: lifetime.isCurrent(),
                 machines: storage.getState().machines, machineListStatusByServerId: storage.getState().machineListStatusByServerId, hasSource,
             }))
@@ -123,7 +134,7 @@ describe('answering-client plugin origin preferences', () => {
             expect(raw).toMatchObject({ unrelated: { preserved: true }, machineAdministrationSelectionsV1: {
                 pluginExecutionOriginsByPluginId: { [pluginId]: origin, 'other.plugin': { sourceRef: { pluginId: 'other.plugin' } } },
             } });
-            expect(await invoke('plugins.execution_origin.clear', { pluginId, expectedSettingsVersion: version }))
+            expect(await invokeRegistered('plugins.execution_origin.clear', { pluginId, expectedSettingsVersion: version }))
                 .toEqual({ status: 'applied', settingsVersion: 3 });
             expect(raw).toMatchObject({ machineAdministrationSelectionsV1: { pluginExecutionOriginsByPluginId: { 'other.plugin': {} } } });
             expect(Object.hasOwn((raw.machineAdministrationSelectionsV1 as { pluginExecutionOriginsByPluginId: object }).pluginExecutionOriginsByPluginId, pluginId)).toBe(false);
@@ -173,7 +184,6 @@ describe('answering-client plugin origin preferences', () => {
                 .find(({ request }) => request.actionId === 'plugins.execution_origin.set');
             expect(created?.request).toMatchObject({ status: 'open', actionArgs: { pluginId, origin, expectedSettingsVersion: version } });
             if (!created) throw new Error('Preference approval missing');
-            const { createDefaultActionExecutor } = await import('./defaultActionExecutor');
             expect(await invokeUiPreference(() => createDefaultActionExecutor().execute('approval.request.decide', {
                 artifactId: created.id, decision: 'approve',
             }, { surface: 'ui', serverId: scope.serverId, expectedAccountId: scope.accountId })))

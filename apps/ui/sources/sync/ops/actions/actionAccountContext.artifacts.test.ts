@@ -480,12 +480,17 @@ describe('scoped Account workflow Artifact operations', () => {
         storage.setState({ settingsScope: { serverId: home.id, accountId: 'artifact-account' }, artifacts: {} });
         const account = await captureLazyActionAccountContext(home.id);
         try {
+            await expect(account.readArtifactContent(artifactId)).resolves.toMatchObject({ shared: true, publicAudience: 'retained' });
+            expect(storage.getState().artifacts[artifactId]).toBeUndefined();
             await expect(account.workflowArtifacts.read(artifactId)).resolves.toMatchObject({ shared: true, publicAudience: 'retained' });
             expect(storage.getState().artifacts[artifactId]).toMatchObject({ publicAudience: 'retained' });
             const ordinary = createUiArtifactAction(account);
             expect(ArtifactActionOutputSchemasV1['artifact.get'].parse(await ordinary({ actionId: 'artifact.get',
                 input: { artifactId }, context: { surface: 'ui' } }))).toMatchObject({ artifact: { publicAudience: 'retained' } });
             publicAudience = 'none';
+            storage.setState({ artifacts: {} });
+            await expect(account.readArtifactContent(artifactId)).resolves.toMatchObject({ shared: false });
+            expect(storage.getState().artifacts[artifactId]).toBeUndefined();
             await expect(account.workflowArtifacts.read(artifactId)).resolves.toMatchObject({ shared: false });
             for (const value of [undefined, 'future-audience']) {
                 publicAudience = value;

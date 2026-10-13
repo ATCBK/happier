@@ -3,8 +3,8 @@ import { serveActionHomes } from '@/dev/testkit/harness/actionHomesHttpHarness';
 import { standardCleanup } from '@/dev/testkit/cleanup/standardCleanup';
 import { createDefaultActionExecutor } from './defaultActionExecutor';
 
-const disposers: Array<() => void> = [];
-afterEach(async () => { await standardCleanup(); for (const dispose of disposers.splice(0).reverse()) dispose(); });
+const disposers: Array<() => void | Promise<void>> = [];
+afterEach(async () => { await standardCleanup(); for (const dispose of disposers.splice(0).reverse()) await dispose(); });
 
 describe('mounted Workflow conversation Action', () => {
     it('shares UI/agent admission, checks the current draft, and retires without storing another draft', async () => {
@@ -73,7 +73,7 @@ describe('mounted Workflow conversation Action', () => {
         const executor = createDefaultActionExecutor();
         expect(await executor.execute('workflow.authoring.conversation.bind', input, { surface: 'agent', authority: 'account_automation', serverId: boundary.homes.other!.id }))
             .toEqual({ ok: true, result: { status: 'refused', reason: 'workflow_binding_scope_mismatch' } });
-        boundary.switchAccount('owner', 'account-b');
+        await boundary.switchAccount('owner', 'account-b');
         expect(await executor.execute('workflow.authoring.conversation.bind', input, { surface: 'agent', authority: 'account_automation', serverId: scope.serverId }))
             .toEqual({ ok: true, result: { status: 'refused', reason: 'workflow_binding_scope_mismatch' } });
         expect(changes).toEqual([]);

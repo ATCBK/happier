@@ -1,4 +1,8 @@
 import * as React from 'react';
+import type { Socket } from 'socket.io-client';
+import { SOCKET_RPC_EVENTS } from '@happier-dev/protocol/socketRpc';
+import { MACHINE_PLAIN_DATA_KEY_MARKER } from '@happier-dev/protocol/machines/machineStoredContent';
+import { ScopeActionOutputSchemas } from '@happier-dev/protocol/actions/scopeActionFamily';
 import { act } from 'react-test-renderer';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { createActionExecutor, type ActionExecutorDeps, RPC_METHODS, UiActionDispatchRequestV1Schema, ActionIdSchema, tryWriteServerEnabledBitInPlace } from '@happier-dev/protocol';
@@ -8,39 +12,45 @@ import { createHomeGovernanceHarness, installHomeGovernanceBoundaries } from '@/
 import { installDisconnectedServerSocketBoundary, restoreServerAccountForTest } from '@/dev/testkit/harness/serverAccountConnectionHarness';
 import { loadSyncSingletonForTests } from '@/dev/testkit/harness/syncSingletonLoader';
 import { standardCleanup } from '@/dev/testkit/cleanup/standardCleanup';
-import { createFindSurfaceRegistry } from '@/keyboard/findSurfaceRegistry';
-import { registerFindActionRuntime } from '@/keyboard/findActionRuntime';
-import { registerPendingNavigationRuntime } from '@/activity/source/pendingNavigationRuntime';
-import { registerMountedWorkspaceAction } from '@/components/appShell/workspace/workspaceActionRuntime';
-import { createWorkspaceState, createWorkspaceEmptyTab } from '@/components/appShell/workspace/workspaceState';
-import { projectWorkspaceTabsList } from '@/components/appShell/workspace/workspaceActions';
-import { createClientActionReverseDispatcher } from '../../../../../cli/src/session/actions/clientActionReverseDispatch';
 import { createMachineFixture } from '@/dev/testkit/fixtures/machineFixtures';
 import { renderScreen } from '@/dev/testkit/render/renderScreen';
-import { listNewSessionDraftProjections } from '@/sync/ops/sessionDrafts/sessionDraftRepository';
-import { readNewSessionDraftProjectionFromRepository } from '@/components/sessions/composer/newSessionDraftRepositoryAdapter';
 import { API_TOKEN_FULL_GRANT_V1 } from '@happier-dev/protocol/auth/apiTokenGrant';
 import { getActionSpec } from '@happier-dev/protocol/actions/actionSpecs';
 import { ActionsSettingsV1Schema } from '@happier-dev/protocol/actions/actionSettings';
 
 const navigation = vi.hoisted(() => ({ push: vi.fn() }));
+// The cross-package daemon dispatcher can import Socket before the UI installs
+// its transport; every consumer must retain the same canonical boundary.
+vi.mock('socket.io-client', async (importOriginal) =>
+  (await import('@/dev/testkit/harness/serverAccountConnectionHarness')).createSocketIoClientBoundary(importOriginal));
 vi.mock('expo-router', async () => {
   const { createExpoRouterMock } = await import('@/dev/testkit/mocks/router');
   return createExpoRouterMock({ router: navigation }).module;
 });
 
-installDisconnectedServerSocketBoundary();
+const clientSockets: Socket[] = [];
+installDisconnectedServerSocketBoundary(socket => { clientSockets.push(socket); });
 const homes = createHomeGovernanceHarness();
 installHomeGovernanceBoundaries(homes);
 const { storage } = await import('@/sync/domains/state/storage');
 const { apiSocket } = await import('@/sync/api/session/apiSocket');
 await loadSyncSingletonForTests();
+const { createFindSurfaceRegistry } = await import('@/keyboard/findSurfaceRegistry');
+const { registerFindActionRuntime } = await import('@/keyboard/findActionRuntime');
+const { registerPendingNavigationRuntime } = await import('@/activity/source/pendingNavigationRuntime');
+const { registerMountedWorkspaceAction } = await import('@/components/appShell/workspace/workspaceActionRuntime');
+const { createWorkspaceState, createWorkspaceEmptyTab } = await import('@/components/appShell/workspace/workspaceState');
+const { projectWorkspaceTabsList } = await import('@/components/appShell/workspace/workspaceActions');
+const { createClientActionReverseDispatcher } = await import('../../../../../cli/src/session/actions/clientActionReverseDispatch');
+const { listNewSessionDraftProjections } = await import('@/sync/ops/sessionDrafts/sessionDraftRepository');
+const { readNewSessionDraftProjectionFromRepository } = await import('@/components/sessions/composer/newSessionDraftRepositoryAdapter');
 const { createUiClientActionReverseHandler } = await import('./clientActionReverseDispatch');
 const { createDefaultActionExecutor } = await import('./defaultActionExecutor');
 const releases: (() => void)[] = [];
 let serverId: string;
 let connection: Awaited<ReturnType<typeof restoreServerAccountForTest>> | null = null;
 beforeEach(async () => {
+  clientSockets.length = 0;
   await homes.reset();
   serverId = await homes.addHome({ name: 'Home', serverUrl: 'https://relay.test', accountId: 'relay-account' });
   connection = await restoreServerAccountForTest({ serverUrl: 'https://relay.test', accountId: 'relay-account', request: homes.request });
@@ -60,6 +70,71 @@ afterEach(async () => {
 });
 
 describe('admitted app Actions and daemon-to-app continuations', () => {
+  it('routes driver Library Actions through the mounted client registration and strict receiver', async () => {
+    const { ClientActionReverseRuntime } = await import('@/components/appShell/runtime/ClientActionReverseRuntime');
+    const { useWorkflowLibraryView } = await import('@/components/workflows/library/useWorkflowLibraryView');
+    const rows: Parameters<typeof useWorkflowLibraryView>[0] = [];
+    function LibraryOwner() {
+      useWorkflowLibraryView(rows, null, true);
+      return null;
+    }
+    const machine = createMachineFixture({ id: 'driver-machine', storageMode: 'plain', dataEncryptionKey: MACHINE_PLAIN_DATA_KEY_MARKER });
+    await act(async () => {
+      storage.setState(state => ({ ...state, profile: { ...state.profile!, id: 'relay-account' },
+        machines: { [machine.id]: machine }, machineListByServerId: {} }));
+    });
+    const socket = clientSockets.slice().reverse().find(candidate => candidate.listeners(SOCKET_RPC_EVENTS.REQUEST).length > 0);
+    if (!socket) throw new Error('Account transport did not install its reverse receiver');
+    const registered = new Set<string>();
+    // Socket.IO delivery is the external boundary. Production Runtime registration,
+    // ApiSocket decoding, both Action executors and the Library controller stay real.
+    vi.mocked(socket.emit).mockImplementation((event, ...args) => {
+      const payload: unknown = args[0];
+      if (payload && typeof payload === 'object' && 'method' in payload && typeof payload.method === 'string') {
+        if (event === SOCKET_RPC_EVENTS.REGISTER) registered.add(payload.method);
+        if (event === SOCKET_RPC_EVENTS.UNREGISTER) registered.delete(payload.method);
+      }
+      return socket;
+    });
+    const reverse = createClientActionReverseDispatcher(() => ({
+      hasConnectedClientRpcHandler: method => registered.has(`${machine.id}:${method}`),
+      callConnectedClientRpc: async (method, payload, options) => {
+        const wire = UiActionDispatchRequestV1Schema.parse(JSON.parse(JSON.stringify(payload)));
+        options.onIssued();
+        const result = await new Promise<unknown>(resolve => {
+          for (const receive of socket.listeners(SOCKET_RPC_EVENTS.REQUEST)) {
+            receive({ method: `${machine.id}:${method}`, params: wire }, resolve);
+          }
+        });
+        return { ok: true, result };
+      },
+    }));
+    const caller = createActionExecutor({ clientActionExecute: reverse } as unknown as ActionExecutorDeps);
+    const context = { surface: 'mcp' as const, authority: 'account_automation' as const,
+      defaultSessionId: 'driver-session', defaultSessionMachineId: machine.id };
+    const library = await renderScreen(React.createElement(LibraryOwner));
+    // A mounted Library alone cannot answer a driver: its client transport must be bound.
+    expect(await caller.execute('workflow.library.view.get', {}, context))
+      .toMatchObject({ ok: false, errorCode: 'unavailable', error: 'noClient' });
+    expect(await caller.execute('home.runtime.get', { force: true }, context))
+      .toMatchObject({ ok: false, errorCode: 'unavailable', error: 'noClient' });
+    const runtime = await renderScreen(React.createElement(ClientActionReverseRuntime));
+    expect(await caller.execute('home.runtime.get', { force: true }, context))
+      .toMatchObject({ ok: true, result: { status: 'ready' } });
+    expect(await caller.execute('workflow.library.view.get', {}, context)).toEqual({ ok: true,
+      result: ScopeActionOutputSchemas['workflow.library.view.get'].parse({ view: 'all', searchQuery: '', offeredViews: ['all'], visibleKeys: [] }) });
+    await act(async () => {
+      expect(await caller.execute('workflow.library.view.set', { searchQuery: 'QA-FIN35c' }, context))
+        .toEqual({ ok: true, result: { ok: true } });
+    });
+    expect(await caller.execute('workflow.library.view.get', {}, context)).toMatchObject({ ok: true, result: { searchQuery: 'QA-FIN35c' } });
+    await library.unmount();
+    expect(await caller.execute('workflow.library.view.get', {}, context))
+      .toMatchObject({ ok: false, errorCode: 'client_surface_unavailable' });
+    await runtime.unmount();
+    expect(await caller.execute('workflow.library.view.get', {}, context))
+      .toMatchObject({ ok: false, errorCode: 'unavailable', error: 'noClient' });
+  });
   it('reaches the captured Home registry owner through the public app Settings executor after focus changes', async () => {
     const { setActiveServerId } = await import('@/sync/domains/server/serverProfiles');
     const key = 'HAPPIER_API_CORS_MAX_AGE_SECONDS';

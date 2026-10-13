@@ -36,6 +36,8 @@ import { createSavedSecretResource, promotePersonalSavedSecretResource, updateSa
     deleteSavedSecretResource, setSavedSecretResourceGrants, repairCustodiedSavedSecretResourceEnvelopesBestEffort,
     captureSavedSecretReferenceStateInContext, importLegacySavedSecretsInContext } from './savedSecretResourceOperations';
 import { withProfileAccount } from '@/sync/api/account/apiProfileCatalog';
+import { sealPromptLibraryContentV1 } from '@happier-dev/protocol/prompts/library/promptLibraryRowsV1';
+import { RegistrySourcesRecordV1Schema } from '@happier-dev/protocol/registries/registrySourcesV1';
 import { prepareConnectedAccountCatalogMutationInContext, readConnectedAccountCatalogInContext } from '@/sync/api/account/apiConnectedAccountCatalog';
 import { ConnectedAccountCatalogRowMutationV1Schema, type ConnectedAccountCatalogRecordV1 } from '@happier-dev/protocol/connect/connectedAccountConfigurationRowsV1';
 import { renderHook, renderScreen, standardCleanup, createDeferred } from '@/dev/testkit';
@@ -224,7 +226,7 @@ async function openAccount(mode: 'plain' | 'e2ee' = 'plain', options: { ask?: bo
             if (path === REMOTE_HOST_ROWS_ROUTE_V1) return Response.json(catalogRows.get(path) ?? { status: 'absent' });
             if (['/v1/account/entity-rows/mcp', '/v1/account/entity-rows/acp',
                 '/v1/account/entity-rows/provider-connections', '/v1/account/entity-rows/connected-accounts/configurations',
-                '/v1/account/entity-rows/connected-accounts/purposes', NOTIFICATION_CHANNELS_ROUTE_V1].includes(path)) {
+                '/v1/account/entity-rows/connected-accounts/purposes', '/v1/account/entity-rows/prompt-library/registry-sources', NOTIFICATION_CHANNELS_ROUTE_V1].includes(path)) {
                 if (init?.method === 'POST' && effect) {
                     const body: unknown = JSON.parse(String(init.body));
                     writes.push({ path, body });
@@ -2313,6 +2315,7 @@ describe('Saved Secret operations through their real Account and Action owners',
             '/v1/account/entity-rows/connected-accounts/purposes',
             '/v1/account/entity-rows/mcp',
             '/v1/account/entity-rows/provider-connections',
+            '/v1/account/entity-rows/prompt-library/registry-sources',
             NOTIFICATION_CHANNELS_ROUTE_V1,
         ].sort());
         expect(result).toMatchObject({ ok: false, reason: 'in_use', references: [
@@ -2349,6 +2352,27 @@ describe('Saved Secret operations through their real Account and Action owners',
             resourceRefs: status === 'present' ? [ref] : [] });
         expect(account.writes).toEqual([]);
     });
+    it.each(['plain', 'e2ee'] as const)('captures registry tokens and refuses deletion before dispatch in %s', async mode => {
+        const account = await openAccount(mode);
+        const resourceId = 'registry-captured-token';
+        const ref = `happier:shared-secret:v1:${resourceId}`;
+        const record = RegistrySourcesRecordV1Schema.parse({ v: 2, disabledSourceIds: [], sources: [{
+            id: 'registry:private', title: 'Private', format: 'git', kinds: ['skill'], url: 'https://github.com/acme/private',
+            enabled: false, addedAt: 1, token: { secretRef: ref } }] });
+        const content = await withProfileAccount(account.scope, undefined, (_context, accountMode, material) =>
+            sealPromptLibraryContentV1({ record: { key: 'registry-sources', value: record }, mode: accountMode, material }));
+        account.catalogRows.set('/v1/account/entity-rows/prompt-library/registry-sources', { status: 'present', revision: 12, content });
+        const captured = await withProfileAccount(account.scope, undefined, (context, accountMode) =>
+            captureSavedSecretReferenceStateInContext(context, accountMode));
+        expect(captured).toMatchObject({ ok: true, catalogs: { registrySources: record },
+            referenceCensus: { catalogs: { registrySources: 12 } } });
+        account.setEffect(() => Response.json({ resourceId }));
+        expect(await deleteSavedSecretResource({ scope: account.scope, resourceId, expectedRevision: 1,
+            expectedSettingsVersion: account.settingsVersion })).toMatchObject({ ok: false, reason: 'in_use',
+            references: [{ owner: 'registrySource', path: 'registrySourcesCatalog.sources[0].token.secretRef' }] });
+        expect(account.writes).toEqual([]);
+    });
+
     it('full reference capture refuses an incomplete notification channel before deletion dispatch', async () => {
         const account = await openAccount('plain');
         const record = NotificationChannelCatalogRecordV1Schema.parse({ v: 1, channels: [{

@@ -1,78 +1,305 @@
+/** @vitest-environment jsdom */
 import 'fake-indexeddb/auto';
 import * as React from 'react';
 import { act } from 'react-test-renderer';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 
 vi.mock('react-native', async () => {
-    const { createReactNativeWebMock } = await import('@/dev/testkit/mocks/reactNative');
-    return createReactNativeWebMock();
+    const { getVitestNodeBuiltin } = await import('@/dev/vitestNodeBuiltins');
+    const { createRequire } = getVitestNodeBuiltin<Pick<typeof import('node:module'), 'createRequire'>>('node:module');
+    // Use the real installed browser renderer; the package-name entry is a Node shim.
+    return await vi.importActual(createRequire(import.meta.url).resolve('react-native-web'));
 });
 vi.mock('react-native-unistyles', async () => (await import('@/dev/testkit/mocks/unistyles')).createUnistylesMock());
 vi.mock('expo-router', async () => (await import('@/dev/testkit/mocks/router')).createExpoRouterMock().module);
-vi.mock('@/modal', async () => (await import('@/dev/testkit/mocks/modal')).createModalModuleMock().module);
 
 import { createVoiceSessionLifecycleController } from '@/voice/session/voiceSessionLifecycleController';
 import { setVoiceSessionLifecycleController } from '@/voice/session/voiceSessionLifecycleControllerStore';
-import { getVoiceSessionAttemptId, resetVoiceSessionRuntimeStateForTests, setVoiceSessionSnapshot } from '@/voice/session/voiceSessionStore';
+import { getVoiceSessionAttemptId, getVoiceSessionPresentedAttemptId, resetVoiceSessionRuntimeStateForTests, setVoiceSessionSnapshot } from '@/voice/session/voiceSessionStore';
 import { registerVoiceAdapters } from '@/voice/session/voiceAdapterRegistry';
 import { createVoiceCaptureAdmissionController } from '@/voice/runtime/input/VoiceCaptureAdmissionController';
-import type { VoiceAdapterController, VoiceSessionSnapshot } from '@/voice/session/types';
 import { useVoiceTargetStore } from '@/voice/runtime/voiceTargetStore';
-import { VOICE_AGENT_GLOBAL_SESSION_ID } from '@/voice/agent/voiceAgentGlobalSessionId';
 import { storage } from '@/sync/domains/state/storage';
-import { voiceSettingsParse } from '@/sync/domains/settings/voiceSettings';
-import { createActionExecutor, FeaturesResponseSchema, VoiceConversationActionOutputSchemas } from '@happier-dev/protocol';
+import { createActionExecutor, createPlainSessionOwnerMetadataEnvelopeV1, createSessionOwnerMetadataV1, FeaturesResponseSchema,
+    projectSessionSharedMetadataV1, VoiceConversationActionOutputSchemas } from '@happier-dev/protocol';
 import { createActionExecutorBoundaryFixture } from '@/dev/testkit/fixtures/actionExecutorBoundary';
 import { primeServerFeaturesSnapshot, resetServerFeaturesClientForTests } from '@/sync/api/capabilities/serverFeaturesClient';
 import { executeVoiceConversationAction } from './voiceConversationAction';
 import { serveActionHomes } from '@/dev/testkit/harness/actionHomesHttpHarness';
-import { createPlainAccountEncryptionCurrentnessFixture, createSessionListRenderableSessionFixture, renderHook, renderScreen, standardCleanup } from '@/dev/testkit';
+import { createDeferred, createSessionFixture, createSessionListRenderableSessionFixture, renderScreen, standardCleanup } from '@/dev/testkit';
+import { getFocusedSessionAddress, setFocusedSessionId } from '@/sync/domains/session/sessionSurfaceVisibility';
 import { createSessionActionTarget } from '@/components/sessions/actions/sessionActionContext';
 import { executeSessionAction } from '@/components/sessions/actions/sessionActionExecution';
+import { installVoiceWebRtcBrowserBoundary } from '@/dev/testkit/harness/voiceWebRtcHarness';
+import { answerVoiceRealtimePreparationHttpRequest } from '@/dev/testkit/harness/voiceRealtimePreparationHttpBoundary';
+import { createSessionMetadataHttpBoundary } from '@/dev/testkit/harness/sessionMetadataHttpBoundary';
+import { createConnectedPurposeCatalogHttpBoundary } from '@/dev/testkit/harness/connectedAccountCatalogBoundary';
+import { installDisconnectedServerSocketBoundary } from '@/dev/testkit/harness/serverAccountConnectionHarness';
+import { loadSyncSingletonForTests } from '@/dev/testkit/harness/syncSingletonLoader';
+import { createRecipientContractDigestV1 } from '@happier-dev/protocol/plugins/recipientContractV1';
+import { createBundledVoiceRecipientContract } from '@/voice/credentials/voiceRecipientContract';
+import { applyAccountVoiceCredentialSourceSelection, saveAndUseAccountVoiceCredential } from '@/voice/credentials/accountVoiceCredential';
+import { createAccountVoiceOperationService } from '@/voice/credentials/accountVoiceOperationService';
+import { createBundledConversationRuntimeHostLease, getCurrentBundledConversationRuntimeHost } from '@/voice/registry/bundledConversationRuntimeHost';
+import { BUNDLED_FIRST_PARTY_VOICE_CONVERSATION_RUNTIME_ENTRIES } from '@/voice/registry/generatedBundledVoiceRuntimeEntries';
+import { createExternalVoiceProviderActivationScope } from '@/voice/registry/externalVoiceProviderActivation.testkit';
+import { getExternalVoiceProviderRegistration } from '@/voice/registry/externalVoiceProviderRegistrations';
+import { OPENAI_REALTIME_DEFAULT_SETTINGS } from '../../../../../../packages/plugins/openai/src/protocol/voice/settings';
+import { writeVoiceProviderSettingsConfig } from '@/sync/domains/settings/voiceSettings';
+import { normalizeVoiceSettingsLocalDelta } from '@/sync/domains/settings/voiceSettingsPersistence';
+import { buildVoiceTranscriptHistorySessionMetadata } from '@/voice/persistence/voiceTranscriptHistorySession';
+import { resolveDeviceLocalSettingsSecretsKey } from '@/auth/storage/deviceLocalSecretKey';
+import { assertNoUnsealedSettingsSecretValues, sealSecretsDeep } from '@/sync/encryption/secretSettings';
+import { installLocalStorageMock, installWebLockManagerMock } from '@/auth/storage/tokenStorage.web.testHelpers';
+import { createArtifactStoreBoundary } from '@/dev/testkit/harness/artifactStoreBoundary';
+import { approvalArtifactBodyMatchesHeaderV1 } from '@happier-dev/protocol/approvals/approvalArtifactHeaderV1';
 
-afterEach(async () => { await standardCleanup(); await resetVoiceSessionRuntimeStateForTests(); resetServerFeaturesClientForTests(); });
+vi.mock('socket.io-client', async original => (await import('@/dev/testkit/harness/serverAccountConnectionHarness')).createSocketIoClientBoundary(original));
+vi.mock('expo-audio', () => ({ AudioModule: { setAudioModeAsync: vi.fn(async () => undefined) } }));
+installDisconnectedServerSocketBoundary();
+await loadSyncSingletonForTests();
 
-async function createHarness(providerId = 'local_conversation', start = true) {
-    let snapshot: VoiceSessionSnapshot = { adapterId: providerId, sessionId: null, status: 'disconnected', mode: 'idle', canStop: false };
-    const listeners = new Set<() => void>();
-    const publish = (next: VoiceSessionSnapshot) => { snapshot = next; listeners.forEach((listener) => listener()); };
-    const adapter: VoiceAdapterController = {
-        id: providerId, engineKind: 'realtime',
-        // The adapter is the media/provider boundary. The Action, manager, lifecycle and store stay real.
-        start: async ({ sessionId }) => publish({ adapterId: providerId, sessionId: sessionId || VOICE_AGENT_GLOBAL_SESSION_ID, status: 'connected', mode: 'listening', canStop: true, canCommitInput: true, micMuted: false }),
-        stop: async () => publish({ ...snapshot, status: 'disconnected', mode: 'idle', canStop: false }),
-        toggle: async () => {}, interrupt: async () => publish({ ...snapshot, mode: 'listening' }),
-        bargeIn: async () => publish({ ...snapshot, mode: 'listening' }),
-        commitInput: async () => publish({ ...snapshot, mode: 'thinking' }),
-        setMuted: async ({ muted }) => publish({ ...snapshot, micMuted: muted }), sendContextUpdate() {},
-        getSnapshot: () => snapshot,
-        subscribe: (listener) => { listeners.add(listener); return () => { listeners.delete(listener); }; },
-        resolveSurfaceCapabilities: () => ({ allowsGlobalStart: true, controlSessionScope: 'surface', requiresVoiceAgentFeature: false, bargeInEnabled: true, cancelResponse: 'immediate' }),
-    };
+const runtimeCleanup: Array<() => Promise<void>> = [];
+let homeFixtureOrdinal = 0;
+afterEach(async () => { await standardCleanup(); await resetVoiceSessionRuntimeStateForTests();
+    for (const cleanup of runtimeCleanup.splice(0).reverse()) await cleanup();
+    resetServerFeaturesClientForTests(); vi.restoreAllMocks(); });
+
+async function createHarness(start = true, featureEnabled = true) {
+    // Account settings persistence outlives a mounted fixture. Distinct external
+    // Home inputs keep each case's versioned bootstrap independent.
+    const fixtureOrdinal = ++homeFixtureOrdinal;
+    const previousState = storage.getState();
+    const entry = BUNDLED_FIRST_PARTY_VOICE_CONVERSATION_RUNTIME_ENTRIES.find(value => value.pluginId === 'happier.voice.openai');
+    if (!entry) throw new Error('Missing generated OpenAI contribution');
+    const recipientContract = createBundledVoiceRecipientContract({ pluginId: entry.pluginId, declaration: entry.declaration });
+    if (!recipientContract) throw new Error('Missing generated OpenAI recipient contract');
+    const purposes = createConnectedPurposeCatalogHttpBoundary();
+    const artifacts = createArtifactStoreBoundary({ ownerAccountId: () => 'voice-action-account', encryptionMode: 'plain' });
+    const browser = installVoiceWebRtcBrowserBoundary({ onCreatePeer(peer) {
+        // Browser readiness belongs to each actual newly constructed SDK peer.
+        peer.setRemoteDescription.mockImplementation(async () => { peer.channel.open(); });
+    } });
+    const browserLocks = installWebLockManagerMock();
+    const deviceStorage = installLocalStorageMock();
+    runtimeCleanup.push(async () => { deviceStorage.restore(); browserLocks.restore(); browser.restore(); storage.setState(previousState, true); });
+    const contribution = { pluginId: entry.pluginId, localId: entry.declaration.id };
+    const voice = writeVoiceProviderSettingsConfig(previousState.settings.voice, entry.providerId,
+        { ...OPENAI_REALTIME_DEFAULT_SETTINGS, turnDetection: 'manual' });
+    const saved = saveAndUseAccountVoiceCredential({ settings: { ...previousState.settings,
+        voiceSettingsV1: { ...voice, providerId: entry.providerId }, voice: { ...voice, providerId: entry.providerId } },
+        contribution, credentialSlotId: recipientContract.credentialSlot.id, expectedSettingsVersion: 1,
+        currentDeclaration: entry.declaration, value: 'sk_action_boundary', generateId: () => 'voice-action-secret', now: 1,
+        expectedSecretId: null, expectedSecretUpdatedAt: null, approvedRecipientContractDigest: createRecipientContractDigestV1(recipientContract) });
+    const selected = applyAccountVoiceCredentialSourceSelection({ settings: saved.settings, connectedPurposes: purposes.value,
+        currentDeclaration: entry.declaration, mutation: { contribution, credentialSlotId: recipientContract.credentialSlot.id,
+            expectedSettingsVersion: 1, selection: { kind: 'savedSecret' } } });
+    purposes.replace(selected.connectedPurposes);
+    const features = FeaturesResponseSchema.parse({ features: { voice: { enabled: featureEnabled } }, capabilities: {} });
+    let heldFeatureResponse: Readonly<{ entered: ReturnType<typeof createDeferred<void>>; released: ReturnType<typeof createDeferred<void>> }> | null = null;
+    const sessionIdsByHome = { voice: ['session-original', 'bot-talk-session', 'other-session', 'voice-action-history'],
+        explicit: ['explicit-session'], focused: ['default-session'], competing: ['competing-session'] };
+    const sessionsByHome = new Map(Object.entries(sessionIdsByHome).map(([key, ids]) => [key,
+        createSessionMetadataHttpBoundary(() => Object.fromEntries(Object.entries(storage.getState().sessions)
+            .filter(([id]) => ids.includes(id))))] as const));
+    // The plain Home stores clear Account secrets; the device cache seals them
+    // with its own key after the real Account lifetime has initialized custody.
+    const servedSettings = { ...selected.settings, secrets: selected.settings.secrets.filter(() => false) };
+    const home = await serveActionHomes({ homes: [
+        ...['explicit', 'focused', 'competing'].map(key => ({ key,
+            serverUrl: `https://voice-action-${key}-${fixtureOrdinal}.example.test`, accountId: 'voice-action-account',
+            currentAccount: true, settings: servedSettings })),
+        { key: 'voice', serverUrl: `https://voice-action-runtime-${fixtureOrdinal}.example.test`,
+            accountId: 'voice-action-account', currentAccount: true, settings: servedSettings },
+    ], route: async request => {
+            const artifactResponse = artifacts.handle(request.path, { method: request.method,
+                ...(request.body !== undefined ? { body: JSON.stringify(request.body) } : {}) });
+            if (artifactResponse) return await artifactResponse;
+            const sessions = sessionsByHome.get(request.home);
+            if (request.path === '/v1/features') {
+                const hold = request.home === 'voice' ? heldFeatureResponse : null;
+                if (hold) { hold.entered.resolve(undefined); await hold.released.promise; }
+                return Response.json(features);
+            }
+            if (/^\/v[123]\/sessions\/[^/]+\/messages$/.test(request.path) && request.method === 'GET')
+                return Response.json({ messages: [], hasMore: false });
+            if (request.path === '/v1/sessions' && request.method === 'POST' && sessions) return sessions.createSessionFromPost('voice-action-history',
+                { method: request.method, body: JSON.stringify(request.body) });
+            return await purposes.handle(request.url, { method: request.method, body: request.method === 'POST' ? JSON.stringify(request.body) : undefined })
+                ?? sessions?.handle(request.url, { method: request.method, body: request.method === 'PATCH' ? JSON.stringify(request.body) : undefined })
+                ?? answerVoiceRealtimePreparationHttpRequest(request.url, storage.getState().settings) ?? undefined;
+        } });
+    runtimeCleanup.push(async () => { await home.dispose(); });
+    const disconnect = await home.restoreActiveConnection();
+    runtimeCleanup.push(async () => { await disconnect(); });
+    const serverId = home.homes.voice!.id;
+    const accountScope = { serverId, accountId: 'voice-action-account' };
+    const deviceKey = await resolveDeviceLocalSettingsSecretsKey(accountScope);
+    if (!deviceKey) throw new Error('Voice Action fixture could not initialize device-local secret custody');
+    // This is a real post-bootstrap Settings transition, not a repeated v1 echo.
+    for (const key of Object.keys(home.homes)) home.replaceAccountSettings(key, { settings: selected.settings, version: 2 });
+    const sealedSettings = sealSecretsDeep(selected.settings, deviceKey);
+    storage.getState().applySettingsForScope(accountScope, sealedSettings, 2);
+    expect(storage.getState().settingsVersion).toBe(2);
+    expect(storage.getState().settings.secrets.map(secret => secret.id)).toContain('voice-action-secret');
+    expect(storage.getState().settings.secrets).toEqual(sealedSettings.secrets);
+    assertNoUnsealedSettingsSecretValues(storage.getState().settings);
+    for (const value of Object.values(home.homes)) primeServerFeaturesSnapshot({ serverId: value.id, snapshot: { status: 'ready', features } });
+    storage.setState({ sessions: Object.fromEntries(Object.entries(sessionIdsByHome).flatMap(([key, ids]) => ids.map(id => [id, createSessionFixture({ id, serverId: home.homes[key]!.id,
+            encryptionMode: 'plain', active: false, metadata: { path: '/voice', host: 'test',
+                ...(id === 'voice-action-history' ? buildVoiceTranscriptHistorySessionMetadata() : {}) } })] as const))) });
+    const metadata = storage.getState().sessions['voice-action-history']!.metadata;
+    const owner = createSessionOwnerMetadataV1({ metadata });
+    if (!owner.ok) throw new Error('Voice history fixture needs current owner metadata');
+    sessionsByHome.get('voice')!.createSessionFromPost('voice-action-history', { method: 'POST', body: JSON.stringify({
+        tag: 'system:voice-transcript-history:v1', metadataLayoutVersion: 1,
+        sharedMetadata: { ciphertext: JSON.stringify(projectSessionSharedMetadataV1({ metadata, agentState: null })) },
+        ownerMetadata: createPlainSessionOwnerMetadataEnvelopeV1(owner.ownerMetadata),
+        agentState: null, dataEncryptionKey: null, encryptionMode: 'plain',
+    }) });
+    await purposes.hydrate({ serverId, accountId: 'voice-action-account' });
+    let mintStatus = 200;
+    const providerFetch = vi.fn(async (url: URL | RequestInfo) => {
+        if (String(url).endsWith('/v1/realtime/client_secrets')) return mintStatus === 200
+            ? Response.json({ value: 'ek_action_boundary', expires_at: Math.floor(Date.now() / 1000) + 60,
+                session: { type: 'realtime', object: 'realtime.session', id: 'voice-action-provider', model: OPENAI_REALTIME_DEFAULT_SETTINGS.model.id } })
+            : new Response('{}', { status: mintStatus });
+        if (String(url).endsWith('/v1/realtime/calls')) return new Response('v=0\r\na=action-answer\r\n', { status: 201 });
+        throw new Error(`Unexpected provider request: ${String(url)}`);
+    });
+    vi.stubGlobal('fetch', providerFetch);
+    const lease = createBundledConversationRuntimeHostLease();
+    runtimeCleanup.push(async () => { lease.revoke(); });
+    const host = Object.freeze({ ...lease.host, createMicSession: () => browser.micSession });
+    const scope = createExternalVoiceProviderActivationScope({ pluginId: entry.pluginId, occurrenceId: 'voice-action-occurrence',
+        declarations: [entry.declaration], hostPlatform: 'web', runtimeHost: host,
+        isRuntimeHostCurrent: () => getCurrentBundledConversationRuntimeHost() === lease.host,
+        hostBindingsByLocalId: { [entry.declaration.id]: { recipientContract, descriptor: 'bundled',
+            createInvocationAccountOperations: (signal, _sessionId, isCurrent, phase) => createAccountVoiceOperationService({
+                providerId: entry.providerId, contribution, declaration: entry.declaration, phase, recipientContract, signal, isCurrent, fetch: providerFetch }) } } });
+    runtimeCleanup.push(async () => { await scope.unwind(); });
+    entry.activate(scope.api);
+    await scope.commit();
+    const adapter = getExternalVoiceProviderRegistration(entry.providerId)?.adapter;
+    if (!adapter) throw new Error('Generated OpenAI adapter did not activate');
     registerVoiceAdapters([adapter]);
     const lifecycle = createVoiceSessionLifecycleController({ captureAdmission: createVoiceCaptureAdmissionController() });
     setVoiceSessionLifecycleController(lifecycle);
     lifecycle.subscribe(() => setVoiceSessionSnapshot(lifecycle.getSnapshot()));
-    lifecycle.setConfiguredProviderId(adapter.id);
-    if (start) await lifecycle.toggle({ serverId: 'home-original', sessionId: 'session-original' });
+    lifecycle.setConfiguredProviderId(entry.providerId);
+    if (start) {
+        await lifecycle.toggle({ serverId, sessionId: 'session-original' });
+        expect(lifecycle.getSnapshot()).toMatchObject({ adapterId: entry.providerId, sessionId: 'session-original', status: 'connected' });
+    }
     const expectedAttempt = getVoiceSessionAttemptId()!;
     const invoke = (action: Parameters<typeof executeVoiceConversationAction>[0], input: unknown) => executeVoiceConversationAction(action, input, { navigate() {} });
-    return { lifecycle, expectedAttempt, invoke, publish };
+    let event = 0;
+    return { lifecycle, expectedAttempt, invoke, serverId, providerId: entry.providerId, artifacts, homeRequests: home.requests,
+        explicitServerId: home.homes.explicit!.id, focusedServerId: home.homes.focused!.id, competingServerId: home.homes.competing!.id,
+        micTrack: () => browser.micTrack,
+        speaking() { browser.peer.channel.message(JSON.stringify({ type: 'output_audio_buffer.started', event_id: `action-${++event}` })); },
+        acknowledgeOutputCleared() { browser.peer.channel.message(JSON.stringify({ type: 'output_audio_buffer.cleared', event_id: `action-${++event}` })); },
+        fail() { browser.peer.channel.message(JSON.stringify({ type: 'error', event_id: `action-${++event}`, error: { code: 'session_expired' } })); },
+        rejectCredentials() { mintStatus = 401; },
+        holdFeatureResponse() {
+            const hold = { entered: createDeferred<void>(), released: createDeferred<void>() };
+            heldFeatureResponse = hold;
+            const release = () => { if (heldFeatureResponse === hold) heldFeatureResponse = null; hold.released.resolve(undefined); };
+            runtimeCleanup.push(async () => { release(); });
+            resetServerFeaturesClientForTests();
+            return { entered: hold.entered.promise, release };
+        },
+        sent: () => browser.peer.channel.sent.map(value => JSON.parse(value)),
+    };
 }
 
-describe('local conversation Actions through the lifecycle owner', () => {
+describe('generated OpenAI conversation Actions through the lifecycle owner', () => {
+    it('replays one tapped unmute Ask in the approving client while model decisions and End leave custody intact', async () => {
+        const { lifecycle, expectedAttempt, serverId, artifacts, homeRequests, micTrack } = await createHarness();
+        const { createDefaultActionExecutor } = await import('./defaultActionExecutor');
+        const { captureActionAccountContext } = await import('./actionAccountContext');
+        const { useApprovalDecisionHandler } = await import('@/components/tools/shell/approvals/useApprovalDecisionHandler');
+        const executor = createDefaultActionExecutor();
+        const agent = { surface: 'agent' as const, serverId, defaultSessionId: 'session-original',
+            defaultSessionMachineId: 'unreachable-origin-machine', actionRequestId: 'voice-unmute-request',
+            actionCaller: { kind: 'session' as const, sessionId: 'session-original', starterDepth: 0, turnDepth: 0 } };
+        const account = await captureActionAccountContext(serverId);
+        let unmountDecision = async () => {};
+        try {
+            expect(await executor.execute('ui.voice_global.set_muted', { expectedAttempt, muted: true }, agent))
+                .toMatchObject({ ok: true, result: { status: 'completed' } });
+            const pending = executor.execute('ui.voice_global.set_muted', { expectedAttempt, muted: false }, agent);
+            await vi.waitFor(() => expect(artifacts.list()).toHaveLength(1));
+            const artifactId = artifacts.list()[0]!.id;
+            const artifact = await account.fetchArtifact(artifactId);
+            if (!artifact || typeof artifact.body !== 'string') throw new Error('Expected durable Ask');
+            const parsed = approvalArtifactBodyMatchesHeaderV1(artifact.header ?? {}, artifact.body);
+            if (parsed?.family !== 'built_in') throw new Error('Expected strict built-in Ask');
+            expect(parsed.request).toMatchObject({ status: 'open', actionArgs: { expectedAttempt, muted: false } });
+            expect(micTrack().enabled).toBe(false);
+            expect(await executor.execute('approval.request.decide', { artifactId, decision: 'approve' }, agent))
+                .toMatchObject({ ok: false, errorCode: 'present_user_required' });
+            expect(JSON.parse(artifacts.readPlainBody(artifactId)!)).toMatchObject({ status: 'open' });
+            const { renderHook } = await import('@/dev/testkit');
+            const hook = await renderHook(() => useApprovalDecisionHandler(artifact, parsed.request, 'session-original', serverId));
+            unmountDecision = hook.unmount;
+            expect(await hook.getCurrent()('approve')).toBe(true);
+            expect(await pending).toMatchObject({ ok: true, result: { status: 'completed', voice: { muted: false } } });
+            expect(micTrack().enabled).toBe(true);
+            const settled = JSON.parse(artifacts.readPlainBody(artifactId)!);
+            expect(approvalArtifactBodyMatchesHeaderV1((await account.fetchArtifact(artifactId))!.header ?? {}, JSON.stringify(settled)))
+                .toMatchObject({ family: 'built_in', request: { status: 'executed', execution: { ok: true } } });
+            // A repeated decision cannot reapply the effect to this live attempt.
+            await executor.execute('ui.voice_global.set_muted', { expectedAttempt, muted: true }, agent);
+            expect(await hook.getCurrent()('approve')).toBe(true);
+            expect(micTrack().enabled).toBe(false);
+            const next = executor.execute('ui.voice_global.set_muted', { expectedAttempt, muted: false },
+                { ...agent, actionRequestId: 'voice-unmute-after-end' });
+            await vi.waitFor(() => expect(artifacts.list()).toHaveLength(2));
+            const nextId = artifacts.list()[1]!.id;
+            await executor.execute('ui.voice_global.end', { expectedAttempt }, agent);
+            expect(JSON.parse(artifacts.readPlainBody(nextId)!)).toMatchObject({ status: 'open' });
+            await executor.execute('approval.request.decide', { artifactId: nextId, decision: 'cancel' }, { surface: 'ui', serverId });
+            expect(await next).toMatchObject({ ok: false, errorCode: 'approval_canceled' });
+            expect(homeRequests.filter(request => request.path.includes('/rpc'))).toEqual([]);
+        } finally {
+            for (const row of artifacts.list()) {
+                if (JSON.parse(artifacts.readPlainBody(row.id)!).status === 'open') {
+                    await executor.execute('approval.request.decide', { artifactId: row.id, decision: 'cancel' }, { surface: 'ui', serverId });
+                }
+            }
+            await unmountDecision(); account.dispose(); await lifecycle.dispose();
+        }
+    });
+    it('interrupts actual speaking through the surface handler and ignores an absent control Session', async () => {
+        const { lifecycle, speaking, sent, acknowledgeOutputCleared } = await createHarness();
+        const { createVoiceSurfaceActionHandlers } = await import('@/components/voice/surface/createVoiceSurfaceActionHandlers');
+        try {
+            expect(lifecycle.getSnapshot().status).toBe('connected');
+            const quiescentMode = lifecycle.getSnapshot().mode;
+            speaking();
+            await vi.waitFor(() => expect(lifecycle.getSnapshot().mode).toBe('speaking'));
+            const sentBeforeInterrupt = sent().length;
+            createVoiceSurfaceActionHandlers({ sessionId: 'session-original', snapSessionId: null }).onBargeIn();
+            expect(lifecycle.getSnapshot().mode).toBe('speaking');
+            expect(sent().slice(sentBeforeInterrupt)).toEqual([]);
+            setVoiceSessionLifecycleController(null);
+            createVoiceSurfaceActionHandlers({ sessionId: 'session-original', snapSessionId: 'session-original' }).onBargeIn();
+            await Promise.resolve();
+            expect(lifecycle.getSnapshot().mode).toBe('speaking');
+            expect(sent().slice(sentBeforeInterrupt)).toEqual([]);
+            setVoiceSessionLifecycleController(lifecycle);
+            createVoiceSurfaceActionHandlers({ sessionId: 'session-original', snapSessionId: 'session-original' }).onBargeIn();
+            await vi.waitFor(() => expect(sent().slice(sentBeforeInterrupt)).toEqual([
+                { type: 'response.cancel' }, { type: 'output_audio_buffer.clear' },
+            ]));
+            expect(lifecycle.getSnapshot().mode).toBe('speaking');
+            acknowledgeOutputCleared();
+            await vi.waitFor(() => expect(lifecycle.getSnapshot()).toMatchObject({ status: 'connected', mode: quiescentMode }));
+        } finally { setVoiceSessionLifecycleController(lifecycle); await lifecycle.dispose(); }
+    });
     it.each(['ended', 'history', 'recovery'] as const)('opens $0 through the real default Action and the mounted workspace', async scenario => {
-        const features = FeaturesResponseSchema.parse({ features: { voice: { enabled: true } }, capabilities: {} });
-        const home = await serveActionHomes({ homes: [{ key: 'voice', serverUrl: 'https://voice-hosted-action.example.test',
-            accountId: 'voice-hosted-account', currentAccount: true,
-            settings: { voice: voiceSettingsParse({ providerId: 'local_conversation' }) } }], route: request => {
-                if (request.path === '/v1/features') return Response.json(features);
-                if (request.path === '/v1/account/encryption/currentness') return Response.json(createPlainAccountEncryptionCurrentnessFixture());
-                return undefined;
-            } });
-        const serverId = home.homes.voice!.id;
-        primeServerFeaturesSnapshot({ serverId, snapshot: { status: 'ready', features } });
-        const { lifecycle, publish } = await createHarness();
+        const { lifecycle, serverId, providerId, rejectCredentials } = await createHarness();
         const { createWorkspaceState, reduceWorkspaceState } = await import('@/components/appShell/workspace/workspaceState');
         const { createWorkspaceNavigationAdapter } = await import('@/components/appShell/workspace/workspaceNavigationAdapter');
         const { createWorkspaceActionAdapter } = await import('@/components/appShell/workspace/workspaceActions');
@@ -99,16 +326,19 @@ describe('local conversation Actions through the lifecycle owner', () => {
         };
         const screen = await renderScreen(hosted());
         try {
-            const accountScope = { serverId, accountId: 'voice-hosted-account' };
-            setVoiceSessionSnapshot(lifecycle.getSnapshot(), { adapterId: 'local_conversation', controlSessionId: 'session-original',
+            const accountScope = { serverId, accountId: 'voice-action-account' };
+            setVoiceSessionSnapshot(lifecycle.getSnapshot(), { adapterId: providerId, controlSessionId: 'session-original',
                 conversationSessionId: 'saved-conversation', conversationSessionAddress: { serverId, sessionId: 'saved-conversation' },
                 targetSessionAddress: null, transcriptMode: 'synthetic', updatedAt: 1,
                 ...(scenario === 'history' ? { lifetime: 'runtime_attempt' as const } : {}) },
                 { accountScope, conversationScope: { kind: 'voice_home' } });
-            const expectedAttempt = getVoiceSessionAttemptId()!;
-            if (scenario === 'recovery') publish({ ...lifecycle.getSnapshot(), status: 'error', canStop: false,
-                errorRecoveryAction: 'review_credentials' });
-            else await lifecycle.stop('session-original');
+            if (scenario === 'recovery') {
+                await lifecycle.stop('session-original');
+                rejectCredentials();
+                await lifecycle.toggle({ serverId, sessionId: 'session-original' });
+                expect(lifecycle.getSnapshot()).toMatchObject({ status: 'error', errorRecoveryAction: 'review_credentials' });
+            } else await lifecycle.stop('session-original');
+            const expectedAttempt = getVoiceSessionPresentedAttemptId()!;
             useVoiceTargetStore.getState().setLastFocusedSessionAddress({ serverId: 'other-home', sessionId: 'visible-session' });
             const actionId = scenario === 'recovery' ? 'ui.voice_global.recover' : 'ui.voice_global.open_conversation';
             const context = { surface: 'ui' as const, authority: 'present_user' as const, serverId, expectedAccountId: accountScope.accountId };
@@ -121,32 +351,22 @@ describe('local conversation Actions through the lifecycle owner', () => {
             const stale = await createDefaultActionExecutor().execute(actionId, { expectedAttempt: 'previous-attempt' }, context);
             expect(stale).toMatchObject({ ok: true, result: { status: 'unavailable', code: 'stale_voice_attempt' } });
             expect(hrefForDestinationRef(catalog, workspace.tabs[workspace.groups[workspace.focusedGroupId].activeTabId].target)).toBe(destination);
-        } finally { await screen.unmount(); unregister(); await lifecycle.dispose(); home.dispose(); }
+        } finally { await screen.unmount(); unregister(); await lifecycle.dispose(); }
     });
     it('admits safe mute but refuses microphone reopening when the captured Home disables Voice', async () => {
-        const features = FeaturesResponseSchema.parse({ features: { voice: { enabled: false } }, capabilities: {} });
-        const home = await serveActionHomes({ homes: [{ key: 'voice', serverUrl: 'https://voice-unmute-admission.example.test',
-            accountId: 'voice-unmute-account', currentAccount: true,
-            settings: { voice: voiceSettingsParse({ providerId: 'local_conversation' }) } }], route: request => {
-                if (request.path === '/v1/features') return Response.json(features);
-                if (request.path === '/v1/account/encryption/currentness') return Response.json(createPlainAccountEncryptionCurrentnessFixture());
-                return undefined;
-            } });
-        const serverId = home.homes.voice!.id;
-        primeServerFeaturesSnapshot({ serverId, snapshot: { status: 'ready', features } });
-        const { lifecycle, expectedAttempt } = await createHarness();
+        const { lifecycle, expectedAttempt, serverId } = await createHarness(true, false);
         try {
             const { createDefaultActionExecutor } = await import('./defaultActionExecutor');
             const executor = createDefaultActionExecutor();
             const context = { surface: 'ui' as const, authority: 'present_user' as const, serverId,
-                expectedAccountId: 'voice-unmute-account' };
+                expectedAccountId: 'voice-action-account' };
             expect(await executor.execute('ui.voice_global.set_muted', { expectedAttempt, muted: true }, context))
                 .toMatchObject({ ok: true, result: { status: 'completed' } });
             expect(lifecycle.getSnapshot().micMuted).toBe(true);
             expect(await executor.execute('ui.voice_global.set_muted', { expectedAttempt, muted: false }, context))
                 .toMatchObject({ ok: false, errorCode: 'voice_unavailable' });
             expect(lifecycle.getSnapshot().micMuted).toBe(true);
-        } finally { await lifecycle.dispose(); home.dispose(); }
+        } finally { await lifecycle.dispose(); }
     });
     it.each([
         { lifetime: 'runtime_attempt' as const, target: null, destination: '/settings/voice-history' },
@@ -156,10 +376,11 @@ describe('local conversation Actions through the lifecycle owner', () => {
         const previousScope = storage.getState().profileScope;
         const accountScope = { serverId: 'ended-home', accountId: 'ended-account' };
         storage.setState({ profileScope: accountScope });
-        const { lifecycle } = await createHarness();
+        const { lifecycle, providerId } = await createHarness();
+        storage.setState({ profileScope: accountScope });
         try {
             const binding = {
-                adapterId: 'local_conversation', controlSessionId: 'session-original', conversationSessionId: 'saved-conversation',
+                adapterId: providerId, controlSessionId: 'session-original', conversationSessionId: 'saved-conversation',
                 conversationSessionAddress: { serverId: 'ended-home', sessionId: 'saved-conversation' },
                 targetSessionAddress: target, lifetime, transcriptMode: 'synthetic' as const, updatedAt: 1,
             };
@@ -183,18 +404,7 @@ describe('local conversation Actions through the lifecycle owner', () => {
         } finally { await lifecycle.dispose(); storage.setState({ profileScope: previousScope }); }
     });
     it.each(['action', 'native'] as const)('starts Talk from a Bot SessionAction at its captured Home and surfaces a running attempt refusal through %s', async surface => {
-        const features = FeaturesResponseSchema.parse({ features: { voice: { enabled: true } }, capabilities: {} });
-        const home = await serveActionHomes({ homes: [{ key: 'talk', serverUrl: 'https://bot-talk.example.test', accountId: 'talk-account',
-            settings: { voice: voiceSettingsParse({ providerId: 'local_conversation', providers: {
-                local_conversation: { schemaVersion: 1, config: { conversationMode: 'agent' } },
-            } }) } }], route: request => {
-                if (request.path === '/v1/features') return Response.json(features);
-                if (request.path === '/v1/account/encryption/currentness') return Response.json(createPlainAccountEncryptionCurrentnessFixture());
-                return undefined;
-            } });
-        const serverId = home.homes.talk!.id;
-        primeServerFeaturesSnapshot({ serverId, snapshot: { status: 'ready', features } });
-        const { lifecycle, invoke } = await createHarness('local_conversation', false);
+        const { lifecycle, invoke, serverId } = await createHarness(false);
         const target = createSessionActionTarget({ serverId, session: createSessionListRenderableSessionFixture({
             id: 'bot-talk-session', metadata: { path: '/project', name: 'Ada', bot: { kind: 'bot' } },
         }) });
@@ -206,45 +416,72 @@ describe('local conversation Actions through the lifecycle owner', () => {
             if (surface === 'action') {
                 await expect(executeSessionAction({ actionId: 'ui.session.talk', target })).rejects.toMatchObject({ code: 'voice_start_unavailable' });
             } else {
-                const { Modal } = await import('@/modal');
-                vi.mocked(Modal.alert).mockClear();
+                const { ModalProvider } = await import('@/modal');
                 const { useSessionRowActionMenu } = await import('@/components/sessions/shell/row/actionMenu/useSessionRowActionMenu');
-                const menu = await renderHook(() => useSessionRowActionMenu({ target, sessionName: 'Bot', hideInactiveSessions: false,
-                    iconColor: '#000', activeTags: [], knownTags: [], tagsEnabled: false, isNativeMobile: true,
-                    setContextMenuOpen() {}, openTagsMenuFromContext() {} }));
-                expect(menu.getCurrent().moreMenuItems.find(item => item.id === 'ui.session.talk')?.title).toContain('Ada');
-                menu.getCurrent().handleContextMenuSelect('ui.session.talk');
-                await vi.waitFor(() => expect(Modal.alert).toHaveBeenCalledWith(expect.any(String), 'voice_start_unavailable'));
+                const { createRoot } = await import('react-dom/client');
+                const container = document.createElement('div');
+                document.body.append(container);
+                const root = createRoot(container);
+                let menu: ReturnType<typeof useSessionRowActionMenu> | null = null;
+                function MenuCapture() {
+                    menu = useSessionRowActionMenu({ target, sessionName: 'Bot', hideInactiveSessions: false,
+                        iconColor: '#000', activeTags: [], knownTags: [], tagsEnabled: false, isNativeMobile: true,
+                        setContextMenuOpen() {}, openTagsMenuFromContext() {} });
+                    return null;
+                }
+                const readMenu = () => {
+                    if (!menu) throw new Error('Session menu did not mount');
+                    return menu;
+                };
+                try {
+                    await React.act(async () => { root.render(React.createElement(ModalProvider, null, React.createElement(MenuCapture))); });
+                    expect(readMenu().moreMenuItems.find(item => item.id === 'ui.session.talk')?.title).toContain('Ada');
+                    await React.act(async () => { readMenu().handleContextMenuSelect('ui.session.talk'); });
+                    // The real web OS renderer owns the modal's portal and message.
+                    await vi.waitFor(() => expect(document.body.textContent).toContain('voice_start_unavailable'));
+                } finally { await React.act(async () => { root.unmount(); }); container.remove(); }
             }
             expect(lifecycle.getSnapshot()).toMatchObject({ status: 'connected', sessionId: 'bot-talk-session' });
-        } finally { await lifecycle.dispose(); home.dispose(); }
+        } finally { await lifecycle.dispose(); }
     });
-    it('publishes only the applied voice of the captured attempt and retires it on End', async () => {
-        const { lifecycle, expectedAttempt, invoke, publish } = await createHarness();
-        const inUseVoice = {
-            providerContributionId: 'happier.openai/realtime', settingFieldPath: 'voice', value: 'coral', displayName: 'Coral',
-        };
+});
+
+describe('Action projection of the generated OpenAI applied-selection producer', () => {
+    it('projects the applied voice and retires it on End', async () => {
+        const { lifecycle, expectedAttempt, invoke, providerId, serverId } = await createHarness();
         try {
-            expect((await invoke('ui.voice_global.get', {})).voice).toHaveProperty('inUseVoice', null);
-            // This is the provider/media boundary's accepted selection, not a saved next-attempt preference.
-            publish({ ...lifecycle.getSnapshot(), inUseVoice });
             const current = await invoke('ui.voice_global.get', {});
-            expect(current.voice).toHaveProperty('inUseVoice', inUseVoice);
+            const inUseVoice = current.voice.inUseVoice;
+            expect(inUseVoice).toMatchObject({ providerContributionId: providerId, settingFieldPath: 'voice',
+                value: OPENAI_REALTIME_DEFAULT_SETTINGS.voice, displayName: expect.any(String) });
             expect(VoiceConversationActionOutputSchemas['ui.voice_global.get'].safeParse(current).success).toBe(true);
+            // Changing the next-attempt preference cannot rewrite the already
+            // accepted selection published by the real provider preparation.
+            const settingsBeforePreference = storage.getState().settings;
+            const nextVoice = writeVoiceProviderSettingsConfig(settingsBeforePreference.voice, providerId,
+                { ...OPENAI_REALTIME_DEFAULT_SETTINGS, turnDetection: 'manual', voice: 'coral' });
+            storage.getState().applySettingsLocal(normalizeVoiceSettingsLocalDelta({ voice: nextVoice }, settingsBeforePreference));
+            expect(storage.getState().settings.voiceSettingsV1.credentialBindings).toEqual(settingsBeforePreference.voiceSettingsV1.credentialBindings);
+            expect((await invoke('ui.voice_global.get', {})).voice).toHaveProperty('inUseVoice', inUseVoice);
             useVoiceTargetStore.getState().setLastFocusedSessionAddress({ serverId: 'other-home', sessionId: 'other-session' });
             expect((await invoke('ui.voice_global.get', {})).voice).toHaveProperty('inUseVoice', inUseVoice);
             await invoke('ui.voice_global.end', { expectedAttempt });
             expect((await invoke('ui.voice_global.get', {})).voice).toHaveProperty('inUseVoice', null);
-            await lifecycle.toggle({ serverId: 'other-home', sessionId: 'other-session' });
-            expect((await invoke('ui.voice_global.get', {})).voice).toHaveProperty('inUseVoice', null);
+            await lifecycle.toggle({ serverId, sessionId: 'other-session' });
+            expect((await invoke('ui.voice_global.get', {})).voice.inUseVoice).toMatchObject({
+                providerContributionId: providerId, settingFieldPath: 'voice', value: 'coral', displayName: expect.any(String),
+            });
         } finally { await lifecycle.dispose(); }
     });
+});
+
+describe('generated OpenAI conversation Action admission and turn controls', () => {
     it('starts explicit global/session and default intents through the existing idle-target policy', async () => {
-        const previousVoice = storage.getState().settings.voice;
-        primeServerFeaturesSnapshot({ snapshot: { status: 'ready', features: FeaturesResponseSchema.parse({ features: { voice: { enabled: true } }, capabilities: {} }) } });
-        storage.setState((state) => ({ settings: { ...state.settings, voice: voiceSettingsParse({ providerId: 'local_conversation', ui: { scopeDefault: 'session' },
-            providers: { local_conversation: { schemaVersion: 1, config: { conversationMode: 'agent' } } } }) } }));
-        const { lifecycle, invoke } = await createHarness('local_conversation', false);
+        const { lifecycle, invoke, serverId, explicitServerId, focusedServerId, competingServerId, holdFeatureResponse } = await createHarness(false);
+        const previousFocus = getFocusedSessionAddress();
+        storage.setState(state => ({ settings: { ...state.settings,
+            voice: { ...state.settings.voice, ui: { ...state.settings.voice.ui, scopeDefault: 'session' } },
+            voiceSettingsV1: { ...state.settings.voiceSettingsV1, ui: { ...state.settings.voiceSettingsV1.ui, scopeDefault: 'session' } } } }));
         // This fixture omits unrelated host ports: any accidental non-Voice dispatch fails loudly.
         const executor = createActionExecutor(createActionExecutorBoundaryFixture({
             isActionApprovalRequired: () => false,
@@ -252,12 +489,15 @@ describe('local conversation Actions through the lifecycle owner', () => {
         }));
         const actionContext = { surface: 'ui' as const, authority: 'present_user' as const, actionCaller: { kind: 'host' as const } };
         try {
-            useVoiceTargetStore.getState().setLastFocusedSessionAddress({ serverId: 'default-home', sessionId: 'default-session' });
+            useVoiceTargetStore.getState().setLastFocusedSessionAddress({ serverId: focusedServerId, sessionId: 'default-session' });
             for (const [target, expectedTarget] of [
-                [{ kind: 'session', sessionAddress: { serverId: 'explicit-home', sessionId: 'explicit-session' } }, { kind: 'session', sessionAddress: { serverId: 'explicit-home', sessionId: 'explicit-session' } }],
-                [{ kind: 'default' }, { kind: 'session', sessionAddress: { serverId: 'default-home', sessionId: 'default-session' } }],
+                [{ kind: 'session', sessionAddress: { serverId: explicitServerId, sessionId: 'explicit-session' } }, { kind: 'session', sessionAddress: { serverId: explicitServerId, sessionId: 'explicit-session' } }],
+                [{ kind: 'default' }, { kind: 'session', sessionAddress: { serverId: focusedServerId, sessionId: 'default-session' } }],
                 [{ kind: 'global' }, { kind: 'global' }],
             ] as const) {
+                // Each vector starts from an actual focused surface. Explicit
+                // Start legitimately updates last-focused at the binding owner.
+                setFocusedSessionId('default-session', focusedServerId);
                 const startResult = await executor.execute('ui.voice_global.start', { target, expectedAttempt: null }, actionContext);
                 expect(startResult.ok, JSON.stringify(startResult)).toBe(true);
                 if (!startResult.ok) throw new Error(startResult.errorCode);
@@ -272,47 +512,74 @@ describe('local conversation Actions through the lifecycle owner', () => {
                 expect(VoiceConversationActionOutputSchemas['ui.voice_global.end'].parse(endResult.result))
                     .toMatchObject({ status: 'completed', voice: { status: 'disconnected', canDismissEnded: true } });
             }
-            let competingStart: Promise<void> | null = null;
-            const racedStart = await executeVoiceConversationAction('ui.voice_global.start', {
+            const hold = holdFeatureResponse();
+            const { createDefaultActionExecutor } = await import('./defaultActionExecutor');
+            let settled = false;
+            const pendingStart = createDefaultActionExecutor().execute('ui.voice_global.start', {
                 target: { kind: 'global' }, expectedAttempt: null,
-            }, {
-                navigate() {},
-                // The host boundary lets another surface start after asynchronous preparation,
-                // immediately before this admitted command reaches the same lifecycle owner.
-                isCurrent: () => {
-                    competingStart ??= lifecycle.toggle({ serverId: 'competing-home', sessionId: 'competing-session' });
-                    return true;
-                },
-            });
-            await competingStart;
-            expect(racedStart).toMatchObject({ status: 'unavailable', code: 'stale_voice_attempt' });
-            expect(lifecycle.getSnapshot()).toMatchObject({ status: 'connected', sessionId: 'competing-session' });
+            }, { ...actionContext, serverId, expectedAccountId: 'voice-action-account' }).finally(() => { settled = true; });
+            try {
+                // Readiness is held at the actual Home HTTP boundary, not in a
+                // side-effectful replacement of the caller's currentness guard.
+                await hold.entered;
+                expect(settled).toBe(false);
+                await lifecycle.toggle({ serverId: competingServerId, sessionId: 'competing-session' });
+                expect(lifecycle.getSnapshot()).toMatchObject({ status: 'connected', sessionId: 'competing-session' });
+                const acceptedAttempt = getVoiceSessionAttemptId();
+                expect(acceptedAttempt).not.toBeNull();
+                expect(settled).toBe(false);
+                hold.release();
+                const racedStart = await pendingStart;
+                expect(racedStart).toMatchObject({ ok: true, result: { status: 'unavailable', code: 'voice_start_unavailable' } });
+                expect(getVoiceSessionAttemptId()).toBe(acceptedAttempt);
+                expect(lifecycle.getSnapshot()).toMatchObject({ status: 'connected', sessionId: 'competing-session', canStop: true });
+                expect(lifecycle.getAttemptTargetSessionAddress()).toEqual({ serverId: competingServerId, sessionId: 'competing-session' });
+            } finally { hold.release(); await pendingStart; }
         } finally {
             await lifecycle.dispose();
-            storage.setState((state) => ({ settings: { ...state.settings, voice: previousVoice } }));
+            setFocusedSessionId(previousFocus?.sessionId ?? null, previousFocus?.serverId);
         }
     });
     it('reads and settles the actual attempt after navigation changes, with Mute separate from End', async () => {
-        const { lifecycle, expectedAttempt, invoke, publish } = await createHarness();
+        const { lifecycle, expectedAttempt, invoke, speaking, serverId, sent, micTrack, acknowledgeOutputCleared } = await createHarness();
         try {
+            const quiescentMode = lifecycle.getSnapshot().mode;
             useVoiceTargetStore.getState().setLastFocusedSessionAddress({ serverId: 'other-home', sessionId: 'other-session' });
             const read = await invoke('ui.voice_global.get', {});
             expect(read.voice).toMatchObject({ attemptId: expectedAttempt, sessionId: 'session-original', canStop: true });
-            expect(read.voice.target).toEqual({ kind: 'session', sessionAddress: { serverId: 'home-original', sessionId: 'session-original' } });
+            expect(read.voice.target).toEqual({ kind: 'session', sessionAddress: { serverId, sessionId: 'session-original' } });
             expect((await invoke('ui.voice_global.set_muted', { expectedAttempt, muted: true })).status).toBe('completed');
             expect(lifecycle.getSnapshot()).toMatchObject({ status: 'connected', micMuted: true });
+            expect(micTrack().enabled).toBe(false);
             expect(await invoke('ui.voice_global.set_muted', { expectedAttempt: 'previous-attempt', muted: false }))
                 .toMatchObject({ status: 'unavailable', code: 'stale_voice_attempt' });
             expect(lifecycle.getSnapshot().micMuted).toBe(true);
             expect((await invoke('ui.voice_global.set_muted', { expectedAttempt, muted: false })).status).toBe('completed');
-            expect(lifecycle.getSnapshot()).toMatchObject({ status: 'connected', micMuted: false });
+            expect(lifecycle.getSnapshot().status).toBe('connected');
+            expect((await invoke('ui.voice_global.get', {})).voice.muted).toBe(false);
+            expect(micTrack().enabled).toBe(true);
+            const sentBeforeCommit = sent().length;
             expect((await invoke('ui.voice_global.turn_control', { expectedAttempt, control: 'commit_input' })).status).toBe('completed');
-            expect(lifecycle.getSnapshot().mode).toBe('thinking');
+            expect(sent().slice(sentBeforeCommit)).toEqual([{ type: 'input_audio_buffer.commit' }, { type: 'response.create' }]);
+            expect(lifecycle.getSnapshot().status).toBe('connected');
+            // The commit requests generation; only the genuine provider output
+            // edge admits cancelling that generated response.
+            speaking();
+            await vi.waitFor(() => expect(lifecycle.getSnapshot().mode).toBe('speaking'));
+            const sentBeforeCancel = sent().length;
             expect((await invoke('ui.voice_global.turn_control', { expectedAttempt, control: 'cancel' })).status).toBe('completed');
-            expect(lifecycle.getSnapshot().mode).toBe('listening');
-            publish({ ...lifecycle.getSnapshot(), mode: 'speaking', micMuted: false });
+            expect(sent().slice(sentBeforeCancel)).toEqual([{ type: 'response.cancel' }, { type: 'output_audio_buffer.clear' }]);
+            acknowledgeOutputCleared();
+            await vi.waitFor(() => expect(lifecycle.getSnapshot()).toMatchObject({ status: 'connected', mode: quiescentMode }));
+            expect(micTrack().enabled).toBe(true);
+            speaking();
+            await vi.waitFor(() => expect(lifecycle.getSnapshot().mode).toBe('speaking'));
+            const sentBeforeInterrupt = sent().length;
             expect((await invoke('ui.voice_global.turn_control', { expectedAttempt, control: 'interrupt' })).status).toBe('completed');
-            expect(lifecycle.getSnapshot().mode).toBe('listening');
+            expect(sent().slice(sentBeforeInterrupt)).toEqual([{ type: 'response.cancel' }, { type: 'output_audio_buffer.clear' }]);
+            expect(lifecycle.getSnapshot().mode).toBe('speaking');
+            acknowledgeOutputCleared();
+            await vi.waitFor(() => expect(lifecycle.getSnapshot()).toMatchObject({ status: 'connected', mode: quiescentMode }));
             expect((await invoke('ui.voice_global.end', { expectedAttempt })).status).toBe('completed');
             expect(lifecycle.getSnapshot().status).toBe('disconnected');
             const ended = await invoke('ui.voice_global.get', {});
@@ -332,27 +599,34 @@ describe('local conversation Actions through the lifecycle owner', () => {
     });
 
     it('rejects a stale token after a replacement reuses the same session', async () => {
-        const { lifecycle, expectedAttempt, invoke } = await createHarness();
+        const { lifecycle, expectedAttempt, invoke, serverId, micTrack } = await createHarness();
         try {
             await lifecycle.stop('session-original');
-            await lifecycle.toggle({ serverId: 'home-original', sessionId: 'session-original' });
+            await lifecycle.toggle({ serverId, sessionId: 'session-original' });
             expect(getVoiceSessionAttemptId()).not.toBe(expectedAttempt);
+            const replacementTrack = micTrack();
+            expect(replacementTrack.readyState).toBe('live');
             expect(await invoke('ui.voice_global.end', { expectedAttempt })).toMatchObject({ status: 'unavailable', code: 'stale_voice_attempt' });
             expect(await invoke('ui.voice_global.set_muted', { expectedAttempt, muted: true })).toMatchObject({ status: 'unavailable', code: 'stale_voice_attempt' });
-            expect(lifecycle.getSnapshot()).toMatchObject({ status: 'connected', micMuted: false });
+            expect(lifecycle.getSnapshot().status).toBe('connected');
+            expect((await invoke('ui.voice_global.get', {})).voice.muted).toBe(false);
+            expect(micTrack()).toBe(replacementTrack);
+            expect(micTrack().enabled).toBe(true);
         } finally { await lifecycle.dispose(); }
     });
 
     it('retries the failed attempt at its captured target and acknowledges failure without a clean End', async () => {
-        const { lifecycle, expectedAttempt, invoke, publish } = await createHarness();
+        const { lifecycle, expectedAttempt, invoke, fail } = await createHarness();
         try {
-            publish({ adapterId: 'local_conversation', sessionId: 'session-original', status: 'error', mode: 'idle', canStop: false, errorCode: 'transport_failed', errorRecoveryAction: 'retry' });
+            fail();
+            await vi.waitFor(() => expect(lifecycle.getSnapshot().errorRecoveryAction).toBe('retry'));
             useVoiceTargetStore.getState().setLastFocusedSessionAddress({ serverId: 'other-home', sessionId: 'other-session' });
             expect((await invoke('ui.voice_global.get', {})).voice).toMatchObject({ attemptId: expectedAttempt, canDismissFailedAttempt: true });
             expect((await invoke('ui.voice_global.recover', { expectedAttempt })).status).toBe('completed');
             expect(lifecycle.getSnapshot()).toMatchObject({ sessionId: 'session-original', status: 'connected' });
             const replacement = getVoiceSessionAttemptId()!;
-            publish({ adapterId: 'local_conversation', sessionId: 'session-original', status: 'error', mode: 'idle', canStop: false, errorCode: 'transport_failed', errorRecoveryAction: 'retry' });
+            fail();
+            await vi.waitFor(() => expect(lifecycle.getSnapshot().errorRecoveryAction).toBe('retry'));
             expect((await invoke('ui.voice_global.dismiss', { expectedAttempt: replacement, kind: 'failed' })).status).toBe('completed');
             expect((await invoke('ui.voice_global.get', {})).voice).toMatchObject({ canDismissFailedAttempt: false, canDismissEnded: false });
         } finally { await lifecycle.dispose(); }

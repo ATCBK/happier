@@ -4,8 +4,9 @@ import { resolvePromptStackSystemAppendBlocksV1 as resolvePromptStackSystemAppen
 export async function resolvePromptStackSystemAppendBlocksV1(
   args: Omit<PromptStackSystemAppendInputV1, 'promptStacksV1'> & Readonly<{ promptStacksV1?: unknown }>,
 ): Promise<PromptStackSystemAppendResultV1> {
+  const { promptStacksV1, ...input } = args;
   return resolvePromptStackSystemAppendBlocksProtocolV1({
-    ...args,
-    ...(args.promptStacksV1 === undefined ? {} : { promptStacksV1: PromptStacksV1Schema.parse(args.promptStacksV1) }),
+    ...input,
+    ...(promptStacksV1 === undefined ? {} : { promptStacksV1: PromptStacksV1Schema.parse(promptStacksV1) }),
   });
 }

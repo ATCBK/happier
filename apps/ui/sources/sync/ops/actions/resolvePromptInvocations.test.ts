@@ -16,7 +16,7 @@ import { listPromptInvocationsForActions, resolvePromptInvocationForActions } fr
 describe('Account-bound prompt invocations', () => {
   let fixture: Awaited<ReturnType<typeof createPlainArtifactHomeFixture>>;
   beforeEach(async () => { fixture = await createPlainArtifactHomeFixture('https://prompt-invocations.example'); });
-  afterEach(() => { fixture.dispose(); resetPromptLibraryCatalogSnapshotsForTests(); });
+  afterEach(async () => { await fixture.dispose(); resetPromptLibraryCatalogSnapshotsForTests(); });
   const entries = (count: number) => Array.from({ length: count }, (_, index) => ({
     id: `prompt-${index}`, token: `/prompt-${index}`, title: `Prompt ${index}`,
     target: { kind: 'doc' as const, artifactId: `artifact-${index}` },

@@ -1,7 +1,9 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { RPC_METHODS } from '@happier-dev/protocol/rpc';
+import { ACP_CATALOG_ROWS_ROUTE_V1, AcpCatalogRecordV1Schema, AcpCatalogRowReadResponseV1Schema } from '@happier-dev/protocol/acp/catalog/catalogRowsV1';
 import { AccountSettingsV2UpdateRequestSchema, BUILT_IN_ROLES_V1, RoleActionOutputSchemasV1, readLegacyRolesV1 } from '@happier-dev/protocol';
 import { createMachineFixture } from '@/dev/testkit/fixtures/machineFixtures';
+import { createPlainAccountEncryptionCurrentnessFixture } from '@/dev/testkit/fixtures/accountEncryptionCurrentness';
 
 import { standardCleanup } from '@/dev/testkit/cleanup/standardCleanup';
 import { createHomeGovernanceHarness, installHomeGovernanceBoundaries } from '@/dev/testkit/harness/homeGovernanceHarness';
@@ -210,6 +212,9 @@ describe('UI machine Agent inventory Action transport', () => {
 
     it('uses the target daemon roster and returns daemon facts on the exact Home and machine', async () => {
         const serverId = await harness.addHome({ name: 'Inventory Home', serverUrl: 'https://inventory.test', accountId: 'alice' });
+        harness.answer(serverId, '/v1/account/encryption/currentness', { body: createPlainAccountEncryptionCurrentnessFixture() });
+        harness.answer(serverId, ACP_CATALOG_ROWS_ROUTE_V1, { body: { status: 'present', revision: 1,
+            content: { t: 'plain', v: AcpCatalogRecordV1Schema.parse({ v: 1, definitions: [] }) } } });
         rpc.machine.mockImplementation(async (request: { method: string }) => {
             if (request.method === RPC_METHODS.DAEMON_MERGED_CONTRIBUTION_REGISTRY_PROJECTION_DESCRIBE) {
                 return { protocolVersion: 1, projection: { v: 2, generation: 1, familiesById: {}, agentsById: {
@@ -230,13 +235,105 @@ describe('UI machine Agent inventory Action transport', () => {
                 payload: { machineId: 'machine-1', selection: 'agents' },
             }),
             expect.objectContaining({ machineId: 'machine-1', serverId, method: RPC_METHODS.CAPABILITIES_DETECT,
-                payload: { requests: [{ id: 'cli.acme/helper', params: { includeLoginStatus: true, includeLatestVersion: true } }], bypassCache: true },
+                payload: { requests: [{ id: 'cli.acme/helper', params: { includeLoginStatus: true, includeLatestVersion: true } },
+                    { id: 'tool.acpAgentInventory', params: { definitions: [] } }], bypassCache: true },
             }),
         ]);
     });
 
+    it('includes the captured Account managed definitions in definition-qualified Machine inventory', async () => {
+        const serverId = await harness.addHome({ name: 'Managed Inventory Home', serverUrl: 'https://managed-inventory.test', accountId: 'alice' });
+        harness.answer(serverId, '/v1/account/encryption/currentness', { body: createPlainAccountEncryptionCurrentnessFixture() });
+        const record = AcpCatalogRecordV1Schema.parse({ v: 1, definitions: [{ id: 'managed-definition',
+            name: 'managed-definition', title: 'Managed definition', createdAt: 1, updatedAt: 1,
+            launch: { kind: 'npm', package: '@example/agent', version: '1.0.0', args: [] },
+            env: { PRIVATE_ENV: { t: 'literal', v: 'must-stay-local' } },
+        }] });
+        harness.answer(serverId, ACP_CATALOG_ROWS_ROUTE_V1, { body: AcpCatalogRowReadResponseV1Schema.parse({
+            status: 'present', revision: 1, content: { t: 'plain', v: record },
+        }) });
+        rpc.machine.mockImplementation(async ({ method, payload }) => {
+            if (method === RPC_METHODS.DAEMON_MERGED_CONTRIBUTION_REGISTRY_PROJECTION_DESCRIBE) {
+                return { protocolVersion: 1, projection: { v: 2, generation: 1, familiesById: {}, agentsById: {} } };
+            }
+            if (method !== RPC_METHODS.CAPABILITIES_DETECT) throw new Error('Unexpected inventory transport');
+            expect(payload).toMatchObject({ requests: [{ id: 'tool.acpAgentInventory', params: { definitions: [{
+                definitionId: 'managed-definition', title: 'Managed definition', launch: record.definitions[0].launch,
+            }] } }] });
+            expect(JSON.stringify(payload)).not.toContain('PRIVATE_ENV');
+            return { protocolVersion: 1, results: { 'tool.acpAgentInventory': { ok: true, checkedAt: 1,
+                data: { items: [{ ...facts, agentId: 'custom-acp', definitionId: 'managed-definition',
+                    title: 'Managed definition', installed: true, managed: true, version: '1.0.0',
+                    fit: { kind: 'can_run', via: 'npm' }, dependencies: [] }] },
+            } } };
+        });
+        const inventory = await createDefaultActionExecutor().execute('machines.agents.list', {
+            machineId: 'machine-1', definitionId: 'managed-definition',
+        }, { surface: 'ui', authority: 'present_user', serverId });
+        expect(inventory, JSON.stringify({ inventory, paths: harness.requests.map(request => request.path) })).toMatchObject({ ok: true,
+            result: { items: [{ agentId: 'custom-acp', definitionId: 'managed-definition', installed: true, version: '1.0.0' }] },
+        });
+    });
+
+    it('checks an unsaved command draft through the exact Machine capability without persisting or reading a roster', async () => {
+        const serverId = await harness.addHome({ name: 'Draft Home', serverUrl: 'https://draft-inventory.test', accountId: 'alice' });
+        harness.answer(serverId, '/v1/account/encryption/currentness', { body: createPlainAccountEncryptionCurrentnessFixture() });
+        harness.answer(serverId, ACP_CATALOG_ROWS_ROUTE_V1, { body: { status: 'present', revision: 1,
+            content: { t: 'plain', v: AcpCatalogRecordV1Schema.parse({ v: 1, definitions: [] }) } } });
+        storage.setState({ machineListByServerId: { [serverId]: [createMachineFixture({ id: 'draft-machine', activeAt: Date.now() })] },
+            machineListStatusByServerId: { [serverId]: 'idle' } });
+        rpc.machine.mockImplementation(async ({ method, payload }) => {
+            if (method !== RPC_METHODS.CAPABILITIES_DETECT) throw new Error('Draft preview must not enumerate the daemon roster');
+            expect(payload).toMatchObject({ requests: [{ id: 'tool.acpAgentInventory', params: { definitions: [{
+                definitionId: 'draft-agent', title: 'Draft agent', launch: { kind: 'command', command: 'draft-executable', args: ['--acp'] },
+            }] } }] });
+            expect(JSON.stringify(payload)).not.toContain('PRIVATE_ENV');
+            return { protocolVersion: 1, results: { 'tool.acpAgentInventory': { ok: true, checkedAt: 1,
+                data: { items: [{ ...facts, agentId: 'custom-acp', definitionId: 'draft-agent', title: 'Draft agent',
+                    installed: true, managed: false, fit: { kind: 'can_run', via: 'command' }, dependencies: [] }] },
+            } } };
+        });
+        const result = await createDefaultActionExecutor().execute('agents.acp.backends.upsert', { dryRun: true,
+            backend: { id: 'draft-agent', name: 'draft-agent', title: 'Draft agent',
+                launch: { kind: 'command', command: 'draft-executable', args: ['--acp'] },
+                env: { PRIVATE_ENV: { t: 'literal', v: 'must-stay-local' } },
+            },
+        }, { surface: 'ui', authority: 'present_user', serverId });
+        expect(result, JSON.stringify({ result, paths: harness.requests.map(request => request.path) })).toMatchObject({ ok: true, result: { dryRun: true,
+            machines: [{ machineId: 'draft-machine', commandFound: true }],
+        } });
+        expect(rpc.machine.mock.calls.map(([request]) => request)).toEqual([
+            expect.objectContaining({ machineId: 'draft-machine', serverId, method: RPC_METHODS.CAPABILITIES_DETECT }),
+        ]);
+        expect(harness.artifacts(serverId).list()).toEqual([]);
+    });
+
+    it('preserves a registry definition target through the UI install Action and its job observation', async () => {
+        const serverId = await harness.addHome({ name: 'Registry Setup Home', serverUrl: 'https://registry-setup.test', accountId: 'alice' });
+        // This slice tests transport; real Account policy explicitly waives its default confirmation.
+        harness.answer(serverId, '/v2/account/settings', { body: { version: 1, content: { t: 'plain', v: {
+            actionsSettingsV1: { v: 1, approvalWaivedSurfaces: { 'machines.agents.install': ['ui'] } },
+        } } } });
+        rpc.machine.mockImplementation(async ({ method }) => method === RPC_METHODS.DAEMON_AGENTS_INSTALL_START
+            ? { ok: true, jobId: 'registry-job' } : method === RPC_METHODS.DAEMON_AGENTS_INSTALL_LIST
+                ? { ok: true, jobs: [] } : { error: 'Unsupported fixture RPC' });
+        expect(await createDefaultActionExecutor().execute('machines.agents.install', {
+            machineId: 'machine-1', agentId: 'custom-acp', definitionId: 'registry-definition', intent: 'install',
+        }, { surface: 'ui', authority: 'present_user', serverId })).toEqual({ ok: true, result: { ok: true, jobId: 'registry-job' } });
+        expect(rpc.machine.mock.calls.find(([request]) => request.method === RPC_METHODS.DAEMON_AGENTS_INSTALL_START)?.[0])
+            .toMatchObject({ machineId: 'machine-1', serverId, accountId: 'alice',
+                payload: { agentId: 'custom-acp', definitionId: 'registry-definition', intent: 'install' },
+            });
+        const { readAgentInstallJob } = await import('@/agents/machineAgents/installJobs/installJobStore');
+        expect(readAgentInstallJob({ serverId, accountId: 'alice', machineId: 'machine-1', agentId: 'custom-acp',
+            definitionId: 'registry-definition' })?.jobId).toBe('registry-job');
+    });
+
     it.each(['install', 'update'] as const)('starts a %s job on the captured Home with explicit vendor consent', async (intent) => {
         const serverId = await harness.addHome({ name: 'Setup Home', serverUrl: 'https://setup.test', accountId: 'alice' });
+        harness.answer(serverId, '/v2/account/settings', { body: { version: 1, content: { t: 'plain', v: {
+            actionsSettingsV1: { v: 1, approvalWaivedSurfaces: { 'machines.agents.install': ['ui'] } },
+        } } } });
         const signal = new AbortController().signal;
         const job = { jobId: 'job-1', agentId: 'acme/helper', intent, startedAt: 1, steps: [], progress: [], done: true,
             outcome: { kind: 'succeeded', version: '1.1.0' } };

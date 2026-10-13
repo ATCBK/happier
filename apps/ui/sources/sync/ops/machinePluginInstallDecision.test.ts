@@ -1,13 +1,9 @@
 import { afterEach, describe, expect, it, vi } from 'vitest';
 
 const machineRpcWithServerScopeMock = vi.hoisted(() => vi.fn());
-const randomUUIDMock = vi.hoisted(() => vi.fn(() => 'ui-interaction-1'));
 
 vi.mock('@/sync/runtime/orchestration/serverScopedRpc/serverScopedMachineRpc', () => ({
     machineRpcWithServerScope: (...args: unknown[]) => machineRpcWithServerScopeMock(...args),
-}));
-vi.mock('@/platform/randomUUID', () => ({
-    randomUUID: () => randomUUIDMock(),
 }));
 describe('machinePluginInstallDecision', () => {
     it('treats a workspace project-trust acceptance as a successful terminal decision', async () => {
@@ -31,13 +27,13 @@ describe('machinePluginInstallDecision', () => {
 
     afterEach(() => {
         machineRpcWithServerScopeMock.mockReset();
-        randomUUIDMock.mockClear();
         vi.restoreAllMocks();
     });
 
-    it('creates affirmative interaction evidence at the UI transport boundary', async () => {
-        vi.spyOn(Date, 'now').mockReturnValue(42);
-        machineRpcWithServerScopeMock.mockResolvedValueOnce({ kind: 'committed' });
+    it('preserves the committed daemon receipt after the authenticated human decision', async () => {
+        const committed = { kind: 'committed', pluginId: 'acme.plugin', desiredGeneration: 'generation-1',
+            appliedGeneration: 'generation-1', pendingSurfaces: [] };
+        machineRpcWithServerScopeMock.mockResolvedValueOnce(committed);
         const { machinePluginInstallDecision } = await import('./machinePluginInstallDecision');
 
         await expect(machinePluginInstallDecision('machine-1', {
@@ -49,7 +45,7 @@ describe('machinePluginInstallDecision', () => {
             },
         })).resolves.toEqual({
             supported: true,
-            outcome: { kind: 'committed', detail: null },
+            outcome: { kind: 'committed', detail: null, change: committed },
         });
 
         expect(machineRpcWithServerScopeMock).toHaveBeenCalledWith(expect.objectContaining({
@@ -85,7 +81,7 @@ describe('machinePluginInstallDecision', () => {
         }));
     });
 
-    it('does not mint evidence or send a decision when authority changes while confirmation is open', async () => {
+    it('withholds the private decision when authority changes while confirmation is open', async () => {
         let resolveConfirmation!: (selections: readonly Readonly<{ accessId: string; selected: boolean }>[]) => void;
         const confirmPresentUser = vi.fn(async () => await new Promise<
             readonly Readonly<{ accessId: string; selected: boolean }>[]
@@ -108,7 +104,6 @@ describe('machinePluginInstallDecision', () => {
         resolveConfirmation([]);
 
         await expect(resultPromise).resolves.toEqual({ supported: false, reason: 'error' });
-        expect(randomUUIDMock).not.toHaveBeenCalled();
         expect(machineRpcWithServerScopeMock).not.toHaveBeenCalled();
     });
 });

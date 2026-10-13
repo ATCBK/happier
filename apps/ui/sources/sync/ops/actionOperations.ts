@@ -101,10 +101,12 @@ export async function getActionOperation(
         operationId: string;
         /** Notification reconciliation needs current owner facts, not the released projection. */
         requireCurrentDomainFacts?: true;
+        /** A human setup decision must await the retained producer's fresh effect. */
+        refreshSetupReview?: true;
     }>,
 ): Promise<ActionOperationGetV1Response> {
-    // This reader has only the predecessor-compatible plain get payload, never richer wait flags.
-    return await readActionOperationObservation(params, { operationId: params.operationId }, ActionOperationGetV1ResponseSchema, {
+    return await readActionOperationObservation(params, { operationId: params.operationId,
+        ...(params.refreshSetupReview ? { refreshSetupReview: true } : {}) }, ActionOperationGetV1ResponseSchema, {
         current: ACTION_OPERATION_RPC_METHODS_V2.get, predecessor: ACTION_OPERATION_RPC_METHODS_V1.get,
-    }, params.requireCurrentDomainFacts === true);
+    }, params.requireCurrentDomainFacts === true || params.refreshSetupReview === true);
 }

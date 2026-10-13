@@ -27,10 +27,10 @@ beforeEach(async () => {
         ? Response.json({ mode: url.origin === 'https://home-e.example.test' ? 'e2ee' : accountMode, updatedAt: 1 }) : new Response(null, { status: 204 }));
     setRuntimeFetch(async (input, init) => network(new URL(String(input)), init));
 });
-afterEach(() => {
+afterEach(async () => {
     retireActiveServerAccountScopeLifetime();
     publishAppliedActiveServerRuntimeAvailability(false);
-    homes?.dispose();
+    await homes?.dispose();
 });
 
 it('retains original Account-only cleanup custody after user cancellation, but not Account retirement', async () => {

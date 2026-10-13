@@ -126,8 +126,9 @@ describe('requester credential disclosure at the human Action front door', () =>
     });
 
     it.each(['ui', 'voice'] as const)('honors an ordinary foreign spawn waiver without a second consent modal (%s)', async surface => {
+        const homeId = 'srv_requester_send';
         const serverId = await harness.addHome({ name: 'Original requester Home', serverUrl: 'https://requester-send.test',
-            accountId: 'bob', currentAccount: true });
+            serverIdentityId: homeId, accountId: 'bob', currentAccount: true });
         const home = harness.findByServerUrl('https://requester-send.test');
         if (!home?.token) throw new Error('Missing original requester credential');
         harness.answer(serverId, '/v2/account/settings', { body: { content: { t: 'plain', v: {
@@ -135,27 +136,49 @@ describe('requester credential disclosure at the human Action front door', () =>
         } }, version: 1 } });
         harness.answer(serverId, '/v1/account/encryption/currentness', { body: createPlainAccountEncryptionCurrentnessFixture() });
         const custodian = { accountId: 'alice', displayName: 'Alice' };
+        const installation = tweetnacl.sign.keyPair.fromSeed(new Uint8Array(32).fill(7));
+        harness.answer(serverId, '/v1/machines', { body: [{ id: 'alice-machine', kind: 'persistent', active: true,
+            installationId: 'alice-installation', installationPublicKey: encodeBase64(installation.publicKey),
+            revokedAt: null, replacedByMachineId: null, dataEncryptionKey: null, runnerContentKeyBinding: null,
+            access: { custodian, role: 'use', resourceMode: 'plain', accessState: 'ready' } }] });
         harness.answer(serverId, '/v1/machines/alice-machine/access', { body: {
             machineId: 'alice-machine', custodian,
             access: { custodian, role: 'use', resourceMode: 'plain', accessState: 'ready' },
             canManage: false, grants: [], ownDirectGrant: true, ownAccessSources: [],
         } });
         requesterConsent.mockResolvedValue(false);
-        machineDispatch.mockImplementation(async () => {
-            return { type: 'pending', retryWithSameCreationKey: true, outcome: 'accepted' };
-        });
+        harness.answer(serverId, '/v1/actions/session.spawn_new/execution-authorization', { select: body => {
+            const mint = ExternalActionExecutionAuthorizationRequestV1Schema.parse(body);
+            return { body: ExternalActionExecutionAuthorizationV1Schema.parse({ v: 1, token: 'requester-send-root', binding: {
+                accountId: 'bob', authentication: { kind: 'account', tokenEpoch: 0 }, serverIdentityId: homeId,
+                machineId: 'alice-machine', installationId: 'alice-installation', custodianAccountId: 'alice',
+                accountEncryptionMode: 'plain', actionId: 'session.spawn_new', requestId: mint.envelope.requestId,
+                target: mint.envelope.target, requestEnvelopeDigest: computeExternalActionRequestEnvelopeDigestV1(mint.envelope),
+            } }) };
+        } });
+        let reachedRequesterSender = false;
+        harness.answer(serverId, '/v1/actions/session.spawn_new', { select: body => {
+            const carried = ExternalActionExecutionAuthorizationRequestV1Schema.parse(body);
+            expect(openExternalActionRequesterAccountContextV1({ authorization: carried.executionAuthorization,
+                purpose: { kind: 'external_action' }, machineId: 'alice-machine', installationId: 'alice-installation',
+                serverIdentityId: homeId, installationPrivateKey: installation.secretKey })).toEqual({ token: home.token });
+            expect(JSON.stringify(carried)).not.toContain(home.token);
+            reachedRequesterSender = true;
+            return { body: { v: 1, actionId: 'session.spawn_new', requestId: carried.envelope.requestId,
+                execution: { ok: true, result: { type: 'pending', retryWithSameCreationKey: true, outcome: 'accepted' } } } };
+        } });
+        machineDispatch.mockRejectedValue(new Error('Shared raw spawn must not be used'));
         const result = await createFrontDoorActionExecute(createDefaultActionExecutor())('session.spawn_new', {
-            executionTarget: { serverId, machineId: 'alice-machine' },
+            executionTarget: { serverId: homeId, machineId: 'alice-machine' },
             directory: { kind: 'path', path: '/workspace/project' },
             agentTarget: { kind: 'agent', identity: { pluginId: 'happier.agent.codex', localId: 'codex' } },
         }, { surface, serverId, actionRequestId: `requester-send-${surface}` });
-        const reachedRequesterSender = machineDispatch.mock.calls.some(([request]) => request?.payload?.kind === 'requester_session_bootstrap_v1');
         const outcome = result.ok && result.result && typeof result.result === 'object' && 'type' in result.result
             ? result.result.type : result.ok ? 'other_success' : result.errorCode;
         expect(requesterConsent, JSON.stringify({ ok: result.ok, outcome, reachedRequesterSender })).not.toHaveBeenCalled();
         expect(reachedRequesterSender).toBe(true);
         expect(result).toEqual({ ok: true, result: { type: 'pending', retryWithSameCreationKey: true, outcome: 'accepted' } });
-        expect(machineDispatch).toHaveBeenCalledOnce();
+        expect(machineDispatch).not.toHaveBeenCalled();
     });
 
     it.each([

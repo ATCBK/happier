@@ -1,4 +1,5 @@
 import { createProfileActionExecuteV1 } from '@happier-dev/protocol/profiles/profileActionsV1';
+import { readSkillLibraryCatalog } from '@happier-dev/protocol/prompts/library/skills/readSkillLibraryCatalog';
 import { setProfileFavoritePreferenceV1, type ProfileOperations } from '@happier-dev/protocol/profiles/profileOperations';
 import type { ActionExecutorDeps } from '@happier-dev/protocol/actions/executor/types';
 import { router } from 'expo-router';
@@ -103,6 +104,12 @@ export function createUiProfileActionExecuteV1(account: LazyActionAccountContext
         };
         const execute = createProfileActionExecuteV1({
             operations: resolveOperations,
+            readSkillLibrary: async signal => {
+                assertCurrent();
+                const items = await readSkillLibraryCatalog({ list: options => account.listArtifacts(options) }, signal);
+                assertCurrent();
+                return items;
+            },
             select: async ({ id }) => {
                 const memory = await resolveMemory();
                 if (id !== null) {

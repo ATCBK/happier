@@ -17,7 +17,7 @@ vi.mock('socket.io-client', async original =>
 await import('@/sync/ops/actions/actionAccountContext');
 
 let home: Awaited<ReturnType<typeof createPlainArtifactHomeFixture>> | undefined;
-afterEach(() => { home?.dispose(); home = undefined; });
+afterEach(async () => { await home?.dispose(); home = undefined; });
 
 function entry(artifactId: string, overrides: Partial<PromptStackEntryV1> = {}): PromptStackEntryV1 {
   return PromptStackEntryV1Schema.parse({ id: artifactId, ref: { kind: 'doc', artifactId },
@@ -82,7 +82,7 @@ describe('UI prompt-stack input and qualified Artifact composition', () => {
     expect(disabled.blocks).toEqual([]);
   });
 
-  it('decodes a real SKILL.md bundle and applies the stored prompt budget through the UI adapter', async () => {
+  it('omits a real SKILL.md bundle while applying the document budget through the UI adapter', async () => {
     const { serverId, ids } = await documents();
     const bundle = await withUiPromptLibraryArtifactStore(store => createPromptBundleInLibrary({ store,
       request: { title: 'Review', bundleSchemaId: 'skills.skill_md_v1', entries: [{ path: 'SKILL.md',
@@ -94,6 +94,6 @@ describe('UI prompt-stack input and qualified Artifact composition', () => {
         entry(bundle.artifactId, { ref: { kind: 'bundle', artifactId: bundle.artifactId }, placement: 'skill_instructions' }),
       ] } }, ...reader,
     }), { serverId });
-    expect(result.blocks).toEqual(['Hello', '# Skill']);
+    expect(result.blocks).toEqual(['Hello']);
   });
 });

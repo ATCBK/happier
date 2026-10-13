@@ -6,7 +6,7 @@ import {
     installDisconnectedServerSocketBoundary, restoreServerAccountForTest,
 } from '@/dev/testkit/harness/serverAccountConnectionHarness';
 import { loadSyncSingletonForTests } from '@/dev/testkit/harness/syncSingletonLoader';
-import { standardCleanup } from '@/dev/testkit';
+import { standardCleanup, createSessionFixture } from '@/dev/testkit';
 import { decodePlainArtifactStoredContent } from '@happier-dev/protocol/storage/artifactStoredContent';
 import { ActionsSettingsV1Schema } from '@happier-dev/protocol/actions/actionSettings';
 import { HomeHubLayoutV1Schema, buildHomeHubArtifactIdV1 } from '@happier-dev/protocol/home';
@@ -18,6 +18,7 @@ import {
     buildWidgetSurfaceArtifactIdV1, USAGE_WIDGET_PRESET_IDS, flattenWidgetLayoutWidgetsV1, type WidgetSurfaceRefV1,
 } from '@happier-dev/protocol/widgets';
 import { resolveWidgetLayoutEntityDrop } from '@/components/ui/treeDragDrop/widgetLayoutEntityDrop';
+import type { ActionApprovalContinuation } from '@/components/approvals/actionApprovalContinuation';
 
 // HTTP, device credentials and Socket.IO are the external boundaries. No
 // executor, policy, domain port, reducer, Artifact codec or store is replaced.
@@ -26,6 +27,11 @@ const homes = createHomeGovernanceHarness();
 installHomeGovernanceBoundaries(homes);
 await loadSyncSingletonForTests();
 const { createDefaultActionExecutor } = await import('./defaultActionExecutor');
+const { executeHomeHubLayoutIntent } = await import('@/components/hub/layout/homeHubActionWriter');
+const { captureLazyActionAccountContext } = await import('./actionAccountContext');
+const { putSessionUnderLead } = await import('@/components/sessions/work/putSessionUnderLead');
+const { storage } = await import('@/sync/domains/state/storage');
+const { loadAccountSettings } = await import('@/sync/domains/state/accountSettingsPersistence');
 let connection: Awaited<ReturnType<typeof restoreServerAccountForTest>> | undefined;
 let serverId: string;
 const accountId = 'widget-seam-account';
@@ -75,8 +81,58 @@ function scope(owner: WidgetSurfaceRefV1['owner']): WidgetSurfaceRefV1 {
     return { serverId, accountId, owner };
 }
 function context() { return { surface: 'ui' as const, authority: 'present_user' as const, serverId, expectedAccountId: accountId }; }
+function waiveUiAction(actionId: 'session.reports_to.set' | 'widgets.item.remove') {
+    const state = storage.getState();
+    const accountScope = state.settingsScope;
+    if (!accountScope) throw new Error('Current Account settings scope missing');
+    const settings = { ...state.settings,
+        actionsSettingsV1: ActionsSettingsV1Schema.parse({ v: 1, approvalWaivedSurfaces: { [actionId]: ['ui'] } }) };
+    const version = (loadAccountSettings(accountScope).version ?? 0) + 1;
+    state.applySettingsForScope(accountScope, settings, version);
+    homes.answer(serverId, '/v2/account/settings', { body: { content: { t: 'plain', v: settings }, version } });
+}
 
 describe('widget semantic Actions through production UI composition', () => {
+    it('uses current Home relation evidence for Put under after an unopened list relation becomes stale', async () => {
+        waiveUiAction('session.reports_to.set');
+        storage.setState({ sessions: {
+            child: createSessionFixture({ id: 'child', serverId, reportsTo: { sessionId: 'old-lead' } }),
+            lead: createSessionFixture({ id: 'lead', serverId }),
+        } });
+        homes.answer(serverId, '/v1/sessions/child/reports-to/options', { body: { sessionId: 'child', currentLeadSessionId: null,
+            candidates: [{ sessionId: 'lead', allowed: true }] } });
+        homes.answer(serverId, '/v1/sessions/child/reports-to', { body: { ok: true, sessionId: 'child', leadSessionId: 'lead', attachedAt: 1 } });
+        const result = await putSessionUnderLead({ serverId, sessionId: 'child', leadSessionId: 'lead', accountId });
+        expect(result, JSON.stringify(homes.requests.filter(request => request.path.includes('/reports-to')).map(request => ({ path: request.path, input: request.input })))).toBe('applied');
+        expect(homes.requestsFor('/v1/sessions/child/reports-to').at(-1)?.input)
+            .toEqual({ leadSessionId: 'lead', expectedLeadSessionId: null });
+    });
+    it('keeps a Home group and its children when removal is awaiting approval or canceled, and honors the removal waiver', async () => {
+        const surface = scope({ kind: 'home' });
+        const executor = createDefaultActionExecutor();
+        for (const id of ['one', 'two']) {
+            expect(await executor.execute('widgets.item.add', { surface, instance: instance(id) }, context())).toMatchObject({ ok: true });
+        }
+        expect(await executor.execute('widgets.group.create', { surface, groupId: 'group', instanceIds: ['one', 'two'] }, context()))
+            .toMatchObject({ ok: true });
+        const before = HomeHubLayoutV1Schema.parse(storedBody(buildHomeHubArtifactIdV1(accountId)));
+        const account = await captureLazyActionAccountContext(serverId);
+        let continuation: ActionApprovalContinuation | undefined;
+        const pending = executeHomeHubLayoutIntent({ intent: { kind: 'remove', instanceId: 'group' },
+            scope: { serverId, accountId }, transport: account.homeHubArtifactTransport, execute: executor.execute,
+            onApprovalPending: registration => { continuation = registration; registration.onTerminal?.('canceled'); } });
+        await expect(pending).rejects.toThrow();
+        expect(continuation).toBeDefined();
+        expect(HomeHubLayoutV1Schema.parse(storedBody(buildHomeHubArtifactIdV1(accountId)))).toEqual(before);
+        waiveUiAction('widgets.item.remove');
+        const after = await executeHomeHubLayoutIntent({ intent: { kind: 'remove', instanceId: 'group' },
+            scope: { serverId, accountId }, transport: account.homeHubArtifactTransport, execute: createDefaultActionExecutor().execute,
+            onApprovalPending: () => { throw new Error('Removal waiver was ignored'); } });
+        expect(after.items.some(item => item.kind === 'group' && item.id === 'group')).toBe(false);
+        expect(flattenWidgetLayoutWidgetsV1(after.items).some(item => ['one', 'two'].includes(item.instance.id))).toBe(false);
+        expect(HomeHubLayoutV1Schema.parse(storedBody(buildHomeHubArtifactIdV1(accountId)))).toEqual(after);
+        account.dispose();
+    });
     it('projects untouched Usage defaults through the real host preset producer and preserves personalization through Reset and Undo', async () => {
         const executor = createDefaultActionExecutor();
         const base = scope({ kind: 'corePage', pageId: 'usage', area: 'main' });

@@ -1,129 +1,46 @@
-import { beforeEach, describe, expect, it, vi } from 'vitest';
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
+import { installPromptAssetsCommonModuleMocks } from '@/components/settings/prompts/assets/promptAssetsScreenTestHelpers';
+import type { PromptAssetTypeDescriptorV1, PromptAssetWriteRequest } from '@happier-dev/protocol';
 
-import type {
-    PromptAssetDeleteRequest,
-    PromptAssetDiscoverRequest,
-    PromptAssetReadRequest,
-    PromptAssetWriteRequest,
-} from '@happier-dev/protocol';
+vi.mock('socket.io-client', async original => (await import('@/dev/testkit/harness/serverAccountConnectionHarness')).createSocketIoClientBoundary(original));
+vi.mock('@happier-dev/iroh-native', async original => (await import('@/dev/testkit/harness/promptMachineTransferBoundary')).createPromptNativeTransferModuleBoundary(original));
+installPromptAssetsCommonModuleMocks({ storage: original => original(), reactNative: async () => {
+    const { createReactNativeWebMock } = await import('@/dev/testkit/mocks/reactNative');
+    return createReactNativeWebMock({ Platform: { OS: 'ios', select: ({ ios, default: fallback }: { ios?: unknown; default?: unknown }) => ios ?? fallback } });
+} });
+const { createHomeGovernanceHarness, installHomeGovernanceBoundaries } = await import('@/dev/testkit/harness/homeGovernanceHarness');
+installHomeGovernanceBoundaries(createHomeGovernanceHarness());
+const { createPromptLibraryCatalogBoundary } = await import('@/dev/testkit/harness/promptLibraryCatalogBoundary');
+const { createPromptMachineTransferFixture, installPromptMachineSocketBoundary } = await import('@/dev/testkit/harness/promptMachineTransferBoundary');
+installPromptMachineSocketBoundary();
+const { storage } = await import('@/sync/domains/state/storage');
+const { machinePromptAssetsListTypes, machinePromptAssetsWrite, machinePromptAssetsDelete } = await import('./machinePromptAssets');
+let fixture: Awaited<ReturnType<typeof createPromptMachineTransferFixture>>;
+let previousState: ReturnType<typeof storage.getState>;
+const type: PromptAssetTypeDescriptorV1 = { id: 'agents.skill', providerId: 'agents', title: 'Skills', description: 'Skills', libraryKind: 'bundle',
+    supportsScope: { user: true, project: true }, supportsFiles: true, formatId: 'skill_md_v1', defaultRoots: [],
+    capabilities: { supportsSymlinkInstall: false } };
+beforeEach(async () => {
+    previousState = storage.getState(); const catalog = createPromptLibraryCatalogBoundary();
+    fixture = await createPromptMachineTransferFixture({ serverUrl: 'https://legacy-prompt-assets.test', serverIdentityId: 'srv_legacy_prompt_assets',
+        selectionKey: 'prompts.assets', types: [type], handleHomeRequest: catalog.handle });
+});
+afterEach(async () => { await fixture?.dispose(); storage.setState(previousState, true); });
 
-const deleteDaemonPromptAssetMock = vi.hoisted(() => vi.fn());
-const discoverDaemonPromptAssetsMock = vi.hoisted(() => vi.fn());
-const downloadDaemonPromptAssetMock = vi.hoisted(() => vi.fn());
-const listDaemonPromptAssetTypesMock = vi.hoisted(() => vi.fn());
-const uploadDaemonPromptAssetMock = vi.hoisted(() => vi.fn());
-
-vi.mock('@/sync/domains/transfers/runtime/transferRuntime', () => ({
-    deleteDaemonPromptAsset: (...args: unknown[]) => deleteDaemonPromptAssetMock(...args),
-    discoverDaemonPromptAssets: (...args: unknown[]) => discoverDaemonPromptAssetsMock(...args),
-    downloadDaemonPromptAsset: (...args: unknown[]) => downloadDaemonPromptAssetMock(...args),
-    listDaemonPromptAssetTypes: (...args: unknown[]) => listDaemonPromptAssetTypesMock(...args),
-    uploadDaemonPromptAsset: (...args: unknown[]) => uploadDaemonPromptAssetMock(...args),
-}));
-
-describe('machine prompt assets ops', () => {
-    beforeEach(() => {
-        deleteDaemonPromptAssetMock.mockReset();
-        discoverDaemonPromptAssetsMock.mockReset();
-        downloadDaemonPromptAssetMock.mockReset();
-        listDaemonPromptAssetTypesMock.mockReset();
-        uploadDaemonPromptAssetMock.mockReset();
+describe('retained legacy export transport', () => {
+    it('lists legacy export destinations and deletes through the admitted Machine RPC', async () => {
+        expect(await machinePromptAssetsListTypes('machine-1', { serverId: fixture.serverId })).toEqual({ ok: true, types: [type] });
+        expect(await machinePromptAssetsDelete('machine-1', { assetTypeId: type.id, scope: 'user', externalRef: { name: 'sample' } },
+            { serverId: fixture.serverId })).toMatchObject({ ok: true });
+        expect(fixture.daemonRequests.at(-1)).toMatchObject({ method: 'machine-1:daemon.promptAssets.delete',
+            params: { assetTypeId: type.id, scope: 'user', externalRef: { name: 'sample' } } });
     });
-
-    it('delegates type listing to the transfer substrate', async () => {
-        listDaemonPromptAssetTypesMock.mockResolvedValueOnce({ ok: true, types: [] });
-        const { machinePromptAssetsListTypes } = await import('./machinePromptAssets');
-
-        await expect(machinePromptAssetsListTypes('machine-1', { serverId: 'server-a' })).resolves.toEqual({
-            ok: true,
-            types: [],
-        });
-
-        expect(listDaemonPromptAssetTypesMock).toHaveBeenCalledWith('machine-1', { serverId: 'server-a' });
-    });
-
-    it('delegates discovery to the transfer substrate', async () => {
-        discoverDaemonPromptAssetsMock.mockResolvedValueOnce({ ok: true, items: [] });
-        const { machinePromptAssetsDiscover } = await import('./machinePromptAssets');
-        const request: PromptAssetDiscoverRequest = { assetTypeId: 'agents.skill', scope: 'project', directory: '/tmp/project' };
-
-        await expect(machinePromptAssetsDiscover('machine-1', request, { serverId: 'server-a' })).resolves.toEqual({
-            ok: true,
-            items: [],
-        });
-
-        expect(discoverDaemonPromptAssetsMock).toHaveBeenCalledWith('machine-1', request, { serverId: 'server-a' });
-    });
-
-    it('maps substrate downloads onto the item response shape', async () => {
-        const item = {
-            assetTypeId: 'agents.skill',
-            scope: 'user',
-            externalRef: { name: 'skill-a' },
-            title: 'Skill A',
-            libraryKind: 'bundle',
-            bundleSchemaId: 'skills.skill_md_v1',
-            digest: 'digest-a',
-            displayPath: '~/.agents/skills/skill-a',
-            bundleBody: {
-                v: 1,
-                entries: [],
-                createdAtMs: 1,
-                updatedAtMs: 1,
-            },
-        };
-        downloadDaemonPromptAssetMock.mockResolvedValueOnce({ ok: true, item });
-        const { machinePromptAssetsDownload } = await import('./machinePromptAssets');
-        const request: PromptAssetReadRequest = { assetTypeId: 'agents.skill', scope: 'user', externalRef: { name: 'skill-a' } };
-
-        await expect(machinePromptAssetsDownload('machine-1', request, { serverId: 'server-a' })).resolves.toEqual({
-            ok: true,
-            item,
-        });
-
-        expect(downloadDaemonPromptAssetMock).toHaveBeenCalledWith('machine-1', request, { serverId: 'server-a' });
-    });
-
-    it('delegates writes to the transfer substrate', async () => {
-        const request: PromptAssetWriteRequest = {
-            assetTypeId: 'agents.skill',
-            scope: 'user',
-            externalRef: null,
-            targetName: 'writer',
-            title: 'Writer',
-            bundleSchemaId: 'skills.skill_md_v1',
-            bundleBody: {
-                v: 1 as const,
-                entries: [],
-                createdAtMs: 1,
-                updatedAtMs: 1,
-            },
-            previewOnly: false,
-            expectedDigest: null,
-        };
-        uploadDaemonPromptAssetMock.mockResolvedValueOnce({
-            ok: true,
-            externalRef: { skillName: 'writer' },
-            digest: 'digest-a',
-        });
-        const { machinePromptAssetsWrite } = await import('./machinePromptAssets');
-
-        await expect(machinePromptAssetsWrite('machine-1', request, { serverId: 'server-a' })).resolves.toEqual({
-            ok: true,
-            externalRef: { skillName: 'writer' },
-            digest: 'digest-a',
-        });
-
-        expect(uploadDaemonPromptAssetMock).toHaveBeenCalledWith('machine-1', request, { serverId: 'server-a' });
-    });
-
-    it('delegates deletion to the transfer substrate', async () => {
-        const request: PromptAssetDeleteRequest = { assetTypeId: 'agents.skill', scope: 'user', externalRef: { name: 'skill-a' } };
-        deleteDaemonPromptAssetMock.mockResolvedValueOnce({ ok: true });
-        const { machinePromptAssetsDelete } = await import('./machinePromptAssets');
-
-        await expect(machinePromptAssetsDelete('machine-1', request, { serverId: 'server-a' })).resolves.toEqual({ ok: true });
-
-        expect(deleteDaemonPromptAssetMock).toHaveBeenCalledWith('machine-1', request, { serverId: 'server-a' });
+    it('uploads legacy export bytes through the real finite carrier and strict finalize parser', async () => {
+        const request: PromptAssetWriteRequest = { assetTypeId: type.id, scope: 'user', externalRef: null, targetName: 'sample', title: 'Sample',
+            bundleSchemaId: 'skills.skill_md_v1', bundleBody: { v: 1, entries: [
+                { path: 'SKILL.md', contentBase64: Buffer.from('# Sample').toString('base64'), contentKind: 'utf8', unixMode: 0o644 },
+            ], createdAtMs: 1, updatedAtMs: 1 }, previewOnly: false, expectedDigest: null };
+        expect(await machinePromptAssetsWrite('machine-1', request, { serverId: fixture.serverId })).toMatchObject({ ok: true, externalRef: { skillName: 'sample' } });
+        expect(fixture.uploadedRequests).toEqual([request]);
     });
 });

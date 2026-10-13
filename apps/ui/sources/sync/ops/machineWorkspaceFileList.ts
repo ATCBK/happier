@@ -3,10 +3,17 @@ import {
     DaemonWorkspaceFileListResponseSchema,
     type DaemonWorkspaceFileListRequest,
     type DaemonWorkspaceFileListResponse,
+    type DaemonWorkspaceFileListErrorCode,
 } from '@happier-dev/protocol/machines/workspaceFiles';
 import { RPC_METHODS } from '@happier-dev/protocol/rpc';
 
 import { machineRpcWithServerScope } from '@/sync/runtime/orchestration/serverScopedRpc/serverScopedMachineRpc';
+import { classifyWorkspaceFileRpcError, type WorkspaceFileRpcErrorCode } from './machineWorkspaceFileRpcError';
+
+// Client failures are not daemon wire responses and must not expand its schema.
+export type MachineWorkspaceFileListErrorCode = DaemonWorkspaceFileListErrorCode | WorkspaceFileRpcErrorCode | 'invalid_response';
+export type MachineWorkspaceFileListResponse = DaemonWorkspaceFileListResponse
+    | Readonly<{ ok: false; errorCode: WorkspaceFileRpcErrorCode | 'invalid_response' }>;
 
 export async function machineWorkspaceFileList(
     machineId: string,
@@ -17,7 +24,7 @@ export async function machineWorkspaceFileList(
         timeoutMs?: number;
         signal?: AbortSignal;
     }>,
-): Promise<DaemonWorkspaceFileListResponse> {
+): Promise<MachineWorkspaceFileListResponse> {
     const payload = DaemonWorkspaceFileListRequestSchema.parse(input);
     try {
         const response = await machineRpcWithServerScope<unknown, DaemonWorkspaceFileListRequest>({
@@ -30,9 +37,9 @@ export async function machineWorkspaceFileList(
             ...(options?.signal ? { signal: options.signal } : {}),
         });
         const parsed = DaemonWorkspaceFileListResponseSchema.safeParse(response);
-        return parsed.success ? parsed.data : { ok: false, errorCode: 'method_unavailable' };
+        return parsed.success ? parsed.data : { ok: false, errorCode: 'invalid_response' };
     } catch (error) {
         if (options?.signal?.aborted) throw error;
-        return { ok: false, errorCode: 'method_unavailable' };
+        return { ok: false, errorCode: classifyWorkspaceFileRpcError(error) };
     }
 }

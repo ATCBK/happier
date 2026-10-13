@@ -1,5 +1,9 @@
 import { expect, it } from 'vitest';
-import { buildWidgetSurfaceArtifactIdV1, buildWidgetSurfaceArtifactHeaderV1, projectOverviewDefaultPlacementsV1, flattenWidgetLayoutWidgetsV1, WidgetAreaLayoutV1Schema, WIDGET_SURFACE_ARTIFACT_KIND_V1, type WidgetAreaLayoutV1 } from '@happier-dev/protocol/widgets';
+import { buildWidgetSurfaceArtifactIdV1, buildWidgetSurfaceArtifactHeaderV1, readWidgetSurfaceArtifactV1, projectOverviewDefaultPlacementsV1, flattenWidgetLayoutWidgetsV1, WidgetAreaLayoutV1Schema, WIDGET_SURFACE_ARTIFACT_KIND_V1, type WidgetAreaLayoutV1 } from '@happier-dev/protocol/widgets';
+import { decodePlainArtifactStoredContent } from '@happier-dev/protocol/storage/artifactStoredContent';
+import { normalizeActionsSettingsV1 } from '@happier-dev/protocol/actions/actionSettings';
+import { WorkspaceRefV1WriteSchema } from '@happier-dev/protocol/workspaces/workspaceRefV1';
+import { StrictJsonValueSchema } from '@happier-dev/protocol/json/strictJsonValue';
 import { createLayoutArtifactHttpBoundary } from '@/dev/testkit/harness/homeHubArtifactHttpBoundary';
 import { restoreServerAccountForTest } from '@/dev/testkit/harness/serverAccountConnectionHarness';
 import { captureLazyActionAccountContext } from './actionAccountContext';
@@ -42,31 +46,69 @@ it('admits local and portable Home identities through the widget Action owner wi
 });
 
 it('uses a stable Project key without a Source through the actual Account Artifact codec', async () => {
+    const produced: { header: Readonly<Record<string, unknown>>; body: string }[] = [];
     const provisional = { serverId: 'home', accountId: 'actor', owner: { kind: 'project' as const, projectId: 'stable-project' } };
     let surface = provisional;
     let boundary = createLayoutArtifactHttpBoundary<WidgetAreaLayoutV1>('actor', {
         artifactId: buildWidgetSurfaceArtifactIdV1(surface), kind: WIDGET_SURFACE_ARTIFACT_KIND_V1,
         defaultLayout: { v: 1 as const, surface, items: [] }, parseLayout: value => WidgetAreaLayoutV1Schema.parse(value),
     });
-    const connection = await restoreServerAccountForTest({ serverUrl: 'http://source-free-dashboard.test', accountId: 'actor', request: (...args) => boundary.request(...args) });
+    const connection = await restoreServerAccountForTest({ serverUrl: 'http://source-free-dashboard.test', accountId: 'actor', request: async (url, init) => {
+        if (init?.method === 'POST' && new URL(String(url)).pathname.startsWith('/v1/artifacts')) {
+            const wire: unknown = JSON.parse(String(init.body));
+            if (!wire || typeof wire !== 'object') throw new Error('Expected Artifact mutation');
+            const header = StrictJsonValueSchema.parse(decodePlainArtifactStoredContent(String(Reflect.get(wire, 'header'))));
+            if (!header || typeof header !== 'object' || Array.isArray(header)) throw new Error('Expected Artifact header');
+            const body = decodePlainArtifactStoredContent(String(Reflect.get(wire, 'body')));
+            if (!body || typeof body !== 'object' || typeof Reflect.get(body, 'body') !== 'string') throw new Error('Expected Artifact text body');
+            const text = String(Reflect.get(body, 'body'));
+            produced.push({ header, body: text });
+        }
+        return boundary.request(url, init);
+    } });
     surface = { ...provisional, serverId: connection.home.id };
+    const checkout = WorkspaceRefV1WriteSchema.parse({ id: 'checkout', serverId: surface.serverId,
+        machineId: 'machine', rootPath: '/repo', projectKey: surface.owner.projectId, createdAtMs: 1 });
     boundary = createLayoutArtifactHttpBoundary<WidgetAreaLayoutV1>('actor', {
         artifactId: buildWidgetSurfaceArtifactIdV1(surface), kind: WIDGET_SURFACE_ARTIFACT_KIND_V1,
         defaultLayout: { v: 1 as const, surface, items: [] }, parseLayout: value => WidgetAreaLayoutV1Schema.parse(value),
     });
     const account = await captureLazyActionAccountContext(connection.home.id);
     try {
-        const port = createWidgetAreaActionDepsV1(account).widgetSurfaceActions!.project!;
+        const { createDefaultActionExecutor } = await import('./defaultActionExecutor');
+        const executor = createDefaultActionExecutor();
+        const context = { surface: 'ui' as const, authority: 'present_user' as const, serverId: connection.home.id,
+            expectedAccountId: 'actor', actionCaller: { kind: 'host' as const },
+            widgetAreaContext: { surface, values: { checkout: [checkout] } },
+            actionsSettings: normalizeActionsSettingsV1({ v: 1, approvalWaivedSurfaces: {
+                'widgets.item.add': ['ui'], 'widgets.item.rename': ['ui'],
+            } }),
+        };
         const defaults = projectOverviewDefaultPlacementsV1();
-        expect(await port.read(surface, { surface: 'ui' })).toMatchObject({ surface, state: 'missing', canEdit: true, instances: defaults.map(({ kind: _kind, ...entry }) => entry) });
+        expect(await executor.execute('widgets.item.list', { surface }, context)).toMatchObject({ ok: true, result: {
+            surface, state: 'missing', canEdit: true, instances: defaults.map(({ kind: _kind, ...entry }) => entry) } });
         expect(boundary.writes).toHaveLength(0);
-        const instance = { v: 1 as const, id: 'copy', definition: { kind: 'builtin' as const, id: 'project_about' }, bindings: {} };
-        expect(await port.apply(surface, { kind: 'add', instance }, { surface: 'ui' })).toMatchObject({ ok: true });
+        const instance = { v: 1 as const, id: 'copy', definition: { kind: 'builtin' as const, id: 'project_about' },
+            bindings: { checkout: { kind: 'value' as const, value: checkout } } };
+        const added = await executor.execute('widgets.item.add', { surface, instance }, context);
+        expect(added, JSON.stringify(added)).toMatchObject({ ok: true });
         const saved = flattenWidgetLayoutWidgetsV1(boundary.layout().items);
         expect(saved.filter(entry => entry.instance.id !== instance.id).map(entry => ({ id: entry.instance.id, area: entry.area })))
             .toEqual(defaults.map(entry => ({ id: entry.instance.id, area: entry.area })));
         expect(saved.find(entry => entry.instance.id === instance.id)).toMatchObject({ instance, area: 'main' });
-        expect(await port.read({ ...surface, accountId: 'foreign' }, { surface: 'ui' })).toMatchObject({ ok: false, errorCode: 'widget_area_owner_mismatch' });
+        expect(await executor.execute('widgets.item.rename', { ref: { surface, instanceId: instance.id }, displayName: 'My project' }, context))
+            .toMatchObject({ ok: true });
+        expect(flattenWidgetLayoutWidgetsV1(boundary.layout().items).find(entry => entry.instance.id === instance.id)?.instance.displayName).toBe('My project');
+        expect(produced.length).toBeGreaterThan(0);
+        for (const wire of produced) {
+            const layout = WidgetAreaLayoutV1Schema.parse(JSON.parse(wire.body));
+            // Assert outside HTTP: the Action's unknown-outcome projection must
+            // not swallow a producer/consumer assertion thrown by the boundary.
+            expect(readWidgetSurfaceArtifactV1({ artifactId: boundary.artifactId, ...wire })).toEqual(layout);
+            expect(wire.header).toMatchObject(buildWidgetSurfaceArtifactHeaderV1(layout));
+        }
+        expect(await executor.execute('widgets.item.list', { surface: { ...surface, accountId: 'foreign' } }, context))
+            .toMatchObject({ ok: false, errorCode: 'account_target_mismatch' });
     } finally { account.dispose(); await connection.dispose(); }
 });
 

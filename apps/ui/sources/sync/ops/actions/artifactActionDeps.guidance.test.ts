@@ -12,9 +12,9 @@ vi.mock('react-native-enriched-markdown/lib/module/web/streamingReveal.js', () =
 
 let fixture: Awaited<ReturnType<typeof createPlainArtifactHomeFixture>> | undefined;
 let account: LazyActionAccountContext | undefined;
-afterEach(() => {
+afterEach(async () => {
     account?.dispose(); account = undefined;
-    fixture?.dispose(); fixture = undefined;
+    await fixture?.dispose(); fixture = undefined;
     vi.restoreAllMocks();
 });
 

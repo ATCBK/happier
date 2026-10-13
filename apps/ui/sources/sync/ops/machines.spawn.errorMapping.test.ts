@@ -119,7 +119,7 @@ describe('machineSpawnNewSession error mapping', () => {
     const { resetScopedMachineTransportCacheForTests } = await import('@/sync/runtime/orchestration/serverScopedRpc/serverScopedRpcPool');
     serverScopedRpcSocketPool.resetForTests();
     resetScopedMachineTransportCacheForTests();
-    network.dispose();
+    await network.dispose();
     vi.clearAllTimers();
     vi.useRealTimers();
   });

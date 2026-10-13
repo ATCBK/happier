@@ -18,7 +18,19 @@ import {
     type ActionId,
     type ActionExecutorContext,
     type ApprovalRequest,
+    PromptAssetWriteRequestSchema,
+    PromptAssetWriteBundleRequestSchema,
 } from '@happier-dev/protocol';
+import { RegistryFetchRequestV1Schema, RegistryFetchResponseV1Schema } from '@happier-dev/protocol/registries';
+import { ExternalActionMachineBootstrapV1Schema, ExternalActionRequestEnvelopeV1Schema, ExternalActionResponseEnvelopeV1Schema } from '@happier-dev/protocol/actions/externalActionApi';
+import { projectLegacySkillRegistryInstallActionResultV1 } from '@happier-dev/protocol/prompts/library/promptLibraryActionOperations';
+import { PromptRegistryInstallInputSchema } from '@happier-dev/protocol/actions/actionSpecs';
+import { DEFAULT_CURATED_MARKETPLACE_SOURCE_URL } from '@happier-dev/protocol/marketplace';
+import { createSkillActionExecuteV1 } from '@happier-dev/protocol/prompts/library/skills/skillActionOperations';
+import { readSkillLibraryCatalog } from '@happier-dev/protocol/prompts/library/skills/readSkillLibraryCatalog';
+import { createPromptLibraryCatalogBoundary } from '@/dev/testkit/harness/promptLibraryCatalogBoundary';
+import { readPromptLibraryCatalogRecordV1 } from '@happier-dev/protocol/prompts/library/promptLibraryCatalogV1';
+import { randomUUID } from '@/platform/randomUUID';
 import { normalizeUsageQuery } from '@happier-dev/protocol/inputs/usageQuery';
 import { UsageQueryBatchResultSchema } from '@happier-dev/protocol/usage/resolveUsagePageAggregation';
 import { UsageCoachApplyResultSchema } from '@happier-dev/protocol/usage/coach/coachActions';
@@ -92,6 +104,14 @@ const homes = createHomeGovernanceHarness();
 installHomeGovernanceBoundaries(homes);
 await loadSyncSingletonForTests();
 const { storage } = await import('@/sync/domains/state/storage');
+const { createUiPromptLibraryArtifactStore } = await import('@/sync/ops/promptLibrary/promptLibraryArtifactStore');
+const { installPromptRegistryItem } = await import('@/sync/ops/promptLibrary/installPromptRegistryItem');
+const { captureLazyActionAccountContext } = await import('./actionAccountContext');
+const { createUiRegistryHostV1 } = await import('@/registries/registryHostDeps');
+const { readPromptLibraryCatalogProjectionInContext, writePromptLibraryRecordAndPublishInContext,
+    PromptLibraryRowOperationError } = await import('@/sync/api/account/apiPromptLibraryCatalog');
+const requireUpdatedPromptLibraryMutation: typeof import('@/sync/api/account/apiPromptLibraryCatalog').requireUpdatedPromptLibraryMutation =
+    (await import('@/sync/api/account/apiPromptLibraryCatalog')).requireUpdatedPromptLibraryMutation;
 const { sync } = await import('@/sync/sync');
 const { setRuntimeFetch } = await import('@/utils/system/runtimeFetch');
 const { createRootLayoutFeaturesResponse } = await import('@/dev/testkit/fixtures/featureFixtures');
@@ -213,29 +233,44 @@ async function seededApproval(request: ApprovalRequest) {
 
 
 type DaemonRequest = Readonly<{ machineId?: string; sessionId?: string; serverId: string; method: string; payload: unknown }>;
-const registryItem = {
-    sourceId: 'skills_sh:featured', itemId: 'skills_sh:featured:item-1', title: 'Review skill', description: 'Review',
-    bundleSchemaId: 'skills.skill_md_v1' as const,
-    bundleBody: { v: 1 as const, entries: [{ path: 'SKILL.md', contentBase64: Buffer.from('# Review').toString('base64'), contentKind: 'utf8' as const }], createdAtMs: 1, updatedAtMs: 1 },
-};
+const { createPromptRegistrySkillFixture } = await import('@/dev/testkit/harness/promptMachineTransferBoundary');
+const registryFixture = createPromptRegistrySkillFixture({ sourceId: 'catalog-source', itemId: 'review', title: 'Review skill',
+    files: [{ path: 'SKILL.md', content: '---\nname: review\ndescription: Review changes\n---\n# Review' }] });
+const registryItem = registryFixture.item;
+const registryPointer = { sourceId: registryItem.summary.sourceId, itemId: registryItem.summary.itemId };
 const externalResult = { ok: true as const, externalRef: { path: '.claude/commands/review.md' }, digest: 'digest-1' };
 
 /** Stateful row HTTP/CAS boundary; Action policy, catalog loading and transfer logic remain real. */
-function serveExternalLinksCatalog(outcome: 'updated' | 'conflict' | 'unavailable') {
+function serveExternalLinksCatalog(outcome: 'updated' | 'conflict' | 'unavailable', options?: Readonly<{
+    publicSource?: boolean; refuseSkillRules?: boolean; afterSkillRulesWrite?: () => void | Promise<void>;
+}>) {
     let record: Extract<PromptLibraryRecordV1, { key: 'external-links' }> = {
         key: 'external-links', value: { v: 1, links: [{ id: 'neighbor-link', artifactId: 'neighbor-doc',
             assetTypeId: 'claude.command', scope: 'user', machineId: 'machine_1', externalRef: { path: 'neighbor.md' } }] },
     };
     let revision = 4;
     const mutations: ReturnType<typeof PromptLibraryRowMutationV1Schema.parse>[] = [];
-    const tombstones = PromptLibraryCatalogKeyV1Schema.options.filter(key => key !== record.key)
-        .map(key => ({ key, revision: 1, content: null }));
+    const sources = PromptLibraryRecordV1Schema.parse({ key: 'registry-sources', value: { v: 2, disabledSourceIds: [],
+        sources: [{ id: registryPointer.sourceId, title: 'Private skills', format: 'git', kinds: ['skill'],
+            url: 'https://catalog.test/skills.git', enabled: true, addedAt: 1,
+            ...(options?.publicSource ? {} : { token: { secretRef: 'registry-token' } }) }] } });
+    const otherRows = createPromptLibraryCatalogBoundary();
+    const otherKeys = PromptLibraryCatalogKeyV1Schema.options.filter(key => key !== record.key && key !== sources.key);
     homes.answer(serverId, '/v1/account/encryption/currentness', { body: createPlainAccountEncryptionCurrentnessFixture() });
     homes.answer(serverId, 'GET /v2/account/settings', { body: { content: { t: 'plain', v: {} }, version: 7 } });
     homes.answer(serverId, 'POST /v2/account/settings', { body: { success: true, version: 8 } });
     homes.answer(serverId, PROMPT_LIBRARY_ROWS_ROUTE_V1, { select: () => outcome === 'unavailable'
         ? { status: 403, body: { error: 'forbidden' } }
-        : { body: { status: 'listed', rows: [{ key: record.key, revision, content: { t: 'plain', v: record } }, ...tombstones] } } });
+        : { body: { status: 'listed', rows: [{ key: record.key, revision, content: { t: 'plain', v: record } },
+            { key: sources.key, revision: 1, content: { t: 'plain', v: sources } },
+            ...otherKeys.map(key => ({ key, revision: otherRows.revision(key), content: { t: 'plain', v: otherRows.read(key) } }))] } } });
+    for (const key of otherKeys) homes.answer(serverId, `POST ${PROMPT_LIBRARY_ROWS_ROUTE_V1}/${key}`, { select: async input => {
+        if (key === 'skill-rules' && options?.refuseSkillRules) return { body: { status: 'account-inconsistent' } };
+        const response = await otherRows.handle(`${PROMPT_LIBRARY_ROWS_ROUTE_V1}/${key}`, { method: 'POST', body: JSON.stringify(input) });
+        if (!response) throw new Error('Canonical row boundary did not accept its owned path');
+        if (key === 'skill-rules') await options?.afterSkillRulesWrite?.();
+        return { status: response.status, body: await response.json() };
+    } });
     homes.answer(serverId, `POST ${PROMPT_LIBRARY_ROWS_ROUTE_V1}/external-links`, { select: input => {
         const mutation = PromptLibraryRowMutationV1Schema.parse(input);
         mutations.push(mutation);
@@ -257,15 +292,65 @@ async function servePromptTransfers() {
     }
     homes.answer(serverId, '/v1/features', { body: features });
     homes.answer(serverId, '/v1/features/authenticated', { body: features });
-    const machine = createMachineFixture({ id: 'machine_1', kind: 'persistent', operationProtocolCapabilitiesRevision: 1,
+    const machine = createMachineFixture({ id: 'machine_1', kind: 'persistent', activeAt: Date.now(), operationProtocolCapabilitiesRevision: 1,
         operationProtocolCapabilities: { irohMachineEndpoint: { protocolVersions: [1], endpointId: 'a'.repeat(64), directAddresses: ['127.0.0.1:48123'] } },
         daemonState: { status: 'running', transfer: { supported: { import: true, export: true },
             listenerClasses: { loopback_http: { enabled: true, configured: true, active: true }, tailscale_serve_https: { enabled: false, configured: false, active: false } },
             lifecycle: { mode: 'lazy_idle_shutdown', version: 1 } } } });
-    const publishedMachine = { ...machine, dataEncryptionKey: MACHINE_PLAIN_DATA_KEY_MARKER,
+    const publishedMachine = { ...machine, ...ExternalActionMachineBootstrapV1Schema.parse({ id: machine.id, kind: 'persistent', active: true,
+        installationId: 'prompt-fixture-installation', revokedAt: null, replacedByMachineId: null,
+        dataEncryptionKey: MACHINE_PLAIN_DATA_KEY_MARKER, runnerContentKeyBinding: null,
+        access: { custodian: { accountId: 'account-a', displayName: 'Prompt custodian' }, role: 'manage', resourceMode: 'plain', accessState: 'ready' } }),
         metadata: encodePlainMachineStoredContent(machine.metadata), daemonState: encodePlainMachineStoredContent(machine.daemonState) };
     homes.answer(serverId, '/v1/machines', { body: [publishedMachine] });
     homes.answer(serverId, '/v1/machines/machine_1', { body: { machine: publishedMachine } });
+    homes.answer(serverId, 'POST /v1/actions/registries.items.read', { select: input => {
+        const envelope = ExternalActionRequestEnvelopeV1Schema.parse(input);
+        return { body: ExternalActionResponseEnvelopeV1Schema.parse({ v: 1, actionId: 'registries.items.read', requestId: envelope.requestId,
+            execution: { ok: true, result: { item: registryItem } } }) };
+    } });
+    // This is a simulated remote network adapter, not the real Node receiver
+    // proof. Shared domain owners, Artifact/row transports and native bytes stay
+    // real; the separate signed-Home/CLI composed case proves Node ingress.
+    homes.answer(serverId, 'POST /v1/actions/prompt_registry.install', { select: async (input, request) => {
+        const envelope = ExternalActionRequestEnvelopeV1Schema.parse(input);
+        const actionInput = PromptRegistryInstallInputSchema.parse(envelope.input);
+        const account = await captureLazyActionAccountContext(serverId, request.signal ?? undefined);
+        try {
+            const store = createUiPromptLibraryArtifactStore(account.workflowArtifacts, account);
+            if (!store.organization || !account.serverIdentityId) throw new Error('Remote fixture Account is unavailable');
+            const projection = await readPromptLibraryCatalogProjectionInContext(account, request.signal ?? undefined);
+            const links = readPromptLibraryCatalogRecordV1({ ...projection, key: 'external-links' });
+            if (links.status !== 'ready' || links.record.key !== 'external-links') throw new PromptLibraryRowOperationError(
+                links.status === 'unavailable' ? links.reason : 'invalid-stored-content');
+            const registry = await createUiRegistryHostV1(account, store.organization, { surface: 'ui', signal: request.signal ?? undefined });
+            const skills = createSkillActionExecuteV1({ store, skillRules: { ...store.organization,
+                listSkills: signal => readSkillLibraryCatalog({ list: options => account.listArtifacts(options) }, signal),
+                ruleWriteContext: () => ({ nowMs: Date.now(), newId: randomUUID }) }, randomId: randomUUID,
+                readRegistryItem: registry.readRegistryItem, readRegistrySource: registry.readRegistrySource,
+                fetchRegistrySkillFiles: registry.filesForPointer,
+                includeInSession: async () => { throw new Error('UI default registry reach must not request Session inclusion'); } });
+            const result = await installPromptRegistryItem({ ...actionInput,
+                machineTarget: { serverIdentityId: account.serverIdentityId, machineId: actionInput.machineId },
+                libraryServerIdentityId: account.serverIdentityId, serverId, promptExternalLinks: links.record.value,
+                signal: request.signal ?? undefined }, store, account, { surface: 'ui', signal: request.signal ?? undefined },
+                pointer => skills('skills.install', { source: { kind: 'registry', ...pointer } }, { surface: 'ui' }, request.signal ?? undefined));
+            let receipt: unknown = result;
+            if (result.ok && result.nextPromptExternalLinks) {
+                try { requireUpdatedPromptLibraryMutation(await writePromptLibraryRecordAndPublishInContext(account, {
+                    record: { key: 'external-links', value: result.nextPromptExternalLinks }, expectedRevision: links.revision,
+                    ...(links.authority === 'inactive' ? { sourceSettingsVersion: projection.sourceSettingsVersion } : {}) }, request.signal ?? undefined)); }
+                catch (error) {
+                    if (!(error instanceof PromptLibraryRowOperationError)) throw error;
+                    receipt = { ...result, externalLinkPersistence: { ok: false, errorCode: error.code, error: error.code } };
+                }
+            }
+            const projected = projectLegacySkillRegistryInstallActionResultV1(receipt);
+            const failure = (await import('@happier-dev/protocol/actions/actionExecutionResult')).ActionExecuteFailureSchema.safeParse(projected);
+            return { body: ExternalActionResponseEnvelopeV1Schema.parse({ v: 1, actionId: 'prompt_registry.install', requestId: envelope.requestId,
+                execution: failure.success ? failure.data : { ok: true, result: projected } }) };
+        } finally { account.dispose(); }
+    } });
     homes.answer(serverId, '/v1/machines/peer/mediation/route-grants', { select: (input) => {
         const request = DirectRouteGrantRequestV2Schema.parse(input);
         const now = Date.now();
@@ -279,8 +364,9 @@ async function servePromptTransfers() {
     } });
     const recipient = createTransferRecipientKeyPair();
     let uploaded: unknown;
+    let finalized: unknown;
     let sizeBytes = 0;
-    const exportedBytes = new TextEncoder().encode(JSON.stringify(registryItem));
+    const exportedBytes = new TextEncoder().encode(JSON.stringify(registryFixture.files));
     const hash = createTransferManifestHasher(); hash.update(exportedBytes);
     const manifestHash = hash.digestManifestHash();
     rpc.machine.mockImplementation(async (request: DaemonRequest) => {
@@ -299,8 +385,11 @@ async function servePromptTransfers() {
                 url: 'http://127.0.0.1:48123/machine-transfers/direct/export-1' }] };
         if (request.method === 'daemon.directTransfer.import.abort') return { success: true, aborted: true };
         if (request.method === 'daemon.directTransfer.export.release') return { success: true };
-        if (request.method === 'daemon.promptRegistry.install') {
-            return { ok: true, externalRef: { skillName: 'review' }, digest: 'digest-1' };
+        if (request.method === 'daemon.registries.fetch') {
+            const input = RegistryFetchRequestV1Schema.parse(request.payload);
+            if (input.op !== 'read' || input.sourceId !== registryPointer.sourceId || input.itemId !== registryPointer.itemId
+                || input.version !== undefined && input.version !== registryItem.summary.version) throw new Error('Unexpected registry pointer');
+            return RegistryFetchResponseV1Schema.parse({ op: 'read', item: registryItem });
         }
         throw new Error(`Unexpected daemon transport: ${request.method}`);
     });
@@ -312,11 +401,14 @@ async function servePromptTransfers() {
         if (url.pathname.endsWith('/chunks/0') && init?.method === 'PUT') {
             const envelope = JSON.parse(String(init.body)) as { payloadBase64: string; encryptedDataKeyEnvelopeBase64: string };
             const bytes = await decryptEncryptedTransferChunkEnvelope({ ...envelope, transferId: 'upload-1', sequence: 0, recipientSecretKeySeed: recipient.recipientSecretKeySeed });
-            uploaded = JSON.parse(new TextDecoder().decode(bytes));
+            uploaded = PromptAssetWriteRequestSchema.parse(JSON.parse(new TextDecoder().decode(bytes)));
             return Response.json({ success: true });
         }
         if (url.pathname.endsWith('/finalize')) {
-            return Response.json({ success: true, finalized: { success: true, path: 'review.md', sizeBytes, result: externalResult }, sha256: 'digest-1' });
+            const bundle = PromptAssetWriteBundleRequestSchema.safeParse(uploaded);
+            const result = bundle.success ? { ok: true, externalRef: { skillName: bundle.data.targetName }, digest: 'digest-1' } : externalResult;
+            finalized = result;
+            return Response.json({ success: true, finalized: { success: true, path: 'review.md', sizeBytes, result }, sha256: 'digest-1' });
         }
         if (url.pathname.endsWith('/open')) return Response.json({ transferId: 'export-1', totalChunks: 1, sizeBytes: exportedBytes.length, manifestHash });
         if (url.pathname.endsWith('/chunks/0')) {
@@ -365,7 +457,7 @@ async function servePromptTransfers() {
         browserHost: isBrowserIrohHost(), nativeLifecycleAvailable: await probeIrohMachineTransferLifecycleAvailability(),
         applicationCarrierEligibility: storage.getState().localSettings.homeApplicationCarrierEligibility,
     })).toMatchObject({ kind: 'iroh_peer', carrierKind: 'native_http' });
-    return { readUploaded: () => uploaded };
+    return { readUploaded: () => uploaded, readFinalized: () => finalized };
 }
 
 describe('createDefaultActionExecutor (prompt library routing)', () => {
@@ -374,8 +466,10 @@ describe('createDefaultActionExecutor (prompt library routing)', () => {
         await homes.reset();
         storage.setState(baseline, true);
         for (const boundary of Object.values(rpc)) boundary.mockReset();
-        serverId = await homes.addHome({ name: 'Prompt Home', serverUrl: 'https://prompt-actions.test', serverIdentityId: 'srv_prompt-actions', accountId: 'account-a' });
-        connection = await restoreServerAccountForTest({ serverUrl: 'https://prompt-actions.test', accountId: 'account-a' });
+        serverId = await homes.addHome({ name: 'Prompt Home', serverUrl: 'https://prompt-actions.test', serverIdentityId: 'srv_prompt-actions', accountId: 'account-a', currentAccount: true });
+        homes.answer(serverId, '/v1/account/encryption/currentness', { body: createPlainAccountEncryptionCurrentnessFixture() });
+        connection = await restoreServerAccountForTest({ serverUrl: 'https://prompt-actions.test', accountId: 'account-a',
+            credentials: { token: homes.findByServerUrl('https://prompt-actions.test')!.token! } });
         installHomeGovernanceBoundaries(homes);
         storage.getState().applySettingsForScope({ serverId, accountId: 'account-a' }, storage.getState().settings, 1);
         storage.getState().activateProfileScope({ serverId, accountId: 'account-a' });
@@ -396,6 +490,80 @@ describe('createDefaultActionExecutor (prompt library routing)', () => {
         standardCleanup();
         webLocks.restore();
         installHomeGovernanceBoundaries(homes);
+    });
+
+    it.each(['completed', 'cancelled_after_ack'] as const)('lists registries without a Machine and retains the acknowledged Account CAS receipt: %s', async outcome => {
+        const { resetPromptLibraryCatalogEngineForTests } = await import('@/sync/engine/settings/promptLibraryCatalogEngine');
+        const { resetPromptLibraryCatalogSnapshotsForTests } = await import('@/sync/store/settings/promptLibraryCatalogSnapshot');
+        resetPromptLibraryCatalogEngineForTests();
+        resetPromptLibraryCatalogSnapshotsForTests();
+        setRuntimeFetch(async (input, init) => String(input) === DEFAULT_CURATED_MARKETPLACE_SOURCE_URL
+            ? new Response(null, { status: 503 }) : homes.request(new URL(String(input)), init));
+        homes.answer(serverId, '/v1/account/encryption/currentness', { body: createPlainAccountEncryptionCurrentnessFixture() });
+        homes.answer(serverId, 'GET /v2/account/settings', { body: { content: { t: 'plain', v: {} }, version: 1 } });
+        let record: PromptLibraryRecordV1 = { key: 'registry-sources', value: { v: 2, sources: [], disabledSourceIds: [] } };
+        let revision = 4;
+        homes.answer(serverId, PROMPT_LIBRARY_ROWS_ROUTE_V1, { select: () => ({ body: { status: 'listed', rows: [
+            { key: record.key, revision, content: { t: 'plain', v: record } },
+            ...PromptLibraryCatalogKeyV1Schema.options.filter(key => key !== record.key).map(key => ({ key, revision: 1, content: null })),
+        ] } }) });
+        homes.answer(serverId, `POST ${PROMPT_LIBRARY_ROWS_ROUTE_V1}/registry-sources`, { select: input => {
+            const mutation = PromptLibraryRowMutationV1Schema.parse(input);
+            if (mutation.expectedRevision !== revision) return { body: { status: 'conflict', revision } };
+            if (mutation.content?.t !== 'plain') throw new Error('Expected plain registry-sources row');
+            record = PromptLibraryRecordV1Schema.parse(mutation.content.v);
+            return { body: { status: 'updated', revision: ++revision, cursor: revision } };
+        } });
+        const executor = createDefaultActionExecutor();
+        const context = { surface: 'ui', authority: 'present_user', serverId } as const;
+        const listed = await executor.execute('registries.sources.list', { kind: 'skill' }, context);
+        expect(listed, JSON.stringify(listed)).toMatchObject({ ok: true, result: {
+            sources: expect.arrayContaining([expect.objectContaining({ id: 'builtin:skills-sh', enabled: true })]),
+        } });
+        const { subscribePromptLibraryCatalogSnapshots, getPromptLibraryCatalogValue } = await import('@/sync/store/settings/promptLibraryCatalogSnapshot');
+        const { captureLazyActionAccountContext } = await import('./actionAccountContext');
+        const observedAccount = await captureLazyActionAccountContext(serverId);
+        const scope = { serverId: observedAccount.serverId, accountId: observedAccount.accountId };
+        const cancellation = new AbortController();
+        const stop = subscribePromptLibraryCatalogSnapshots(() => {
+            if (outcome === 'cancelled_after_ack' && getPromptLibraryCatalogValue(scope, 'registry-sources').revision === 5) cancellation.abort();
+        });
+        try {
+            const changed = await executor.execute('registries.sources.update', { sourceId: 'builtin:skills-sh', enabled: false },
+                { ...context, signal: cancellation.signal });
+            expect(changed).toMatchObject({ ok: true, result: { source: { id: 'builtin:skills-sh', enabled: false } } });
+            expect(cancellation.signal.aborted).toBe(outcome === 'cancelled_after_ack');
+        } finally { stop(); observedAccount.dispose(); }
+        expect(record).toMatchObject({ key: 'registry-sources', value: { disabledSourceIds: ['builtin:skills-sh'] } });
+        expect(rpc.machine).not.toHaveBeenCalled();
+    });
+
+    it('changes skill rules by frontmatter name through the captured Account row and returns an Undo value', async () => {
+        homes.answer(serverId, '/v1/account/encryption/currentness', { body: createPlainAccountEncryptionCurrentnessFixture() });
+        homes.answer(serverId, 'GET /v2/account/settings', { body: { content: { t: 'plain', v: {} }, version: 1 } });
+        let record: PromptLibraryRecordV1 = { key: 'skill-rules', value: { v: 1, rules: [] } };
+        let revision = 4;
+        homes.answer(serverId, `POST ${PROMPT_LIBRARY_ROWS_ROUTE_V1}/skill-rules`, { select: input => {
+            const mutation = PromptLibraryRowMutationV1Schema.parse(input);
+            if (mutation.expectedRevision !== revision) return { status: 409, body: { status: 'conflict', revision } };
+            if (mutation.content?.t !== 'plain') throw new Error('Expected plain skill-rules row');
+            record = PromptLibraryRecordV1Schema.parse(mutation.content.v);
+            return { body: { status: 'updated', revision: ++revision, cursor: revision } };
+        } });
+        homes.answer(serverId, PROMPT_LIBRARY_ROWS_ROUTE_V1, { select: () => ({ body: { status: 'listed', rows: [
+            { key: record.key, revision, content: { t: 'plain', v: record } },
+            ...PromptLibraryCatalogKeyV1Schema.options.filter(key => key !== record.key).map(key => ({ key, revision: 1, content: null })),
+        ] } }) });
+        const skillId = await sync.createArtifactWithHeader({ v: 1, kind: 'prompt_bundle.v2', title: 'Display title', bundleSchemaId: 'skills.skill_md_v1' },
+            JSON.stringify({ v: 1, createdAtMs: 1, updatedAtMs: 1, entries: [{ path: 'SKILL.md', contentKind: 'utf8',
+                contentBase64: Buffer.from('---\nname: lint\ndescription: Checks changes\n---\nUse it.').toString('base64') }] }));
+        const result = await createDefaultActionExecutor().execute('skills.rules.set', { items: [{ name: 'lint' }],
+            change: { kind: 'write', write: { place: { t: 'allMachines' }, state: 'on' } } },
+            { surface: 'ui', authority: 'present_user', serverId });
+        expect(result, JSON.stringify(result)).toMatchObject({ ok: true, result: { ok: true, revision: 5,
+            items: [{ skillId, previous: [], rules: [{ target: { t: 'allMachines' }, enabled: true }] }] } });
+        expect(record).toMatchObject({ key: 'skill-rules', value: { rules: [{ skillId, enabled: true }] } });
+        expect(homes.requestsFor('/v2/account/settings').filter(request => request.input !== null)).toEqual([]);
     });
 
     it('creates Account memory without a Session through the captured coding row', async () => {
@@ -487,6 +655,31 @@ describe('createDefaultActionExecutor (prompt library routing)', () => {
             }, { surface: 'ui' });
             expect(inherited.projectEntries).toEqual([{ ...entry('source.memory'), ref: { kind: 'doc', artifactId: 'source.memory', serverId: projectServerId } }]);
         } finally { account.dispose(); }
+    });
+
+    it('reads skill bodies from the Account Artifact owner and session names from the owning runner', async () => {
+        const skillMd = '---\nname: review\ndescription: Review the change\n---\nFull review instructions';
+        const artifactId = await sync.createArtifactWithHeader({ v: 1, kind: 'prompt_bundle.v2', title: 'Review', bundleSchemaId: 'skills.skill_md_v1' },
+            JSON.stringify({ v: 1, entries: [
+                { path: 'SKILL.md', contentBase64: Buffer.from(skillMd).toString('base64'), contentKind: 'utf8' },
+                { path: 'references/note.bin', contentBase64: 'AAEC/w==', contentKind: 'binary', unixMode: 0o755 },
+            ], createdAtMs: 1, updatedAtMs: 1 }));
+        const usage = PromptLibraryRecordV1Schema.parse({ key: 'skill-usage', value: { v: 1, lastUsedAt: { [artifactId]: 123 } } });
+        homes.answer(serverId, PROMPT_LIBRARY_ROWS_ROUTE_V1, { body: { status: 'listed', rows: [
+            { key: usage.key, revision: 2, content: { t: 'plain', v: usage } },
+            ...PromptLibraryCatalogKeyV1Schema.options.filter(key => key !== usage.key).map(key => ({ key, revision: 1, content: null })),
+        ] } });
+        const executor = createDefaultActionExecutor();
+        const direct = await executor.execute('skills.read', { skillId: artifactId, file: 'references/note.bin' }, { surface: 'ui', serverId });
+        expect(direct, JSON.stringify(direct)).toMatchObject({ ok: true, result: { skillId: artifactId, name: 'review', skillMd, lastUsedAt: 123,
+            file: { contentBase64: 'AAEC/w==', unixMode: 0o755 } } });
+        seedSession(true);
+        const output = direct.ok ? direct.result : null;
+        rpc.session.mockResolvedValue(output);
+        expect(await executor.execute('skills.read', { name: 'review', sessionId: 'session_1' }, { surface: 'ui', serverId }))
+            .toMatchObject({ ok: true, result: { skillId: artifactId, skillMd } });
+        expect(rpc.session).toHaveBeenCalledWith(expect.objectContaining({ method: 'skills.read', sessionId: 'session_1',
+            payload: { name: 'review', sessionId: 'session_1' } }));
     });
 
     it('routes qualified memory reads to their Home and writes private facts through real Artifact CAS', async () => {
@@ -773,14 +966,14 @@ describe('createDefaultActionExecutor (prompt library routing)', () => {
         const settings = storage.getState().settings;
         await servePromptTransfers();
         const result = await createDefaultActionExecutor().execute('prompt_registry.install', {
-            machineId: 'machine_1', sourceId: registryItem.sourceId, itemId: registryItem.itemId, configuredSources: [],
+            machineId: 'machine_1', ...registryPointer,
             installTarget: { assetTypeId: 'agents.skill', scope: 'user', targetName: 'review' },
         }, { serverId, surface: 'ui' });
         if (outcome === 'updated') {
             expect(result, JSON.stringify(result)).toMatchObject({ ok: true, result: { exported: true, artifactId: expect.any(String) } });
             if (!result.ok) throw new Error(result.error);
             const artifactId = (result.result as { artifactId: string }).artifactId;
-            expect(JSON.parse(homes.artifacts(serverId).readPlainBody(artifactId) ?? 'null')).toMatchObject({ entries: registryItem.bundleBody.entries });
+            expect(JSON.parse(homes.artifacts(serverId).readPlainBody(artifactId) ?? 'null')).toMatchObject({ entries: registryFixture.files });
             expect(catalog.read().record.value.links).toEqual(expect.arrayContaining([
                 expect.objectContaining({ id: 'neighbor-link' }), expect.objectContaining({ artifactId, machineId: 'machine_1' }),
             ]));
@@ -792,10 +985,53 @@ describe('createDefaultActionExecutor (prompt library routing)', () => {
         }
         expect(catalog.mutations, JSON.stringify(result)).toHaveLength(1);
         expect(catalog.mutations[0]).toMatchObject({ expectedRevision: 4 });
-        expect(rpc.machine).toHaveBeenCalledWith(expect.objectContaining({ serverId, machineId: 'machine_1', method: 'daemon.directTransfer.export.prepare', payload: expect.objectContaining({ sourceId: registryItem.sourceId, itemId: registryItem.itemId }) }));
-        expect(rpc.machine).toHaveBeenCalledWith(expect.objectContaining({ serverId, machineId: 'machine_1', method: 'daemon.promptRegistry.install' }));
+        expect(rpc.machine).toHaveBeenCalledWith(expect.objectContaining({ serverId, machineId: 'machine_1', method: 'daemon.directTransfer.export.prepare',
+            payload: { t: 'prompt_registry_download_v1', kind: 'skill', ...registryPointer, version: registryItem.summary.version } }));
+        expect(rpc.machine).toHaveBeenCalledWith(expect.objectContaining({ serverId, machineId: 'machine_1', method: 'daemon.directTransfer.import.prepare' }));
         expect(homes.requestsFor('/v2/account/settings').filter(request => request.input !== null)).toEqual([]);
         expect(storage.getState().settings).toBe(settings);
+    });
+
+    it('prompt catalog public registry install preserves acknowledged library content when its rule write is refused', async () => {
+        const catalog = serveExternalLinksCatalog('updated', { publicSource: true, refuseSkillRules: true });
+        await servePromptTransfers();
+        const result = await createDefaultActionExecutor().execute('prompt_registry.install', {
+            machineId: 'machine_1', ...registryPointer,
+            installTarget: { assetTypeId: 'agents.skill', scope: 'user', targetName: 'review' },
+        }, { serverId, surface: 'ui' });
+        expect(result).toMatchObject({ ok: true, result: { artifactId: expect.any(String), exported: true,
+            skillIds: [expect.any(String)], includedInSessionId: null,
+            incomplete: [{ skillId: expect.any(String), step: 'rules' }] } });
+        if (!result.ok) throw new Error(result.error);
+        const receipt = result.result as Readonly<{ artifactId: string; skillIds: string[] }>;
+        expect(receipt.skillIds).toEqual([receipt.artifactId]);
+        expect(homes.artifacts(serverId).readPlainBody(receipt.artifactId)).not.toBeNull();
+        expect(catalog.read().record.value.links.some(link => link.artifactId === receipt.artifactId)).toBe(true);
+    });
+
+    it.each(['cancelled', 'retired'] as const)('prompt catalog public registry install retains its native and library ACK before row preparation is %s', async outcome => {
+        const controller = new AbortController();
+        let transfer: Awaited<ReturnType<typeof servePromptTransfers>>;
+        const catalog = serveExternalLinksCatalog('updated', { publicSource: true, afterSkillRulesWrite: async () => {
+            // The real loader may first publish the built-in rule seed. Retire
+            // only after this install's content exists and its rules are written.
+            if (!homes.artifacts(serverId).list().some(artifact => {
+                const body: unknown = JSON.parse(homes.artifacts(serverId).readPlainBody(artifact.id) ?? 'null');
+                return body !== null && typeof body === 'object' && 'entries' in body;
+            })) return;
+            expect(transfer.readFinalized()).toMatchObject({ ok: true, externalRef: { skillName: 'review' }, digest: 'digest-1' });
+            if (outcome === 'cancelled') controller.abort();
+            else await homes.switchAccount(serverId, 'replacement-account');
+        } });
+        transfer = await servePromptTransfers();
+        const result = await createDefaultActionExecutor().execute('prompt_registry.install', {
+            machineId: 'machine_1', ...registryPointer,
+            installTarget: { assetTypeId: 'agents.skill', scope: 'user', targetName: 'review' },
+        }, { serverId, surface: 'ui', signal: controller.signal });
+        expect(result).toMatchObject({ ok: false, details: { artifactId: expect.any(String), exported: true,
+            response: { ok: true, externalRef: { skillName: 'review' }, digest: 'digest-1' }, skillIds: [expect.any(String)] } });
+        expect(homes.artifacts(serverId).list()).toHaveLength(1);
+        expect(catalog.mutations).toEqual([]);
     });
 
     it('prompt catalog registry install does not begin external installation after cancellation during the Machine download', async () => {
@@ -810,7 +1046,7 @@ describe('createDefaultActionExecutor (prompt library routing)', () => {
             return response;
         });
         const disposition = await createDefaultActionExecutor().execute('prompt_registry.install', {
-            machineId: 'machine_1', sourceId: registryItem.sourceId, itemId: registryItem.itemId, configuredSources: [],
+            machineId: 'machine_1', ...registryPointer,
             installTarget: { assetTypeId: 'agents.skill', scope: 'user', targetName: 'review' },
         }, { serverId, surface: 'ui', signal: controller.signal }).then(
             result => ({ kind: 'returned' as const, result }),
@@ -823,7 +1059,7 @@ describe('createDefaultActionExecutor (prompt library routing)', () => {
             expect(disposition.result).toMatchObject({ ok: false });
             expect(disposition.result.ok ? undefined : disposition.result.details).not.toEqual(expect.objectContaining({ exported: true }));
         }
-        expect(rpc.machine.mock.calls.map(([request]) => request).filter((request: DaemonRequest) => request.method === 'daemon.promptRegistry.install')).toEqual([]);
+        expect(rpc.machine.mock.calls.map(([request]) => request).filter((request: DaemonRequest) => request.method === 'daemon.directTransfer.import.prepare')).toEqual([]);
         expect(homes.artifacts(serverId).list()).toEqual([]);
         expect(catalog.mutations).toEqual([]);
     });
@@ -833,13 +1069,13 @@ describe('createDefaultActionExecutor (prompt library routing)', () => {
         await servePromptTransfers();
         homes.answer(serverId, 'POST /v1/artifacts', { status: 503, body: { error: 'artifact_write_unavailable' } });
         const result = await createDefaultActionExecutor().execute('prompt_registry.install', {
-            machineId: 'machine_1', sourceId: registryItem.sourceId, itemId: registryItem.itemId, configuredSources: [],
+            machineId: 'machine_1', ...registryPointer,
             installTarget: { assetTypeId: 'agents.skill', scope: 'user', targetName: 'review' },
         }, { serverId, surface: 'ui' });
         expect(result, JSON.stringify(result)).toMatchObject({ ok: false, details: { exported: true,
             response: { ok: true, externalRef: { skillName: 'review' }, digest: 'digest-1' } } });
-        expect(JSON.stringify(result)).not.toContain(registryItem.bundleBody.entries[0]!.contentBase64);
-        expect(JSON.stringify(result)).not.toContain(registryItem.title);
+        expect(JSON.stringify(result)).not.toContain(registryFixture.files[0]!.contentBase64);
+        expect(JSON.stringify(result)).not.toContain(registryItem.summary.title);
         expect(homes.artifacts(serverId).list()).toEqual([]);
         expect(catalog.mutations).toEqual([]);
         expect(homes.requestsFor('/v2/account/settings').filter(request => request.input !== null)).toEqual([]);
@@ -852,7 +1088,7 @@ describe('createDefaultActionExecutor (prompt library routing)', () => {
         await servePromptTransfers();
         const input = actionId === 'prompt_asset.export'
             ? { artifactId, machineId: 'machine_1', assetTypeId: 'claude.command', scope: 'user', targetPath: 'review.md' }
-            : { machineId: 'machine_1', sourceId: registryItem.sourceId, itemId: registryItem.itemId, configuredSources: [],
+            : { machineId: 'machine_1', ...registryPointer,
                 installTarget: { assetTypeId: 'agents.skill', scope: 'user', targetName: 'review' } };
         const result = await createDefaultActionExecutor().execute(actionId, input, { serverId, surface: 'ui' });
         expect(result).toMatchObject({ ok: false });
@@ -872,12 +1108,13 @@ describe('createDefaultActionExecutor (prompt library routing)', () => {
         installHomeGovernanceBoundaries(homes);
         const displayedScope = { serverId: displayedServerId, accountId: 'account-b' };
         storage.getState().activateProfileScope(displayedScope);
+        await storage.getState().activateSettingsScope(displayedScope);
         storage.getState().applySettingsForScope(displayedScope, baseline.settings, 11);
         const displayedPreferences = storage.getState().settings;
         await servePromptTransfers();
         const input = actionId === 'prompt_asset.export'
             ? { artifactId, machineId: 'machine_1', assetTypeId: 'claude.command', scope: 'user', targetPath: 'review.md' }
-            : { machineId: 'machine_1', sourceId: registryItem.sourceId, itemId: registryItem.itemId, configuredSources: [],
+            : { machineId: 'machine_1', ...registryPointer,
                 installTarget: { assetTypeId: 'agents.skill', scope: 'user', targetName: 'review' } };
         const result = await createDefaultActionExecutor().execute(actionId, input, { serverId, surface: 'ui' });
         expect(result, JSON.stringify(result)).toMatchObject({ ok: true, result: { exported: true } });

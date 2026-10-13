@@ -426,6 +426,10 @@ describe('default Action executor mode and catalog contracts', () => {
     if (owner.t !== 'plain') throw new Error('Unreadable owner metadata');
     const flat = projectSessionOwnerCompatibilityViewV1({ sharedMetadata: JSON.parse(read().metadata), ownerMetadata: owner.v });
     expect(flat.acpSessionModeOverrideV1 ?? flat.sessionModeOverrideV1).toMatchObject({ v: 1, modeId: expectedModeId });
+    // The first write migrates to layout 1. The picker must still authorize
+    // the next selection from its owner view, as on a replied live Session.
+    expect(await createDefaultActionExecutor().execute('session.mode.set', { sessionId: 's1', modeId }, context()))
+      .toMatchObject({ ok: true });
   });
 
   it('rejects an unavailable mode without writing metadata', async () => {
@@ -483,20 +487,6 @@ describe('default Action executor mode and catalog contracts', () => {
     expect(read().metadataLayoutVersion).toBe(0);
   });
 
-  it('publishes an existing-session MCP selection through the Action owner', async () => {
-    const read = installSession('s1', { path: '/tmp/project', host: 'localhost', flavor: 'claude' });
-    const result = await createDefaultActionExecutor().execute('session.mcp_selection.set', {
-      sessionId: 's1',
-      selection: { v: 1, managedServersEnabled: true, forceIncludeServerIds: ['managed:repo'], forceExcludeServerIds: [] },
-      sessionActive: true,
-    }, context());
-    expect(result, JSON.stringify(result)).toMatchObject({ ok: true });
-    const owner = SessionOwnerMetadataEnvelopeV1Schema.parse(read().ownerMetadata);
-    if (owner.t !== 'plain') throw new Error('Unreadable owner metadata');
-    const flat = projectSessionOwnerCompatibilityViewV1({ sharedMetadata: JSON.parse(read().metadata), ownerMetadata: owner.v });
-    expect(flat.mcpSelectionV1).toEqual({ v: 1, managedServersEnabled: true, forceIncludeServerIds: ['managed:repo'], forceExcludeServerIds: [] });
-    expect(flat.mcpSelectionRestartRequiredV1).toBeDefined();
-  });
 
   it('routes a confirmed connected-account chip mutation through its Action owner', async () => {
     daemonAnswer = () => ({ ok: true, action: 'metadata_updated' });

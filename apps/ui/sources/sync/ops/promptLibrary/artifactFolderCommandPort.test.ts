@@ -32,7 +32,7 @@ describe('folder command Account port', () => {
             expect(await executeArtifactFolderActionV1({ port, actionId: 'artifact.folders.read', input: { folderId: 'empty' } }))
                 .toEqual({ status: 'ready', item: { id: 'empty', name: 'Empty', parentId: 'parent' }, revision: 4, coverage: 'complete' });
             expect(boundary.requests).toHaveLength(0);
-        } finally { account.dispose(); fixture.dispose(); }
+        } finally { account.dispose(); await fixture.dispose(); }
     });
 
     it('creates then renames while history maintenance is pending', async () => {
@@ -64,7 +64,7 @@ describe('folder command Account port', () => {
             history.resolve(Response.json({ error: 'not_found' }, { status: 404 }));
             await create;
             account.dispose();
-            fixture.dispose();
+            await fixture.dispose();
         }
     });
 
@@ -82,7 +82,7 @@ describe('folder command Account port', () => {
                 .toEqual({ status: 'conflict', revision: 5 });
             await vi.waitFor(() => expect(getPromptLibraryCatalogValue(scope, 'folders')).toMatchObject({ status: 'ready', revision: 5,
                 value: { folders: [{ id: 'neighbor', name: 'Neighbor' }] }, stale: false }));
-        } finally { fixture.dispose(); }
+        } finally { await fixture.dispose(); }
     });
 
     it('publishes a stale command revision refusal and accepts an explicit retry', async () => {
@@ -111,6 +111,6 @@ describe('folder command Account port', () => {
             expect(boundary.read('folders')).toMatchObject({ value: { folders: [
                 { id: 'r2-folder', name: 'Renamed' }, { id: 'neighbor', name: 'Neighbor' },
             ] } });
-        } finally { account.dispose(); fixture.dispose(); }
+        } finally { account.dispose(); await fixture.dispose(); }
     });
 });

@@ -8,10 +8,21 @@ import { machinePromptAssetsWrite } from '@/sync/ops/machinePromptAssets';
 import { randomUUID } from '@/platform/randomUUID';
 import { runTransferFinalizeRecovery } from '@/components/transfers/recovery/runTransferFinalizeRecovery';
 import { t } from '@/text';
-import { isTransferFinalizeRecoveryFailure } from '@/sync/domains/transfers/runtime/transferRuntime/plumbing/directTransferFinalizeRecovery';
+import { isTransferFinalizeRecoveryFailure } from '@/sync/domains/transfers/runtime/transferRuntime';
 import { withUiPromptLibraryArtifactStore } from './promptLibraryArtifactStore';
 
 export type { ExportablePromptLibraryArtifact };
+
+/** The existing finite-import recovery dialog is shared by external writes and retained registry installs. */
+export async function writePromptAssetWithRecovery(...args: Parameters<typeof machinePromptAssetsWrite>): Promise<PromptAssetMutationResponseV1> {
+  const response = await machinePromptAssetsWrite(...args);
+  if (!isTransferFinalizeRecoveryFailure<PromptAssetMutationResponseV1>(response)) return response;
+  const recovery = await runTransferFinalizeRecovery({ recovery: response.recovery,
+    title: t('transferRecovery.title'), message: t('transferRecovery.message') });
+  return recovery?.status === 'finalized' ? recovery.response : { ok: false, errorCode: 'internal_error',
+    error: recovery?.status === 'unavailable' ? t('transferRecovery.unavailable')
+      : recovery?.status === 'discarded' ? t('transferRecovery.discarded') : response.error };
+}
 
 export async function readPromptLibraryArtifactForExport(
   artifactId: string,
@@ -51,32 +62,11 @@ export async function writePromptLibraryArtifactToExternalAsset(args: Readonly<{
     libraryServerIdentityId,
     store: current,
     write: async ({ machineId, serverId, request }) => {
-      let response = await machinePromptAssetsWrite(
+      return await writePromptAssetWithRecovery(
         machineId,
         request,
         serverId ? { serverId } : undefined,
       );
-      if (isTransferFinalizeRecoveryFailure<PromptAssetMutationResponseV1>(response)) {
-        const recoveryResult = await runTransferFinalizeRecovery({
-          recovery: response.recovery,
-          title: t('transferRecovery.title'),
-          message: t('transferRecovery.message'),
-        });
-        if (recoveryResult?.status === 'finalized') {
-          response = recoveryResult.response;
-        } else {
-          response = {
-            ok: false,
-            error: recoveryResult?.status === 'unavailable'
-              ? t('transferRecovery.unavailable')
-              : recoveryResult?.status === 'discarded'
-                ? t('transferRecovery.discarded')
-                : response.error,
-            errorCode: 'internal_error',
-          };
-        }
-      }
-      return response;
     },
     request,
     randomId: randomUUID,

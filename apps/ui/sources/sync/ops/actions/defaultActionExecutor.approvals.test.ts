@@ -10,7 +10,7 @@ import { SOCKET_RPC_EVENTS, type SocketRpcRequestPayload } from '@happier-dev/pr
 import tweetnacl from 'tweetnacl';
 import { encodeBase64 } from '@happier-dev/protocol/crypto/base64';
 import { computeExternalActionRequestEnvelopeDigestV1, signExternalActionApprovalInputV1 } from '@happier-dev/protocol/actions/externalActionExecutionAuthorization';
-import type { ExternalActionExecutionAuthorizationV1 } from '@happier-dev/protocol/actions/externalActionApi';
+import type { ExternalActionExecutionAuthorizationV1, ExternalActionRequestEnvelopeV1 } from '@happier-dev/protocol/actions/externalActionApi';
 import { createHomeGovernanceHarness, installHomeGovernanceBoundaries } from '@/dev/testkit/harness/homeGovernanceHarness';
 import { installDisconnectedServerSocketBoundary } from '@/dev/testkit/harness/serverAccountConnectionHarness';
 import { installWebLockManagerMock } from '@/auth/storage/tokenStorage.web.testHelpers';
@@ -55,7 +55,7 @@ async function connectPermissionTransport(): Promise<void> {
     const { apiSocket } = await import('@/sync/api/session/apiSocket');
     const { createServerFetchAtEndpoint } = await import('@/sync/http/client');
     const account = homes.findByServerUrl('https://approval-actions.test');
-    if (!account) throw new Error('expected_account');
+    if (!account?.token) throw new Error('expected_account');
     apiSocket.initialize({
         endpoint: account.serverUrl, token: account.token, serverId: homeId,
         request: createServerFetchAtEndpoint({ endpointUrl: account.serverUrl, credentials: { token: account.token } }),
@@ -70,20 +70,23 @@ async function connectPermissionTransport(): Promise<void> {
     });
 }
 
-async function invitationApproval(actionId: 'teams.invitations.create' | 'teams.invitations.reissue', signed = true) {
-    const input = actionId === 'teams.invitations.create'
+async function invitationApproval(actionId: 'teams.invitations.create' | 'teams.invitations.reissue' | 'account.name.set' | 'ui.voice_global.get', signed = true, publicProposal = false,
+    carrierActionId?: ExternalActionExecutionAuthorizationV1['binding']['actionId']) {
+    const input: ExternalActionRequestEnvelopeV1['input'] = actionId === 'ui.voice_global.get' ? {} : actionId === 'account.name.set' ? { name: 'Captain' } : actionId === 'teams.invitations.create'
         ? { v: 1, teamId: 'team-a', role: 'member', historyAccess: 'from_membership', recipientEmail: null, requestKey: 'create-request' }
         : { v: 1, teamId: 'team-a', invitationId: 'old-invitation', recipientEmail: null, requestKey: 'reissue-request' };
     const caller = { kind: 'session' as const, sessionId: 's1', starterDepth: 0, turnDepth: 0 };
     const target = { kind: 'machine' as const, machineId: 'machine-exact' };
     const requestId = `proposal-${actionId}`;
+    const proposalInput = { actionId, actionArgs: input, summary: 'Set my name', createdBy: { surface: 'agent' } };
     const authorization: ExternalActionExecutionAuthorizationV1 = {
         v: 1, token: 'signed-proposal-fixture', binding: {
             serverIdentityId: 'srv_approval_home', accountId: 'account-a',
             authentication: { kind: 'account', tokenEpoch: 0 },
             machineId: target.machineId, custodianAccountId: 'account-a', installationId: 'installation-1',
-            actionId, requestId, target,
-            requestEnvelopeDigest: computeExternalActionRequestEnvelopeDigestV1({ v: 1, requestId, target, input }),
+            actionId: carrierActionId ?? (publicProposal ? 'approval.request.create' : actionId), requestId, target,
+            requestEnvelopeDigest: computeExternalActionRequestEnvelopeDigestV1({ v: 1, requestId, target,
+                input: publicProposal ? proposalInput : input }),
             sessionActionOrigin: { v: 1, caller, sourceTurnId: 'turn-1', callerPermissionMode: null, requestId },
             sessionActionSource: { machineId: target.machineId, installationId: 'installation-1' },
         },
@@ -112,17 +115,19 @@ async function invitationApproval(actionId: 'teams.invitations.create' | 'teams.
         }));
         return { artifactId, input, proposed: { ok: true, result: { kind: 'approval_request_created', artifactId } } };
     }
-    const proposed = await executor.execute(actionId, input, {
+    const proposed = await executor.execute(publicProposal ? 'approval.request.create' : actionId,
+        publicProposal ? proposalInput : input, {
         surface: 'agent', authority: 'account_automation', serverId: homeId,
         actionCaller: caller, actionRequestId: requestId,
-            defaultSessionId: 's1', defaultSessionMachineId: target.machineId, callerPermissionMode: null,
+            ...(!publicProposal ? { defaultSessionId: 's1' } : {}), defaultSessionMachineId: target.machineId, callerPermissionMode: null,
             sessionInputSource: { sourceSessionId: 's1', sourceTurnId: 'turn-1', via: 'action' as const },
             externalActionTarget: target, externalActionExecutionAuthorization: authorization,
             signExternalActionApprovalInput: (args: Parameters<NonNullable<import('@happier-dev/protocol/actions/executor/types').ActionExecutorContext['signExternalActionApprovalInput']>>[0]) =>
                 signExternalActionApprovalInputV1({ authorizationToken: args.authorization.token,
                     actionId: args.actionId, input: args.input, target: args.target, privateKey: installation.secretKey }),
     });
-    expect(proposed, proposed.ok ? undefined : proposed.errorCode).toMatchObject({ ok: true, result: { kind: 'approval_request_created' } });
+    expect(proposed, proposed.ok ? undefined : proposed.errorCode).toMatchObject({ ok: true,
+        result: publicProposal ? { artifactId: expect.any(String) } : { kind: 'approval_request_created' } });
     if (!proposed.ok || !proposed.result || typeof proposed.result !== 'object'
         || !('artifactId' in proposed.result) || typeof proposed.result.artifactId !== 'string') throw new Error('expected_approval');
     return { artifactId: proposed.result.artifactId, input, proposed };
@@ -165,6 +170,34 @@ await import('@/sync/syncEngine');
 await import('./defaultActionExecutor');
 
 describe('createDefaultActionExecutor approvals', () => {
+    it('replays a signed Session client proposal with the approving app authority and no daemon carrier', async () => {
+        const { artifactId } = await invitationApproval('ui.voice_global.get', true, true);
+        const { captureActionAccountContext } = await import('./actionAccountContext');
+        const { normalizeActionsSettingsV1 } = await import('@happier-dev/protocol/actions/actionSettings');
+        const { storage } = await import('@/sync/domains/state/storage');
+        const { settingsParse } = await import('@/sync/domains/settings/settings');
+        const account = await captureActionAccountContext(homeId);
+        try {
+            // A newer external Settings fact disables agent ingress; it must not
+            // veto the approving person's separate UI invocation of the proposal.
+            const settings = normalizeActionsSettingsV1(storage.getState().settings.actionsSettingsV1);
+            const next = settingsParse({ ...storage.getState().settings, actionsSettingsV1: { ...settings,
+                actions: { ...settings.actions, 'ui.voice_global.get': { disabledSurfaces: ['agent', 'mcp'] } } } });
+            const previousVersion = storage.getState().settingsVersion;
+            if (previousVersion === null) throw new Error('expected_settings_baseline');
+            const version = previousVersion + 1;
+            homes.answer(homeId, '/v2/account/settings', { body: { content: { t: 'plain', v: next }, version } });
+            storage.getState().applySettingsForScope(account.accountLifetime.scope, next, version);
+        } finally { account.dispose(); }
+        const approved = await executor.execute('approval.request.decide', { artifactId, decision: 'approve' }, context());
+        expect(approved, JSON.stringify(approved)).toMatchObject({ ok: true, result: {
+            status: 'executed', execution: { ok: true, result: { voice: { status: 'disconnected' } } },
+        } });
+        expect(persistedApproval(artifactId)).toMatchObject({ executionOriginV1: {
+            authority: 'account_automation', caller: { kind: 'session' }, externalActionExecutionAuthorization: expect.any(Object),
+        } });
+        expect(outgoing).toEqual([]);
+    });
     beforeEach(async () => {
         webLocks = installWebLockManagerMock();
         installHomeGovernanceBoundaries(homes);
@@ -268,6 +301,33 @@ describe('createDefaultActionExecutor approvals', () => {
         expect(persistedApproval(artifactId)).toMatchObject({ executionOriginV1: origin });
         expect(outgoing).toEqual([]);
     });
+    it.each([false, true])('executes a signed self-name request once in the approving app (public proposal: %s)', async publicProposal => {
+        const { artifactId, input } = await invitationApproval('account.name.set', true, publicProposal);
+        expect(persistedApproval(artifactId)).toMatchObject({ createdBy: { sessionId: 's1' },
+            approval: { flow: 'deferred', result: 'required' } });
+        const path = '/v1/account/profile';
+        const output = { name: 'Captain', firstName: 'Captain', lastName: null, timestamp: 10 };
+        homes.answer(homeId, path, { body: output });
+        const decide = () => executor.execute('approval.request.decide', { artifactId, decision: 'approve' }, context());
+        expect(await decide()).toMatchObject({ ok: true, result: { status: 'executed', execution: { ok: true } } });
+        await decide();
+        expect(homes.requestsFor(path)).toEqual([expect.objectContaining({ input })]);
+        expect(homes.requestsFor(path)[0]?.token === homes.findByServerUrl('https://approval-actions.test')?.token).toBe(true);
+        expect(outgoing).toEqual([]);
+        expect(persistedApproval(artifactId)).toMatchObject({ status: 'executed', execution: { ok: true, result: output } });
+        const stored = persistedApproval(artifactId);
+        expect(stored.v === 2 && stored.executionOriginV1.externalActionExecutionAuthorization?.binding.actionId)
+            .toBe(publicProposal ? 'approval.request.create' : 'account.name.set');
+    });
+
+    it('refuses a self-name proposal borrowing an unrelated read carrier', async () => {
+        const { artifactId } = await invitationApproval('account.name.set', true, true, 'teams.list');
+        expect(await executor.execute('approval.request.decide', { artifactId, decision: 'approve' }, context()))
+            .toMatchObject({ ok: true, result: { status: 'failed', execution: { ok: false, errorCode: 'approval_stale' } } });
+        expect(homes.requestsFor('/v1/account/profile')).toEqual([]);
+        expect(outgoing).toEqual([]);
+    });
+
     it.each([
         { actionId: 'teams.invitations.create', signed: true },
         { actionId: 'teams.invitations.reissue', signed: true },
@@ -338,9 +398,21 @@ describe('createDefaultActionExecutor approvals', () => {
             },
         });
         await seedApproval('signed-machine-approval', machineRequest);
-        await executor.execute('approval.request.decide', { artifactId: 'signed-machine-approval', decision: 'approve' }, context());
-        expect(outgoing).toMatchObject([{ method: 'machine-exact:' + RPC_METHODS.APPROVAL_REQUEST_REPLAY_APPROVED,
-            params: { artifactId: 'signed-machine-approval' } }]);
+        const { ExternalActionRequestEnvelopeV1Schema, ExternalActionResponseEnvelopeV1Schema } = await import('@happier-dev/protocol/actions/externalActionApi');
+        const path = '/v1/actions/approval.request.decide';
+        // The current Account transport addresses the original Machine through
+        // Home. Only that remote execution boundary is substituted here.
+        homes.answer(homeId, path, { select: body => {
+            const envelope = ExternalActionRequestEnvelopeV1Schema.parse(body);
+            expect(envelope.target).toEqual({ kind: 'machine', machineId: 'machine-exact' });
+            expect(envelope.input).toMatchObject({ artifactId: 'signed-machine-approval', decision: 'approve' });
+            return { body: ExternalActionResponseEnvelopeV1Schema.parse({ v: 1, actionId: 'approval.request.decide',
+                requestId: envelope.requestId, execution: { ok: false, errorCode: 'target_unavailable', error: 'target_unavailable' } }) };
+        } });
+        expect(await executor.execute('approval.request.decide', { artifactId: 'signed-machine-approval', decision: 'approve' }, context()))
+            .toMatchObject({ ok: false, errorCode: 'target_unavailable' });
+        expect(homes.requestsFor(path)).toHaveLength(1);
+        expect(outgoing).toEqual([]);
         expect(homes.requestsFor('/v1/teams/invitations/create')).toEqual([]);
     });
     it('records the authenticated Home effect failure and does not retry it on a repeated decision', async () => {

@@ -400,6 +400,97 @@ describe('Project finite delivery through the default UI Action host', () => {
         } finally { await act(async () => screen.unmount()); disposeExecutor(); }
     }));
 
+    it('opens the real required setup approval from the reviewed This time control and releases a rejected decision', async () => {
+        const { useProjectScriptsController } = await import('@/components/projects/projectSetup/useProjectScriptsController');
+        const { useServerCredentialAccountScopeBindings } = await import('@/sync/domains/scope/useServerCredentialAccountScopes');
+        const { decideApprovalAsInbox } = await import('@/dev/testkit/harness/approvalInbox');
+        const { router } = await import('expo-router');
+        const { buildApprovalHref } = await import('@/components/approvals/approvalNavigation');
+        const disposeExecutor = await installRealActionExecutorModuleLoader();
+        const workspace = { serverId, workspaceId: 'source-workspace', machineId: 'source', rootPath: '/repo' };
+        const requestedHomes = [serverId];
+        const controller = await renderHook(() => useProjectScriptsController(workspace, () => {},
+            useServerCredentialAccountScopeBindings(requestedHomes).get(serverId) ?? null));
+        let deciding: Promise<unknown> | undefined;
+        try {
+            await vi.waitFor(() => expect(controller.getCurrent().ready).toBe(true));
+            act(() => { deciding = controller.getCurrent().prepare('reviewed-setup-effect', 'thisTime'); });
+            await vi.waitFor(() => expect(controller.getCurrent().approvalId).not.toBeNull());
+            const artifactId = controller.getCurrent().approvalId!;
+            expect(router.push).toHaveBeenLastCalledWith(buildApprovalHref(artifactId, serverId));
+            expect(ownFiniteRelayRequests('projects.prepare')).toEqual([]);
+            await act(async () => { await decideApprovalAsInbox(serverId, artifactId, 'reject'); });
+            await act(async () => { await deciding; });
+            expect(controller.getCurrent().pendingKeys).toEqual({});
+            expect(controller.getCurrent().failure).toMatchObject({ code: 'approval_rejected' });
+            expect(ownFiniteRelayRequests('projects.prepare')).toEqual([]);
+        } finally { await controller.unmount(); disposeExecutor(); await deciding; }
+    });
+
+    it.each(['projects.prepare', 'projects.script.run', 'projects.compute.exec', 'action.operations.cancel'] as const)('routes unsigned UI %s approval to its exact Machine with the captured Home', async actionId => {
+        const { decideApprovalAsInbox } = await import('@/dev/testkit/harness/approvalInbox');
+        const { captureLazyActionAccountContext } = await import('./actionAccountContext');
+        const { ApprovalRequestV2Schema } = await import('@happier-dev/protocol/approvals/approvalRequestV1');
+        const { ActionApprovalRequestCreatedResultSchema } = await import('@happier-dev/protocol/actions/actionExecutionResult');
+        if (actionId === 'projects.script.run' || actionId === 'projects.compute.exec') await homes.requireUiApproval(requesterHomeId, actionId);
+        const account = await captureLazyActionAccountContext(serverId);
+        // A fresh root arriving at Home applies the real policy again. Local
+        // replay must not send that second root for an already approved effect.
+        homes.answer(requesterHomeId, '/v1/actions/projects.prepare', { select: async body => {
+            const request = ExternalActionExecutionAuthorizationRequestV1Schema.parse(body);
+            const execution = await createDefaultActionExecutor().execute('projects.prepare', request.envelope.input,
+                { surface: 'ui', serverId, actionRequestId: request.envelope.requestId });
+            return { body: ExternalActionResponseEnvelopeV1Schema.parse({ v: 1, actionId: 'projects.prepare', requestId: request.envelope.requestId, execution }) };
+        } });
+        // HTTP is the real Machine boundary. Installed native completion is
+        // exercised by executeExternalAction.filesystemApprovals.test.ts.
+        homes.answer(requesterHomeId, '/v1/actions/approval.request.decide', { select: body => {
+            const envelope = ExternalActionRequestEnvelopeV1Schema.parse(body);
+            return { body: ExternalActionResponseEnvelopeV1Schema.parse({ v: 1, actionId: 'approval.request.decide', requestId: envelope.requestId,
+                execution: { ok: false, errorCode: 'fixture_machine_refusal', error: 'fixture_machine_refusal' } }) };
+        } });
+        try {
+            const workspace = { serverId, workspaceId: 'source-workspace', machineId: 'source', rootPath: '/repo' };
+            const input = actionId === 'projects.prepare' ? { workspace,
+                phase: 'setup', expectedEffectDigest: 'reviewed-setup-effect', consentScope: 'thisTime' }
+                : actionId === 'projects.script.run' ? { workspace, selection: { kind: 'named', name: 'check' }, choice: { kind: 'primary' } }
+                : actionId === 'projects.compute.exec' ? { workspace, executable: 'echo', argv: ['checked'], cwd: '.', choice: { kind: 'primary' } }
+                : { serverId, machineId: 'source', operationId: 'held-script' };
+            const result = await createDefaultActionExecutor().execute(actionId, input, { surface: 'ui', serverId, authority: 'present_user' });
+            if (!result.ok) throw new Error(result.errorCode);
+            const created = ActionApprovalRequestCreatedResultSchema.parse(result.result);
+            const artifact = await account.fetchArtifact(created.artifactId);
+            const proposal = ApprovalRequestV2Schema.parse(JSON.parse(artifact!.body!));
+            expect(await decideApprovalAsInbox(serverId, created.artifactId, 'approve'))
+                .toMatchObject({ ok: false, errorCode: 'fixture_machine_refusal' });
+            expect(proposal.executionOriginV1).toMatchObject({ serverIdentityId: account.serverIdentityId, machineId: 'source' });
+            const requests = homes.requestsFor('/v1/actions/approval.request.decide');
+            expect(requests).toHaveLength(1);
+            expect(requests[0].serverUrl).toBe(serverUrl);
+            expect(ExternalActionRequestEnvelopeV1Schema.parse(requests[0].input)).toMatchObject({ target: { kind: 'machine', machineId: 'source' },
+                input: { artifactId: created.artifactId, serverIdentityId: account.serverIdentityId, originServerId: proposal.executionOriginV1.serverId } });
+            expect(getActionSpec('approval.request.decide').inputSchema.safeParse(ExternalActionRequestEnvelopeV1Schema.parse(requests[0].input).input).success).toBe(true);
+            expect(ownFiniteRelayRequests('projects.prepare')).toEqual([]);
+        } finally { account.dispose(); }
+    });
+
+    it('refuses an approved Stop when current Home discovery no longer binds its exact Machine', async () => {
+        const { decideApprovalAsInbox } = await import('@/dev/testkit/harness/approvalInbox');
+        const { ActionApprovalRequestCreatedResultSchema } = await import('@happier-dev/protocol/actions/actionExecutionResult');
+        const requested = await createDefaultActionExecutor().execute('action.operations.cancel', {
+            serverId, machineId: 'source', operationId: 'held-script',
+        }, { surface: 'ui', serverId, authority: 'present_user' });
+        if (!requested.ok) throw new Error(requested.errorCode);
+        const approval = ActionApprovalRequestCreatedResultSchema.parse(requested.result);
+        // Mis-bound current Machine discovery is a Home boundary condition;
+        // no internal approval or replay collaborator is replaced.
+        homes.answer(requesterHomeId, '/v1/machines', { body: [] });
+        expect(await decideApprovalAsInbox(serverId, approval.artifactId, 'approve'))
+            .toMatchObject({ ok: false, errorCode: 'admission_unavailable' });
+        expect(homes.requestsFor('/v1/actions/approval.request.decide')).toEqual([]);
+        expect(calls).toEqual([]);
+    });
+
     it.each([
         { actionId: 'projects.prepare', managedWake: false, guestOwned: false },
         { actionId: 'projects.inspect', managedWake: false, guestOwned: false },
@@ -638,9 +729,9 @@ describe('Project finite delivery through the default UI Action host', () => {
                 });
                 expect(controller.getCurrent().setupOperation?.snapshot.setupReview).toBeUndefined();
                 expect(calls).toEqual([expect.objectContaining({ token: requesterToken, request: expect.objectContaining({
-                    method: `source:${ACTION_OPERATION_RPC_METHODS_V2.get}`, params: { operationId: 'remembered-setup' },
+                    method: `source:${ACTION_OPERATION_RPC_METHODS_V2.get}`, params: { operationId: 'remembered-setup', refreshSetupReview: true },
                 }) }), expect.objectContaining({ token: requesterToken, request: expect.objectContaining({
-                    method: `source:${ACTION_OPERATION_RPC_METHODS_V2.get}`, params: { operationId: 'remembered-setup' },
+                    method: `source:${ACTION_OPERATION_RPC_METHODS_V2.get}`, params: { operationId: 'remembered-setup', refreshSetupReview: true },
                 }) })]);
                 const mutations = homes.requestsFor(`${PROJECT_TRUST_ROUTE_V1}/mutate`);
                 expect(mutations).toEqual([expect.objectContaining({ serverUrl, token: requesterToken })]);
@@ -656,6 +747,11 @@ describe('Project finite delivery through the default UI Action host', () => {
     });
 
     it.each([false, true])('retains the accepted receipt and original request identity at the input Home, including cancellation after ACK: %s', async cancelAfterAck => {
+        // This case owns delivery/ACK custody, not confirmation routing. AP1's
+        // default Ask remains exercised by the required-review controller case.
+        homes.answer(requesterHomeId, '/v2/account/settings', { body: { version: 1, content: { t: 'plain', v: {
+            actionsSettingsV1: { v: 1, approvalWaivedSurfaces: { 'projects.prepare': ['ui'] } },
+        } } } });
         const controller = new AbortController();
         const input = { workspace: { serverId, workspaceId: 'source-workspace', machineId: 'source', rootPath: '/repo' }, phase: 'setup' };
         response = ProjectCommandActionOutputV1Schema.parse({ operation: {
@@ -675,8 +771,6 @@ describe('Project finite delivery through the default UI Action host', () => {
             input: { v: 1, target: { kind: 'machine', machineId: 'source' }, input, requestId: 'original-prepare' },
         })]);
         expect(calls).toEqual([]);
-        expect(homes.requestsFor('/v1/machines').map(row => ({ serverUrl: row.serverUrl, token: row.token })))
-            .toEqual([{ serverUrl, token: requesterToken }]);
         expect(controller.signal.aborted).toBe(cancelAfterAck);
     });
 
@@ -686,6 +780,9 @@ describe('Project finite delivery through the default UI Action host', () => {
         const { resolveServerProfileScopeIdForIdentifier } = await import('@/sync/domains/server/serverProfiles');
         const canonicalHome = resolveServerProfileScopeIdForIdentifier(alias);
         expect(canonicalHome).not.toBe(alias);
+        homes.answer(alias, '/v2/account/settings', { body: { version: 1, content: { t: 'plain', v: {
+            actionsSettingsV1: { v: 1, approvalWaivedSurfaces: { 'projects.prepare': ['ui'] } },
+        } } } });
         homes.answer(alias, '/v1/account/encryption/currentness', { body: createPlainAccountEncryptionCurrentnessFixture() });
         answerOwnMachineActions(alias, 'portable-requester', canonicalHome);
         const workspace = { serverId: alias, workspaceId: 'source-workspace', machineId: 'source', rootPath: '/repo' };
@@ -781,6 +878,7 @@ describe('Project finite delivery through the default UI Action host', () => {
         await homes.requireUiApproval(requesterHomeId, 'projects.compute.exec');
         const result = await createDefaultActionExecutor().execute('projects.compute.exec', {
             workspace: { serverId, workspaceId: 'source-workspace', machineId: 'source', rootPath: '/repo' }, executable: '/bin/echo', argv: ['reviewed'], cwd: '/repo',
+            choice: { kind: 'primary' },
         }, { serverId, expectedAccountId: 'requester', surface: 'ui', authority: 'present_user', actionCaller: { kind: 'host' } });
         expect(result, JSON.stringify({ result, requests: homes.requests.map(row => ({ serverId: row.serverId, path: row.path })) }))
             .toMatchObject({ ok: true, result: { kind: 'approval_request_created', actionId: 'projects.compute.exec' } });

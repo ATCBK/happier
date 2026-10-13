@@ -32,8 +32,8 @@ function requireBodyVersion(row: Readonly<{ bodyVersion?: number }>): number {
 const promptWriteSettings = { actionsSettingsV1: { v: 1, approvalWaivedSurfaces: {
   'prompt_doc.create': ['ui'], 'prompt_doc.update': ['ui'],
 } } };
-afterEach(() => {
-  fixture?.dispose();
+afterEach(async () => {
+  await fixture?.dispose();
   fixture = undefined;
 });
 async function home(receivedId?: string) {

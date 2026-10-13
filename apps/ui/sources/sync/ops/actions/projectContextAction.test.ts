@@ -16,7 +16,7 @@ vi.mock('react-native-enriched-markdown/lib/module/web/streamingReveal.js', () =
 
 let fixture: Awaited<ReturnType<typeof createPlainArtifactHomeFixture>> | undefined;
 let foreignHomeId: string | undefined;
-afterEach(async () => { if (foreignHomeId) await removeServerProfile(foreignHomeId); foreignHomeId = undefined; fixture?.dispose(); fixture = undefined; resetRuntimeFetch(); vi.restoreAllMocks(); });
+afterEach(async () => { if (foreignHomeId) await removeServerProfile(foreignHomeId); foreignHomeId = undefined; await fixture?.dispose(); fixture = undefined; resetRuntimeFetch(); vi.restoreAllMocks(); });
 
 describe('UI private Project context Action transport', () => {
   it('uses current Artifact reads and exact row CAS, preserves neighbors, and acknowledges repeat attaches without another write', async () => {

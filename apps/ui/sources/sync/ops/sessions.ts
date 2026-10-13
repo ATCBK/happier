@@ -78,6 +78,8 @@ import { getPendingQueueWakeResumeOptions } from '@/sync/domains/pending/pending
 import { supportsSessionForkRequestId } from '@/utils/system/versionUtils';
 import { machineResolveSpawnSessionByNonceUntilSettled } from './machines';
 import { captureLazyActionAccountContext } from './actions/actionAccountContext';
+import { executeOriginalAccountMachineAction } from '@/sync/api/externalActionAccountTransport';
+import { randomUUID } from '@/platform/randomUUID';
 import { createManagedMachineActionClient } from '@/sync/api/machines/managedMachineActions';
 export {
     sessionScmBranchCheckout,
@@ -425,7 +427,23 @@ async function runResumeSession(
         const retirementSubscription = exactAccountLifetime?.onRetire(() => retirementAbort?.abort());
         let result: unknown;
         try {
-            result = await machineRpcWithServerScope<unknown, ResumeHappySessionRpcParams>({
+            const execution = await (async () => {
+                const account = await captureLazyActionAccountContext(serverId ?? getActiveServerSnapshot().serverId, retirementAbort?.signal);
+                try {
+                    if (exactAccountLifetime && account.accountId !== exactAccountLifetime.scope.accountId) {
+                        throw new Error(`Session resume requires Account ${exactAccountLifetime.scope.accountId}`);
+                    }
+                    return await executeOriginalAccountMachineAction({ account, actionId: 'session.open',
+                    requestId: params.executionAuthorization?.requestId ?? params.spawnNonce ?? randomUUID(),
+                    machineId, foreignTargetOnly: true,
+                    input: { serverId: account.serverId, sessionId, intent: 'resume', resumeRequest: params },
+                    ...(retirementAbort ? { signal: retirementAbort.signal } : {}),
+                    });
+                } finally { account.dispose(); }
+            })();
+            result = execution ? execution.ok ? execution.result : {
+                type: 'error', errorCode: execution.errorCode, errorMessage: execution.error,
+            } : await machineRpcWithServerScope<unknown, ResumeHappySessionRpcParams>({
                 machineId,
                 method: providerSafeRpcRequired
                     ? RPC_METHODS.SPAWN_HAPPY_SESSION_PROVIDER_SAFE
@@ -633,6 +651,7 @@ export async function forkSession(options: ForkSessionOptions): Promise<SessionF
             method: providerSafeRpcRequired
                 ? RPC_METHODS.SESSION_FORK_PROVIDER_SAFE
                 : RPC_METHODS.SESSION_FORK,
+            authorization: { kind: 'session.write', sessionId: options.parentSessionId },
             payload: {
                 v: 1,
                 parentSessionId: options.parentSessionId,

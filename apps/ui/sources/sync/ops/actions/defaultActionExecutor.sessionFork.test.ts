@@ -6,7 +6,7 @@ import { AgentNativeResumeIdentityV1Schema, buildQualifiedPluginContributionKey,
   PluginManifestV2Schema, PluginProjectionV2Schema, SessionCreationCorrespondenceV1Schema, SessionForkRpcParamsSchema,
   type ActionExecutorContext, type SessionRollbackTarget } from '@happier-dev/protocol';
 import { RPC_METHODS, SESSION_RPC_METHODS } from '@happier-dev/protocol/rpc';
-import type { SocketRpcRequestPayload } from '@happier-dev/protocol/socketRpc';
+import { parseSocketRpcAuthorizationContext, type SocketRpcRequestPayload } from '@happier-dev/protocol/socketRpc';
 import type { Session } from '@/sync/domains/state/storageTypes';
 import type { SettingsWriteDelta } from '@/sync/domains/settings/settings';
 import type { CurrentProjectedAgentCapabilities } from '@/agents/backendCatalog/currentAgentCapabilities';
@@ -243,6 +243,11 @@ describe('default Action executor Session lifecycle contracts', () => {
     await act(async () => { await harness.getCurrent().submit('replay'); });
     expect(rpcRequests(RPC_METHODS.SESSION_FORK)[0]?.params).toMatchObject({ strategy: 'replay',
       forkPoint: { type: 'seq', upToSeqInclusive: 12 }, replayMaxSeedChars: 12_345 });
+    const forkRequest = rpcRequests(RPC_METHODS.SESSION_FORK)[0];
+    const forkParams = SessionForkRpcParamsSchema.parse(forkRequest?.params);
+    expect(parseSocketRpcAuthorizationContext(forkRequest?.authorization)).toEqual({
+      kind: 'session.write', sessionId: forkParams.parentSessionId,
+    });
     expect(getExistingSessionDraftProjection({ serverId, accountId: 'alice' }, 'sess_child'))
       .toMatchObject({ text: 'restored draft' });
     expect(navigate).toHaveBeenCalledExactlyOnceWith('sess_child', { serverId });
@@ -364,6 +369,16 @@ describe('default Action executor Session lifecycle contracts', () => {
     setSettings({ sessionReplayMaxSeedChars: 200_000 });
     expect(await executor().execute('session.fork', { sessionId: 'sess_parent' }, context())).toMatchObject({ ok: true });
     expect(rpcRequests(RPC_METHODS.SESSION_FORK)[0]?.params).toHaveProperty('replayMaxSeedChars', 200_000);
+  });
+
+  it('reads an undersized retained preference as the default before the real fork Action dispatch', async () => {
+    installSession();
+    answerFork();
+    // Retained data may predate the writable floor; exercise the real config
+    // reader beneath Action composition without changing a live Account.
+    storage.setState({ settings: { ...storage.getState().settings, sessionReplayMaxSeedChars: 1024 } });
+    expect(await executor().execute('session.fork', { sessionId: 'sess_parent' }, context())).toMatchObject({ ok: true });
+    expect(rpcRequests(RPC_METHODS.SESSION_FORK)[0]?.params).toHaveProperty('replayMaxSeedChars', 120_000);
   });
 
   it('requests native fork when Replay is off and the current Agent declares native fork', async () => {

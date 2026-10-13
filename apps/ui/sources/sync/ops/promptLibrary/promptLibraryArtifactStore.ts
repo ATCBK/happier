@@ -92,8 +92,9 @@ export async function withUiPromptLibraryArtifactReader<T>(
     return await run({
       readArtifact: async (ref) => {
         const { pending } = accountFor(ref);
+        const account = await pending;
         return createUiPromptLibraryArtifactStore(
-          (await pending).workflowArtifacts,
+          account.workflowArtifacts, account,
         ).read(ref.artifactId, { signal: options?.signal });
       },
       readArtifactHeader: async (ref) => {
@@ -197,7 +198,7 @@ export function createUiPromptLibraryArtifactStore(
     ...(organization ? { organization } : {}),
     read: async (id, options) => {
       throwIfAborted(options?.signal);
-      const artifact = await artifacts.read(id, options);
+      const artifact = await (account ? account.readArtifactContent(id, options) : artifacts.read(id, options));
       return artifact
         ? {
             id: artifact.artifactId,
@@ -223,6 +224,11 @@ export function createUiPromptLibraryArtifactStore(
           code: result.errorCode,
         });
       return { revision: result.revision };
+    },
+    delete: async ({ artifactId, expectedRevision, signal }) => {
+      throwIfAborted(signal);
+      const result = await artifacts.delete(artifactId, { expectedRevision, ...(signal ? { signal } : {}) });
+      if (!result.ok) throw Object.assign(new Error(result.error), { code: result.errorCode });
     },
     list: async (options) => {
       throwIfAborted(options?.signal);

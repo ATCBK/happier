@@ -11,7 +11,7 @@ vi.mock('@/sync/runtime/orchestration/serverScopedRpc/serverScopedMachineRpc', (
 vi.mock('react-native-enriched-markdown/lib/module/web/streamingReveal.js', () => ({ splitStreamingRevealTextParts: () => { throw new Error('Unexpected rendering'); } }));
 
 let home: Awaited<ReturnType<typeof createPlainArtifactHomeFixture>> | undefined;
-afterEach(() => { home?.dispose(); home = undefined; remote.mockReset(); storage.getState().clearProjectAccountRowsScope(); });
+afterEach(async () => { await home?.dispose(); home = undefined; remote.mockReset(); storage.getState().clearProjectAccountRowsScope(); });
 
 describe('UI service placement Get through the Action front door', () => {
   it('observes a linked native declaration using source identity and refuses failed or withdrawn owner reads', async () => {

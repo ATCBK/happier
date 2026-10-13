@@ -13,6 +13,7 @@ import { invalidateAccountEncryptionModeCache } from '@/sync/api/account/apiAcco
 import { resetServerFeaturesClientForTests } from '@/sync/api/capabilities/serverFeaturesClient';
 import { ACP_CATALOG_ROWS_ROUTE_V1, AcpCatalogRowMutationV1Schema, type AcpCatalogRowMutationV1,
     type AcpCatalogContentV1 } from '@happier-dev/protocol/acp/catalog/catalogRowsV1';
+import { AcpBackendDefinitionV1Schema } from '@happier-dev/protocol/acp/catalog/settingsV1';
 import { getStorage } from '@/sync/domains/state/storage';
 
 installApprovalCommonModuleMocks({ storage: original => original(), reactNavigation: async () =>
@@ -32,7 +33,7 @@ describe('captured UI ACP Agent Actions', () => {
         const home = await upsertAndActivateServer({ serverUrl: 'https://acp-action-stale-draft.test', scope: 'tab' });
         const token = `e30.${Buffer.from(JSON.stringify({ sub: 'owner' })).toString('base64url')}.signature`;
         vi.spyOn(TokenStorage, 'getCredentialsForServerUrl').mockResolvedValue({ token });
-        const backend = { id: 'row-review', name: 'row-review', title: 'Other writer title', launch: { kind: 'command' as const, command: 'review', args: [] }, createdAt: 1, updatedAt: 1 };
+        const backend = AcpBackendDefinitionV1Schema.parse({ id: 'row-review', name: 'row-review', title: 'Other writer title', launch: { kind: 'command', command: 'review', args: [] }, createdAt: 1, updatedAt: 1 });
         let content: AcpCatalogContentV1 = { t: 'plain', v: { v: 1, definitions: [backend] } };
         let revision = 1;
         let posts = 0;

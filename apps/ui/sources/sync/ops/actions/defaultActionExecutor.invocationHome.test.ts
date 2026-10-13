@@ -1,7 +1,11 @@
 import { afterEach, beforeAll, describe, expect, it, vi } from 'vitest';
-import { SessionRequesterBootstrapRpcRequestV1Schema } from '@happier-dev/protocol/sessions/creation/sessionRequesterBootstrapV1';
-import { FeaturesResponseSchema } from '@happier-dev/protocol';
-import { RPC_METHODS } from '@happier-dev/protocol/rpc';
+import { openExternalActionRequesterAccountContextV1 } from '@happier-dev/protocol/sessions/creation/sessionRequesterBootstrapV1';
+import { ExternalActionExecutionAuthorizationRequestV1Schema, ExternalActionExecutionAuthorizationV1Schema,
+    computeExternalActionRequestEnvelopeDigestV1 } from '@happier-dev/protocol/actions';
+import { encodeBase64 } from '@happier-dev/protocol/crypto/base64';
+import nacl from 'tweetnacl';
+import { FeaturesResponseSchema, SessionCurrentProjectionRecordV1Schema } from '@happier-dev/protocol';
+import { createSessionFixture } from '@/dev/testkit';
 import { installApprovalCommonModuleMocks } from '@/components/approvals/approvalsTestHelpers';
 import { installLocalStorageMock } from '@/auth/storage/tokenStorage.web.testHelpers';
 import { TokenStorage } from '@/auth/storage/tokenStorage';
@@ -12,6 +16,8 @@ import { resetRuntimeFetch, setRuntimeFetch } from '@/utils/system/runtimeFetch'
 import { buildManualSessionCreationKey, executeSessionSpawnNewAction } from './sessionSpawnNewAction';
 import { createRootLayoutFeaturesResponse } from '@/dev/testkit/fixtures/featureFixtures';
 import { createPlainAccountEncryptionCurrentnessFixture } from '@/dev/testkit/fixtures/accountEncryptionCurrentness';
+import { captureLazyActionAccountContext } from './actionAccountContext';
+import { resumeSession } from '../sessions';
 
 // The daemon RPC is the genuine process boundary; Account capture, grant read,
 // policy, credential preparation and public Action parsing remain real.
@@ -89,16 +95,27 @@ describe('default Action original Home selection', () => {
             .toBe('captured-home');
     });
 
-    it('reaches the existing private requester carrier through the ordinary UI Action with the original Home and creation key intact', async () => {
+    it.each(['session.spawn_new', 'session.open', 'rich-resume'] as const)('uses the authenticated Action relay for shared %s with the original Home intact', async (operation) => {
+        const actionId = operation === 'rich-resume' ? 'session.open' : operation;
         const localStorage = installLocalStorageMock();
         try {
             const profile = await upsertServerProfile({ serverUrl: 'https://requester-spawn-original-home.test' });
             const homeId = 'srv_requester_spawn_original_home';
             await setServerProfileIdentityForUrl(profile.serverUrl, homeId);
-            const token = 'e30.eyJzdWIiOiJib2IiLCJwcm92ZW5hbmNlIjp7InYiOjEsImtpbmQiOiJhY2NvdW50IiwiYXV0aG9yaXR5IjoicHJlc2VudF91c2VyIn19.signature';
+            const token = `e30.${Buffer.from(JSON.stringify({ sub: 'bob', tokenEpoch: 0,
+                provenance: { v: 1, kind: 'account', authority: 'present_user' } })).toString('base64url')}.signature`;
             expect(await TokenStorage.setCredentialsForServerUrl(profile.serverUrl, { serverId: homeId }, { token })).toBe(true);
             const custodian = { accountId: 'alice', displayName: 'Alice' };
+            const installation = nacl.sign.keyPair();
+            const session = createSessionFixture({ id: 'bob-session', serverId: homeId, active: false,
+                metadata: { path: '/workspace/project', host: 'alice-host', machineId: 'alice-machine', flavor: 'codex', codexSessionId: 'native-session' } });
+            const sessionWire = SessionCurrentProjectionRecordV1Schema.parse({ ...session,
+                metadata: JSON.stringify(session.metadata), metadataLayoutVersion: 0,
+                effectiveAccess: { v: 1, level: session.access!.level, sources: [{ kind: 'owner' }], capabilities: session.access!.capabilities },
+                responsibleAccountId: null, responsibleAccount: null, share: null, archivedAt: null,
+                agentState: null, dataEncryptionKey: null, pendingCount: 0, pendingVersion: 0 });
             const httpPaths: string[] = [];
+            let relayedInput: unknown;
             setRuntimeFetch(async (rawUrl, init) => {
                 const url = new URL(String(rawUrl));
                 expect(url.origin).toBe(profile.serverUrl);
@@ -109,38 +126,78 @@ describe('default Action original Home selection', () => {
                 // The canonical reachability owner probes before scoped HTTP dispatch.
                 if (url.pathname === '/v1/auth/ping') return Response.json({ ok: true });
                 if (url.pathname === '/v1/account/encryption') return Response.json({ mode: 'plain', updatedAt: 1 });
+                if (url.pathname === '/v1/account/encryption/currentness') return Response.json(createPlainAccountEncryptionCurrentnessFixture());
+                if (url.pathname === '/v2/sessions/bob-session') return Response.json({ session: sessionWire });
                 if (url.pathname === '/v2/account/settings') return Response.json({ content: { t: 'plain', v: {} }, version: 1 });
+                if (url.pathname === '/v1/machines') return Response.json([{ id: 'alice-machine', kind: 'persistent', active: true,
+                    installationId: 'alice-installation', installationPublicKey: encodeBase64(installation.publicKey),
+                    revokedAt: null, replacedByMachineId: null, dataEncryptionKey: null, runnerContentKeyBinding: null,
+                    access: { custodian, role: 'use', resourceMode: 'plain', accessState: 'ready' } }]);
                 if (url.pathname === '/v1/machines/alice-machine/access') return Response.json({
                     machineId: 'alice-machine', custodian,
                     access: { custodian, role: 'use', resourceMode: 'plain', accessState: 'ready' },
                     canManage: false, grants: [], ownDirectGrant: true, ownAccessSources: [],
                 });
+                if (url.pathname === `/v1/actions/${actionId}/execution-authorization`) {
+                    const request = ExternalActionExecutionAuthorizationRequestV1Schema.parse(JSON.parse(String(init?.body)));
+                    return Response.json(ExternalActionExecutionAuthorizationV1Schema.parse({ v: 1, token: 'home-root', binding: {
+                        accountId: 'bob', authentication: { kind: 'account', tokenEpoch: 0 }, custodianAccountId: 'alice',
+                        serverIdentityId: homeId, machineId: 'alice-machine', installationId: 'alice-installation', accountEncryptionMode: 'plain',
+                        actionId, requestId: request.envelope.requestId, target: request.envelope.target,
+                        requestEnvelopeDigest: computeExternalActionRequestEnvelopeDigestV1(request.envelope),
+                    } }));
+                }
+                if (url.pathname === `/v1/actions/${actionId}`) {
+                    const request = ExternalActionExecutionAuthorizationRequestV1Schema.parse(JSON.parse(String(init?.body)));
+                    expect(openExternalActionRequesterAccountContextV1({ authorization: request.executionAuthorization,
+                        purpose: { kind: 'external_action' }, machineId: 'alice-machine', installationId: 'alice-installation',
+                        serverIdentityId: homeId, installationPrivateKey: installation.secretKey })).toEqual({ token });
+                    expect(JSON.stringify(request)).not.toContain(token);
+                    if (request.envelope.v !== 1) throw new Error('Expected Plain Account Action');
+                    relayedInput = request.envelope.input;
+                    return Response.json({ v: 1, actionId, requestId: request.envelope.requestId,
+                        execution: { ok: true, result: operation === 'rich-resume' ? { type: 'success', sessionId: 'bob-session' } : actionId === 'session.spawn_new'
+                            ? { type: 'pending', retryWithSameCreationKey: true, outcome: 'unknown' }
+                            : { ok: true, status: 'opened', sessionId: 'bob-session', serverId: homeId } } });
+                }
                 throw new Error(`Unexpected requester preparation HTTP effect: ${url.pathname}`);
             });
-            let privateRequest: unknown;
-            machineRpcBoundary.mockImplementation(async (request: Readonly<{ method: string; payload: unknown; serverId: string; machineId: string }>) => {
-                expect(request.method).toBe(RPC_METHODS.SESSION_SPAWN_NEW);
-                expect(request.serverId).toBe(homeId);
-                expect(request.machineId).toBe('alice-machine');
-                privateRequest = request.payload;
-                return { type: 'pending', retryWithSameCreationKey: true, outcome: 'unknown' };
-            });
+            machineRpcBoundary.mockRejectedValue(new Error('Raw shared-Machine spawn is forbidden'));
             const input = {
                 executionTarget: { serverId: homeId, machineId: 'alice-machine' },
                 directory: { kind: 'path' as const, path: '/workspace/project' },
                 agentTarget: { kind: 'agent' as const, identity: { pluginId: 'happier.agent.codex', localId: 'codex' } },
                 creationKey: buildManualSessionCreationKey('original-home-attempt'),
             };
-            const outcome = await executeSessionSpawnNewAction(input, {
-                surface: 'ui', authority: 'present_user', actionRequestId: 'original-home-attempt',
-            }, createDefaultActionExecutor());
-            expect(outcome).toEqual({ ok: true, result: { type: 'pending', retryWithSameCreationKey: true, outcome: 'unknown' } });
-            const prepared = SessionRequesterBootstrapRpcRequestV1Schema.parse(privateRequest);
-            expect(prepared.input).toEqual(input);
-            expect(prepared.requesterBootstrap).toEqual({ v: 1, disposition: 'ordinary_requester', credentials: { token } });
+            const resumeInput = { serverId: homeId, sessionId: 'bob-session', intent: 'resume' as const };
+            const context = { surface: 'ui' as const, authority: 'present_user' as const, actionRequestId: 'original-home-attempt', serverId: homeId };
+            const executor = createDefaultActionExecutor();
+            const account = operation === 'rich-resume' ? await captureLazyActionAccountContext(homeId) : null;
+            const richOptions = { sessionId: 'bob-session', machineId: 'alice-machine', directory: '/workspace/project',
+                backendTarget: { kind: 'backend' as const, backendId: 'codex', sourceKind: 'built_in' as const },
+                resume: 'native-session', serverId: homeId, permissionMode: 'read-only' as const,
+                permissionModeUpdatedAt: 9, initialTranscriptAfterSeq: 17, spawnNonce: 'rich-resume-attempt',
+                initialGoal: { objective: 'Finish the task', tokenBudget: 100 }, environmentVariables: { WORKSPACE: 'project' } };
+            const outcome = operation === 'rich-resume'
+                ? await resumeSession({ ...richOptions, accountLifetime: account!.accountLifetime })
+                : actionId === 'session.spawn_new'
+                ? await executeSessionSpawnNewAction(input, context, executor)
+                : await executor.execute(actionId, resumeInput, context);
+            account?.dispose();
+            expect(outcome).toEqual(operation === 'rich-resume' ? { type: 'success', sessionId: 'bob-session' } : { ok: true, result: actionId === 'session.spawn_new'
+                ? { type: 'pending', retryWithSameCreationKey: true, outcome: 'unknown' }
+                : { ok: true, status: 'opened', sessionId: 'bob-session', serverId: homeId } });
+            if (operation === 'rich-resume') expect(relayedInput).toMatchObject({ ...resumeInput, resumeRequest: {
+                type: 'resume-session', sessionId: richOptions.sessionId, directory: richOptions.directory,
+                backendTarget: richOptions.backendTarget, resume: richOptions.resume, permissionMode: richOptions.permissionMode,
+                permissionModeUpdatedAt: 9, initialTranscriptAfterSeq: 17, spawnNonce: richOptions.spawnNonce,
+                initialGoal: richOptions.initialGoal, environmentVariables: richOptions.environmentVariables,
+            } });
+            else expect(relayedInput).toEqual(actionId === 'session.spawn_new' ? input : resumeInput);
+            expect(machineRpcBoundary).not.toHaveBeenCalled();
             expect(JSON.stringify(input).includes(token)).toBe(false);
             expect(JSON.stringify(outcome).includes(token)).toBe(false);
-            expect(httpPaths.includes('/v1/machines/alice-machine/access')).toBe(true);
+            if (actionId === 'session.spawn_new') expect(httpPaths.includes('/v1/machines/alice-machine/access')).toBe(true);
         } finally {
             localStorage.restore();
         }

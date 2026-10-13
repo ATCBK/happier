@@ -6,6 +6,7 @@ import {
     type ActionOperationSnapshotV1,
 } from '@happier-dev/protocol';
 import { RPC_ERROR_CODES } from '@happier-dev/protocol/rpcErrors';
+import { ActionOperationGetV2RequestSchema } from '@happier-dev/protocol/actions/operations/v1';
 
 import {
     getActionOperation,
@@ -66,6 +67,10 @@ describe('action operation transport', () => {
             { method: ACTION_OPERATION_RPC_METHODS_V2.list, payload: {} },
             { method: ACTION_OPERATION_RPC_METHODS_V2.get, payload: { operationId: 'operation-1' } },
         ]);
+        await expect(getActionOperation({ machineId: 'machine-1', operationId: 'operation-1', refreshSetupReview: true, rpc }))
+            .resolves.toEqual(responses[ACTION_OPERATION_RPC_METHODS_V2.get]);
+        expect(ActionOperationGetV2RequestSchema.parse(calls.at(-1)?.payload))
+            .toEqual({ operationId: 'operation-1', refreshSetupReview: true });
     });
 
     it.each([
@@ -128,5 +133,7 @@ describe('action operation transport', () => {
         await expect(getActionOperation(params)).rejects.toMatchObject({
             rpcErrorCode: RPC_ERROR_CODES.METHOD_NOT_FOUND,
         });
+        await expect(getActionOperation({ machineId: 'machine-1', operationId: 'operation-1', rpc, refreshSetupReview: true }))
+            .rejects.toMatchObject({ rpcErrorCode: RPC_ERROR_CODES.METHOD_NOT_FOUND });
     });
 });

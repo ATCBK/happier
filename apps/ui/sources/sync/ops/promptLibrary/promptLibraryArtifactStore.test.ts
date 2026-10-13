@@ -1,5 +1,5 @@
 import { afterEach, describe, expect, it, vi } from 'vitest';
-import { createPromptDocInLibrary, updatePromptDocInLibrary } from '@happier-dev/protocol/prompts/library/promptLibraryActionOperations';
+import { createPromptDocInLibrary, createPromptBundleInLibrary, updatePromptDocInLibrary } from '@happier-dev/protocol/prompts/library/promptLibraryActionOperations';
 import {
   ARTIFACT_PLAIN_DATA_KEY_MARKER,
   encodePlainArtifactStoredContent,
@@ -20,9 +20,7 @@ import {
 } from './promptLibraryArtifactStore';
 import { resolvePromptStackSystemAppendBlocksV1 } from './resolvePromptStackSystemAppendBlocksV1';
 import { expandPromptTemplateInvocation } from '@/sync/domains/input/slashCommands/expandPromptTemplateInvocation';
-import { importPromptAssetToLibrary } from './importPromptAssetToLibrary';
 import { createArtifactStoreBoundary } from '@/dev/testkit/harness/artifactStoreBoundary';
-import { MachineAdministrationTargetV1Schema } from '@happier-dev/protocol/account/settings/machineAdministrationSelectionsV1';
 import {
   updateSkillPromptBundleWithEntry,
   removeSkillPromptBundleEntry,
@@ -40,8 +38,8 @@ vi.mock(
 let fixture:
   | Awaited<ReturnType<typeof createPlainArtifactHomeFixture>>
   | undefined;
-afterEach(() => {
-  fixture?.dispose();
+afterEach(async () => {
+  await fixture?.dispose();
   fixture = undefined;
   resetRuntimeFetch();
   vi.restoreAllMocks();
@@ -55,9 +53,10 @@ async function home(
     createdAtMs: 1,
     updatedAtMs: 1,
   }),
+  options?: Parameters<typeof createPlainArtifactHomeFixture>[1],
 ) {
   fixture = await createPlainArtifactHomeFixture(
-    'https://prompt-qualified-read.test',
+    'https://prompt-qualified-read.test', options,
   );
   await fixture.boundary.handle('/v1/artifacts', {
     method: 'POST',
@@ -79,7 +78,33 @@ async function home(
 }
 
 describe('UI qualified prompt-library Artifact authority', () => {
-  it.each(['doc', 'bundle'] as const)('refuses a downloaded %s import after its captured active library Account retires', async libraryKind => {
+  it('returns the real bundle creation revision even when a subsequent content read is unavailable', async () => {
+    const f = fixture = await createPlainArtifactHomeFixture('https://creation-receipt.test', {
+      handleRequest: (path, init) => path.startsWith('/v1/artifacts/') && (!init?.method || init.method === 'GET')
+        ? Promise.resolve(Response.json({ error: 'unavailable' }, { status: 503 })) : null,
+    });
+    const result = await withUiPromptLibraryArtifactStore(store => createPromptBundleInLibrary({ store,
+      request: { title: 'Sample', bundleSchemaId: 'skills.skill_md_v1', entries: [{ path: 'SKILL.md',
+        contentBase64: Buffer.from('---\nname: sample\n---\nInstructions').toString('base64'), contentKind: 'utf8' }] },
+    }), { serverId: f.home.id });
+    const row = f.boundary.read(result.artifactId)!;
+    expect(result).toMatchObject({ revision: { headerVersion: row.headerVersion, bodyVersion: row.bodyVersion } });
+    expect(storage.getState().artifacts[result.artifactId]).toMatchObject({ id: result.artifactId });
+  });
+  it('keeps finite reads observational while explicit Artifact refresh publishes the captured row', async () => {
+    const f = await home();
+    storage.setState({ artifacts: {}, artifactsLoaded: false });
+    await withUiPromptLibraryArtifactStore(async (store, account) => {
+      const read = await store.read('current');
+      expect(read).toMatchObject({ id: 'current', header: { title: 'Current' } });
+      expect(storage.getState().artifacts.current).toBeUndefined();
+      expect(storage.getState().artifactsLoaded).toBe(false);
+      await account.fetchArtifact('current');
+      expect(storage.getState().artifacts.current).toMatchObject({ id: 'current' });
+      expect(storage.getState().artifactsLoaded).toBe(false);
+    }, { serverId: f.home.id });
+  });
+  it.each(['doc', 'bundle'] as const)('refuses a %s create after its captured active library Account retires', async libraryKind => {
     const originalUrl = 'https://captured-import-library.test';
     const nextUrl = 'https://next-import-library.test';
     const originalCatalog = createPromptLibraryCatalogBoundary();
@@ -104,14 +129,10 @@ describe('UI qualified prompt-library Artifact authority', () => {
       const nextHome = await upsertAndActivateServer({ serverUrl: nextUrl, scope: 'device' });
       storage.setState({ profileScope: { serverId: nextHome.id, accountId: 'artifact-account' }, settingsScope: { serverId: nextHome.id, accountId: 'artifact-account' } });
       publishAppliedActiveServerSnapshot(getActiveServerSnapshot());
-      const common = { assetTypeId: 'agents.skill', scope: 'user' as const, externalRef: { name: 'review' },
-        title: 'Downloaded review', digest: 'digest-1', displayPath: 'review' };
-      const item = libraryKind === 'doc' ? { ...common, libraryKind, markdown: '# Review' }
-        : { ...common, libraryKind, bundleSchemaId: 'skills.skill_md_v1' as const,
-          bundleBody: { v: 1 as const, entries: [{ path: 'SKILL.md', contentBase64: Buffer.from('# Review').toString('base64'), contentKind: 'utf8' as const }], createdAtMs: 1, updatedAtMs: 1 } };
-      const machineTarget = MachineAdministrationTargetV1Schema.parse({ serverIdentityId: 'srv_library', machineId: 'machine-1' });
-      return await importPromptAssetToLibrary({ item, machineTarget, libraryServerIdentityId: machineTarget.serverIdentityId,
-        promptExternalLinks: { v: 1, links: [] } }, store);
+      return libraryKind === 'doc'
+        ? await createPromptDocInLibrary({ store, request: { title: 'Review', markdown: '# Review' } })
+        : await createPromptBundleInLibrary({ store, request: { title: 'Review', bundleSchemaId: 'skills.skill_md_v1',
+          entries: [{ path: 'SKILL.md', contentBase64: Buffer.from('# Review').toString('base64'), contentKind: 'utf8' }] } });
     }, { serverId: f.home.id });
     await expect(importing).rejects.toMatchObject({ code: 'action_account_scope_changed' });
     expect(f.boundary.list()).toEqual([]);
@@ -261,6 +282,7 @@ describe('UI qualified prompt-library Artifact authority', () => {
   it.each(['update', 'remove'] as const)(
     'refuses a stale supporting-entry %s without rebasing the bundle revision',
     async (operation) => {
+      const catalog = createPromptLibraryCatalogBoundary({ records: [{ key: 'skill-rules', value: { v: 1, rules: [] } }] });
       const f = await home(
         'prompt_bundle.v2',
         JSON.stringify({
@@ -268,7 +290,7 @@ describe('UI qualified prompt-library Artifact authority', () => {
           entries: [
             {
               path: 'SKILL.md',
-              contentBase64: 'IyBTa2lsbA==',
+              contentBase64: Buffer.from('---\nname: skill\ndescription: Test skill\n---\n# Skill').toString('base64'),
               contentKind: 'utf8',
             },
             {
@@ -280,13 +302,20 @@ describe('UI qualified prompt-library Artifact authority', () => {
           createdAtMs: 1,
           updatedAtMs: 1,
         }),
+        { handleRequest: catalog.handle },
       );
+      const { PromptBundleBodyV1Schema } = await import('@happier-dev/protocol/prompts/library/promptBundleSchemas');
+      const originalBody = f.boundary.readPlainBody('current');
+      if (!originalBody) throw new Error('Missing seeded skill body');
+      const original = PromptBundleBodyV1Schema.parse(JSON.parse(originalBody));
+      const concurrentBody = JSON.stringify({ ...original, entries: original.entries.map(entry => entry.path === 'notes.md'
+        ? { ...entry, contentBase64: Buffer.from('concurrent').toString('base64') } : entry) });
       f.boundary.beforeNextUpdate(async () => {
         await f.boundary.handle('/v1/artifacts/current', {
           method: 'POST',
           body: JSON.stringify({
             body: encodePlainArtifactStoredContent({
-              body: 'concurrent bundle',
+              body: concurrentBody,
             }),
             expectedBodyVersion: 1,
           }),
@@ -303,8 +332,9 @@ describe('UI qualified prompt-library Artifact authority', () => {
               artifactId: 'current',
               path: 'notes.md',
             }),
-      ).rejects.toMatchObject({ code: 'version_mismatch' });
-      expect(f.boundary.readPlainBody('current')).toBe('concurrent bundle');
+      ).rejects.toMatchObject({ code: 'revision_conflict' });
+      expect(f.boundary.readPlainBody('current')).toBe(concurrentBody);
+      expect(f.boundary.read('current')).toMatchObject({ headerVersion: 1, bodyVersion: 2 });
     },
   );
 

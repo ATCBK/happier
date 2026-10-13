@@ -1,17 +1,16 @@
+import { projectNativeJsonValueForTransport } from '@happier-dev/protocol/json/strictJsonValue';
 import { afterEach, describe, expect, it } from 'vitest';
 import { serveAccountHomes } from '@/dev/testkit/harness/actionHomesHttpHarness';
 import { standardCleanup } from '@/dev/testkit/cleanup/standardCleanup';
 import { publishAppliedActiveServerSnapshot } from '@/sync/runtime/orchestration/appliedActiveServerRuntime';
 import { retireActiveServerAccountScopeLifetime } from '@/sync/domains/scope/activeServerAccountScope';
-import { createActionExecutor } from '@happier-dev/protocol/actions/actionExecutor';
+import { createDefaultActionExecutor } from './defaultActionExecutor';
 import { captureUiUsageQueryAccountContext, decodeUsageQueryResource, getUsageQueryResourceStore } from '@/sync/api/account/usageQueryResource';
 import { normalizeUsageQuery } from '@happier-dev/protocol/inputs/usageQuery';
 import { TokenStorage } from '@/auth/storage/tokenStorage';
-import { createUiUsageActionPorts } from './usageActionDeps';
-import { captureLazyActionAccountContext } from './actionAccountContext';
 
 let home: Awaited<ReturnType<typeof serveAccountHomes>> | undefined;
-afterEach(() => { standardCleanup(); retireActiveServerAccountScopeLifetime(); home?.dispose(); home = undefined; });
+afterEach(async () => { standardCleanup(); retireActiveServerAccountScopeLifetime(); await home?.dispose(); home = undefined; });
 const catalog = { v: 1, models: { reference: { inputUsdPerMillion: 2, outputUsdPerMillion: 4 } },
     provenance: { source: 'litellm', origin: 'bundled', asOfMs: 100, revision: 'test', fetchStatus: 'ready' } };
 
@@ -49,11 +48,9 @@ describe('Usage model prices through captured UI Account Actions', () => {
         const credentials = (await TokenStorage.getCredentialsForServerUrl(focused.serverUrl))!;
         const account = captureUiUsageQueryAccountContext(credentials);
         if (!account) throw new Error('Expected admitted Account');
-        const actionAccount = await captureLazyActionAccountContext(focused.id);
-        const executor = createActionExecutor({ usageActions: createUiUsageActionPorts(actionAccount),
-            isActionApprovalRequired: () => false });
+        const executor = createDefaultActionExecutor();
         expect(await executor.execute('usage.prices.get', {}, caller)).toMatchObject({ ok: true, result: catalog });
-        const entry = getUsageQueryResourceStore(account).getEntry({ hostRead: 'usage.query', input: { queries: [normalizeUsageQuery({})] } });
+        const entry = getUsageQueryResourceStore(account).getEntry({ hostRead: 'usage.query', input: projectNativeJsonValueForTransport({ queries: [normalizeUsageQuery({})] }) });
         const release = entry.subscribe(() => {}, true);
         const read = () => decodeUsageQueryResource(entry.getSnapshot().value!).results[0]!;
         try {
@@ -66,9 +63,9 @@ describe('Usage model prices through captured UI Account Actions', () => {
             denied = true;
             expect(await executor.execute('usage.prices.get', {}, caller)).toMatchObject({ ok: false, errorCode: 'denied' });
             denied = false; retireOnRead = true;
-            await expect(executor.execute('usage.prices.get', {}, caller))
-                .rejects.toMatchObject({ code: 'action_account_scope_changed' });
+            expect(await executor.execute('usage.prices.get', {}, caller))
+                .toMatchObject({ ok: false, errorCode: 'action_account_scope_changed' });
             expect(home.requests.every(request => !String(JSON.stringify(request.body)).includes('usageModelPriceOverridesV1'))).toBe(true);
-        } finally { release(); actionAccount.dispose(); }
+        } finally { release(); }
     });
 });

@@ -120,6 +120,7 @@ export async function captureLazyActionAccountContext(serverIdRaw: string, signa
                 assertCurrent(); const result = await run(); assertResultCurrent(effectClass); return result;
             },
             fetchArtifact: async (_artifactId: string) => unavailable(),
+            readArtifactContent: async (..._args: Parameters<WorkflowDefinitionArtifactOperations['read']>) => artifactUnavailable(),
             createArtifact: async (_header: Readonly<Record<string, unknown>>, _body: string) => unavailable(),
             createArtifactDocument: async (_input: ArtifactCreateOperation) => artifactUnavailable(),
             updateArtifactDocument: async (_input: ArtifactUpdateOperation) => artifactUnavailable(),
@@ -280,10 +281,14 @@ export async function captureLazyActionAccountContext(serverIdRaw: string, signa
         const artifactParams = async () => ({
             request, serverId, credentials, encryption: (await resolveAccountEncryption()).encryption, artifactDataKeys,
         });
-        const fetchArtifact = async (artifactId: string, options?: Readonly<{ signal?: AbortSignal }>) => {
+        const readArtifact = async (artifactId: string, options?: Readonly<{ signal?: AbortSignal }>) => {
             assertCurrent();
             const artifact = await fetchArtifactWithBodyFromApi({ ...await artifactParams(), artifactId, signal: options?.signal ?? signal });
             assertCurrent();
+            return artifact;
+        };
+        const fetchArtifact = async (artifactId: string, options?: Readonly<{ signal?: AbortSignal }>) => {
+            const artifact = await readArtifact(artifactId, options);
             if (canPublish()) {
                 // One read publishes one row. `applyArtifacts` also marks the whole list as read, which made the
                 // Library show its first-visit state while the list was still loading.
@@ -387,9 +392,8 @@ export async function captureLazyActionAccountContext(serverIdRaw: string, signa
                     throw error;
                 }
         };
-        const workflowArtifacts: WorkflowDefinitionArtifactOperations = {
-            read: async (artifactId, options) => {
-                const artifact = await fetchArtifact(artifactId, options);
+        const readArtifactDocument = async (publish: boolean, ...[artifactId, options]: Parameters<WorkflowDefinitionArtifactOperations['read']>) => {
+                const artifact = await (publish ? fetchArtifact : readArtifact)(artifactId, options);
                 if (!artifact) return null;
                 const header = readableRawArtifactHeader(artifact);
                 if (artifact.bodyVersion === undefined || (artifact.body !== null && typeof artifact.body !== 'string')) throw artifactContentUnavailable();
@@ -397,14 +401,18 @@ export async function captureLazyActionAccountContext(serverIdRaw: string, signa
                 const sharing = artifactKindHasSharedWidgetInputsV1(header.kind)
                     ? { shared: await readArtifactSharedAudienceV1({ current: { artifactId, header, ...access,
                         publicAudience: artifact.publicAudience }, signal: options?.signal,
-                        readGrants: () => artifactAccessGrants.list({ artifactId }, options?.signal) }) } : {};
+                        readGrants: () => publish
+                            ? artifactAccessGrants.list({ artifactId }, options?.signal)
+                            : accessApi.list({ artifactId }, options?.signal) }) } : {};
                 assertCurrent();
                 return { artifactId: artifact.id, header, body: artifact.body,
                     provenance: artifact.provenance,
                     ...access, ...sharing,
                     publicAudience: artifact.publicAudience,
                     revision: { headerVersion: artifact.headerVersion, bodyVersion: artifact.bodyVersion } };
-            },
+        };
+        const workflowArtifacts: WorkflowDefinitionArtifactOperations = {
+            read: (...args) => readArtifactDocument(true, ...args),
             list: listArtifacts,
             create: async (input) => (await createArtifactDocument(input)).artifactId,
             update: updateArtifactDocument,
@@ -540,6 +548,9 @@ export async function captureLazyActionAccountContext(serverIdRaw: string, signa
                 } finally { stopWatching(); }
             },
             fetchArtifact,
+            // Finite content observations use the same codec and authority without
+            // invalidating the list that is currently reading them.
+            readArtifactContent: (...args: Parameters<WorkflowDefinitionArtifactOperations['read']>) => readArtifactDocument(false, ...args),
             createArtifactDocument,
             updateArtifactDocument,
             readArtifactHtmlBundle: async (artifactId: string, operationSignal?: AbortSignal): Promise<ArtifactHtmlBundleRead> => {

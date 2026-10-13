@@ -1,113 +1,53 @@
-import { installPromptRegistryItemInLibrary, type PromptLibraryArtifactStore } from '@happier-dev/protocol/prompts/library/promptLibraryActionOperations';
-import type { PromptAssetMutationResponseV1 } from '@happier-dev/protocol/prompts/library/promptAssetsV1';
-import type { PromptAssetInstallModeV1, PromptAssetScopeV1 } from '@happier-dev/protocol/prompts/library/promptAssetDescriptorsV1';
-import type { PromptExternalLinksV1 } from '@happier-dev/protocol/prompts/library/promptExternalLinksV1';
-import type { PromptRegistryConfiguredSourceV1, PromptRegistryFetchedItemV1 } from '@happier-dev/protocol/prompts/library/promptRegistriesV1';
-import type { MachineAdministrationTargetV1 } from '@happier-dev/protocol/account/settings/machineAdministrationSelectionsV1';
-
+import { installPromptRegistryItemInLibrary, type PromptLibraryArtifactStore, type LegacySkillRegistryInstallResultV1 } from '@happier-dev/protocol/prompts/library/promptLibraryActionOperations';
+import { REGISTRY_ACTION_OUTPUT_SCHEMAS_V1 } from '@happier-dev/protocol/registries';
+import { encodeBase64 } from '@/encryption/base64';
 import { randomUUID } from '@/platform/randomUUID';
-import { machinePromptRegistriesDownloadItem, machinePromptRegistriesInstall } from '@/sync/ops/machinePromptRegistries';
+import { createUiRegistryHostV1 } from '@/registries/registryHostDeps';
+import type { LazyActionAccountContext } from '@/sync/ops/actions/actionAccountContext';
+import type { ActionExecutorContext } from '@happier-dev/protocol/actions/executor/types';
 import { defaultPromptAssetTargetInput } from '@/components/settings/prompts/assets/promptAssetExportDefaults';
 import { withUiPromptLibraryArtifactStore } from './promptLibraryArtifactStore';
-import { createPromptRegistrySkillArtifactFromFetchedItem } from './promptRegistrySkillImports';
+import { writePromptAssetWithRecovery } from './exportPromptLibraryArtifact';
 
-export type PromptRegistryInstallResult = Readonly<
-  | {
-      ok: true;
-      artifactId?: string;
-      routeKind: 'bundle';
-      exported: boolean;
-      response?: Extract<PromptAssetMutationResponseV1, { ok: true }>;
-      nextPromptExternalLinks?: PromptExternalLinksV1;
-    }
-  | {
-      ok: false;
-      error: string;
-      artifactId?: string;
-      errorCode?: string;
-      currentDigest?: string | null;
-      exported?: true;
-      response?: Extract<PromptAssetMutationResponseV1, { ok: true }>;
-    }
->;
+export type PromptRegistryInstallResult = LegacySkillRegistryInstallResultV1;
+type RegistryInstallOwner = Parameters<typeof installPromptRegistryItemInLibrary>[0];
+export type PromptRegistryInstallArgs = RegistryInstallOwner['request'] & Pick<RegistryInstallOwner, 'machineTarget' | 'libraryServerIdentityId' | 'signal'>;
 
-export async function installPromptRegistryItem(args: Readonly<{
-  machineId: string;
-  machineTarget: MachineAdministrationTargetV1;
-  libraryServerIdentityId: string;
-  serverId?: string | null;
-  configuredSources: readonly PromptRegistryConfiguredSourceV1[];
-  sourceId: string;
-  itemId: string;
-  installTarget?: Readonly<{
-    assetTypeId: string;
-    scope: PromptAssetScopeV1;
-    directory?: string | null;
-    targetName?: string | null;
-    installMode?: PromptAssetInstallModeV1;
-  }>;
-  promptExternalLinks: PromptExternalLinksV1 | null | undefined;
-  previewOnly?: boolean;
-  signal?: AbortSignal;
-}>, store?: PromptLibraryArtifactStore): Promise<PromptRegistryInstallResult> {
-  let fetchedTitle = '';
-  let fetchedItem: PromptRegistryFetchedItemV1 | null = null;
-  const { installTarget, machineTarget, libraryServerIdentityId, signal, ...requestBase } = args;
-  const runInstall = (current: PromptLibraryArtifactStore) => installPromptRegistryItemInLibrary({
-    machineTarget,
-    libraryServerIdentityId,
-    store: {
-      ...current,
-      create: async () => {
-        if (!fetchedItem) throw new Error('prompt_registry_item_not_fetched');
-        const imported = await createPromptRegistrySkillArtifactFromFetchedItem(fetchedItem, current);
-        if (!imported.ok) throw new Error(imported.error);
-        return imported.artifactId;
-      },
-    },
-    fetchItem: async ({ machineId, serverId, sourceId, itemId, configuredSources, signal }) => {
-      const fetched = await machinePromptRegistriesDownloadItem(machineId, {
-        sourceId,
-        itemId,
-        configuredSources: [...configuredSources],
-      }, serverId || signal ? { ...(serverId ? { serverId } : {}), ...(signal ? { signal } : {}) } : undefined);
-      if (fetched.ok) {
-        fetchedTitle = fetched.item.title;
-        fetchedItem = fetched.item;
-        return fetched;
-      }
-      return { ok: false, errorCode: 'invalid_request', error: fetched.error };
-    },
-    install: async ({ machineId, serverId, request, signal }) => await machinePromptRegistriesInstall(
-      machineId,
-      {
-        ...request,
-        installTarget: {
-          ...request.installTarget,
-          targetName: request.installTarget.targetName.trim() || defaultPromptAssetTargetInput({
-            libraryKind: 'bundle',
-            title: fetchedTitle,
-          }),
-        },
-      },
-      serverId || signal ? { ...(serverId ? { serverId } : {}), ...(signal ? { signal } : {}) } : undefined,
-    ),
-    request: {
-      ...requestBase,
-      ...(installTarget
-        ? {
-            installTarget: {
-              assetTypeId: installTarget.assetTypeId,
-              scope: installTarget.scope,
-              ...(installTarget.directory ? { directory: installTarget.directory } : {}),
-              ...(installTarget.installMode ? { installMode: installTarget.installMode } : {}),
-              targetName: installTarget.targetName?.trim() ?? '',
+/** Retained external-target semantics delegate to the one protocol owner and the new pinned skill install. */
+export async function installPromptRegistryItem(args: PromptRegistryInstallArgs, store?: PromptLibraryArtifactStore,
+    capturedAccount?: LazyActionAccountContext, context?: ActionExecutorContext,
+    installLibrary?: RegistryInstallOwner['installLibrary']): Promise<PromptRegistryInstallResult> {
+    const run = async (current: PromptLibraryArtifactStore, account: LazyActionAccountContext) => {
+        if (!current.organization) throw new Error('registry_sources_unavailable');
+        const invocation = context ?? { surface: 'ui' as const, authority: 'present_user' as const, serverId: account.serverId, signal: args.signal };
+        const registry = await createUiRegistryHostV1(account, current.organization, invocation);
+        let title = '';
+        return installPromptRegistryItemInLibrary({
+            machineTarget: args.machineTarget, libraryServerIdentityId: args.libraryServerIdentityId, signal: args.signal,
+            randomId: randomUUID, request: { machineId: args.machineId, serverId: args.serverId, sourceId: args.sourceId,
+                itemId: args.itemId, promptExternalLinks: args.promptExternalLinks, previewOnly: args.previewOnly,
+                ...(args.installTarget ? { installTarget: args.installTarget } : {}) },
+            fetchItem: async ({ sourceId, itemId }) => {
+                const item = REGISTRY_ACTION_OUTPUT_SCHEMAS_V1['registries.items.read'].parse(await registry.execute('registries.items.read',
+                    { kind: 'skill', sourceId, itemId })).item;
+                if (!item.summary.version) throw new Error('registry_version_unavailable');
+                title = item.summary.title;
+                const files = (await registry.filesForPointer({ sourceId: item.summary.sourceId, itemId: item.summary.itemId, version: item.summary.version }))
+                    .map(file => { let contentKind: 'utf8' | 'binary' = 'utf8';
+                        try { new TextDecoder('utf-8', { fatal: true }).decode(file.bytes); } catch { contentKind = 'binary'; }
+                        return { path: file.path, unixMode: file.unixMode, contentBase64: encodeBase64(file.bytes, 'base64'), contentKind }; });
+                return { item, files };
             },
-          }
-        : {}),
-    },
-    randomId: randomUUID,
-    ...(signal ? { signal } : {}),
-  });
-  return store ? runInstall(store) : withUiPromptLibraryArtifactStore(runInstall, { signal: args.signal });
+            install: ({ machineId, serverId, request }) => writePromptAssetWithRecovery(machineId, { ...request,
+                targetName: request.targetName.trim() || defaultPromptAssetTargetInput({ libraryKind: 'bundle', title }) },
+                { ...(serverId ? { serverId } : {}), signal: args.signal }),
+            installLibrary: installLibrary ?? (async pointer => {
+                const { executeDefaultActionInCapturedAccount } = await import('@/sync/ops/actions/defaultActionExecutor');
+                const result = await executeDefaultActionInCapturedAccount(account, 'skills.install', { source: { kind: 'registry', ...pointer } },
+                    { ...invocation, serverId: account.serverId, expectedAccountId: account.accountId, signal: args.signal });
+                return result.ok ? result.result : result;
+            }),
+        });
+    };
+    return store && capturedAccount ? run(store, capturedAccount) : withUiPromptLibraryArtifactStore(run, { signal: args.signal });
 }

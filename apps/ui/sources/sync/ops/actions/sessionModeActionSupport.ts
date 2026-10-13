@@ -7,6 +7,7 @@ import {
   resolveRequestedSessionModeIdForMetadata,
   type SessionModePickerControl,
 } from '@/sync/domains/sessionControl/sessionModeControl';
+import { readSessionOwnerMetadataView } from '@/sync/domains/session/readSessionOwnerMetadataView';
 
 export function normalizeRequestedSessionModeId(
   control: SessionModePickerControl | null,
@@ -16,18 +17,21 @@ export function normalizeRequestedSessionModeId(
   return resolveRequestedSessionModeIdForMetadata(control, normalized);
 }
 
-export function resolveSessionModeActionControl(session: Readonly<{ metadata?: unknown }> | null | undefined): SessionModePickerControl | null {
+type SessionModeActionSource = Parameters<typeof readSessionOwnerMetadataView>[0];
+
+export function resolveSessionModeActionControl(session: SessionModeActionSource | null | undefined): SessionModePickerControl | null {
   // A Session whose Agent identity cannot be read has no mode picker; it must
   // not fall back to the default Agent's modes.
-  const agentId = resolveAgentIdFromSessionMetadata((session as any)?.metadata);
+  const metadata = session ? readSessionOwnerMetadataView(session) : null;
+  const agentId = resolveAgentIdFromSessionMetadata(metadata);
   if (agentId === null) return null;
   return computeSessionModePickerControl({
     agentId,
-    metadata: ((session as any)?.metadata ?? null) as any,
+    metadata,
   });
 }
 
-export function isSessionModeActionAvailable(session: Readonly<{ metadata?: unknown }> | null | undefined): boolean {
+export function isSessionModeActionAvailable(session: SessionModeActionSource | null | undefined): boolean {
   return resolveSessionModeActionControl(session) !== null;
 }
 

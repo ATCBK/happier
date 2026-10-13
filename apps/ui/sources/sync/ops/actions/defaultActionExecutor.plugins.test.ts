@@ -1,4 +1,6 @@
-import { afterEach, beforeEach, describe, expect, it } from 'vitest';
+import * as React from 'react';
+import { act } from 'react-test-renderer';
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { ExternalActionMachineBootstrapV1Schema, ExternalActionRequestEnvelopeV1Schema, ExternalActionResponseEnvelopeV1Schema } from '@happier-dev/protocol/actions/externalActionApi';
 import { MACHINE_PLAIN_DATA_KEY_MARKER } from '@happier-dev/protocol/machines/machineStoredContent';
 import { ActionApprovalRequestCreatedResultSchema } from '@happier-dev/protocol/actions/actionExecutionResult';
@@ -8,7 +10,16 @@ import { PluginAccountSettingsMutationRequestV1Schema } from '@happier-dev/proto
 import { createHomeGovernanceHarness, installHomeGovernanceBoundaries, waitForHomeGovernance } from '@/dev/testkit/harness/homeGovernanceHarness';
 import { installDisconnectedServerSocketBoundary, restoreServerAccountForTest } from '@/dev/testkit/harness/serverAccountConnectionHarness';
 import { loadSyncSingletonForTests } from '@/dev/testkit/harness/syncSingletonLoader';
-import { createDeferred, renderHook } from '@/dev/testkit';
+import { createDeferred, renderHook, renderScreen } from '@/dev/testkit';
+import { getActionSpec } from '@happier-dev/protocol/actions/actionSpecs';
+import { createPluginInstallationReviewFixture } from '@happier-dev/protocol/testing/pluginInstallationReviewFixture';
+import { HostPrivatePluginInstallDecisionV1Schema } from '@happier-dev/protocol/marketplace/internal';
+import { createPlainMachineRowFixture } from '@/dev/testkit/fixtures/machineFixtures';
+
+// The native modal host is a presentation boundary; its review body and
+// controls remain the production component.
+vi.mock('@/modal', async () => (await import('@/dev/testkit/mocks/modal'))
+    .createModalModuleMock({ renderCustomModals: true }).module);
 
 // Only HTTP, credentials and the disconnected socket boundary are replaced.
 // Account capture, encryption, Action policy and root delivery remain real.
@@ -47,6 +58,145 @@ afterEach(async () => {
 });
 
 describe('plugin-management Actions in the UI host', () => {
+    it.each(['confirmed', 'account-retired', 'machine-retired', 'declined'] as const)('retains one exact human review until the present-user Action settles (%s)', async disposition => {
+        const home = homes.findByServerUrl('https://plugin-actions.test');
+        if (!home?.token) throw new Error('Expected authenticated Home');
+        const decisions: unknown[] = [];
+        // Account restoration uses the harness's cold connection. Opening its
+        // real Socket starts unrelated full-Sync hydration; the private RPC
+        // handshake becomes available only when the user reaches that boundary.
+        let privateTransportReady = false;
+        connection = await restoreServerAccountForTest({ serverUrl: home.serverUrl,
+            serverIdentityId: 'srv_plugin_home', accountId: 'owner', credentials: { token: home.token },
+            request: homes.request, configureSocket: socket => {
+                vi.mocked(socket.connect).mockImplementation(() => {
+                    if (!privateTransportReady) return socket;
+                    socket.connected = true;
+                    for (const listener of socket.listeners('connect')) listener();
+                    return socket;
+                });
+                socket.timeout = vi.fn(() => socket);
+                socket.emitWithAck = vi.fn(async (event, payload) => {
+                    if (event !== 'rpc-call') return { v: 1, ok: true, admittedSessionIds: [] };
+                    if (!payload || typeof payload !== 'object' || !('method' in payload)
+                        || payload.method !== 'admitted:daemon.plugins.install.review.decide' || !('params' in payload)) {
+                        throw new Error('Unexpected private daemon request');
+                    }
+                    const decision = HostPrivatePluginInstallDecisionV1Schema.parse(payload.params);
+                    decisions.push(decision);
+                    if (decision.decision === 'cancel') return { ok: true, result: { kind: 'cancelled' } };
+                    return { ok: true, result: { kind: 'committed', pluginId: 'acme.plugin',
+                        desiredGeneration: 'generation-1', appliedGeneration: null, pendingSurfaces: ['ui'] } };
+                });
+            } });
+        serverId = connection.home.id;
+        homes.answer(serverId, '/v1/machines/admitted', { body: { machine: createPlainMachineRowFixture({ id: 'admitted', accountId: 'owner' }) } });
+        const pending = { kind: 'reviewRequired', reviewKind: 'installation', pendingChangeId: 'pending-confirmed-marketplace',
+            reason: 'firstInstall', currentVersion: null, authorityExpansion: [],
+            review: createPluginInstallationReviewFixture({ pluginId: 'acme.plugin', version: '1.0.0' }) };
+        homes.answer(serverId, '/v1/actions/plugins.install', { select: body => {
+            const request = ExternalActionRequestEnvelopeV1Schema.parse(body);
+            expect(request.target).toEqual({ kind: 'machine', machineId: 'admitted' });
+            return { body: ExternalActionResponseEnvelopeV1Schema.parse({ v: 1, actionId: 'plugins.install', requestId: request.requestId,
+                execution: { ok: true, result: { ok: false, kind: 'plugins_install', outcome: 'reviewRequired', pendingReview: pending } } }) };
+        } });
+        const { ModalProvider, Modal } = await import('@/modal');
+        vi.mocked(Modal.show).mockClear();
+        const show = vi.mocked(Modal.show);
+        const present = show.getMockImplementation();
+        if (!present) throw new Error('Expected native modal presentation boundary');
+        const shown = createDeferred<void>();
+        let modal: Parameters<typeof Modal.show>[0] | undefined;
+        show.mockImplementation(config => {
+            modal = config;
+            const id = present(config);
+            shown.resolve();
+            return id;
+        });
+        const screen = await renderScreen(React.createElement(ModalProvider));
+        try {
+            let settled = false;
+            const selectedMachineLifetime = new AbortController();
+            const operation = createDefaultActionExecutor().execute('plugins.install', {
+                machineId: 'admitted', source: { kind: 'marketplace', sourceId: 'marketplace:curated',
+                    pluginId: 'acme.plugin', version: '1.0.0' },
+            }, { serverId, expectedAccountId: 'owner', surface: 'ui', signal: selectedMachineLifetime.signal })
+                .then(result => { settled = true; return result; });
+            const first = await Promise.race([
+                shown.promise.then(() => ({ kind: 'shown' as const })),
+                operation.then(result => ({ kind: 'settled' as const, result })),
+            ]);
+            expect(first, JSON.stringify(first)).toEqual({ kind: 'shown' });
+            await waitForHomeGovernance(() => {
+                expect(settled, 'The Action must retain its exact reviewed operation until the human decides').toBe(false);
+                expect(screen.findByTestId('settings.plugins.installReview.confirm')).not.toBeNull();
+            });
+            expect(decisions).toEqual([]);
+            if (disposition === 'account-retired') await homes.switchAccount(serverId, 'replacement');
+            if (disposition === 'machine-retired') selectedMachineLifetime.abort();
+            privateTransportReady = true;
+            await act(async () => screen.pressByTestId(disposition === 'declined'
+                ? 'settings.plugins.installReview.cancel' : 'settings.plugins.installReview.confirm'));
+            if (disposition === 'confirmed') {
+                const result = await operation;
+                expect(result).toMatchObject({ ok: true, result: { ok: true, kind: 'plugins_install', outcome: 'applied',
+                    change: { kind: 'committed', pluginId: 'acme.plugin', desiredGeneration: 'generation-1',
+                        appliedGeneration: null, pendingSurfaces: ['ui'] },
+                } });
+                if (result.ok) expect(getActionSpec('plugins.install').outputSchema?.safeParse(result.result).success).toBe(true);
+                expect(decisions).toEqual([{ v: 1, pendingChangeId: pending.pendingChangeId,
+                    decision: 'installAndTrust', optionalSelections: [] }]);
+            } else if (disposition === 'declined') {
+                expect(await operation).toMatchObject({ ok: true, result: {
+                    ok: false, kind: 'plugins_install', outcome: 'failed', change: { kind: 'cancelled' },
+                } });
+                expect(decisions).toEqual([{ v: 1, pendingChangeId: pending.pendingChangeId, decision: 'cancel' }]);
+            } else {
+                expect(await operation).toMatchObject({ ok: false, errorCode: 'action_account_scope_changed' });
+                expect(decisions).toEqual([]);
+            }
+            expect(Modal.show).toHaveBeenCalledTimes(1);
+        } finally {
+            modal?.onHostUnmount?.();
+            Modal.hideAll();
+            show.mockImplementation(present);
+            await screen.unmount();
+        }
+    });
+    it('delivers an exact marketplace candidate to its selected Machine and refuses a conflicting mounted target', async () => {
+        homes.answer(serverId, '/v2/account/settings', { body: { version: 1, content: { t: 'plain', v: {
+            actionsSettingsV1: { v: 1, approvalWaivedSurfaces: { 'plugins.install': ['cli'] } },
+        } } } });
+        const input = getActionSpec('plugins.install').inputSchema.parse({ machineId: 'admitted',
+            source: { kind: 'marketplace', sourceId: 'marketplace:curated', pluginId: 'acme.plugin', version: '1.0.0' } });
+        const pending = { kind: 'reviewRequired', reviewKind: 'installation', pendingChangeId: 'pending-marketplace',
+            reason: 'firstInstall', currentVersion: null, authorityExpansion: [],
+            review: createPluginInstallationReviewFixture({ pluginId: 'acme.plugin', version: '1.0.0' }) };
+        homes.answer(serverId, '/v1/actions/plugins.install', { select: body => {
+            const request = ExternalActionRequestEnvelopeV1Schema.parse(body);
+            expect(request.target).toEqual({ kind: 'machine', machineId: 'admitted' });
+            expect(getActionSpec('plugins.install').inputSchema.safeParse(request.input).success).toBe(true);
+            return { body: ExternalActionResponseEnvelopeV1Schema.parse({ v: 1, actionId: 'plugins.install', requestId: request.requestId,
+                execution: { ok: true, result: { ok: false, kind: 'plugins_install', outcome: 'reviewRequired', pendingReview: pending } },
+            }) };
+        } });
+        // This fixture is the authenticated, already-admitted headless host;
+        // unlike the UI entrypoint it retains the incoming present-user authority.
+        const executor = createDefaultActionExecutor({ admittedClientActionId: 'plugins.install' });
+        const context = { serverId, expectedAccountId: 'owner', surface: 'cli' as const, authority: 'present_user' as const };
+        const result = await executor.execute('plugins.install', input, context);
+        expect(result, JSON.stringify(result)).toMatchObject({ ok: true, result: { kind: 'plugins_install', outcome: 'reviewRequired', pendingReview: pending } });
+        if (result.ok) expect(getActionSpec('plugins.install').outputSchema?.safeParse(result.result).success).toBe(true);
+        expect(homes.artifacts(serverId).list().some(row => {
+            const raw = homes.artifacts(serverId).readPlainBody(row.id);
+            const approval = ApprovalRequestSchema.safeParse(raw ? JSON.parse(raw) : null);
+            return approval.success && approval.data.actionId === 'plugins.install';
+        })).toBe(false);
+        const issued = homes.requestsFor('/v1/actions/plugins.install').length;
+        expect(await executor.execute('plugins.install', input, { ...context, executionRunTargetMachineId: 'other' }))
+            .toMatchObject({ ok: false, errorCode: 'target_mismatch' });
+        expect(homes.requestsFor('/v1/actions/plugins.install')).toHaveLength(issued);
+    });
     it.each(['approval', 'encryption', 'unchanged', 'terminal-retirement'] as const)('keeps the actual UI Settings approval waiter on its captured field intent (change=%s)', async changeAt => {
         const changeIntent = changeAt !== 'unchanged';
         const home = homes.findByServerUrl('https://plugin-actions.test');

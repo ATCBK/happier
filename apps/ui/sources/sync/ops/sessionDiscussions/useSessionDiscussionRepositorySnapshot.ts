@@ -1,6 +1,7 @@
 import * as React from 'react';
 import { useServerCredentialAccountScopeBindings } from '@/sync/domains/scope/useServerCredentialAccountScopes';
 import { resolveServerProfileScopeIdForIdentifier } from '@/sync/domains/server/serverProfiles';
+import { getActiveServerAccountScope, selectActiveServerAccountScopeForServer } from '@/sync/domains/scope/activeServerAccountScope';
 import { readRegisteredSessionDiscussionRepository, subscribeRegisteredSessionDiscussionRepository } from './sessionDiscussionRepositoryRegistry';
 
 import type {
@@ -17,6 +18,21 @@ export function useSessionDiscussionRepositorySnapshot(
         repository.getSnapshot,
         repository.getSnapshot,
     );
+}
+
+function readDiscussionSnapshotTitle(snapshot: SessionDiscussionRepositorySnapshot | undefined, discussionId: string): string | null {
+    const summary = snapshot?.lists.active.items.find(row => row.id === discussionId)
+        ?? snapshot?.lists.archived.items.find(row => row.id === discussionId)
+        ?? snapshot?.threads[discussionId]?.summary;
+    return summary?.title ?? null;
+}
+
+/** A non-fetching snapshot only for the proven active Home/Account; other Homes need a live binding. */
+export function readSessionDiscussionTitle(address: Readonly<{ serverId: string | null; sessionId: string; discussionId: string }>): string | null {
+    const serverId = resolveServerProfileScopeIdForIdentifier(address.serverId);
+    const scope = selectActiveServerAccountScopeForServer(getActiveServerAccountScope(), serverId);
+    if (!scope) return null;
+    return readDiscussionSnapshotTitle(readRegisteredSessionDiscussionRepository(scope, { ...address, serverId })?.getSnapshot(), address.discussionId);
 }
 
 /** Narrow, non-fetching title projection for every strip; message/read-state updates retain its identity. */
@@ -37,10 +53,7 @@ export function useSessionDiscussionTitleProjections(addresses: readonly Readonl
             const next = entries.map(entry => {
                 if (!entry.binding?.isCurrent()) return null;
                 const snapshot = readRegisteredSessionDiscussionRepository(entry.binding.scope, entry)?.getSnapshot();
-                const summary = snapshot?.lists.active.items.find(row => row.id === entry.discussionId)
-                    ?? snapshot?.lists.archived.items.find(row => row.id === entry.discussionId)
-                    ?? snapshot?.threads[entry.discussionId]?.summary;
-                return summary?.title ?? null;
+                return readDiscussionSnapshotTitle(snapshot, entry.discussionId);
             });
             if (next.length !== titles.length || next.some((title, index) => title !== titles[index])) titles = next;
             return titles;

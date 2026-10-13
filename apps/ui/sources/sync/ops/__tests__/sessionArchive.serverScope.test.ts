@@ -157,7 +157,7 @@ describe('archive routing from canonical session-list rows', () => {
   afterAll(async () => {
     const { resetServerReachabilitySupervisors } = await import('@/sync/runtime/connectivity/serverReachabilitySupervisorPool');
     await resetServerReachabilitySupervisors();
-    boundary?.dispose();
+    await boundary?.dispose();
   });
 
   it('defaults a null serverId to the preferred owner Home from its canonical local list', async () => {

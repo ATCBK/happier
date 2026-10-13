@@ -56,6 +56,8 @@ export type { SavedSecretLegacyImportResult } from '@/sync/domains/settings/save
 
 type SavedSecretMutationOutput = Readonly<{ resourceId: string; revision: number }>;
 type SavedSecretDeleteOutput = Readonly<{ resourceId: string }>;
+/** The outer plaintext Action already owns policy and live input custody. */
+export type SavedSecretAdmittedMutationExecute = typeof runTeamAction;
 type SavedSecretApprovalHandlers<T> = Readonly<{
     onApprovalSucceeded?: (value: T) => void | Promise<void>;
     onApprovalFailed?: (code: string) => void;
@@ -890,6 +892,7 @@ export async function createSavedSecretResource(params: Readonly<{
     accountGrants: readonly string[];
     teamGrants: readonly string[];
     groupGrants: readonly string[];
+    executeAdmittedMutation?: SavedSecretAdmittedMutationExecute;
     onApprovalSucceeded?: (result: Extract<SavedSecretCreationResult, Readonly<{ ok: true }>>) => void | Promise<void>;
     onApprovalFailed?: (code: string) => void;
 }>): Promise<SavedSecretCreationResult> {
@@ -924,7 +927,7 @@ export async function createSavedSecretResource(params: Readonly<{
                     const result = { ok: true as const, resourceRef, revision: value.revision };
                     await params.onApprovalSucceeded?.(result);
                 };
-                const outcome = await runTeamAction({
+                const outcome = await (params.executeAdmittedMutation ?? runTeamAction)({
                     scope: params.scope,
                     actionId: 'secrets.shared.create',
                     input: prepared.input,
@@ -1619,6 +1622,7 @@ export async function updateSavedSecretResource(params: Readonly<{
     expectedRevision: number;
     nextName?: string;
     nextValue?: string;
+    executeAdmittedMutation?: SavedSecretAdmittedMutationExecute;
     /** Explicit mode conversion; absent keeps the resource's current mode. */
     toMode?: 'plain' | 'e2ee';
     decryptDataKeyEnvelope: (encryptedDataKey: string) => Promise<Uint8Array | null>;
@@ -1710,7 +1714,7 @@ export async function updateSavedSecretResource(params: Readonly<{
             const currentMode = (await fetchAccountEncryptionMode(context.credentials, { request: context.request })).mode;
             context.assertCurrent();
             if (currentMode !== accountMode) return { ok: false, reason: 'changed' };
-            const outcome = await runTeamAction({
+            const outcome = await (params.executeAdmittedMutation ?? runTeamAction)({
                 scope: params.scope,
                 actionId: 'secrets.shared.update',
                 input: {
@@ -1762,6 +1766,7 @@ export async function deleteSavedSecretResource(params: Readonly<{
     /** Owner's current Account Settings version; the reference census reads at it. */
     expectedSettingsVersion: number;
     confirmedByPresentUser?: true;
+    executeAdmittedMutation?: SavedSecretAdmittedMutationExecute;
     managedResourceDispositions?: readonly ManagedResourceDispositionV1[];
 }> & Omit<SavedSecretApprovalHandlers<SavedSecretDeleteOutput>, 'onApprovalFailed'> & Readonly<{
     /** The same owner-decoded result for immediate and Inbox-executed refusals. */
@@ -1793,7 +1798,7 @@ export async function deleteSavedSecretResource(params: Readonly<{
             if (census?.status !== 'applied') return { ok: false, reason: 'changed' };
             if (census.value.length > 0) return { ok: false, reason: 'in_use', references: census.value };
             context.assertCurrent();
-            const outcome = await runTeamAction({ scope: params.scope, actionId: 'secrets.shared.delete',
+            const outcome = await (params.executeAdmittedMutation ?? runTeamAction)({ scope: params.scope, actionId: 'secrets.shared.delete',
                 input: { resourceId: params.resourceId, expectedRevision: params.expectedRevision,
                     expectedSettingsVersion: params.expectedSettingsVersion,
                     referenceCensus,

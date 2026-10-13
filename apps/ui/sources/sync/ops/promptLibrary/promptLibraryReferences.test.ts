@@ -30,6 +30,6 @@ describe('prompt library qualified reference identity', () => {
                 .toEqual([true, true, true, false, false, false]);
             expect(isPromptLibraryReferenceInHome({ artifactId: 'same-id', serverId: alpha.home.id }, 'same-id'))
                 .toBe(false);
-        } finally { alpha.dispose(); }
+        } finally { await alpha.dispose(); }
     });
 });

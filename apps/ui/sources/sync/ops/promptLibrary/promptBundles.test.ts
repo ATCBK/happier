@@ -7,7 +7,6 @@ import { PromptBundleBodyV1Schema } from '@happier-dev/protocol/prompts/library/
 import { createPromptBundleInLibrary } from '@happier-dev/protocol/prompts/library/promptLibraryActionOperations';
 import { withUiPromptLibraryArtifactStore } from './promptLibraryArtifactStore';
 import {
-  createPromptBundleArtifact,
   createSkillPromptBundle,
   duplicatePromptBundle,
   listPromptBundleSupportingEntries,
@@ -22,7 +21,7 @@ let fixture:
   | undefined;
 let catalog = createPromptLibraryCatalogBoundary();
 const bundleWriteSettings = { actionsSettingsV1: { v: 1, approvalWaivedSurfaces: {
-  'prompt_bundle.create': ['ui'], 'prompt_bundle.update': ['ui'],
+  'skills.create': ['ui'], 'skills.update': ['ui'], 'skills.duplicate': ['ui'],
 } } };
 // Transform the real Account/Sync graph outside the behavior-test deadline.
 beforeAll(async () => {
@@ -30,8 +29,8 @@ beforeAll(async () => {
   await import('@/sync/domains/state/storage');
   await import('@/sync/runtime/orchestration/appliedActiveServerRuntime');
 }, 300_000);
-afterEach(() => {
-  fixture?.dispose();
+afterEach(async () => {
+  await fixture?.dispose();
   fixture = undefined;
 });
 async function home() {
@@ -48,6 +47,36 @@ async function home() {
 }
 
 describe('promptBundles qualified operations', () => {
+  it('retains the acknowledged skill identity when creation readback cannot produce a revision', async () => {
+    const f = await home();
+    const { setRuntimeFetch } = await import('@/utils/system/runtimeFetch');
+    f.boundary.afterNextCreate(async () => {
+      setRuntimeFetch(async (input, init) => {
+        const url = new URL(String(input));
+        if (/^\/v1\/artifacts\/[^/]+$/.test(url.pathname) && (init?.method ?? 'GET') === 'GET')
+          return Response.json({ error: 'forbidden' }, { status: 403 });
+        if (url.pathname === '/v2/account/settings') return Response.json({ version: 2, content: { t: 'plain', v: bundleWriteSettings } });
+        if (url.pathname === '/v1/account/encryption') return Response.json({ mode: 'plain', updatedAt: 0 });
+        if (url.pathname === '/v1/account/encryption/currentness') return Response.json(createPlainAccountEncryptionCurrentnessFixture());
+        return await catalog.handle(`${url.pathname}${url.search}`, init) ?? await f.boundary.handle(`${url.pathname}${url.search}`, init)
+          ?? Response.json({}, { status: 404 });
+      });
+    });
+    const save = createSkillPromptBundle({ title: 'review', skillMarkdown: '---\nname: review\ndescription: Reviews changes\n---\nReview.' });
+    await expect(save).rejects.toMatchObject({ code: 'created_skill_unreadable', details: {
+      skillIds: [expect.any(String)], incomplete: [{ skillId: expect.any(String), step: 'rules' }],
+    } });
+    const rows = f.boundary.list();
+    expect(rows).toHaveLength(1);
+    await expect(save).rejects.toMatchObject({ details: { skillIds: [rows[0]!.id] } });
+  });
+  it('creates through skills.create so the old editor receives the canonical Everywhere reach', async () => {
+    await home();
+    const id = await createSkillPromptBundle({ title: 'review', skillMarkdown: '---\nname: review\ndescription: Reviews changes\n---\nReview the diff.' });
+    expect(catalog.read('skill-rules')).toMatchObject({ key: 'skill-rules', value: { rules: [
+      { skillId: id, target: { t: 'allMachines' }, enabled: true },
+    ] } });
+  });
   it.each(['create', 'update', 'duplicate', 'edit', 'remove'] as const)('refuses a disabled %s without changing content or personal organization', async operation => {
     const f = await home();
     const { artifactId: id } = await withUiPromptLibraryArtifactStore(store => createPromptBundleInLibrary({ store, request: {
@@ -62,7 +91,7 @@ describe('promptBundles qualified operations', () => {
     setRuntimeFetch(async (input, init) => {
       const url = new URL(String(input));
       if (url.pathname === '/v2/account/settings') return Response.json({ version: 3, content: { t: 'plain', v: {
-        actionsSettingsV1: { v: 1, actions: { [operation === 'create' || operation === 'duplicate' ? 'prompt_bundle.create' : 'prompt_bundle.update']: { disabledSurfaces: ['ui'] } } },
+        actionsSettingsV1: { v: 1, actions: { [operation === 'create' ? 'skills.create' : operation === 'duplicate' ? 'skills.duplicate' : 'skills.update']: { disabledSurfaces: ['ui'] } } },
       } } });
       if (url.pathname === '/v1/account/encryption') return Response.json({ mode: 'plain', updatedAt: 0 });
       if (url.pathname === '/v1/account/encryption/currentness') return Response.json(createPlainAccountEncryptionCurrentnessFixture({ version: 0, updatedAt: 0, settingsVersion: 3 }));
@@ -83,8 +112,7 @@ describe('promptBundles qualified operations', () => {
   it.each([false, true])('keeps bundle placement personal and retains the created identity if its row write conflicts (%s)', async conflict => {
     const f = await home();
     if (conflict) catalog = createPromptLibraryCatalogBoundary({ records: [catalog.read('folders')], mutationOutcome: 'conflict', revision: 2 });
-    const create = createPromptBundleArtifact({ title: 'Shared prompts', bundleSchemaId: 'bundle.generic_v1',
-      entries: [{ path: 'review.md', contentBase64: Buffer.from('Review').toString('base64'), contentKind: 'utf8' }],
+    const create = createSkillPromptBundle({ title: 'shared-prompts', skillMarkdown: '---\nname: shared-prompts\ndescription: Shared checks\n---\nReview',
       folderId: 'folder-1', tags: [' Personal '],
     });
     if (conflict) await expect(create).rejects.toMatchObject({ code: 'artifact_organization_failed', details: {
@@ -99,7 +127,7 @@ describe('promptBundles qualified operations', () => {
     const header = decodePlainArtifactStoredContent(saved[0]!.header);
     expect(header).not.toHaveProperty('folderId');
     expect(header).not.toHaveProperty('tags');
-    expect(header).toMatchObject({ bundleSchemaId: 'bundle.generic_v1' });
+    expect(header).toMatchObject({ bundleSchemaId: 'skills.skill_md_v1' });
   });
   it('creates a starter SKILL.md for empty authoring and preserves imported files on duplication', async () => {
     const f = await home();
@@ -123,7 +151,7 @@ describe('promptBundles qualified operations', () => {
       entries: [
         {
           path: 'SKILL.md',
-          contentBase64: Buffer.from('# Skill').toString('base64'),
+          contentBase64: Buffer.from('---\nname: imported\ndescription: Imported checks\n---\n# Skill').toString('base64'),
           contentKind: 'utf8',
         },
         {
@@ -139,7 +167,6 @@ describe('promptBundles qualified operations', () => {
       decodePlainArtifactStoredContent(f.boundary.read(copyId)!.header),
     ).toMatchObject({
       kind: 'prompt_bundle.v2',
-      title: 'Imported Copy',
       origin: 'user',
     });
     expect(catalog.read('folders').value).toMatchObject({ artifactHeadersById: {
@@ -150,9 +177,9 @@ describe('promptBundles qualified operations', () => {
     );
   });
 
-  it('preserves the generic bundle schema for imported non-skill entries', async () => {
+  it('preserves generic bundle content through the retained update Action', async () => {
     const f = await home();
-    const id = await createPromptBundleArtifact({
+    const { artifactId: id } = await withUiPromptLibraryArtifactStore(store => createPromptBundleInLibrary({ store, request: {
       title: 'Shared prompts',
       bundleSchemaId: 'bundle.generic_v1',
       entries: [
@@ -162,18 +189,21 @@ describe('promptBundles qualified operations', () => {
           contentKind: 'utf8',
         },
       ],
-    });
+    } }));
     expect(
       decodePlainArtifactStoredContent(f.boundary.read(id)!.header),
     ).toMatchObject({ bundleSchemaId: 'bundle.generic_v1' });
-    const copyId = await duplicatePromptBundle(id);
-    expect(decodePlainArtifactStoredContent(f.boundary.read(copyId)!.header)).toMatchObject({ bundleSchemaId: 'bundle.generic_v1' });
-    expect(JSON.parse(f.boundary.readPlainBody(copyId)!).entries).toEqual(JSON.parse(f.boundary.readPlainBody(id)!).entries);
+    const { createDefaultActionExecutor } = await import('@/sync/ops/actions/defaultActionExecutor');
+    const updated = await createDefaultActionExecutor().execute('prompt_bundle.update', { artifactId: id, title: 'Shared prompts',
+      expectedRevision: { headerVersion: 1, bodyVersion: 1 }, entries: [{ path: 'prompts/review.md', contentKind: 'utf8', contentBase64: Buffer.from('Revised checks').toString('base64') }] }, { surface: 'ui', authority: 'present_user' });
+    expect(updated).toMatchObject({ ok: true });
+    expect(decodePlainArtifactStoredContent(f.boundary.read(id)!.header)).toMatchObject({ bundleSchemaId: 'bundle.generic_v1' });
   });
 
   it.each(['duplicate', 'edit'] as const)('accepts retained bundle annotations when deriving a canonical %s', async operation => {
     const f = await home();
-    const id = await createSkillPromptBundle({ title: 'Retained', skillMarkdown: 'Retained instructions' });
+    const markdown = '---\nname: retained\ndescription: Retained checks\n---\nRetained instructions';
+    const id = await createSkillPromptBundle({ title: 'retained', skillMarkdown: markdown });
     const body = JSON.parse(f.boundary.readPlainBody(id)!);
     const response = await f.boundary.handle(`/v1/artifacts/${id}`, { method: 'POST', body: JSON.stringify({
       body: encodePlainArtifactStoredContent({ body: JSON.stringify({ ...body, futureBodyHint: 'retained',
@@ -189,7 +219,7 @@ describe('promptBundles qualified operations', () => {
     else await updateSkillPromptBundleWithEntry({ artifactId: id, path: 'reference.txt', content: 'Reference',
       expectedRevision: { headerVersion: 1, bodyVersion: 2 } });
     const saved = JSON.parse(f.boundary.readPlainBody(savedId)!);
-    expect(readSkillMarkdownFromPromptBundleBody(PromptBundleBodyV1Schema.parse(saved))).toBe('Retained instructions');
+    expect(readSkillMarkdownFromPromptBundleBody(PromptBundleBodyV1Schema.parse(saved))).toBe(markdown);
     expect(saved).not.toHaveProperty('futureBodyHint');
     expect(saved.entries[0]).not.toHaveProperty('futureEntryHint');
     if (operation === 'edit') expect(listPromptBundleSupportingEntries(PromptBundleBodyV1Schema.parse(saved)).map(entry => entry.path)).toEqual(['reference.txt']);
@@ -198,8 +228,8 @@ describe('promptBundles qualified operations', () => {
   it('updates SKILL.md and supporting files through current reads while preserving creation time and title', async () => {
     const f = await home();
     const id = await createSkillPromptBundle({
-      title: 'Stored title',
-      skillMarkdown: 'old skill',
+      title: 'stored',
+      skillMarkdown: '---\nname: stored\ndescription: Stored checks\n---\nold skill',
     });
     const original = JSON.parse(f.boundary.readPlainBody(id)!);
     await updateSkillPromptBundleWithEntry({
@@ -210,7 +240,7 @@ describe('promptBundles qualified operations', () => {
     const acceptedRevision = await updateSkillPromptBundle({
       artifactId: id,
       title: 'New title',
-      skillMarkdown: 'new skill',
+      skillMarkdown: '---\nname: stored\ndescription: Stored checks\n---\nnew skill',
       expectedRevision: { headerVersion: 2, bodyVersion: 2 },
     });
     expect(acceptedRevision).toEqual({ headerVersion: 3, bodyVersion: 3 });
@@ -219,7 +249,7 @@ describe('promptBundles qualified operations', () => {
     );
     expect(withSupporting.createdAtMs).toBe(original.createdAtMs);
     expect(readSkillMarkdownFromPromptBundleBody(withSupporting)).toBe(
-      'new skill',
+      '---\nname: stored\ndescription: Stored checks\n---\nnew skill',
     );
     expect(
       listPromptBundleSupportingEntries(withSupporting).map(

@@ -4,7 +4,7 @@ import { act } from 'react-test-renderer';
 import { createSessionFixture, renderHook, renderScreen } from '@/dev/testkit';
 import { ARTIFACT_PLAIN_DATA_KEY_MARKER, encodePlainArtifactStoredContent } from '@happier-dev/protocol/storage/artifactStoredContent';
 import { SessionCurrentProjectionRecordV1Schema } from '@happier-dev/protocol/sessions/listing/response';
-import { createPlainSessionOwnerMetadataEnvelopeV1, SessionMetadataOwnerPatchV1Schema } from '@happier-dev/protocol/sessions/metadata/sessionMetadataSchemasV1';
+import { createPlainSessionOwnerMetadataEnvelopeV1, createSessionOwnerMetadataV1, projectSessionOwnerCompatibilityViewV1, SessionMetadataOwnerPatchV1Schema } from '@happier-dev/protocol/sessions/metadata/sessionMetadataSchemasV1';
 import { createSessionAccessFixture } from '@/dev/testkit/fixtures/sessionFixtures';
 import { createAccountTokenForTests, createHomeGovernanceHarness, installHomeGovernanceBoundaries } from '@/dev/testkit/harness/homeGovernanceHarness';
 import { installDisconnectedServerSocketBoundary } from '@/dev/testkit/harness/serverAccountConnectionHarness';
@@ -24,6 +24,74 @@ beforeEach(async () => { await homes.reset(); await loadSyncSingletonForTests();
 afterEach(async () => { await homes.reset(); });
 
 describe('reviewed Session context through the default UI Action host', () => {
+    it('sets and undoes session capability overrides through the real owner tuple CAS while offline', async () => {
+        const serverId = await homes.addHome({ name: 'Capabilities Home', serverUrl: 'https://session-capabilities-owner.test', accountId: 'capability-owner' });
+        const sessionId = 'c123456789012345678901234';
+        const initialOwner = createSessionOwnerMetadataV1({ metadata: { path: '/repo', host: 'offline-machine', machineId: 'machine-1', flavor: 'codex',
+            skillSelectionV1: { v: 1, forceIncludeSkillIds: [], forceExcludeSkillIds: [], excludeNativeSkillNames: ['native-lint'] } } });
+        if (!initialOwner.ok) throw new Error('Invalid capability metadata fixture');
+        let row = SessionCurrentProjectionRecordV1Schema.parse({ id: sessionId, seq: 1, createdAt: 1, updatedAt: 1, active: false, activeAt: 1,
+            encryptionMode: 'plain', metadataLayoutVersion: 1, metadata: JSON.stringify({ v: 1 }), metadataVersion: 4,
+            ownerMetadata: createPlainSessionOwnerMetadataEnvelopeV1(initialOwner.ownerMetadata),
+            agentState: null, agentStateVersion: 1, dataEncryptionKey: null, share: null, responsibleAccountId: null, responsibleAccount: null,
+            effectiveAccess: { v: 1, level: 'owner', sources: [{ kind: 'owner' }], capabilities: createSessionAccessFixture().capabilities } });
+        homes.answer(serverId, '/v1/account/encryption/currentness', { body: { mode: 'plain', version: 1, signingKeyFingerprint: null, contentKeyFingerprint: null, updatedAt: 1 } });
+        const path = `/v2/sessions/${sessionId}`;
+        let changeAfterRead = false;
+        for (const suffix of ['', '?accessProjectionVersion=1']) homes.answer(serverId, `GET ${path}${suffix}`, { select: () => {
+            const response = { body: { session: row } };
+            if (changeAfterRead) { changeAfterRead = false; row = { ...row, metadataVersion: row.metadataVersion + 1 }; }
+            return response;
+        } });
+        homes.answer(serverId, `PATCH ${path}`, { select: input => {
+            const patch = SessionMetadataOwnerPatchV1Schema.parse(input);
+            expect(patch.sharedMetadata.expectedVersion).toBe(row.metadataVersion);
+            expect(patch.expectedOwnerMetadata).toEqual(row.ownerMetadata);
+            row = { ...row, metadata: patch.sharedMetadata.ciphertext, metadataVersion: row.metadataVersion + 1,
+                ownerMetadata: patch.ownerMetadata, agentState: patch.agentState.ciphertext, agentStateVersion: row.agentStateVersion! + 1 };
+            return { body: { success: true, metadataLayoutVersion: 1, sharedMetadata: { version: row.metadataVersion }, agentState: { version: row.agentStateVersion } } };
+        } });
+        const { useSessionCapabilities } = await import('@/sync/domains/capabilities/session/useSessionCapabilities');
+        const metadata = () => row.ownerMetadata?.t === 'plain' ? projectSessionOwnerCompatibilityViewV1({ sharedMetadata: { v: 1 }, ownerMetadata: row.ownerMetadata.v }) : null;
+        const { getStorage } = await import('@/sync/domains/state/storageStore');
+        getStorage().setState({ sessions: { [sessionId]: createSessionFixture({ id: sessionId, serverId, metadataLayoutVersion: 1,
+            metadata: { path: '', host: '' }, ownerMetadataView: metadata(), metadataVersion: row.metadataVersion }) },
+            sessionLocalStateScope: { serverId, accountId: 'capability-owner' } });
+        const hook = await renderHook(() => useSessionCapabilities(sessionId));
+        expect(hook.getCurrent().selection.skills?.excludeNativeSkillNames).toEqual(['native-lint']);
+        expect(hook.getCurrent().setItem).toEqual(expect.any(Function));
+        await act(async () => { expect(await hook.getCurrent().setItem('native_skill', 'native-lint', 'on')).toMatchObject({ ok: true }); });
+        expect(hook.getCurrent().selection.skills?.excludeNativeSkillNames).toEqual([]);
+        expect(metadata()).toMatchObject({ skillSelectionV1: { excludeNativeSkillNames: [] } });
+        await act(async () => { expect(await hook.getCurrent().undoLast()).toMatchObject({ ok: true }); });
+        expect(hook.getCurrent().selection.skills?.excludeNativeSkillNames).toEqual(['native-lint']);
+        expect(metadata()).toMatchObject({ skillSelectionV1: { excludeNativeSkillNames: ['native-lint'] } });
+        const skillId = 'happier:happier';
+        // All three Undo states traverse the real catalog identity owner and Account CAS.
+        for (const [before, next] of [['inherit', 'on'], ['on', 'off'], ['off', 'inherit']] as const) {
+            await act(async () => { expect(await hook.getCurrent().setItem('skill', skillId, before)).toMatchObject({ ok: true }); });
+            await act(async () => { expect(await hook.getCurrent().setItem('skill', skillId, next)).toMatchObject({ ok: true }); });
+            await act(async () => { expect(await hook.getCurrent().undoLast()).toMatchObject({ ok: true }); });
+            expect(hook.getCurrent().selection.skills).toMatchObject({
+                forceIncludeSkillIds: before === 'on' ? [skillId] : [],
+                forceExcludeSkillIds: before === 'off' ? [skillId] : [],
+                excludeNativeSkillNames: ['native-lint'],
+            });
+            expect(metadata()).toMatchObject({ skillSelectionV1: hook.getCurrent().selection.skills });
+        }
+        await act(async () => { expect(await hook.getCurrent().setItem('skill', skillId, 'on')).toMatchObject({ ok: true }); });
+        const beforeFailedUndo = hook.getCurrent().selection;
+        changeAfterRead = true; // Another client commits after the Action's captured read.
+        await act(async () => { expect(await hook.getCurrent().undoLast()).toMatchObject({ ok: false, message: 'conflict' }); });
+        expect(hook.getCurrent().selection).toEqual(beforeFailedUndo);
+        expect(metadata()).toMatchObject({ skillSelectionV1: { forceIncludeSkillIds: [skillId], forceExcludeSkillIds: [] } });
+        await act(async () => { expect(await hook.getCurrent().undoLast()).toMatchObject({ ok: true }); });
+        expect(metadata()).toMatchObject({ skillSelectionV1: { forceIncludeSkillIds: [], forceExcludeSkillIds: [skillId] } });
+        await act(async () => { getStorage().setState({ sessionLocalStateScope: { serverId, accountId: 'retired-account' } }); });
+        expect(hook.getCurrent().selection.skills?.excludeNativeSkillNames ?? []).toEqual([]);
+        expect(homes.requests.some(request => request.path.includes('/machines/'))).toBe(false);
+        await hook.unmount();
+    });
     it('reorders and budgets Session-owned Context from mounted controls through real Home CAS without changing Notes', async () => {
         const serverId = await homes.addHome({ name: 'Context controls', serverUrl: 'https://context-controls.test', accountId: 'controls-owner' });
         const sessionId = 'c123456789012345678901234';
