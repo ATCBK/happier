@@ -356,6 +356,7 @@ export const SessionCompanionContent = React.memo(function SessionCompanionConte
         answerSessionPermission({
             requestId: request.requestId,
             ...(request.turnId !== undefined ? { turnId: request.turnId } : {}),
+            ...(request.source !== undefined ? { source: request.source } : {}),
             toolName: request.toolName,
             answer,
             policy: request.policy,

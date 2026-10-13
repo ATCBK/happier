@@ -4,6 +4,7 @@ import { parseParenIdentifier } from "@happier-dev/session-core/tools";
 import { resolveSessionMachineId } from '@/sync/domains/session/external/resolveSessionMachineId';
 import type { ServerAccountScope } from '@/sync/domains/scope/serverAccountScope';
 import type { SessionPermissionRespondRpcParamsV1 } from '@happier-dev/protocol';
+import { NATIVE_TOOL_APPROVAL_ONCE_REQUEST_SOURCE } from '@happier-dev/protocol/sessions/permissions/v1';
 
 /**
  * The three answers every surface may give one pending Session permission
@@ -77,12 +78,19 @@ export function supportsSessionPermissionRule(toolName: string): boolean {
     return toolName.length > 0 && !NO_SESSION_RULE_TOOL_NAMES.has(toolName);
 }
 
+/** Request-owned native scope applies to every grant, independent of the Agent's answer protocol. */
+export function supportsSessionPermissionPersistence(source: string | undefined): boolean {
+    return source !== NATIVE_TOOL_APPROVAL_ONCE_REQUEST_SOURCE;
+}
+
 export function resolveSessionPermissionAnswers(input: Readonly<{
     toolName: string;
     protocol: SessionPermissionAnswerPolicy['protocol'];
+    source?: string;
 }>): readonly SessionPermissionAnswer[] {
     if (input.protocol === 'unavailable') return ['deny'];
-    return input.protocol === 'codexDecision' || supportsSessionPermissionRule(input.toolName)
+    return supportsSessionPermissionPersistence(input.source)
+        && (input.protocol === 'codexDecision' || supportsSessionPermissionRule(input.toolName))
         ? ['allowOnce', 'allowForSession', 'deny']
         : ['allowOnce', 'deny'];
 }
@@ -90,6 +98,7 @@ export function resolveSessionPermissionAnswers(input: Readonly<{
 export type AnswerSessionPermissionInput = Readonly<{
     requestId: string;
     turnId?: string;
+    source?: string;
     toolName: string;
     answer: SessionPermissionAnswer;
     policy: SessionPermissionAnswerPolicy;
@@ -98,6 +107,9 @@ export type AnswerSessionPermissionInput = Readonly<{
 }>;
 
 export async function answerSessionPermission(input: AnswerSessionPermissionInput): Promise<void> {
+    if (input.answer === 'allowForSession' && !supportsSessionPermissionPersistence(input.source)) {
+        throw Object.assign(new Error('Permission answer is unavailable for this request'), { code: 'permission_answer_unavailable' });
+    }
     const { requestId: id, turnId, toolName, policy, respondToPermission } = input;
     const request = { id, ...(turnId !== undefined ? { turnId } : {}) };
     const isDecision = policy.protocol === 'codexDecision';

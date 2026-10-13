@@ -73,6 +73,7 @@ function SummaryWidgetBody(props: SessionBodyProps) {
     const actions = React.useMemo(() => createAppSessionTranscriptActions(props.session.id, props.serverId), [props.session.id, props.serverId]);
     const answerPermission = React.useCallback<SessionSummaryAnswerPermission>((request, answer) => answerSessionPermission({
         requestId: request.requestId, ...(request.turnId !== undefined ? { turnId: request.turnId } : {}),
+        ...(request.source !== undefined ? { source: request.source } : {}),
         toolName: request.toolName, answer, policy: request.policy, respondToPermission: actions.respondToPermission,
     }), [actions]);
     return props.id === 'agent_plan'

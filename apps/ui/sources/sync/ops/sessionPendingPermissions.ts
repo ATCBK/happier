@@ -29,6 +29,7 @@ export type SessionPendingPermission = Readonly<{
     requestId: string;
     toolName: string;
     turnId?: string;
+    source?: string;
     /** The canonical one-line summary of the ask ("Run yarn test:ui"). */
     summary: string;
     command?: string;
@@ -66,6 +67,7 @@ export function listSessionPendingPermissions(
             requestId: request.id,
             toolName: request.tool,
             ...(request.turnId ? { turnId: request.turnId } : {}),
+            ...(request.source ? { source: request.source } : {}),
             summary: formatPermissionRequestSummary({ toolName: request.tool, toolInput: request.arguments }),
             ...(command ? { command } : {}),
             ...(typeof request.createdAt === 'number' && request.createdAt >= 0
@@ -73,7 +75,7 @@ export function listSessionPendingPermissions(
                 : {}),
             policy,
             answers: canApprove
-                ? resolveSessionPermissionAnswers({ toolName: request.tool, protocol: policy.protocol })
+                ? resolveSessionPermissionAnswers({ toolName: request.tool, protocol: policy.protocol, source: request.source })
                 : [],
         });
     });

@@ -59,6 +59,7 @@ import {
 type ProjectedPendingPermission = Readonly<{
     toolName: string;
     turnId?: string;
+    source?: string;
     policy: SessionPermissionAnswerPolicy;
     answers: readonly PluginUiSessionPermissionAnswerV1[];
 }>;
@@ -95,6 +96,7 @@ function projectSession(session: Session, accountScope: ServerAccountScope | nul
         requests.set(pending.requestId, {
             toolName: pending.toolName,
             ...(pending.turnId ? { turnId: pending.turnId } : {}),
+            ...(pending.source ? { source: pending.source } : {}),
             policy: pending.policy,
             answers: pending.answers,
         });
@@ -297,6 +299,7 @@ export function createPluginSurfaceSessionHandlers(input: Readonly<{
             await answerSessionPermission({
                 requestId,
                 ...(pending.turnId ? { turnId: pending.turnId } : {}),
+                ...(pending.source ? { source: pending.source } : {}),
                 toolName: pending.toolName,
                 answer,
                 policy: pending.policy,

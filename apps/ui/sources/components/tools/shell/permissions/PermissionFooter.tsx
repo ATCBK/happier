@@ -1,6 +1,6 @@
 import { extractShellCommand } from '@happier-dev/protocol/activity/shellCommand';
 import { formatPermissionRequestSummary } from '@happier-dev/protocol/activity/agentRequestSummary';
-import { NATIVE_TOOL_APPROVAL_ONCE_REQUEST_SOURCE, type SessionPermissionDecisionActorV1 } from '@happier-dev/protocol/sessions/permissions/v1';
+import type { SessionPermissionDecisionActorV1 } from '@happier-dev/protocol/sessions/permissions/v1';
 import React, { useRef, useState } from 'react';
 import { View, TouchableOpacity, Platform } from 'react-native';
 import { useSessionTranscriptSource } from '@/components/sessions/transcript/source/SessionTranscriptSourceContext';
@@ -15,6 +15,7 @@ import {
     resolveSessionPermissionAnswerPolicy,
     resolveSessionPermissionBehavior,
     supportsSessionPermissionRule,
+    supportsSessionPermissionPersistence,
     type SessionPermissionAnswer,
 } from '@/sync/ops/sessionPermissionAnswers';
 import { parseParenIdentifier } from "@happier-dev/session-core/tools";
@@ -37,6 +38,7 @@ type PermissionFooterProps = PromptResponseOrigin & {
     permission: {
         id: string;
         turnId?: string;
+        source?: string;
         status: "pending" | "approved" | "denied" | "canceled";
         reason?: string;
         mode?: string;
@@ -265,8 +267,12 @@ export const PermissionFooter: React.FC<PermissionFooterProps> = ({
     const source = useSessionTranscriptSource();
     const interaction = source.useInteraction();
     const agentState = source.useAgentState();
+    // A loaded request supersedes a retained transcript projection, including
+    // clearing its source. Otherwise keep the request's projected scope.
+    const loadedRequest = agentState?.requests?.[permission.id];
+    const requestSource = loadedRequest ? loadedRequest.source : permission.source;
     const onceOnlyApproval = executionRun === undefined
-        && agentState?.requests?.[permission.id]?.source === NATIVE_TOOL_APPROVAL_ONCE_REQUEST_SOURCE;
+        && !supportsSessionPermissionPersistence(requestSource);
     const actions = source.actions;
     const canApprovePermissions = callerCanApprovePermissions !== false && (executionRun !== undefined
         ? executionRun.respond !== undefined
@@ -363,6 +369,7 @@ export const PermissionFooter: React.FC<PermissionFooterProps> = ({
     const answerThroughSession = (answer: SessionPermissionAnswer) => answerSessionPermission({
         requestId: permission.id,
         ...(projectedTurnId !== undefined ? { turnId: projectedTurnId } : {}),
+        ...(requestSource !== undefined ? { source: requestSource } : {}),
         toolName,
         answer,
         policy: answerPolicy,

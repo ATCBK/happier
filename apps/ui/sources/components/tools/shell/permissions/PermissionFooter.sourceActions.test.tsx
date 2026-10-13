@@ -3,6 +3,8 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { createTestSessionTranscriptSource, pressTestInstanceAsync, renderWithSessionTranscriptSource, renderScreen, renderHook, wrapWithSessionTranscriptSource, standardCleanup } from '@/dev/testkit';
 import { markPendingNavigationTranscriptReady, markSessionPendingAnswer, setPendingNavigationLanding, usePendingNavigationLanding } from '@/activity/source/pendingNavigationRuntime';
 import { installPermissionShellCommonModuleMocks } from './permissionShellTestHelpers';
+import { AgentStateSchema } from '@happier-dev/session-core/state';
+import { createReducer, reducer } from '@happier-dev/session-core/reducer';
 
 const nativeFocusBoundary = vi.hoisted(() => ({
     platform: 'web' as 'web' | 'android',
@@ -43,6 +45,29 @@ describe('PermissionFooter source authority', () => {
     });
     afterEach(standardCleanup);
 
+    it('keeps a native Edit once-only after full AgentState unloads', async () => {
+        const projection = reducer(createReducer(), [], AgentStateSchema.parse({ requests: {
+            edit: { tool: 'Edit', arguments: { file_path: 'example.ts' }, createdAt: 1,
+                turnId: 'native-turn', source: 'native_tool_approval_once' },
+        } }));
+        const message = projection.messages.find(message => message.kind === 'tool-call');
+        if (message?.kind !== 'tool-call' || !message.tool.permission) throw new Error('Missing projected Edit');
+        const respondToPermission = vi.fn(async () => {});
+        const source = createTestSessionTranscriptSource({ sessionId: 's1', agentState: null,
+            interaction: { canApprovePermissions: true, canSendMessages: true },
+            actions: { respondToPermission, answerUserAction: vi.fn(), abort: vi.fn(), submitMessage: vi.fn() },
+        });
+        const screen = await renderWithSessionTranscriptSource(<PermissionFooter sessionId="s1"
+            permission={message.tool.permission} toolName="Edit" toolInput={message.tool.input}
+            metadata={{ flavor: 'claude' }} canApprovePermissions />, source);
+        const choices = screen.findAll(node => typeof node.type === 'string' && node.props.accessibilityRole === 'button'
+            && typeof node.props.onPress === 'function');
+        expect(choices.filter(node => !['permission-footer.allow', 'permission-footer.deny', 'permission-footer.stop']
+            .includes(node.props.testID))).toHaveLength(0);
+        await screen.pressByTestIdAsync('permission-footer.allow');
+        expect(respondToPermission).toHaveBeenCalledWith({ id: 'edit', approved: true, turnId: 'native-turn' });
+    });
+
     it.each([
         { flavor: 'claude', tool: 'Bash', arguments: { command: 'git status' } },
         { flavor: 'claude', tool: 'Edit', arguments: { file_path: 'example.ts' } },
@@ -74,7 +99,7 @@ describe('PermissionFooter source authority', () => {
             actions: { respondToPermission: vi.fn(), answerUserAction: vi.fn(), abort: vi.fn(), submitMessage: vi.fn() },
         });
         const screen = await renderWithSessionTranscriptSource(<PermissionFooter sessionId="s1"
-            permission={{ id: 'p1', status: 'pending' }} toolName="Bash" toolInput={{ command: 'git status' }}
+            permission={{ id: 'p1', status: 'pending', source: 'native_tool_approval_once' }} toolName="Bash" toolInput={{ command: 'git status' }}
             metadata={{ flavor: 'claude' }} canApprovePermissions />, source);
         expect(screen.findAll(node => typeof node.type === 'string' && node.props.accessibilityRole === 'button'
             && typeof node.props.onPress === 'function' && node.props.testID === undefined).length).toBeGreaterThan(0);

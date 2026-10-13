@@ -1,6 +1,12 @@
 import type { ResourceSubscriptionEvent } from '@happier-dev/plugin-sdk/ui';
 import { SessionSharedMetadataV1Schema } from '@happier-dev/protocol/sessions/metadata/sessionMetadataSchemasV1';
 import { beforeEach, describe, expect, it, vi } from 'vitest';
+import { createReducer, reducer } from '@happier-dev/session-core/reducer';
+import { AgentStateSchema } from '@happier-dev/session-core/state';
+import { createHomeGovernanceHarness, installHomeGovernanceBoundaries } from '@/dev/testkit/harness/homeGovernanceHarness';
+import { installDisconnectedServerSocketBoundary } from '@/dev/testkit/harness/serverAccountConnectionHarness';
+import { installSessionActionFixture } from '@/dev/testkit/harness/sessionActionRpcBoundary';
+import { loadSyncSingletonForTests } from '@/dev/testkit/harness/syncSingletonLoader';
 
 const { mockSessionRpcWithPreferredSessionScope, mockMachineRpcWithServerScope } = vi.hoisted(() => ({
     mockSessionRpcWithPreferredSessionScope: vi.fn(),
@@ -20,24 +26,23 @@ vi.mock('@/sync/runtime/orchestration/serverScopedRpc/serverScopedMachineRpc', (
     machineRpcWithServerScope: (...args: unknown[]) => mockMachineRpcWithServerScope(...args),
 }));
 
-vi.mock('@/sync/sync', () => ({
-    sync: {
-        encryption: {
-            getSessionEncryption: () => null,
-            getMachineEncryption: () => null,
-        },
-    },
-}));
-
-import { createCanonicalPluginReactNativeHostApiAdapter } from '@/components/plugins/reactNative/hostApi';
-import { createPluginSurfaceContextFixture } from '@/dev/testkit/fixtures/pluginSurfaceContextFixture';
+const homes = createHomeGovernanceHarness();
+installHomeGovernanceBoundaries(homes);
+installDisconnectedServerSocketBoundary();
+await loadSyncSingletonForTests();
+const { listPendingRequestListsFromSession } = await import('@/sync/domains/session/pending/listPendingSessionRequests');
+const { listSessionPendingPermissions } = await import('@/sync/ops/sessionPendingPermissions');
+const { projectSessionSummaryCard } = await import('@/components/sessions/companion/summary/sessionSummaryProjection');
+const { projectUiSessionAwareness } = await import('@/sync/domains/session/awareness/sessionAwareness');
+const { createCanonicalPluginReactNativeHostApiAdapter } = await import('@/components/plugins/reactNative/hostApi');
+const { createPluginSurfaceContextFixture } = await import('@/dev/testkit/fixtures/pluginSurfaceContextFixture');
 import { createSessionFixture } from '@/dev/testkit/fixtures/sessionFixtures';
-import { storage } from '@/sync/domains/state/storage';
-import { clearDaemonMergedProjectionCacheForTests } from '@/agents/backendCatalog/loadDaemonMergedProjectionInputs';
-import { publishMachineContributionRegistryProjectionInvalidation } from '@/sync/ops/machineContributionRegistryProjectionRevision';
+const { storage } = await import('@/sync/domains/state/storage');
+const { clearDaemonMergedProjectionCacheForTests } = await import('@/agents/backendCatalog/loadDaemonMergedProjectionInputs');
+const { publishMachineContributionRegistryProjectionInvalidation } = await import('@/sync/ops/machineContributionRegistryProjectionRevision');
 import type { Session } from '@/sync/domains/state/storageTypes';
 
-import { createBoundPluginSurfaceController } from './boundPluginSurfaceController';
+const { createBoundPluginSurfaceController } = await import('./boundPluginSurfaceController');
 
 const initialStorageState = storage.getState();
 
@@ -49,7 +54,7 @@ const CURRENT_ACCOUNT_LIFETIME = Object.freeze({
 
 const canonicalSurface = createPluginSurfaceContextFixture({ target: { kind: 'app' } });
 
-function mountSurface() {
+function mountSurface(accountScope = CURRENT_ACCOUNT_LIFETIME.scope) {
     const controller = createBoundPluginSurfaceController({
         facts: {
             pluginId: 'acme.triage',
@@ -58,7 +63,7 @@ function mountSurface() {
             placement: 'appSurface',
             platform: 'ios',
             channel: 'internal',
-            accountLifetime: CURRENT_ACCOUNT_LIFETIME,
+            accountLifetime: { ...CURRENT_ACCOUNT_LIFETIME, scope: accountScope },
             interactionEnabled: true,
             daemonInteractionEnabled: false,
         },
@@ -108,7 +113,9 @@ function waitingSession(overrides: Partial<Session> = {}): Session {
 }
 
 describe('mounted plugin UI linked-Session state (r0.42)', () => {
-    beforeEach(() => {
+    beforeEach(async () => {
+        await homes.reset();
+        installHomeGovernanceBoundaries(homes);
         storage.setState(initialStorageState, true);
         mockSessionRpcWithPreferredSessionScope.mockReset();
         mockSessionRpcWithPreferredSessionScope.mockResolvedValue(undefined);
@@ -239,8 +246,9 @@ describe('mounted plugin UI linked-Session state (r0.42)', () => {
     });
 
     it('answers through the Session permission decision owner, attributed to the viewer', async () => {
-        storage.getState().applySessions([waitingSession()]);
-        const mounted = mountSurface();
+        const serverId = await homes.addHome({ name: 'Plugin approval Home', serverUrl: 'https://plugin-approval.test', accountId: 'account-a' });
+        installSessionActionFixture({ homes, storage, serverId, session: waitingSession() });
+        const mounted = mountSurface({ serverId, accountId: 'account-a' });
 
         await expect(mounted.api.respondToSessionPermission({
             sessionId: 'linked-1',
@@ -251,7 +259,7 @@ describe('mounted plugin UI linked-Session state (r0.42)', () => {
         const call = mockSessionRpcWithPreferredSessionScope.mock.calls.at(-1)?.[0] as
             Readonly<{ sessionId: string; method: string; payload: Record<string, unknown> }>;
         expect(call.sessionId).toBe('linked-1');
-        expect(call).toMatchObject({ serverId: 'server-1' });
+        expect(call).toMatchObject({ serverId });
         expect(call.method).toBe('session.permission.respond');
         expect(call.payload).toMatchObject({
             id: 'req-1',
@@ -260,6 +268,30 @@ describe('mounted plugin UI linked-Session state (r0.42)', () => {
             allowedTools: ['Bash'],
         });
         mounted.dispose();
+    });
+
+    it.each(['claude', 'codex'])('keeps native once-only Bash answers shared with Companion for %s', async flavor => {
+        const session = waitingSession();
+        storage.getState().applySessions([waitingSession({ metadata: { ...session.metadata!, flavor },
+            agentState: { requests: { 'req-1': { tool: 'Bash', arguments: { command: 'pwd' },
+                createdAt: NOW, turnId: 'native-turn', source: 'native_tool_approval_once' } } } })]);
+        const mounted = mountSurface();
+        try {
+            const state = await mounted.api.readSession('linked-1');
+            expect(state?.pendingPermissions[0]?.answers).toEqual(['allowOnce', 'deny']);
+            const loaded = storage.getState().sessions['linked-1']!;
+            const { messages } = reducer(createReducer(), [], AgentStateSchema.parse(loaded.agentState));
+            const transcriptOnly = { ...loaded, agentState: null };
+            const pending = listPendingRequestListsFromSession(transcriptOnly, messages);
+            const shared = listSessionPendingPermissions(transcriptOnly, CURRENT_ACCOUNT_LIFETIME.scope, pending.permissionRequests);
+            const companion = projectSessionSummaryCard({ awareness: projectUiSessionAwareness(loaded, NOW),
+                agentLabel: null, activity: null, openApprovalCount: 0, scm: null, usage: null, pendingPermissions: shared });
+            expect(companion.needsYou?.request).toMatchObject({ requestId: 'req-1', turnId: 'native-turn',
+                source: 'native_tool_approval_once', answers: state?.pendingPermissions[0]?.answers });
+            await expect(mounted.api.respondToSessionPermission({ sessionId: 'linked-1', requestId: 'req-1', answer: 'allowForSession' }))
+                .resolves.toEqual({ status: 'refused', reason: 'answerUnavailable' });
+            expect(mockSessionRpcWithPreferredSessionScope).not.toHaveBeenCalled();
+        } finally { mounted.dispose(); }
     });
 
     it('refuses a Session the Account cannot reach, a request that is not pending, and an answer the viewer may not give', async () => {

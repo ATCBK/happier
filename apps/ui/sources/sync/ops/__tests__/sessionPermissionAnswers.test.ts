@@ -19,7 +19,7 @@ vi.mock('../../sync', () => ({
     },
 }));
 
-import { sessionRespondToPermission } from '../../ops';
+import { sessionRespondToPermission } from '../sessions';
 import {
     answerSessionPermission,
     resolveSessionPermissionAnswers,
@@ -118,5 +118,19 @@ describe('answerSessionPermission', () => {
             .toEqual(['allowOnce', 'allowForSession', 'deny']);
         expect(resolveSessionPermissionAnswers({ toolName: 'Edit', protocol: 'codexDecision' }))
             .toEqual(['allowOnce', 'allowForSession', 'deny']);
+    });
+
+    it.each(['standard', 'codexDecision'] as const)('keeps a request-owned once-only scope for %s answers', async protocol => {
+        expect(resolveSessionPermissionAnswers({ toolName: 'Bash', protocol, source: 'native_tool_approval_once' }))
+            .toEqual(['allowOnce', 'deny']);
+        const respond = vi.fn(async () => {});
+        const request = { requestId: 'native-bash', turnId: 'native-turn', toolName: 'Bash',
+            source: 'native_tool_approval_once', policy: { protocol, usePermissionUpdates: true }, respondToPermission: respond };
+        await expect(answerSessionPermission({ ...request, answer: 'allowForSession' }))
+            .rejects.toMatchObject({ code: 'permission_answer_unavailable' });
+        expect(respond).not.toHaveBeenCalled();
+        await answerSessionPermission({ ...request, answer: 'allowOnce' });
+        expect(respond).toHaveBeenCalledWith({ id: 'native-bash', turnId: 'native-turn', approved: true,
+            ...(protocol === 'codexDecision' ? { decision: 'approved' } : {}) });
     });
 });
