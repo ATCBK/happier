@@ -1,7 +1,11 @@
 import { PluginError, type PluginInvocationContext } from '@happier-dev/plugin-sdk';
 import type { ConnectedAccountRef } from '@happier-dev/plugin-sdk/connected-accounts';
-import { MAX_CONVERSATION_RETRY_AFTER_MS } from '@happier-dev/channels-protocol/v1';
+import { ConversationProviderSetupOutcomeV1Schema, MAX_CONVERSATION_RETRY_AFTER_MS } from '@happier-dev/channels-protocol/v1';
 import { describe, expect, it, vi } from 'vitest';
+
+// Exercise the canonical retained-fact consumer, not a reconstruction of its reader.
+import { loadConversationAccountLocalBindingPolicyModule, readConnectionFacts } from '../../channels/src/outwardDelivery.js';
+import { createCurrentConversationConnectionFixture } from '../../channels/src/testkit/currentConnectionFixture.js';
 
 import {
   deliverGithubChannelMessage,
@@ -355,10 +359,14 @@ describe('GitHub Channel Actions', () => {
       )),
     };
 
-    await expect(setupGithubChannels({
+    const setupInput = {
       credentialRef: GITHUB_ACCOUNT,
       repository: 'acme/widgets',
-    }, coreContext({ connectedAccounts, http }))).resolves.toEqual({
+    };
+    const setup = ConversationProviderSetupOutcomeV1Schema.parse(await setupGithubChannels(
+      setupInput, coreContext({ connectedAccounts, http }),
+    ));
+    expect(setup).toEqual({
       v: 1,
       credentialRef: GITHUB_ACCOUNT,
       providerConnectionKey: 'github:repository:77',
@@ -382,6 +390,52 @@ describe('GitHub Channel Actions', () => {
       recommendedMaximumObservationAgeMs: 30 * 86_400_000,
       outboundTextLimit: { maximum: 65_536, unit: 'unicodeCodePoints' },
     });
+
+    const connection = createCurrentConversationConnectionFixture({
+      connectionId: 'github-setup-consumer',
+      authority: {
+        providerPluginId: 'happier.scm.forge.github',
+        providerContributionSelection: { contributionId: 'github-channels-provider' },
+        providerSetupInput: setupInput,
+        credentialRef: setup.credentialRef,
+        transportOrigin: {
+          serverIdentityId: 'srv_plugin_testkit',
+          materializationRef: {
+            pluginId: 'happier.scm.forge.github', machineId: 'github-setup-machine',
+            materializationId: 'github-setup-materialization',
+          },
+        },
+        providerConnectionKey: setup.providerConnectionKey,
+        providerConfig: setup.providerConfig,
+        routingIdentityKey: 'f'.repeat(43),
+        integrationPrincipal: setup.integrationPrincipal,
+        authorityEpoch: 1,
+      },
+      outboundTextLimit: setup.outboundTextLimit,
+      overlapSafety: setup.overlapSafety,
+      replayContinuity: setup.replayContinuity,
+    });
+    const accountLocalBindingPolicy = await loadConversationAccountLocalBindingPolicyModule();
+    const facts = readConnectionFacts({
+      accountLocalBindingPolicy,
+      row: { rowId: connection.id, revision: 1, value: connection },
+      connectionId: connection.id,
+    });
+    expect(facts?.outboundTextLimit).toEqual({ maximum: 65_536, unit: 'unicodeCodePoints' });
+    expect(facts?.providerAction).toMatchObject({
+      providerConnectionKey: setup.providerConnectionKey, providerConfig: setup.providerConfig,
+    });
+    // Negative wiring control: keep the producer-derived canonical row intact
+    // except for failing to forward its native limit into retained setup facts.
+    const { outboundTextLimit: _unforwardedNativeBound, ...payloadWithoutBound } = connection.payload;
+    const factsWithoutBound = readConnectionFacts({
+      accountLocalBindingPolicy,
+      row: { rowId: connection.id, revision: 1, value: { ...connection, payload: payloadWithoutBound } },
+      connectionId: connection.id,
+    });
+    expect(factsWithoutBound).not.toBeNull();
+    expect(factsWithoutBound?.outboundTextLimit).toBeUndefined();
+    expect(factsWithoutBound?.providerAction).toEqual(facts?.providerAction);
 
     expect(connectedAccounts.materialize).toHaveBeenCalledOnce();
     expect(connectedAccounts.materialize).toHaveBeenCalledWith(

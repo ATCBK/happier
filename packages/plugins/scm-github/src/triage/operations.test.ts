@@ -8,7 +8,11 @@ import {
   type TriageConfiguredSourceInstanceV1,
 } from '@happier-dev/triage-protocol/v1';
 import { createTriageSourceV1Fixture } from '@happier-dev/triage-protocol/testing/v1';
+import { createPluginTestkit } from '@happier-dev/plugin-sdk/testing';
 import { describe, expect, it, vi } from 'vitest';
+import { activate } from '../activate.js';
+import { PLUGIN_MANIFEST } from '../manifest.js';
+import { GITHUB_TRIAGE_ACTION_IDS_V1 } from './contribution.js';
 
 import {
   GITHUB_CONNECTED_ACCOUNT_PURPOSE,
@@ -40,6 +44,46 @@ import {
 } from './testkit/githubTriage.test-support.js';
 
 const REPOSITORY_KEY = `${GITHUB_FIXTURE_OWNER}/${GITHUB_FIXTURE_REPOSITORY}`.toLowerCase();
+
+describe('registered GitHub REST → Triage source contract', () => {
+  it('projects provider responses through the real registered get Action into the strict target schema', async () => {
+    let response: Readonly<Record<string, unknown>> = { ...GITHUB_PULL_REQUEST_RESPONSE, title: 'Fix café 🧪'.repeat(500) };
+    const transport = createStubGithubTransport({ respond: (request) => (
+      request.url.endsWith('/pulls/1284') ? { status: 200, body: response } : undefined
+    ) });
+    const plugin = await createPluginTestkit({ manifest: PLUGIN_MANIFEST, module: { activate }, services: {
+      http: transport.context.services.http, connectedAccounts: transport.context.services.connectedAccounts,
+    } });
+    const input = {
+      v: 1,
+      instance: configuredInstance({ scope: 'repository' }),
+      localRef: { kindId: 'pull-request', collisionScope: `github:${GITHUB_FIXTURE_REPOSITORY_ID}`, entryId: '1284' },
+      lastKnownLocator: { v: 1, routingToken: REPOSITORY_KEY },
+    };
+    try {
+      const result = TriageGetResultV1Schema.parse(await plugin.invokeAction(GITHUB_TRIAGE_ACTION_IDS_V1.get, input,
+        { surface: 'agent', sessionId: 'triage-audit-session' }));
+      expect(result.kind).toBe('present');
+      if (result.kind !== 'present') throw new Error('Matching REST entity must be present');
+      expect(result.localRef).toEqual(input.localRef);
+      expect(result.snapshot.title).toContain('café 🧪');
+      expect(result.comparisonSource).toMatchObject({ kind: 'pullRequest', locator: { number: 1284,
+        repository: REPOSITORY_KEY, sourceAction: { input: { instance: input.instance, localRef: input.localRef } } } });
+      expect(TriageGetResultV1Schema.safeParse({ ...result, providerPayload: response }).success).toBe(false);
+
+      // A 200 at the right URL is insufficient: the body must prove the same
+      // entry. The public result retains that failure instead of leaking it as
+      // a present row or treating it as absence.
+      response = { ...response, number: 1285 };
+      const mismatch = TriageGetResultV1Schema.parse(await plugin.invokeAction(GITHUB_TRIAGE_ACTION_IDS_V1.get, input,
+        { surface: 'agent', sessionId: 'triage-audit-session' }));
+      expect(mismatch).toMatchObject({ kind: 'unresolved', localRef: input.localRef,
+        failure: { code: 'route-body-mismatch' } });
+    } finally {
+      await plugin.dispose();
+    }
+  });
+});
 const CONFIGURED_ACCOUNT: ConnectedAccountRef = Object.freeze({
   service: Object.freeze({ pluginId: GITHUB_PLUGIN_ID, localId: 'github-account' }),
   accountId: 'configured-account',
