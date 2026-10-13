@@ -32,7 +32,7 @@ describe('ordinary Session refresh hydrates every personal pin surface', () => {
         connection = undefined;
     });
 
-    it('restores off-page rail-only Bots alongside list and dual-surface pins', async () => {
+    it.each(['retained', 'new'] as const)('hydrates %s off-page rail-only Bots alongside list and dual-surface pins', async membership => {
         const pins = [
             { sessionId: 'list-only', sortKey: 'a', pinnedAt: 1, listPinned: true, railPinned: false },
             { sessionId: 'rail-only', sortKey: 'b', pinnedAt: 2, listPinned: false, railPinned: true },
@@ -42,6 +42,10 @@ describe('ordinary Session refresh hydrates every personal pin surface', () => {
             schemaVersion: 1, version: 1, pins, folders: [], folderAssignments: [], tags: [],
             tagAssignments: [], orderEntries: [], labels: [],
         } });
+        const emptySnapshot = SessionOrganizationSnapshotResponseSchema.parse({ snapshot: {
+            ...snapshot.snapshot, version: 0, pins: [],
+        } });
+        let pinsAvailable = membership === 'retained';
         const sourceMetadata = { path: '/bot', host: 'fixture', bot: { kind: 'bot' } };
         const owner = createSessionOwnerMetadataV1({ metadata: sourceMetadata });
         if (!owner.ok) throw new Error('Bot owner metadata fixture was rejected');
@@ -57,7 +61,8 @@ describe('ordinary Session refresh hydrates every personal pin surface', () => {
         })]));
         const exactReads: string[] = [];
         connection = await restoreServerAccountForTest({
-            serverUrl: 'https://rail-hydration.example.test', serverIdentityId: 'srv_rail-hydration', accountId: 'rail-account',
+            serverUrl: `https://${membership}-rail-hydration.example.test`,
+            serverIdentityId: `srv_rail-hydration-${membership}`, accountId: 'rail-account',
             request: async url => {
                 const path = new URL(String(url)).pathname;
                 if (path === '/health') return Response.json({ status: 'ok' });
@@ -66,7 +71,7 @@ describe('ordinary Session refresh hydrates every personal pin surface', () => {
                 if (path === '/v1/account/encryption/currentness') return Response.json(createPlainAccountEncryptionCurrentnessFixture());
                 if (path === '/v1/account/encryption') return Response.json({ mode: 'plain', updatedAt: 1 });
                 if (path === '/v2/account/settings') return Response.json(AccountSettingsV2GetResponseSchema.parse({ content: { t: 'plain', v: {} }, version: 1 }));
-                if (path === '/v2/session-organization') return Response.json(snapshot);
+                if (path === '/v2/session-organization') return Response.json(pinsAvailable ? snapshot : emptySnapshot);
                 if (path === '/v2/sessions/metadata-upgrades') return Response.json({ sessionIds: [] });
                 if (path === '/v2/sessions' || path === '/v2/sessions/active') return Response.json({ sessions: [], nextCursor: null, hasNext: false });
                 const sessionId = path.startsWith('/v2/sessions/') ? decodeURIComponent(path.slice('/v2/sessions/'.length)) : '';
@@ -78,6 +83,9 @@ describe('ordinary Session refresh hydrates every personal pin surface', () => {
         });
         const serverId = resolveServerProfileScopeIdForIdentifier(connection.home.id);
         await fetchAndApplySessionOrganizationSnapshot({ credentials: connection.credentials, serverId, serverUrl: connection.home.serverUrl });
+        // External Agent mutations arrive through the refresh, after the app
+        // already has a last-known organization snapshot.
+        pinsAvailable = true;
         const { sync } = await import('./sync');
         await sync.refreshSessions({ awaitSessionListHydration: true });
 
