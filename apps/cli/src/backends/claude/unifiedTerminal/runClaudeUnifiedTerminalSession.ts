@@ -1180,10 +1180,17 @@ export async function runClaudeUnifiedTerminalSession<Mode extends EnhancedMode 
   const terminateCurrentTerminalProcess = async (): Promise<void> => {
     const ownedProcess = currentTerminalProcess;
     if (!ownedProcess) return;
-    await ownedProcess.terminate();
-    // The session adapter survives runner replacement. Complete this process's exit observation
-    // before another runner can admit tasks to the same ledger.
-    await ownedProcess.whenExited;
+    try {
+      await ownedProcess.terminate();
+      // Complete this process's proven exit before another runner can reuse the Session ledger.
+      const exit = await ownedProcess.whenExited;
+      if (exit.nativeExited !== true && exit.processTreeStopped !== true) {
+        throw new ClaudeNativeProviderExitUnverifiedError();
+      }
+    } catch (error) {
+      if (error instanceof ClaudeNativeProviderExitUnverifiedError) throw error;
+      throw new AggregateError([error, new ClaudeNativeProviderExitUnverifiedError()], 'Claude owned process termination could not be verified', { cause: error });
+    }
   };
   let controller: ClaudeUnifiedController | null = null;
   let runtimeControlBridge: ClaudeUnifiedRuntimeControlBridge | null = null;
@@ -2764,22 +2771,19 @@ export async function runClaudeUnifiedTerminalSession<Mode extends EnhancedMode 
     }
     let incompleteOwnedCleanup: unknown;
     const noteOwnedCleanupFailure = async (error: unknown): Promise<void> => {
-      if (error && typeof error === 'object' && 'code' in error && error.code === 'process_tree_termination_incomplete') {
-        incompleteOwnedCleanup = error;
-      }
+      incompleteOwnedCleanup = error;
       await opts.runtimeActivityAdapter?.handleRuntimeLoss('claude_process_cleanup_failed').catch((observationError) => {
         logger.debug('[unified]: failed to publish provider cleanup observation loss', observationError);
       });
     };
-    if (currentTerminalProcess && terminalHostLifecycle !== 'borrowed') {
+    if (currentTerminalProcess) {
       await terminateCurrentTerminalProcess().catch(async (error: unknown) => {
         await noteOwnedCleanupFailure(error);
-        logger.infoFile('[unified]: failed to terminate current terminal provider process', error);
+        logger.infoFile('[unified]: failed to terminate current terminal provider process', error instanceof AggregateError ? error.cause : error);
       });
     }
-    if (terminalHostLifecycle === 'borrowed') {
+    if (terminalHostLifecycle === 'borrowed' && !incompleteOwnedCleanup) {
       await releaseBorrowedTerminalHost('wrapper_exit').catch(async (error: unknown) => {
-        await noteOwnedCleanupFailure(error);
         logger.infoFile('[unified]: failed to release borrowed terminal attachment', error);
       });
     }

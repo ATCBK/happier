@@ -27,6 +27,7 @@ import { createClaudeProviderActivityLedger } from '../providerActivity/createCl
 import { createClaudeProviderRuntimeActivityAdapter } from '../providerActivity/createClaudeProviderRuntimeActivityAdapter';
 import type { SessionHookData } from '../utils/startHookServer';
 import { createDeferred } from '@/testkit/async/deferred';
+import { resolveClaudeRemoteLaunchErrorDisposition } from '../claudeRemoteLauncher';
 
 vi.mock('child_process', async (importOriginal) => {
   const actual = await importOriginal<typeof import('child_process')>();
@@ -101,7 +102,7 @@ function baseOptions(
 }
 
 describe('runClaudeUnifiedTerminalSession launch disposition', () => {
-  it.runIf(process.platform !== 'win32')('retains provider tasks when the same-pane launcher dies with its native provider alive', async () => {
+  it.runIf(process.platform !== 'win32').each(['wrapper-died', 'termination-unproven'] as const)('retains provider tasks when the same-pane launcher dies with its native provider alive (%s)', async (outcome) => {
     const directory = await mkdtemp(join(tmpdir(), 'happier-claude-unified-wrapper-death-'));
     const nativePidPath = join(directory, 'native-pid');
     const prepared = await prepareOwnedTerminalSpawn({ command: process.execPath,
@@ -125,11 +126,14 @@ describe('runClaudeUnifiedTerminalSession launch disposition', () => {
       ...baseOptions(createAdapter(), abortController), path: directory, createController: undefined,
       currentTerminalHost: { handle: existingHandle, lifecycle: 'borrowed' },
       providerActivityLedger: ledger, runtimeActivityAdapter,
-      launchCurrentTerminalProcess: async () => launchOwnedTerminalProcess({ spawn: prepared, cwd: directory, spawnProcess }),
+      launchCurrentTerminalProcess: async () => launchOwnedTerminalProcess({ spawn: prepared, cwd: directory, spawnProcess,
+        ...(outcome === 'termination-unproven' ? { terminateProcess: async (child) => { process.kill(child.pid!, 'SIGKILL'); } } : {}),
+      }),
       persistTerminalHostAttachmentInfo: async () => {},
       onTerminalHostReady: async () => {
         await vi.waitFor(async () => { nativePid = Number(await readFile(nativePidPath, 'utf8')); });
-        launcher!.kill('SIGKILL');
+        if (outcome === 'termination-unproven') abortController.abort();
+        else launcher!.kill('SIGKILL');
       },
     });
     const settled = session.then(() => undefined, (error: unknown) => error);
@@ -139,7 +143,7 @@ describe('runClaudeUnifiedTerminalSession launch disposition', () => {
       expect(isPidAlive(nativePid!)).toBe(true);
       expect(ledger.getActiveProviderTaskCount()).toBe(1);
       expect(states.at(-1)).toBe('unknown');
-      expect(error).toMatchObject({ code: 'claude_native_provider_exit_unverified' });
+      expect(resolveClaudeRemoteLaunchErrorDisposition({ error, exitReason: null, runtimeTerminationStarted: false })).toBe('preserve-resume-and-exit');
     } finally {
       abortController.abort();
       await killProcessTree({ pid: nativePid });
@@ -296,7 +300,9 @@ describe('runClaudeUnifiedTerminalSession launch disposition', () => {
         readTerminalHostAttachmentInfo: async () => storedAttachment,
         removeTerminalHostAttachmentInfo: async () => { storedAttachment = null; },
         onTerminalHostReady: async ({ stopTerminalHostForExplicitStop }) => {
-          await expect(stopTerminalHostForExplicitStop()).rejects.toBe(failure);
+          await expect(stopTerminalHostForExplicitStop()).rejects.toMatchObject({
+            errors: [failure, { code: 'claude_native_provider_exit_unverified' }], cause: failure,
+          });
           expect(storedAttachment).toMatchObject({ version: 3, lifecycle: 'borrowed', attachmentId });
           expect(isPidAlive(launcherPid!)).toBe(true);
           await expect(stopTerminalHostForExplicitStop()).resolves.toBeUndefined();
@@ -315,7 +321,10 @@ describe('runClaudeUnifiedTerminalSession launch disposition', () => {
       await rm(directory, { recursive: true, force: true });
     }
   });
-  it.each([false, true])('retains attachment and surfaces incomplete owned cleanup without late ledger mutation (runtime failure: %s)', async (runtimeFails) => {
+  it.each([
+    { failureKind: 'coded', runtimeFails: false }, { failureKind: 'coded', runtimeFails: true },
+    { failureKind: 'ordinary', runtimeFails: false }, { failureKind: 'ordinary', runtimeFails: true },
+  ])('retains attachment and surfaces incomplete owned cleanup without late ledger mutation ($failureKind / runtime failure: $runtimeFails)', async ({ failureKind, runtimeFails }) => {
     const abortController = new AbortController();
     let storedAttachment: TerminalAttachmentInfo | null = null;
     const removeAttachment = vi.fn(async () => { storedAttachment = null; });
@@ -324,7 +333,8 @@ describe('runClaudeUnifiedTerminalSession launch disposition', () => {
     const runtimeActivityAdapter = createClaudeProviderRuntimeActivityAdapter({ providerActivityLedger: ledger,
       contributionHandle: { report: async () => {}, markUnknown: async () => {}, dispose: async () => {} } });
     const exited = createDeferred<{ code: 0; signal: null }>();
-    const incomplete = Object.assign(new Error('owned-child-cleanup-unverified'), { code: 'process_tree_termination_incomplete' });
+    const incomplete = new Error('owned-child-cleanup-unverified');
+    if (failureKind === 'coded') Object.assign(incomplete, { code: 'process_tree_termination_incomplete' });
     const runtimeError = new Error('initial-runtime-failure');
     const result = runClaudeUnifiedTerminalSession({
       ...baseOptions(createAdapter(), abortController),
@@ -342,8 +352,9 @@ describe('runClaudeUnifiedTerminalSession launch disposition', () => {
       removeTerminalHostAttachmentInfo: removeAttachment,
       onTerminalHostReady: () => { abortController.abort(); if (runtimeFails) throw runtimeError; },
     });
-    if (runtimeFails) await expect(result).rejects.toMatchObject({ errors: [runtimeError, incomplete] });
-    else await expect(result).rejects.toBe(incomplete);
+    const failedCleanup = { errors: [incomplete, { code: 'claude_native_provider_exit_unverified' }], cause: incomplete };
+    if (runtimeFails) await expect(result).rejects.toMatchObject({ errors: [runtimeError, failedCleanup], cause: runtimeError });
+    else await expect(result).rejects.toMatchObject(failedCleanup);
     expect(storedAttachment).toMatchObject({ version: 3, lifecycle: 'borrowed', handle: existingHandle });
     expect(removeAttachment).not.toHaveBeenCalled();
     ledger.apply({ type: 'started', sessionId: 'claude-resume-id', taskId: 'replacement-child' });
@@ -353,20 +364,28 @@ describe('runClaudeUnifiedTerminalSession launch disposition', () => {
     logger.flushSync();
     expect(await readFile(logger.logFilePath, 'utf8')).toContain('owned-child-cleanup-unverified');
   });
-  it('retains borrowed-terminal cleanup failures in the default session file log', async () => {
+  it('keeps confirmed provider exit idle when borrowed attachment release fails, with default diagnostics', async () => {
     logger.infoFile('Borrowed terminal cleanup regression started');
     const abortController = new AbortController();
     const adapter = createAdapter();
     let storedAttachment: TerminalAttachmentInfo | null = null;
-    const exited = createDeferred<{ code: 0; signal: null }>();
+    const exited = createDeferred<{ code: 0; signal: null; nativeExited: true }>();
+    const ledger = createClaudeProviderActivityLedger();
+    ledger.apply({ type: 'started', sessionId: 'claude-resume-id', taskId: 'completed-provider-child' });
+    const states: string[] = [];
+    const runtimeActivityAdapter = createClaudeProviderRuntimeActivityAdapter({ providerActivityLedger: ledger,
+      contributionHandle: { report: async snapshot => { states.push(snapshot.state); },
+        markUnknown: async () => { states.push('unknown'); }, dispose: async () => {} } });
+    await runtimeActivityAdapter.activateObservation('fixture-native-provider');
     await runClaudeUnifiedTerminalSession({
       ...baseOptions(adapter, abortController),
       createController: undefined,
       currentTerminalHost: { handle: existingHandle, lifecycle: 'borrowed' },
+      providerActivityLedger: ledger, runtimeActivityAdapter,
       // Process termination and attachment-file writes are external boundaries.
       launchCurrentTerminalProcess: async () => ({
         whenExited: exited.promise,
-        terminate: async () => { exited.resolve({ code: 0, signal: null }); },
+        terminate: async () => { exited.resolve({ code: 0, signal: null, nativeExited: true }); },
       }),
       persistTerminalHostAttachmentInfo: async ({ sessionId, attachmentId, handle, terminal }) => {
         storedAttachment = {
@@ -381,6 +400,8 @@ describe('runClaudeUnifiedTerminalSession launch disposition', () => {
     logger.flushSync();
     const log = await readFile(logger.logFilePath, 'utf8');
     expect(log).toContain('descriptor_retirement_failed');
+    expect(ledger.getActiveProviderTaskCount()).toBe(0);
+    expect(states.at(-1)).toBe('idle');
     expect(storedAttachment).toMatchObject({
       version: 3,
       lifecycle: 'borrowed',
@@ -394,8 +415,8 @@ describe('runClaudeUnifiedTerminalSession launch disposition', () => {
     const createOrAttachHost = vi.fn(async () => existingHandle);
     const dispose = vi.fn(async () => undefined);
     const adapter = createAdapter({ createOrAttachHost, dispose });
-    const exited = createDeferred<{ code: 0; signal: null }>();
-    const terminate = vi.fn(async () => { exited.resolve({ code: 0, signal: null }); });
+    const exited = createDeferred<{ code: 0; signal: null; nativeExited: true }>();
+    const terminate = vi.fn(async () => { exited.resolve({ code: 0, signal: null, nativeExited: true }); });
     const launchBorrowedProcess = vi.fn(async () => ({
       whenExited: exited.promise,
       terminate,
@@ -443,8 +464,8 @@ describe('runClaudeUnifiedTerminalSession launch disposition', () => {
     const abortController = new AbortController();
     const dispose = vi.fn(async () => undefined);
     const adapter = createAdapter({ dispose });
-    const exited = createDeferred<{ code: 0; signal: null }>();
-    const terminate = vi.fn(async () => { exited.resolve({ code: 0, signal: null }); });
+    const exited = createDeferred<{ code: 0; signal: null; nativeExited: true }>();
+    const terminate = vi.fn(async () => { exited.resolve({ code: 0, signal: null, nativeExited: true }); });
     const launchCurrentTerminalProcess = vi.fn(async () => ({
       whenExited: exited.promise,
       terminate,
@@ -486,8 +507,8 @@ describe('runClaudeUnifiedTerminalSession launch disposition', () => {
     const abortController = new AbortController();
     const dispose = vi.fn(async () => undefined);
     const adapter = createAdapter({ dispose });
-    const exited = createDeferred<{ code: 0; signal: null }>();
-    const terminate = vi.fn(async () => { exited.resolve({ code: 0, signal: null }); });
+    const exited = createDeferred<{ code: 0; signal: null; nativeExited: true }>();
+    const terminate = vi.fn(async () => { exited.resolve({ code: 0, signal: null, nativeExited: true }); });
     const launchCurrentTerminalProcess = vi.fn(async () => ({
       whenExited: exited.promise,
       terminate,
