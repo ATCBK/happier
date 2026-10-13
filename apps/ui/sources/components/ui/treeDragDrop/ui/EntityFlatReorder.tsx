@@ -373,6 +373,7 @@ function MountedFlatRow(props: React.ComponentProps<typeof EntityFlatReorderRow>
 function FlatRowIndicator(props: Readonly<{ runtime: EntityDragDropRuntime; targetId: string; position: React.RefObject<AnchoredListPositionV1 | null> }>) {
     const edge = React.useSyncExternalStore(props.runtime.subscribe, () => {
         const snapshot = props.runtime.getSnapshot();
+        if (snapshot.phase !== 'carrying' && snapshot.phase !== 'pending') return null;
         if (snapshot.targetId !== props.targetId || snapshot.admission?.status !== 'allowed') return null;
         const pointer = props.runtime.getPointer();
         // Semantic admission changes only; this leaf never subscribes to pointer frames.

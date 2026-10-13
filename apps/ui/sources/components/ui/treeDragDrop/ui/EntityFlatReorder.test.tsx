@@ -12,6 +12,7 @@ import { useEntityDragDropRuntime } from '../entityDragDropHooks';
 import type { EntityDragDropRuntime } from '../entityDragDropTypes';
 import { EntityFlatReorderList, EntityFlatReorderRow, settleEntityReorderWrite, type EntityFlatReorderBinding } from './EntityFlatReorder';
 import { EntityDragGripTrigger, EntityStagedMoveDock } from './EntityReleasePreview';
+import { TreeDropIndicatorLine } from './TreeDropIndicatorLine';
 
 vi.mock('react-native', async () => {
     const { createReactNativeWebMock } = await import('@/dev/testkit/mocks/reactNative');
@@ -137,12 +138,14 @@ describe('shared flat reorder UI binding', () => {
             await act(async () => { pan.__handlers.onUpdate!({ absoluteX: 10, absoluteY: 90 }); });
             await act(async () => { pan.__handlers.onEnd!({ absoluteX: 10, absoluteY: 90 }, true); });
             expect(runtime.getSnapshot().phase).toBe('pending');
+            expect(screen.root.findAllByType(TreeDropIndicatorLine)).toHaveLength(1);
             await screen.pressByTestIdAsync('grip:a');
             await flushHookEffects({ cycles: 1, frames: 1 });
             expect(screen.root.findAllByType(DropdownMenu).every(menu => !menu.props.open)).toBe(true);
             expect(f.model.writes).toHaveLength(1);
             await act(async () => { acknowledgement.resolve(); });
             expect(runtime.getSnapshot().phase).toBe('settled');
+            expect(screen.root.findAllByType(TreeDropIndicatorLine)).toHaveLength(0);
             // A later intentional press still opens the ordinary Move chooser.
             await screen.pressByTestIdAsync('grip:a');
             await flushHookEffects({ cycles: 1, frames: 1 });
