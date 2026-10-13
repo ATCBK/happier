@@ -1,8 +1,6 @@
 import React from 'react';
 import { View } from 'react-native';
 import { StyleSheet, useUnistyles } from 'react-native-unistyles';
-import { resolveHappierIconSize } from '@happier-dev/plugin-ui/presentation';
-import { Icon } from '@/components/ui/icons/Icon';
 import { Typography } from '@/constants/Typography';
 import { EnvironmentVariableCard } from './EnvironmentVariableCard';
 import type { ProfileDocumentation } from '@/sync/domains/profiles/profileUtils';
@@ -222,7 +220,7 @@ export function EnvironmentVariablesList({
     const hasCards = environmentVariables.length > 0 || secretOnlyRequirements.length > 0;
 
     return (
-        <View style={styles.container}>
+        <View>
             <ItemGroup
                 title={t('profiles.environmentVariables.title')}
                 description={t('profilesPage.environmentDescription')}
@@ -308,7 +306,6 @@ export function EnvironmentVariablesList({
                     trigger={hasCards ? null : undefined}
                     // With no variables yet, the add row is the section's action: the plus glyph in the
                     // leading column, as every other "add" row (Add launch profile, Add model).
-                    icon={<Icon name="plus" size={resolveHappierIconSize('medium')} color={theme.colors.text.secondary} />}
                     triggerTestID="profile-environment-add"
                     onCancel={resetAddDraft}
                     onSave={handleAddVariable}
@@ -355,9 +352,6 @@ export function EnvironmentVariablesList({
 
 
 const stylesheet = StyleSheet.create((theme) => ({
-    container: {
-        marginBottom: theme.space.s16,
-    },
     fieldLabel: {
         ...Typography.variant('body', 'semiBold'),
         color: theme.colors.text.secondary,

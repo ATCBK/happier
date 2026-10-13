@@ -19,26 +19,14 @@ const actEnvironment = globalThis as typeof globalThis & {
 actEnvironment.IS_REACT_ACT_ENVIRONMENT = true;
 
 installProfilesCommonModuleMocks();
+vi.doUnmock('@/sync/domains/state/storage');
 
 vi.mock('@expo/vector-icons', () => ({
     Ionicons: () => <>{'.'}</>,
 }));
 
-vi.mock('@/hooks/session/useProfileEnvRequirements', () => ({
-    useProfileEnvRequirements: () => ({ isReady: false, isLoading: false }),
-}));
 
-vi.mock('@/sync/domains/profiles/profileSecrets', () => ({
-    hasRequiredSecret: () => true,
-}));
 
-type TextMockProps = {
-    children?: React.ReactNode;
-} & Record<string, unknown>;
-
-vi.mock('@/components/ui/text/Text', () => ({
-    Text: ({ children, ...props }: TextMockProps) => React.createElement('Text', props as never, children),
-}));
 
 const profile: AIBackendProfile = {
     id: 'p1',
@@ -80,6 +68,7 @@ describe('ProfileRequirementsBadge', () => {
             { wrapper: PresentationEnvironmentHarness },
         );
 
+        expect(screen.getTextContent()).toContain('secrets.badgeRequired');
         expect(collectUnexpectedRawTextNodes(screen.tree.toJSON())).toEqual([]);
 
         act(() => {

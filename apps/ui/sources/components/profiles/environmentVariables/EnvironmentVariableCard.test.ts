@@ -3,7 +3,6 @@ import { act } from 'react-test-renderer';
 import React from 'react';
 import { renderScreen } from '@/dev/testkit';
 import { installProfilesCommonModuleMocks } from '../profilesTestHelpers';
-import { EnvironmentVariableCard } from './EnvironmentVariableCard';
 
 (
     globalThis as typeof globalThis & {
@@ -20,34 +19,16 @@ installProfilesCommonModuleMocks({
         });
     },
 });
+vi.doUnmock('@/sync/domains/state/storage');
+const { Switch } = await import('@/components/ui/forms/Switch');
+const { EnvironmentVariableCard } = await import('./EnvironmentVariableCard');
 
 vi.mock('@expo/vector-icons', () => ({
     Ionicons: (props: Record<string, unknown>) => React.createElement('Ionicons', props),
 }));
 
-vi.mock('@/components/ui/forms/Switch', () => ({
-    Switch: (props: Record<string, unknown>) => React.createElement('Switch', props),
-}));
 
-vi.mock('@/components/ui/lists/Item', () => ({
-    Item: (props: {
-        title?: React.ReactNode;
-        subtitle?: React.ReactNode;
-        rightElement?: React.ReactNode;
-    }) =>
-        React.createElement(
-            'Item',
-            props,
-            props.title ? React.createElement('Text', null, props.title) : null,
-            props.subtitle ?? null,
-            props.rightElement ?? null,
-        ),
-}));
 
-vi.mock('@/components/ui/lists/ItemGroup', () => ({
-    ItemGroup: (props: { children?: React.ReactNode }) =>
-        React.createElement('ItemGroup', props, props.children),
-}));
 
 type RenderedCard = Awaited<ReturnType<typeof renderScreen>>;
 
@@ -72,7 +53,7 @@ function findTextInputs(screen: RenderedCard) {
 }
 
 function findUseMachineSwitch(screen: RenderedCard) {
-    const switches = screen.findAllByType('Switch');
+    const switches = screen.findAllByType(Switch);
     return switches.find((node) => node.props.disabled !== true);
 }
 
