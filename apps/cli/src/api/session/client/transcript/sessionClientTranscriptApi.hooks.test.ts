@@ -5,6 +5,7 @@ import { logger } from '@/ui/logger';
 import { withToolTraceFile } from '@/testkit/logger/toolTraceFile';
 import { createSessionClientTranscriptApi } from './sessionClientTranscriptApi';
 import { API_TOKEN_FULL_GRANT_V1 } from '@happier-dev/protocol';
+import { createTurnAssistantTextSnapshotStore } from '../../turns/assistantTextSnapshotStore';
 
 function createTranscriptApi(params?: Readonly<{
     transformSessionInputBeforeCommit?: (payload: Record<string, unknown>) => Promise<Record<string, unknown>>;
@@ -18,8 +19,11 @@ function createTranscriptApi(params?: Readonly<{
     getActiveLocalTurnProgressAt?: () => number | null;
     onPresence?: (presence: Readonly<{ thinking: boolean; mode: 'local' | 'remote' }>) => void;
     findPersistedSessionUserMessageAdmission?: Parameters<typeof createSessionClientTranscriptApi>[0]['findPersistedSessionUserMessageAdmission'];
+    enqueueCommittedTranscriptMessage?: Parameters<typeof createSessionClientTranscriptApi>[0]['enqueueCommittedTranscriptMessage'];
+    turnAssistantTextSnapshotStore?: Parameters<typeof createSessionClientTranscriptApi>[0]['turnAssistantTextSnapshotStore'];
 }>) {
-    const enqueueCommittedTranscriptMessage = vi.fn(async () => ({ persisted: true, delivered: false }));
+    const enqueueCommittedTranscriptMessage = vi.fn(params?.enqueueCommittedTranscriptMessage
+        ?? (async () => ({ persisted: true, delivered: false })));
     const admitSessionUserMessage = params?.admitSessionUserMessage ?? vi.fn(async ({ localId }) => ({
         status: 'accepted' as const,
         localId,
@@ -48,6 +52,7 @@ function createTranscriptApi(params?: Readonly<{
         updateAgentState: vi.fn(async () => undefined),
         updateMetadata: vi.fn(async () => undefined),
         enqueueCommittedTranscriptMessage,
+        turnAssistantTextSnapshotStore: params?.turnAssistantTextSnapshotStore,
         enqueueCommittedVoiceAgentTranscriptTurn: vi.fn(async () => ({ persisted: true, delivered: true })),
         usageObservationPublisher,
         buildOutboundSessionMessagePayload: (content) => ({ t: 'plain', v: content }),
@@ -77,6 +82,25 @@ function createTranscriptApi(params?: Readonly<{
 }
 
 describe('createSessionClientTranscriptApi hook dispatch', () => {
+    it('retains the acknowledged assistant sequence for turn completion before a socket echo', async () => {
+        const store = createTurnAssistantTextSnapshotStore();
+        store.beginTurn({ turnToken: 'turn-1', startSeqExclusive: 3, startedAtMs: 100 });
+        const { api } = createTranscriptApi({
+            turnAssistantTextSnapshotStore: store,
+            // Transcript storage/transport is the system boundary. No socket
+            // echo is supplied: the exact positive commit receipt owns identity.
+            enqueueCommittedTranscriptMessage: async ({ localId }) => ({
+                persisted: true, delivered: true, localId, committedSequence: 7,
+            }),
+        });
+        await api.enqueueAgentMessageCommitted('claude', { type: 'message', message: 'Committed reply' }, {
+            localId: 'reply-1', provenance: { kind: 'non_dependent', source: 'external' },
+        });
+        expect(store.getCurrentTurnSnapshot()).toMatchObject({
+            text: 'Committed reply', seq: 7, localId: 'reply-1', source: 'committed',
+        });
+    });
+
     it('keeps verified per-input authorization through pre-persistence admission', async () => {
         const authorization = { v: 1 as const, token: 'verified-home-proof', binding: {
             serverIdentityId: 'home', accountId: 'account', principalId: 'account',

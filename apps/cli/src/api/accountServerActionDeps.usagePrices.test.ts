@@ -57,7 +57,7 @@ describe('CLI and MCP model prices through captured Account Actions', () => {
     app.get('/v1/account/encryption/currentness', async () => ({ mode: 'plain', version: 1, signingKeyFingerprint: null,
       contentKeyFingerprint: null, updatedAt: 1 }));
     app.get('/v1/account/encryption', async () => ({ mode: 'plain', updatedAt: 1 }));
-    app.get('/v1/profile', async () => ({ id: 'account', connectedAccountsV4: [], connectedAccountGroupsV4: [] }));
+    app.get('/v1/account/profile', async () => ({ id: 'account', connectedAccountsV4: [], connectedAccountGroupsV4: [] }));
     app.get('/v2/account/settings', async () => ({ content: { t: 'plain', v: raw }, version }));
     app.post('/v2/account/settings', async (request, reply) => {
       const mutation = AccountSettingsV2UpdateRequestSchema.parse(request.body);

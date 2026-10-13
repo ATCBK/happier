@@ -2,8 +2,9 @@ import { createProviderErrorV1 } from '@happier-dev/protocol/providers/errors';
 import { runWithServerHttpBaseUrl } from '@/api/client/serverHttpBaseUrl';
 import { sameStoredCredentials, type StoredCredentials } from '@/persistence';
 import { bootstrapAccountSettingsContext } from '@/settings/accountSettings/bootstrapAccountSettingsContext';
-import { createInvocationSavedSecretOperationContextV1, refreshSavedSecretCatalogForOperation } from '@/settings/secrets/hydrateSavedSecretCatalog';
+import { createInvocationSavedSecretOperationContextV1, refreshSavedSecretCatalogForOperation, type SavedSecretOperationContextV1 } from '@/settings/secrets/hydrateSavedSecretCatalog';
 import { createCliMcpServerStoreForOperation } from '@/settings/mcp/mcpServerStore';
+import { projectMcpServerCatalogRefreshFailure } from '@/settings/mcp/hydrateMcpServerCatalog';
 
 export function createExecutionRunAccountSettingsSnapshotResolver(input: Readonly<{
     machineId: string;
@@ -12,35 +13,56 @@ export function createExecutionRunAccountSettingsSnapshotResolver(input: Readonl
     isOwnerCurrent: () => boolean;
     onSettings: (settings: Awaited<ReturnType<typeof bootstrapAccountSettingsContext>>['settings'] | null) => void;
 }>) {
-    return async (demand?: Readonly<{ mcpServerCatalog?: boolean; savedSecretReferences?: readonly import('@/settings/secrets/hydrateSavedSecretCatalog').SavedSecretOperationReferenceV1[]; signal?: AbortSignal }>) => runWithServerHttpBaseUrl(input.serverHttpBaseUrl, async () => {
+    let operation: SavedSecretOperationContextV1 | null = null;
+    let disposed = false;
+    const resolveSnapshot = async (demand?: Readonly<{ mcpServerCatalog?: boolean; secretReferenceOverlay?: import('@happier-dev/protocol').SecretReferenceOverlayV1;
+        savedSecretReferences?: readonly import('@/settings/secrets/hydrateSavedSecretCatalog').SavedSecretOperationReferenceV1[]; signal?: AbortSignal }>) => runWithServerHttpBaseUrl(input.serverHttpBaseUrl, async () => {
         demand?.signal?.throwIfAborted();
         const unavailable = () => {
             input.onSettings(null);
             return createProviderErrorV1('provider_authorization_changed', { machineId: input.machineId });
         };
         const credentials = await input.readCredentials();
-        if (!credentials) throw unavailable();
-        const isCurrent = async () => input.isOwnerCurrent()
+        if (!credentials || disposed) { await operation?.isCurrent(); throw unavailable(); }
+        const isCurrent = async () => !disposed && input.isOwnerCurrent()
             && sameStoredCredentials(credentials, await input.readCredentials())
-            && input.isOwnerCurrent();
+            && !disposed && input.isOwnerCurrent();
         const snapshot = await bootstrapAccountSettingsContext({ credentials, mode: 'blocking', publication: 'invocation',
-            honorAccountSettingsModeEnv: false, shouldCommit: input.isOwnerCurrent });
+            honorAccountSettingsModeEnv: false, shouldCommit: () => !disposed && input.isOwnerCurrent() });
         if (!await isCurrent()) throw unavailable();
-        const operation = createInvocationSavedSecretOperationContextV1({ credentials, snapshot,
-            serverHttpBaseUrl: input.serverHttpBaseUrl, isCurrent });
+        if (!operation || operation.readSnapshot() === null || !sameStoredCredentials(operation.credentials, credentials)) {
+            await operation?.isCurrent();
+            operation = createInvocationSavedSecretOperationContextV1({ credentials, snapshot,
+                serverHttpBaseUrl: input.serverHttpBaseUrl, isCurrent });
+        } else if (!await operation.replaceAccountSettings(snapshot)) throw unavailable();
         if (!await operation.isCurrent()) throw unavailable();
-        const catalog = demand?.mcpServerCatalog
-            ? await createCliMcpServerStoreForOperation({ operationContext: operation, signal: demand.signal }).readCatalogForOperation()
-            : undefined;
-        if (demand?.savedSecretReferences?.length && snapshot.scopeKey) {
+        if (demand?.mcpServerCatalog) await createCliMcpServerStoreForOperation({ operationContext: operation, signal: demand.signal }).readCatalogForOperation();
+        if ((demand?.secretReferenceOverlay || demand?.savedSecretReferences?.length) && snapshot.scopeKey) {
             await refreshSavedSecretCatalogForOperation({ expectedScopeKey: snapshot.scopeKey,
-                references: demand.savedSecretReferences, operationContext: operation, signal: demand.signal });
+                secretReferenceOverlay: demand.secretReferenceOverlay, references: demand.savedSecretReferences, operationContext: operation, signal: demand.signal });
         }
         demand?.signal?.throwIfAborted();
         if (!await operation.isCurrent()) throw unavailable();
         const admitted = operation.readSnapshot();
         if (!admitted) throw unavailable();
         input.onSettings(admitted.settings);
-        return catalog ? { ...admitted, mcpServerCatalog: catalog } : admitted;
+        return admitted;
+    });
+    return Object.assign(resolveSnapshot, {
+        readOperationContext: () => operation,
+        refreshDemandedMcpCatalog: async (signal?: AbortSignal) => {
+            const captured = operation;
+            if (captured?.readSnapshot()?.mcpServerCatalog === undefined) return;
+            try {
+                if (!await captured.isCurrent()) throw createProviderErrorV1('provider_authorization_changed', { machineId: input.machineId });
+                await createCliMcpServerStoreForOperation({ operationContext: captured, signal }).readCatalogForOperation();
+            } catch (error) {
+                const current = await captured.isCurrent();
+                if (!current) throw createProviderErrorV1('provider_authorization_changed', { machineId: input.machineId });
+                await captured.commitMcpCatalog(projectMcpServerCatalogRefreshFailure({ error, current, signal }));
+                throw error;
+            }
+        },
+        dispose: async () => { disposed = true; await operation?.isCurrent(); },
     });
 }

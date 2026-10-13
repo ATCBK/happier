@@ -317,9 +317,15 @@ export async function verifyManagedActivityTargetCurrent(input: Readonly<{
   } catch { return false; }
 }
 
-function readSessionIdFromParams(params: unknown): string | null {
+function readSessionIdFromParams(params: unknown, method: string): string | null {
   if (!params || typeof params !== 'object') return null;
-  const sessionId = (params as { sessionId?: unknown }).sessionId;
+  const unscopedMethod = method.slice(method.lastIndexOf(':') + 1);
+  const replay = Reflect.get(params, 'replay');
+  const sessionId = unscopedMethod === RPC_METHODS.SESSION_FORK || unscopedMethod === RPC_METHODS.SESSION_FORK_PROVIDER_SAFE
+    ? Reflect.get(params, 'parentSessionId')
+    : unscopedMethod === RPC_METHODS.SESSION_CONTINUE_WITH_REPLAY
+      ? replay && typeof replay === 'object' ? Reflect.get(replay, 'previousSessionId') : undefined
+      : Reflect.get(params, 'sessionId');
   return typeof sessionId === 'string' && sessionId.trim().length > 0 ? sessionId.trim() : null;
 }
 
@@ -493,7 +499,7 @@ export async function authorizeMachineRpcRequest(request: Readonly<{
     return { ok: true };
   }
 
-  const requestedSessionId = readSessionIdFromParams(request.params);
+  const requestedSessionId = readSessionIdFromParams(request.params, request.method);
   if (
     authorizationMethod === RPC_METHODS.STOP_SESSION
     && !request.authorization

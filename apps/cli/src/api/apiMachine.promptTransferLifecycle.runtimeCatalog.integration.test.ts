@@ -8,6 +8,8 @@ import { describe, expect, it } from 'vitest';
 import type { Machine } from '@/api/types';
 import { createTransferRecipientKeyPair } from '@happier-dev/transfers/node';
 import { RPC_METHODS } from '@happier-dev/protocol/rpc';
+import { accountSettingsParse } from '@happier-dev/protocol';
+import { setActiveAccountSettingsSnapshot } from '@/settings/accountSettings/activeAccountSettingsSnapshot';
 
 import { ApiMachineClient } from './apiMachine';
 
@@ -56,7 +58,7 @@ function createDeferredVoid(): { promise: Promise<void>; resolve: () => void } {
 function getMachineRpcLifecycleRegistration(client: ApiMachineClient): any {
   const registrations = (client as any).rpcLifecycleRegistrations as readonly unknown[] | undefined;
   return registrations?.find((registration: any) => (
-    registration?.promptAssetTransfers || registration?.promptRegistryTransfers
+    registration?.promptAssetTransfers || registration?.registryTransfers
   ));
 }
 
@@ -139,25 +141,20 @@ describe('ApiMachineClient prompt transfer lifecycle', () => {
 
       const lifecycle = getMachineRpcLifecycleRegistration(client);
       expect(lifecycle).toBeTruthy();
-      const store = lifecycle.promptRegistryTransfers.transferSessionStore;
+      const store = lifecycle.registryTransfers.transferSessionStore;
       const rpc = (client as any).rpcHandlerManager as RpcInvoker;
-      const configuredSources = [{
-        id: 'local-skills',
-        adapterId: 'git',
-        title: 'Local skills',
-        enabled: true,
-        config: { repositoryUrl: repo },
-      }];
-      const scan = await rpc.invokeLocal(RPC_METHODS.DAEMON_PROMPT_REGISTRY_SCAN_SOURCE, {
-        sourceId: 'git:local-skills',
-        configuredSources,
+      setActiveAccountSettingsSnapshot({source:'network',settings:accountSettingsParse({}),settingsVersion:1,loadedAtMs:1,settingsSecretsReadKeys:[],
+        promptLibraryCatalog:{status:'ready',rows:[{revision:1,record:{key:'registry-sources',value:{v:2,disabledSourceIds:[],sources:[
+          {id:'local-skills',title:'Local skills',format:'git',kinds:['skill'],url:repo,enabled:true,addedAt:0},
+        ]}}}],diagnostics:[],tombstones:[]}});
+      const scan = await rpc.invokeLocal(RPC_METHODS.DAEMON_REGISTRIES_FETCH, {
+        op:'list',kind:'skill',sourceId: 'local-skills',
       });
-      expect(scan).toMatchObject({ ok: true, items: [expect.objectContaining({ itemId: expect.any(String) })] });
+      expect(scan).toMatchObject({ op:'list',page:{items: [expect.objectContaining({ itemId: expect.any(String) })]} });
       const recipient = createTransferRecipientKeyPair();
-      const download = await rpc.invokeLocal(RPC_METHODS.DAEMON_PROMPT_REGISTRY_DOWNLOAD_INIT, {
-        sourceId: 'git:local-skills',
-        itemId: scan.items[0].itemId,
-        configuredSources,
+      const download = await rpc.invokeLocal(RPC_METHODS.DAEMON_REGISTRIES_DOWNLOAD_INIT, {
+        kind:'skill',sourceId: 'local-skills',
+        itemId: scan.page.items[0].itemId,version:scan.page.items[0].version,
         recipientPublicKeyBase64: recipient.recipientPublicKeyBase64,
       });
       expect(download).toMatchObject({ success: true, downloadId: expect.any(String) });
@@ -174,6 +171,7 @@ describe('ApiMachineClient prompt transfer lifecycle', () => {
     } finally {
       await client.shutdown().catch(() => undefined);
       await rm(repo, { recursive: true, force: true });
+      setActiveAccountSettingsSnapshot(null);
       await rm(happierHomeDir, { recursive: true, force: true });
     }
   });

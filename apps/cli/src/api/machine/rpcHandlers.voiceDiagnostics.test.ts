@@ -1,5 +1,5 @@
 import { createHash } from 'node:crypto';
-import { describe, expect, it, vi } from 'vitest';
+import { describe, expect, it } from 'vitest';
 import { mkdtemp, readFile, readdir, rm, stat, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
@@ -10,10 +10,12 @@ import {
   VoiceSpeechDiagnosticsDeleteAllResponseV1Schema,
   VoiceSpeechDiagnosticsRevokeCaptureResponseV1Schema,
   VoiceSpeechDiagnosticsStatusResponseV1Schema,
+  VoiceSpeechDiagnosticsSettingsV1Schema,
 } from '@happier-dev/protocol';
 import { RPC_METHODS } from '@happier-dev/protocol/rpc';
 import { createTransferRecipientKeyPair, decryptEncryptedTransferChunkEnvelope } from '@happier-dev/transfers/node';
 import { createVoiceDiagnosticsController } from '@/daemon/voiceDiagnostics/controller';
+import { createVoiceDiagnosticStore } from '@/daemon/voiceDiagnostics/store';
 import { RpcHandlerManager } from '../rpc/RpcHandlerManager';
 
 import { registerMachineVoiceDiagnosticsRpcHandlers } from './rpcHandlers.voiceDiagnostics';
@@ -29,8 +31,11 @@ function createDeterministicPcm16(): Buffer {
   return pcm;
 }
 
-function createRealFilesystemRuntime(home: string, logs: string[]) {
-  const diagnostics = createVoiceDiagnosticsController({ happyHomeDir: home });
+function createRealFilesystemRuntime(
+  home: string,
+  logs: string[],
+  diagnostics = createVoiceDiagnosticsController({ happyHomeDir: home }),
+) {
   const rpcHandlerManager = new RpcHandlerManager({
     scopePrefix: TEST_SCOPE,
     encryptionKey: new Uint8Array(32),
@@ -251,44 +256,47 @@ describe('registerMachineVoiceDiagnosticsRpcHandlers', () => {
 
   it('exports only a confirmed committed artifact through the encrypted one-time transfer lifecycle', async () => {
     const root = await mkdtemp(join(tmpdir(), 'voice-diagnostics-rpc-'));
-    const audioPath = join(root, 'artifact.webm');
-    await writeFile(audioPath, 'private-audio');
-    const handlers = new Map<string, (value: unknown) => Promise<any>>();
-    const registration = registerMachineVoiceDiagnosticsRpcHandlers({
-      rpcHandlerManager: { registerHandler: (method: string, handler: any) => handlers.set(method, handler) } as any,
-      diagnostics: {
-        root,
-        configure: vi.fn(), capture: vi.fn(), captureFile: vi.fn(), deleteAll: vi.fn(),
-        status: vi.fn(),
-        resolveArtifactForExport: async (artifactId: string) => artifactId === 'abcdef12-dead-beef' ? ({
-          id: artifactId, createdAtMs: 42, direction: 'stt_input' as const, format: 'webm' as const,
-          durationMs: null, byteLength: 13, audioPath, metadataPath: join(root, 'artifact.json'),
-        }) : null,
-        revokeCaptureAuthorization: vi.fn(),
-      },
+    const diagnostics = createVoiceDiagnosticsController({
+      happyHomeDir: root,
+      createStore: (policy) => createVoiceDiagnosticStore({ happyHomeDir: root, policy, now: () => 42 }),
     });
+    const runtime = createRealFilesystemRuntime(root, [], diagnostics);
     try {
+      await diagnostics.configure(VoiceSpeechDiagnosticsSettingsV1Schema.parse({
+        enabled: true, consentVersion: 1, captureSttInput: true,
+      }));
+      const artifact = await diagnostics.capture({
+        authorizationId: '11111111-1111-4111-8111-111111111111',
+        direction: 'stt_input', format: 'webm', bytes: Buffer.from('private-audio'), durationMs: null,
+        sessionId: 'voice-session', providerId: 'voice-provider', attemptId: 'voice-attempt',
+      });
+      if (!artifact) throw new Error('Expected a committed diagnostics artifact');
       const recipient = createTransferRecipientKeyPair();
-      const initMethod = handlers.get(RPC_METHODS.DAEMON_VOICE_DIAGNOSTICS_ARTIFACT_DOWNLOAD_INIT)!;
+      const initMethod = async (input: unknown) => VoiceSpeechDiagnosticArtifactDownloadInitResponseV1Schema.parse(
+        await runtime.request(RPC_METHODS.DAEMON_VOICE_DIAGNOSTICS_ARTIFACT_DOWNLOAD_INIT, input),
+      );
       expect(await initMethod({
         artifactId: '../../private', intent: 'user_confirmed_export',
         recipientPublicKeyBase64: recipient.recipientPublicKeyBase64,
       })).toMatchObject({ success: false, errorCode: 'invalid_parameters' });
       expect(await initMethod({
-        artifactId: 'abcdef12-dead-beef', recipientPublicKeyBase64: recipient.recipientPublicKeyBase64,
+        artifactId: artifact.id, recipientPublicKeyBase64: recipient.recipientPublicKeyBase64,
       })).toMatchObject({ success: false, errorCode: 'invalid_parameters' });
       expect(await initMethod({
-        artifactId: 'abcdef12-dead-beef', intent: 'user_confirmed_export', recipientPublicKeyBase64: 'a'.repeat(44),
+        artifactId: artifact.id, intent: 'user_confirmed_export', recipientPublicKeyBase64: 'a'.repeat(44),
       })).toMatchObject({ success: false, errorCode: 'invalid_parameters' });
 
       const init = await initMethod({
-        artifactId: 'abcdef12-dead-beef', intent: 'user_confirmed_export',
+        artifactId: artifact.id, intent: 'user_confirmed_export',
         recipientPublicKeyBase64: recipient.recipientPublicKeyBase64,
       });
       expect(init).toMatchObject({ success: true, sizeBytes: 13, name: 'voice-diagnostic-42-stt_input.webm' });
-      const chunk = await handlers.get(RPC_METHODS.DAEMON_VOICE_DIAGNOSTICS_ARTIFACT_DOWNLOAD_CHUNK)!({
+      if (!init.success) throw new Error('Expected diagnostics download admission');
+      const chunk = VoiceSpeechDiagnosticArtifactDownloadChunkResponseV1Schema.parse(await runtime.request(
+        RPC_METHODS.DAEMON_VOICE_DIAGNOSTICS_ARTIFACT_DOWNLOAD_CHUNK, {
         downloadId: init.downloadId, index: 0,
-      });
+      }));
+      if (!chunk.success) throw new Error('Expected diagnostics download chunk');
       expect(Buffer.from(decryptEncryptedTransferChunkEnvelope({
         transferId: init.downloadId,
         sequence: 0,
@@ -296,87 +304,82 @@ describe('registerMachineVoiceDiagnosticsRpcHandlers', () => {
         encryptedDataKeyEnvelopeBase64: chunk.encryptedDataKeyEnvelopeBase64,
         recipientSecretKeySeed: recipient.recipientSecretKeySeed,
       })).toString('utf8')).toBe('private-audio');
-      expect(await handlers.get(RPC_METHODS.DAEMON_VOICE_DIAGNOSTICS_ARTIFACT_DOWNLOAD_FINALIZE)!({
+      expect(await runtime.request(RPC_METHODS.DAEMON_VOICE_DIAGNOSTICS_ARTIFACT_DOWNLOAD_FINALIZE, {
         downloadId: init.downloadId,
       })).toEqual({ success: true });
 
       const second = await initMethod({
-        artifactId: 'abcdef12-dead-beef', intent: 'user_confirmed_export',
+        artifactId: artifact.id, intent: 'user_confirmed_export',
         recipientPublicKeyBase64: recipient.recipientPublicKeyBase64,
       });
-      await handlers.get(RPC_METHODS.DAEMON_VOICE_DIAGNOSTICS_DELETE_ALL)!({});
-      expect(await handlers.get(RPC_METHODS.DAEMON_VOICE_DIAGNOSTICS_ARTIFACT_DOWNLOAD_CHUNK)!({
+      if (!second.success) throw new Error('Expected second diagnostics download admission');
+      await runtime.request(RPC_METHODS.DAEMON_VOICE_DIAGNOSTICS_DELETE_ALL, {});
+      expect(await runtime.request(RPC_METHODS.DAEMON_VOICE_DIAGNOSTICS_ARTIFACT_DOWNLOAD_CHUNK, {
         downloadId: second.downloadId, index: 0,
       })).toMatchObject({ success: false, errorCode: 'transfer_not_found' });
     } finally {
-      await registration.dispose();
+      await runtime.registration.dispose();
       await rm(root, { recursive: true, force: true });
     }
   });
 
   it('validates configuration and exposes status/delete without returning artifact paths', async () => {
-    const handlers = new Map<string, (value: unknown) => Promise<unknown>>();
-    const configure = vi.fn(async () => {});
-    const deleteAll = vi.fn(async () => {});
-    registerMachineVoiceDiagnosticsRpcHandlers({
-      rpcHandlerManager: { registerHandler: (method: string, handler: any) => handlers.set(method, handler) } as any,
-      diagnostics: {
-        root: '/private/voice/diagnostics/v1',
-        configure,
-        status: async () => ({
-          settings: {
-            v: 1 as const, enabled: false, consentVersion: null,
-            captureSttInput: false, captureTtsOutput: false,
-            maxAgeMs: 86_400_000, maxFiles: 20, maxBytes: 104_857_600, maxDurationMs: 300_000,
-          },
-          artifacts: [{
-            id: 'artifact-1', createdAtMs: 1, direction: 'stt_input' as const,
-            format: 'webm' as const, durationMs: null, byteLength: 42,
-          }],
-          health: {
-            captureFailure: false,
-            cleanup: { status: 'healthy' as const, code: null, ownedEntryCount: 2 },
-          },
-          backupPolicy: { status: 'best_effort' as const, storage: 'private_cache' as const, mechanism: 'cachedir_tag' as const, automaticSync: 'not_implemented' as const },
-        }),
-        deleteAll,
-        capture: vi.fn(),
-        captureFile: vi.fn(),
-        resolveArtifactForExport: vi.fn(),
-        revokeCaptureAuthorization: vi.fn(),
-      },
-    });
-
-    const invalid = await handlers.get(RPC_METHODS.DAEMON_VOICE_DIAGNOSTICS_CONFIGURE)?.({ settings: { enabled: true } });
-    expect(invalid).toMatchObject({ ok: false, errorCode: 'invalid_parameters' });
-    expect(configure).not.toHaveBeenCalled();
-
-    const status = await handlers.get(RPC_METHODS.DAEMON_VOICE_DIAGNOSTICS_STATUS)?.({});
-    expect(status).toMatchObject({ ok: true, root: '/private/voice/diagnostics/v1' });
-    expect(JSON.stringify(status)).not.toContain('audioPath');
-
-    await handlers.get(RPC_METHODS.DAEMON_VOICE_DIAGNOSTICS_DELETE_ALL)?.({});
-    expect(deleteAll).toHaveBeenCalledOnce();
+    const home = await mkdtemp(join(tmpdir(), 'voice-diagnostics-config-rpc-'));
+    const runtime = createRealFilesystemRuntime(home, []);
+    try {
+      const settings = VoiceSpeechDiagnosticsSettingsV1Schema.parse({ enabled: true, consentVersion: 1, captureSttInput: true });
+      await runtime.request(RPC_METHODS.DAEMON_VOICE_DIAGNOSTICS_CONFIGURE, { settings });
+      const artifact = await runtime.diagnostics.capture({
+        authorizationId: '11111111-1111-4111-8111-111111111111',
+        direction: 'stt_input', format: 'webm', bytes: Buffer.from('private-audio'), durationMs: null,
+        sessionId: 'voice-session', providerId: 'voice-provider', attemptId: 'voice-attempt',
+      });
+      if (!artifact) throw new Error('Expected a committed diagnostics artifact');
+      const invalid = await runtime.request(RPC_METHODS.DAEMON_VOICE_DIAGNOSTICS_CONFIGURE, { settings: { enabled: true } });
+      expect(invalid).toMatchObject({ ok: false, errorCode: 'invalid_parameters' });
+      const status = VoiceSpeechDiagnosticsStatusResponseV1Schema.parse(await runtime.request(RPC_METHODS.DAEMON_VOICE_DIAGNOSTICS_STATUS, {}));
+      expect(status).toMatchObject({ ok: true, root: runtime.diagnostics.root, settings, artifacts: [{ id: artifact.id }] });
+      expect(JSON.stringify(status)).not.toContain('audioPath');
+      expect(JSON.stringify(status)).not.toContain(artifact.audioPath);
+      expect(await runtime.request(RPC_METHODS.DAEMON_VOICE_DIAGNOSTICS_DELETE_ALL, {})).toEqual({ ok: true });
+      const deleted = VoiceSpeechDiagnosticsStatusResponseV1Schema.parse(await runtime.request(RPC_METHODS.DAEMON_VOICE_DIAGNOSTICS_STATUS, {}));
+      expect(deleted.artifacts).toEqual([]);
+      await expect(readFile(artifact.audioPath)).rejects.toThrow();
+    } finally {
+      await runtime.registration.dispose();
+      await rm(home, { recursive: true, force: true });
+    }
   });
 
   it('normalizes storage failures instead of rejecting the RPC handler', async () => {
-    const handlers = new Map<string, (value: unknown) => Promise<unknown>>();
-    registerMachineVoiceDiagnosticsRpcHandlers({
-      rpcHandlerManager: { registerHandler: (method: string, handler: any) => handlers.set(method, handler) } as any,
-      diagnostics: {
-        root: '/private/voice/diagnostics/v1',
-        configure: async () => { throw new Error('disk unavailable'); },
-        status: async () => { throw new Error('disk unavailable'); },
-        deleteAll: async () => { throw new Error('disk unavailable'); },
-        capture: vi.fn(), captureFile: vi.fn(),
-        resolveArtifactForExport: vi.fn(),
-        revokeCaptureAuthorization: vi.fn(),
-      },
-    });
-
-    await expect(handlers.get(RPC_METHODS.DAEMON_VOICE_DIAGNOSTICS_STATUS)?.({}))
-      .resolves.toMatchObject({ ok: false, errorCode: 'internal_error' });
-    await expect(handlers.get(RPC_METHODS.DAEMON_VOICE_DIAGNOSTICS_DELETE_ALL)?.({}))
-      .resolves.toMatchObject({ ok: false, errorCode: 'internal_error' });
+    const directory = await mkdtemp(join(tmpdir(), 'voice-diagnostics-storage-failure-'));
+    const blockedHome = join(directory, 'blocked-home');
+    // An actual non-directory home reaches the OS ENOTDIR failure on every
+    // platform; the controller's real health projection and RPC redaction run.
+    await writeFile(blockedHome, 'not a directory');
+    const runtime = createRealFilesystemRuntime(blockedHome, []);
+    try {
+      const status = VoiceSpeechDiagnosticsStatusResponseV1Schema.parse(await runtime.request(
+        RPC_METHODS.DAEMON_VOICE_DIAGNOSTICS_STATUS, {},
+      ));
+      expect(status).toMatchObject({
+        ok: true, artifacts: [],
+        health: { cleanup: { status: 'required', code: 'catalog_unreadable', ownedEntryCount: null } },
+      });
+      expect(JSON.stringify(status)).not.toContain('audioPath');
+      expect(JSON.stringify(status)).not.toContain('ENOTDIR');
+      const configured = VoiceSpeechDiagnosticsStatusResponseV1Schema.parse(await runtime.request(
+        RPC_METHODS.DAEMON_VOICE_DIAGNOSTICS_CONFIGURE,
+        { settings: VoiceSpeechDiagnosticsSettingsV1Schema.parse({ enabled: true, consentVersion: 1, captureSttInput: true }) },
+      ));
+      expect(configured.health.cleanup).toMatchObject({ status: 'required', code: 'catalog_unreadable' });
+      const deleted = await runtime.request(RPC_METHODS.DAEMON_VOICE_DIAGNOSTICS_DELETE_ALL, {});
+      expect(deleted).toMatchObject({ ok: false, errorCode: 'internal_error' });
+      expect(JSON.stringify(deleted)).not.toContain(blockedHome);
+      expect(JSON.stringify(deleted)).not.toContain('ENOTDIR');
+    } finally {
+      await runtime.registration.dispose();
+      await rm(directory, { recursive: true, force: true });
+    }
   });
 });

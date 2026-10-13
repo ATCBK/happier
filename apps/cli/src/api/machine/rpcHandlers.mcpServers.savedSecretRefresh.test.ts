@@ -54,7 +54,7 @@ describe('rpcHandlers.mcpServers (saved secret refresh)', () => {
           loadedAtMs: 0,
           whenRefreshed: null,
         }),
-        probeMcpStdioServerTools: async () => [{ name: 'remote_echo' }],
+        probeMcpStdioServerTools: async () => ({ tools: [{ name: 'remote_echo', inputSchema: { type: 'object' } }] }),
       },
     } as any);
 
@@ -116,7 +116,7 @@ describe('rpcHandlers.mcpServers (saved secret refresh)', () => {
       expect(config.env).toMatchObject({
         HAPPIER_MCP_REMOTE_BRIDGE_CONFIG_FILE: expect.any(String),
       });
-      return [{ name: 'remote_echo' }];
+      return { tools: [{ name: 'remote_echo', inputSchema: { type: 'object' } }] };
     });
 
     registerMachineMcpServersRpcHandlers({

@@ -67,7 +67,7 @@ describe('rpcHandlers (direct transfer exports)', () => {
         expect(releaseExportSession).toHaveBeenNthCalledWith(1, 'transfer-release');
     });
 
-    it('delegates prompt asset export prepare through the registered direct transfer export handler', async () => {
+    it('delegates Found skill export prepare through the registered direct transfer export handler', async () => {
         const prepareExportSession = vi.fn(async () => ({
             transferId: 'transfer-1',
             endpointCandidates: [
@@ -100,9 +100,7 @@ describe('rpcHandlers (direct transfer exports)', () => {
 
         await expect(handler({
             t: 'prompt_asset_download_v1',
-            assetTypeId: 'agents.skill',
-            scope: 'user',
-            externalRef: { skillName: 'writer' },
+            path: '/skills/writer',
         })).resolves.toEqual({
             success: true,
             transferId: 'transfer-1',
@@ -117,9 +115,7 @@ describe('rpcHandlers (direct transfer exports)', () => {
         });
         expect(prepareExportSession).toHaveBeenCalledWith({
             t: 'prompt_asset_download_v1',
-            assetTypeId: 'agents.skill',
-            scope: 'user',
-            externalRef: { skillName: 'writer' },
+            path: '/skills/writer',
         });
     });
 
@@ -158,7 +154,8 @@ describe('rpcHandlers (direct transfer exports)', () => {
             t: 'prompt_registry_download_v1',
             sourceId: 'skills_sh:featured',
             itemId: 'skills_sh:featured:item-1',
-            configuredSources: [],
+            version: '1'.repeat(40),
+            kind: 'skill',
         })).resolves.toEqual({
             success: true,
             transferId: 'transfer-2',
@@ -175,7 +172,8 @@ describe('rpcHandlers (direct transfer exports)', () => {
             t: 'prompt_registry_download_v1',
             sourceId: 'skills_sh:featured',
             itemId: 'skills_sh:featured:item-1',
-            configuredSources: [],
+            version: '1'.repeat(40),
+            kind: 'skill',
         });
     });
 

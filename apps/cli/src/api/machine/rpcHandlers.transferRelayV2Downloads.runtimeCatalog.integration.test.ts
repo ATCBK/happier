@@ -10,6 +10,8 @@ import { createTransferRecipientKeyPair, decryptEncryptedTransferChunkEnvelope }
 import { RPC_METHODS } from '@happier-dev/protocol/rpc';
 
 import { registerMachineRpcHandlers } from './rpcHandlers';
+import { accountSettingsParse,RegistrySkillFilesPayloadV1Schema } from '@happier-dev/protocol';
+import { setActiveAccountSettingsSnapshot } from '@/settings/accountSettings/activeAccountSettingsSnapshot';
 
 type Handler = (data: unknown) => Promise<any>;
 
@@ -307,33 +309,27 @@ describe('rpcHandlers relay-v2 download wiring', () => {
                 },
             });
 
-            const scanSource = mgr.handlers.get(RPC_METHODS.DAEMON_PROMPT_REGISTRY_SCAN_SOURCE);
-            const downloadInit = mgr.handlers.get(RPC_METHODS.DAEMON_PROMPT_REGISTRY_DOWNLOAD_INIT);
+            const scanSource = mgr.handlers.get(RPC_METHODS.DAEMON_REGISTRIES_FETCH);
+            const downloadInit = mgr.handlers.get(RPC_METHODS.DAEMON_REGISTRIES_DOWNLOAD_INIT);
             if (!scanSource || !downloadInit) {
                 throw new Error('expected prompt registry handlers');
             }
 
-            const configuredSources = [{
-                id: 'local-skills',
-                adapterId: 'git',
-                title: 'Local skills',
-                enabled: true,
-                config: {
-                    repositoryUrl: repo,
-                },
-            }];
+            setActiveAccountSettingsSnapshot({source:'network',settings:accountSettingsParse({}),settingsVersion:1,loadedAtMs:1,settingsSecretsReadKeys:[],
+              promptLibraryCatalog:{status:'ready',rows:[{revision:1,record:{key:'registry-sources',value:{v:2,disabledSourceIds:[],sources:[
+                {id:'local-skills',title:'Local skills',format:'git',kinds:['skill'],url:repo,enabled:true,addedAt:0},
+              ]}}}],diagnostics:[],tombstones:[]}});
 
             const scan = await scanSource({
-                sourceId: 'git:local-skills',
-                configuredSources,
+                op: 'list',kind:'skill',sourceId: 'local-skills',
             });
-            expect(scan).toMatchObject({ ok: true });
+            expect(scan).toMatchObject({ op:'list',page:{status:{state:'ok'}} });
 
             const recipientKeyPair = createTransferRecipientKeyPair();
             const initResponse = await downloadInit({
-                sourceId: 'git:local-skills',
-                itemId: scan.items[0]?.itemId,
-                configuredSources,
+                kind:'skill',sourceId: 'local-skills',
+                itemId: scan.page.items[0]?.itemId,
+                version: scan.page.items[0]?.version,
                 recipientPublicKeyBase64: recipientKeyPair.recipientPublicKeyBase64,
             });
             expect(initResponse).toMatchObject({ success: true, downloadId: expect.any(String) });
@@ -367,11 +363,7 @@ describe('rpcHandlers relay-v2 download wiring', () => {
                 encryptedDataKeyEnvelopeBase64: chunkEnvelope.encryptedDataKeyEnvelopeBase64,
                 recipientSecretKeySeed: recipientKeyPair.recipientSecretKeySeed,
             }).toString('utf8'));
-            expect(payload).toMatchObject({
-                sourceId: 'git:local-skills',
-                title: 'reviewer',
-                bundleSchemaId: 'skills.skill_md_v1',
-            });
+            expect(RegistrySkillFilesPayloadV1Schema.parse(payload)).toMatchObject([{path:'SKILL.md',contentBase64:Buffer.from('# Reviewer\n').toString('base64')},{path:'notes.txt'}]);
 
             relay.emitFromUser({
                 scopeUserId: 'user-1',
@@ -399,6 +391,7 @@ describe('rpcHandlers relay-v2 download wiring', () => {
                 },
             });
         } finally {
+            setActiveAccountSettingsSnapshot(null);
             rmSync(repo, { recursive: true, force: true });
             rmSync(happierHomeDir, { recursive: true, force: true });
         }

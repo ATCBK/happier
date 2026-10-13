@@ -4,6 +4,8 @@ import { RPC_METHODS } from '@happier-dev/protocol/rpc/methods';
 import { DaemonMcpServersDetectRequestSchema, DaemonMcpServersTestRequestSchema } from '@happier-dev/protocol/mcp/servers/daemonRpcV1';
 import { DaemonMcpServersPreviewRequestSchema } from '@happier-dev/protocol/mcp/servers/previewV1';
 import { listMcpServerCatalogSavedSecretRefsV1 } from '@happier-dev/protocol/mcp/servers/serverRowsV1';
+import { estimateTokensV1 } from '@happier-dev/protocol/capabilities/estimateTokensV1';
+import type { McpServerToolsSnapshotV1 } from '@happier-dev/protocol/mcp/servers/settingsV1';
 import type { DaemonMcpServersPreviewResponse, DaemonMcpServersTestErrorCode, DaemonMcpServersDetectResponse, DaemonMcpServersDetectWarningV1, DaemonMcpServersTestRequest, DaemonMcpServersTestResponse, McpServerRuleV1, McpServersSettingsV1, McpServerMaterializationV1 } from '@happier-dev/protocol';
 
 import type { McpServerConfig } from '@/agent';
@@ -19,11 +21,21 @@ import { createInvocationSavedSecretOperationContextV1, refreshSavedSecretCatalo
 import { resolveAccountSettingsScopeKeyForToken } from '@/settings/accountSettings/accountSettingsScopeKey';
 import { getActiveAccountSettingsSnapshot, getActiveAccountSettingsSnapshotLifetimeToken, type ActiveAccountSettingsSnapshot } from '@/settings/accountSettings/activeAccountSettingsSnapshot';
 import { resolveServerHttpBaseUrl } from '@/api/client/serverHttpBaseUrl';
-import { probeMcpStdioServerTools } from '@/mcp/servers/probeMcpStdioServerTools';
+import { McpServerProbeError, probeMcpStdioServerTools } from '@/mcp/servers/probeMcpStdioServerTools';
+import { createCliMcpServerStoreForOperation } from '@/settings/mcp/mcpServerStore';
 import { redactMcpServerProbeError } from '@/mcp/servers/redactMcpServerProbeError';
 import { detectProviderMcpServers } from '@/mcp/providerDetection/detectProviderMcpServers';
 import { resolveSessionMcpPreview } from '@/mcp/preview/resolveSessionMcpPreview';
+import { createCredentialedAccountArtifactStore } from '@/api/artifacts/accountArtifactStore';
+import { readSkillLibraryInventory } from '@/prompts/skills/library/readSkillLibraryContent';
+import { prepareActivePromptLibraryRecord } from '@/settings/prompts/hydratePromptLibraryCatalog';
+import { acquireAuthoritativePluginRuntimeRegistryLease } from '@/plugins/runtime/reload/runtimeLease';
+import { resolveSessionTransportContext } from '@/session/services/resolveSessionTransportContext';
+import { tryDecryptSessionOwnerMetadataView, readSessionOwnerLocality } from '@/session/transport/encryption/sessionEncryptionContext';
+import { readSessionCapabilitySelectionFromMetadataV1 } from '@happier-dev/protocol/reach/sessionCapabilityMetadataV1';
+import { resolveBackendTargetFromSessionMetadata } from '@/session/backendTargets/resolveBackendTargetFromSessionMetadata';
 import type { RpcHandlerManager } from '../rpc/RpcHandlerManager';
+import type { RpcHandlerContext } from '../rpc/types';
 
 function redactErrorText(raw: unknown): string {
   return redactMcpServerProbeError(raw);
@@ -211,7 +223,10 @@ export function registerMachineMcpServersRpcHandlers(params: Readonly<{
         isCurrent: () => operationContext !== null && operationContext.readSnapshot() === materialSnapshot,
       });
 
-      let mcpConfig: { serverName: string; config: McpServerConfig; cleanup: () => void };
+      let mcpConfig: { serverName: string; config: McpServerConfig; cleanup: () => void;
+        sanitizeDiagnosticText: (value: string) => string;
+        createDiagnosticStreamingSanitizer: Awaited<ReturnType<typeof materializeMcpServerConfigRecord>>['createDiagnosticStreamingSanitizer'];
+      };
       try {
         const materialized = await materializeMcpServerConfigRecord({
           resolved: resolution.resolved,
@@ -229,33 +244,66 @@ export function registerMachineMcpServersRpcHandlers(params: Readonly<{
           materialized.cleanup();
           throw new McpServerCatalogUnavailableError('scope-retired');
         }
-        mcpConfig = { serverName: resolution.serverName, config, cleanup: materialized.cleanup };
+        mcpConfig = { serverName: resolution.serverName, config, cleanup: materialized.cleanup,
+          sanitizeDiagnosticText: materialized.sanitizeDiagnosticText,
+          createDiagnosticStreamingSanitizer: materialized.createDiagnosticStreamingSanitizer };
       } catch (error) {
         const durationMs = Math.max(0, nowMs(params.deps?.nowMs) - startedAt);
         return { ok: false, errorCode: 'materialization_failed', error: redactErrorText(error), durationMs };
       }
 
+      let probeCompleted = false;
       try {
-        const tools = await probeMcpStdioServerToolsImpl({ config: mcpConfig.config, baseEnv: depsEnv });
+        const probe = await probeMcpStdioServerToolsImpl({ config: mcpConfig.config, baseEnv: depsEnv,
+          sanitizeDiagnosticText: mcpConfig.sanitizeDiagnosticText,
+          createDiagnosticStreamingSanitizer: mcpConfig.createDiagnosticStreamingSanitizer });
+        probeCompleted = true;
         if (operationContext && !await operationContext.isCurrent()) throw new McpServerCatalogUnavailableError('scope-retired');
-        const toolNames = tools.map((t) => t.name);
+        const { stderrTail, tools: definitions, ...metadata } = probe;
+        const tools = definitions.map(({ inputSchema, ...tool }) => ({ ...tool,
+          tokens: estimateTokensV1(tool.name + (tool.description ?? '') + JSON.stringify(inputSchema)) }));
+        const toolsSnapshot: McpServerToolsSnapshotV1 = { ...metadata, tools,
+          checkedAt: nowMs(params.deps?.nowMs), machineId: parsed.data.machineId };
+        if (parsed.data.t === 'byId') {
+          const capturedCatalog = accountSettingsContext.mcpServerCatalog;
+          const serverId = parsed.data.serverId;
+          const entry = capturedCatalog?.status === 'ready'
+            ? capturedCatalog.catalog.servers.find(server => server.id === serverId) : undefined;
+          if (!operationContext || !entry || capturedCatalog?.status !== 'ready' || capturedCatalog.revision === 'absent') {
+            return { ok: false, errorCode: 'materialization_failed', error: 'mcp_catalog_unavailable',
+              durationMs: Math.max(0, nowMs(params.deps?.nowMs) - startedAt) };
+          }
+          const updated = await createCliMcpServerStoreForOperation({ operationContext }).mutate({
+            kind: 'server-update', entry: { ...entry, toolsSnapshot },
+          }, capturedCatalog.revision, capturedCatalog);
+          if (updated.status !== 'updated') return { ok: false, errorCode: 'materialization_failed',
+            error: updated.status === 'conflict' ? 'mcp_tools_snapshot_conflict' : 'mcp_tools_snapshot_unavailable',
+            ...(stderrTail ? { stderrTail } : {}), durationMs: Math.max(0, nowMs(params.deps?.nowMs) - startedAt) };
+          if (!await operationContext.isCurrent()) throw new McpServerCatalogUnavailableError('scope-retired');
+        }
+        const toolNames = tools.map((tool) => tool.name);
         const durationMs = Math.max(0, nowMs(params.deps?.nowMs) - startedAt);
         return {
           ok: true,
           toolCount: toolNames.length,
           toolNamesSample: toolNames.slice(0, 20),
+          tools, ...metadata, ...(stderrTail ? { stderrTail } : {}),
           durationMs,
         };
       } catch (error) {
         const durationMs = Math.max(0, nowMs(params.deps?.nowMs) - startedAt);
-        const message = redactErrorText(error);
-        const code =
-          message.includes('mcp_connect_timeout')
-            ? 'mcp_connect_failed'
-            : message.includes('mcp_list_tools_timeout')
-              ? 'mcp_list_tools_failed'
-              : 'mcp_list_tools_failed';
-        return { ok: false, errorCode: code, error: message, durationMs };
+        const message = redactErrorText(mcpConfig.sanitizeDiagnosticText(error instanceof Error ? error.message : String(error)));
+        const cause = error instanceof McpServerProbeError ? error.spawnFailure ?? error.cause : error;
+        const configuredCommand = resolution.resolved.serversByName[resolution.serverName]?.config.stdio?.command;
+        const runtimeMissing = configuredCommand && cause && typeof cause === 'object'
+          && 'code' in cause && cause.code === 'ENOENT' && 'path' in cause && cause.path === configuredCommand
+          ? configuredCommand : undefined;
+        const stderrTail = error instanceof McpServerProbeError ? error.stderrTail : undefined;
+        const code = probeCompleted ? 'materialization_failed'
+          : error instanceof McpServerProbeError ? error.phase === 'connect' ? 'mcp_connect_failed' : 'mcp_list_tools_failed'
+            : message.includes('mcp_connect_timeout') ? 'mcp_connect_failed' : 'mcp_list_tools_failed';
+        return { ok: false, errorCode: code, error: message, durationMs,
+          ...(runtimeMissing ? { runtimeMissing } : {}), ...(stderrTail ? { stderrTail } : {}) };
       } finally {
         mcpConfig.cleanup();
       }
@@ -291,7 +339,8 @@ export function registerMachineMcpServersRpcHandlers(params: Readonly<{
 
   rpcHandlerManager.registerHandler(
     RPC_METHODS.DAEMON_MCP_SERVERS_PREVIEW,
-    async (raw: unknown): Promise<DaemonMcpServersPreviewResponse> => {
+    async (raw: unknown, context?: RpcHandlerContext): Promise<DaemonMcpServersPreviewResponse> => {
+      context?.signal?.throwIfAborted();
       const parsed = DaemonMcpServersPreviewRequestSchema.safeParse(raw);
       if (!parsed.success) {
         return { ok: false, errorCode: 'invalid_request', error: 'invalid_request' };
@@ -308,25 +357,64 @@ export function registerMachineMcpServersRpcHandlers(params: Readonly<{
         });
         const accountMcpSettings = readMcpServersSettingsFromAccountSettings(accountSettingsContext);
         const operationContext = accountSettingsContext.operationContext;
+        let metadata: Record<string, unknown> = {};
+        let sessionRunning = false;
+        let directory = parsed.data.directory ?? null;
+        let agentId = parsed.data.agentId;
+        let capabilitySelection = parsed.data.capabilitySelection ?? (parsed.data.selection ? { mcp: parsed.data.selection } : null);
+        if (parsed.data.sessionId) {
+          const session = await resolveSessionTransportContext({ credentials, idOrPrefix: parsed.data.sessionId, signal: context?.signal });
+          if (!session.ok || session.sessionId !== parsed.data.sessionId) throw new Error('session_unavailable');
+          const opened = tryDecryptSessionOwnerMetadataView({ credentials, accountEncryptionMode: session.accountEncryptionCurrentness.mode,
+            rawSession: session.rawSession });
+          if (!opened || readSessionOwnerLocality({ metadata: opened, rawSession: session.rawSession })?.machineId !== parsed.data.machineId) {
+            throw new Error('session_unavailable');
+          }
+          metadata = opened;
+          directory = typeof opened.path === 'string' ? opened.path : null;
+          const target = resolveBackendTargetFromSessionMetadata(opened);
+          if (target?.kind === 'backend') agentId = target.backendId;
+          sessionRunning = session.rawSession.active === true;
+          capabilitySelection = readSessionCapabilitySelectionFromMetadataV1(opened);
+        }
+        const scopeKey = resolveAccountSettingsScopeKeyForToken(credentials.token);
+        const rules = await prepareActivePromptLibraryRecord({ credentials, scopeKey,
+          lifetimeToken: getActiveAccountSettingsSnapshotLifetimeToken(), key: 'skill-rules', operationContext, signal: context?.signal });
+        if (rules.status !== 'ready' || rules.record.key !== 'skill-rules') throw new Error('skill_rules_unavailable');
+        const artifacts = createCredentialedAccountArtifactStore(credentials);
+        const inventory = await readSkillLibraryInventory(artifacts);
+        const lease = await acquireAuthoritativePluginRuntimeRegistryLease();
+        let mcpPluginItems;
+        try { mcpPluginItems = await lease.registry.projectMcpServerItems?.(accountMcpSettings) ?? []; }
+        finally { await lease.release(); }
         const detected = await detectProviderMcpServersImpl({
-          directory: parsed.data.directory,
+          directory,
           providers: undefined,
           env: depsEnv,
         });
         if (!await operationContext.isCurrent()) throw new McpServerCatalogUnavailableError('scope-retired');
 
-        return await resolveSessionMcpPreview({
+        const preview = await resolveSessionMcpPreview({
           settings: accountMcpSettings,
           machineId: parsed.data.machineId,
-          directory: parsed.data.directory,
-          agentId: parsed.data.agentId,
-          sessionProject: { credentials, metadata: {} },
-          capabilitySelection: parsed.data.capabilitySelection
-            ?? (parsed.data.selection ? { mcp: parsed.data.selection } : null),
+          directory,
+          agentId,
+          ...(parsed.data.projectKey !== undefined ? { projectKey: parsed.data.projectKey } : {}),
+          sessionProject: { credentials, metadata, signal: context?.signal },
+          capabilitySelection,
+          sessionMetadata: metadata, sessionRunning,
+          skillLibrary: { inventory, artifacts, rules: rules.record.value.rules }, mcpPluginItems,
+          assertCurrent: async () => { context?.signal?.throwIfAborted();
+            if (!await operationContext.isCurrent()) throw new McpServerCatalogUnavailableError('scope-retired');
+            context?.signal?.throwIfAborted(); },
           detectedServers: detected.servers,
           detectedWarnings: detected.warnings,
         });
+        if (!await operationContext.isCurrent()) throw new McpServerCatalogUnavailableError('scope-retired');
+        context?.signal?.throwIfAborted();
+        return preview;
       } catch (error) {
+        context?.signal?.throwIfAborted();
         return { ok: false, errorCode: 'internal_error', error: redactErrorText(error) };
       }
     },

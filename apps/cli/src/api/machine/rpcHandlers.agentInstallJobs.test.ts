@@ -7,6 +7,27 @@ import type { RpcHandler, RpcHandlerContext } from '../rpc/types';
 import { createAgentInstallJobOwner } from '@/capabilities/installJobs/agentInstallJobOwner';
 import { registerMachineAgentInstallJobRpcHandlers } from './rpcHandlers.agentInstallJobs';
 
+it('preserves the reviewed version precondition through the real registered START handler', async () => {
+  const handlers = new Map<string, RpcHandler<unknown, unknown>>();
+  const definition = AcpBackendDefinitionV1Schema.parse({ id: 'reviewed-agent', name: 'reviewed-agent', title: 'Reviewed Agent',
+    launch: { kind: 'npm', package: '@fixture/reviewed-agent', version: '2.0.0' }, createdAt: 1, updatedAt: 2 });
+  const owner = createAgentInstallJobOwner({ accountId: 'alice', readTrackedSessions: () => [],
+    readRegistry: () => ({ agents: [{ id: 'custom-acp', pluginId: CUSTOM_ACP_AGENT_CONTRIBUTION_IDENTITY_V1.pluginId,
+      identity: CUSTOM_ACP_AGENT_CONTRIBUTION_IDENTITY_V1 }] }),
+    readAcpCatalog: () => ({ status: 'ready', record: { v: 1, definitions: [definition] }, revision: 2 }) });
+  registerMachineAgentInstallJobRpcHandlers({ owner,
+    rpcHandlerManager: { registerHandler: (method, handler) => { handlers.set(method, handler); } } });
+  const context: RpcHandlerContext = { signal: new AbortController().signal, verifyMachineAdmissionCurrent: async () => true,
+    machineAdmission: { actorAccountId: 'alice', custodianAccountId: 'alice', machineId: 'machine', installationId: 'installation',
+      role: 'manage', encryptionMode: 'plain' } };
+  try {
+    const response = await handlers.get(RPC_METHODS.DAEMON_AGENTS_INSTALL_START)!({ agentId: 'custom-acp',
+      definitionId: definition.id, expectedDefinitionVersion: '1.0.0', intent: 'install', consent: { vendorRecipe: false } }, context);
+    expect(DaemonAgentInstallStartResponseSchema.parse(response)).toMatchObject({ ok: false, errorCode: 'definition_version_changed' });
+    expect(owner.list('alice')).toEqual({ ok: true, jobs: [] });
+  } finally { await owner.shutdown(); }
+});
+
 it('refuses a requester Account definition before resolving the custodian catalog and leaves built-in target admission available', async () => {
   const handlers = new Map<string, RpcHandler<unknown, unknown>>();
   const definition = AcpBackendDefinitionV1Schema.parse({ id: 'private-agent', name: 'private-agent', title: 'Private Agent',

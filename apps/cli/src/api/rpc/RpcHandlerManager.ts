@@ -13,6 +13,7 @@ import type {
     RpcRequest,
     RpcHandlerConfig,
     RpcHandlerActiveExecution,
+    RpcHandlerContext,
 } from './types';
 import { RPC_ADMISSION_PREDICATES, type RpcAdmissionPredicate } from './types';
 import type { Socket } from 'socket.io-client';
@@ -193,12 +194,14 @@ export class RpcHandlerManager {
         const auth = socket.auth;
         if (typeof auth === 'object' && auth.clientType === 'machine-scoped') {
             const method = this.readUnprefixedMethod(prefixedMethod);
+            const sessionAuthorization = resolveSocketRpcSessionAuthorization(method);
             // Keep daemon Action handlers available in-process; only their socket
-            // publication is scoped. Spawn and bulk transfers are Machine-owned.
+            // publication is scoped. The closed map also declares Session writes
+            // carried by the Machine lifecycle, alongside spawn and bulk transfers.
             if (method !== RPC_METHODS.SESSION_SPAWN_NEW
                 && !SessionTransferRpcMethodV1Schema.safeParse(method).success
-                && (isSocketRpcSessionAuthorizationNamespace(method)
-                    || resolveSocketRpcSessionAuthorization(method)?.routeToSessionOwnerDaemon === true)) {
+                && ((isSocketRpcSessionAuthorizationNamespace(method) && !sessionAuthorization)
+                    || sessionAuthorization?.routeToSessionOwnerDaemon === true)) {
                 return false;
             }
         }
@@ -786,6 +789,9 @@ export class RpcHandlerManager {
         signal?: AbortSignal;
         localActionContext?: import('./types').RpcLocalActionContext;
         verifiedPeerAuthority?: 'present_user' | 'account_automation';
+        /** Installed host forwards an already-admitted requester; input never supplies authority. */
+        rpcContext?: Pick<RpcHandlerContext, 'machineAdmission' | 'verifyMachineAdmissionCurrent' | 'callerInputAuthorization'
+            | 'callerAuthority' | 'callerInputConstraints' | 'sessionActionOrigin'>;
     }>): Promise<unknown> {
         const prefixedMethod = this.getPrefixedMethod(method);
         return this.observeRequest(prefixedMethod, undefined, async diagnostic => {
@@ -798,9 +804,17 @@ export class RpcHandlerManager {
             const handlerExecutionId = this.beginHandlerExecution(method);
             try {
                 return await handler(params, Object.freeze({
+                    ...(options?.rpcContext ? {
+                        machineAdmission: options.rpcContext.machineAdmission,
+                        verifyMachineAdmissionCurrent: options.rpcContext.verifyMachineAdmissionCurrent,
+                        callerInputAuthorization: options.rpcContext.callerInputAuthorization,
+                        callerInputConstraints: options.rpcContext.callerInputConstraints,
+                        sessionActionOrigin: options.rpcContext.sessionActionOrigin,
+                    } : {}),
                     signal: options?.signal ?? new AbortController().signal,
                     reportAdmissionDenial: (predicate: RpcAdmissionPredicate) => this.reportAdmissionDenial(diagnostic, predicate),
-                    ...(options?.verifiedPeerAuthority ? { callerAuthority: options.verifiedPeerAuthority } : {}),
+                    ...((options?.rpcContext?.callerAuthority ?? options?.verifiedPeerAuthority)
+                        ? { callerAuthority: options?.rpcContext?.callerAuthority ?? options?.verifiedPeerAuthority } : {}),
                     ...(options?.localActionContext
                         ? { localActionContext: options.localActionContext }
                         : {}),

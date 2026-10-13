@@ -78,16 +78,17 @@ import {
   type SessionHandoffDirectPeerTransferHandle,
 } from './sessionHandoff/handlers';
 import { registerMachinePromptAssetsRpcHandlers } from './rpcHandlers.promptAssets';
+import { registerMachineSkillsRpcHandlers } from './rpcHandlers.skills';
 import {
   registerMachinePromptAssetTransferRpcHandlers,
   type MachinePromptAssetTransferRpcRegistration,
 } from './rpcHandlers.promptAssetTransfers';
-import { registerMachineMarketplaceSourcesRpcHandlers } from './rpcHandlers.marketplaceSources';
-import { registerMachinePromptRegistriesRpcHandlers } from './rpcHandlers.promptRegistries';
+import { registerMachinePluginInstallDecisionRpcHandlers } from './rpcHandlers.pluginInstallDecision';
+import { registerMachineRegistriesRpcHandlers } from './rpcHandlers.registries';
 import {
-  registerMachinePromptRegistryTransferRpcHandlers,
-  type MachinePromptRegistryTransferRpcRegistration,
-} from './rpcHandlers.promptRegistryTransfers';
+  registerMachineRegistryTransferRpcHandlers,
+  type MachineRegistryTransferRpcRegistration,
+} from './rpcHandlers.registryTransfers';
 import { registerPetRpcHandlers } from '@/pets/rpc/registerPetRpcHandlers';
 import { registerMachineDirectTransferImportRpcHandlers } from './rpcHandlers.directTransferImports';
 import {
@@ -178,7 +179,7 @@ import { SessionRunnerStatusGetRequestV1Schema } from '@happier-dev/protocol/ses
 import { SessionConnectedServiceAuthSwitchRpcParamsSchema } from '@happier-dev/protocol/connect/sessionConnectedServiceAuthSwitch';
 import { createPromptAssetAdapterRegistry } from '@/prompts/assets/createPromptAssetAdapterRegistry';
 import { pluginReloadController } from '@/plugins/runtime/reload/singleton';
-import { createPromptRegistryAdapterRegistry } from '@/prompts/registries/createPromptRegistryAdapterRegistry';
+import { createCliRegistryHostV1 } from '@/registries/createCliRegistryHost';
 import {
   createExternalSessionOperationExclusion,
   type ExternalSessionOperationExclusionOwner,
@@ -285,7 +286,7 @@ export type MachineRpcHandlers = {
     ) => Promise<void | Readonly<{ aborted: boolean }>>;
   }>;
   directTransferExport?: Readonly<{
-    prepareExportSession: (input: DirectTransferExportPrepareRequest, filesystemScope?: PreparedFilesystemTransferScope) => Promise<Readonly<{
+    prepareExportSession: (input: DirectTransferExportPrepareRequest, filesystemScope?: PreparedFilesystemTransferScope, context?: RpcHandlerContext) => Promise<Readonly<{
       transferId: string;
       endpointCandidates: readonly TransferEndpointCandidate[];
       expiresAt: number;
@@ -361,10 +362,14 @@ export type MachineRpcHandlerDeps = Readonly<{
   activateCapabilitiesPurposeBindings?: NonNullable<
     Parameters<typeof registerCapabilitiesHandlers>[1]
   >['activatePurposeBindings'];
+  observeCapabilitiesCliSnapshot?: NonNullable<
+    Parameters<typeof registerCapabilitiesHandlers>[1]
+  >['observeCliSnapshot'];
   runReplaySummaryForDialog?: typeof runReplaySummaryForDialog;
   resolveExecutionSurfaces?: SessionLifecycleMachineDeps['resolveExecutionSurfaces'];
   awaitAgentSessionOpen?: SessionLifecycleMachineDeps['awaitAgentSessionOpen'];
   promptAssetsHomedir?: () => string;
+  createRegistryHost?: (signal?:AbortSignal,context?:RpcHandlerContext)=>ReturnType<typeof createCliRegistryHostV1>;
   promptAssetsHappierHomeDir?: () => string;
   workingDirectory?: string;
   filesystemAccessPolicy?: FilesystemAccessPolicy;
@@ -466,7 +471,7 @@ export type MachineRpcLifecycleRegistration = Readonly<{
   }>[];
   transferRelayV2DownloadOwners: readonly TransferRelayV2DownloadSessionOwner[];
   promptAssetTransfers: MachinePromptAssetTransferRpcRegistration;
-  promptRegistryTransfers: MachinePromptRegistryTransferRpcRegistration;
+  registryTransfers: MachineRegistryTransferRpcRegistration;
   voiceInference?: MachineVoiceInferenceRpcRegistration;
   voiceSpeech: MachineVoiceSpeechRpcRegistration;
   voiceClientCredentials: MachineVoiceClientCredentialRpcRegistration;
@@ -587,6 +592,9 @@ function registerMachineRpcHandlersOnce(params: Readonly<{
   // the incumbent execution-run bridge/action family with its nullable scope;
   // no Admin target picker, Session projection, or parallel daemon registry.
   registerCapabilitiesHandlers(rpcHandlerManager, {
+    ...(params.deps?.observeCapabilitiesCliSnapshot
+      ? { observeCliSnapshot: params.deps.observeCapabilitiesCliSnapshot }
+      : {}),
     hasSessionAgentTransition: () => rpcHandlerManager.hasHandler(RPC_METHODS.SESSION_AGENT_TRANSITION),
     ...(params.deps?.createCapabilitiesApiClient
       ? { createApiClient: params.deps.createCapabilitiesApiClient }
@@ -779,37 +787,27 @@ function registerMachineRpcHandlersOnce(params: Readonly<{
       pluginReloadController.getState().activeRegistry?.promptAssetAdapters ?? new Map()
     ),
   });
-  const promptRegistryAdapterRegistry = createPromptRegistryAdapterRegistry();
   registerMachinePromptAssetsRpcHandlers({
     rpcHandlerManager,
     adapterRegistry: promptAssetAdapterRegistry,
+    ...(externalAction ? { actionExecutor: externalAction.executor } : {}),
+  });
+  registerMachineSkillsRpcHandlers({ rpcHandlerManager,
+    ...(externalAction ? { actionExecutor: externalAction.executor } : {}),
   });
   const promptAssetTransfers = registerMachinePromptAssetTransferRpcHandlers({
     rpcHandlerManager,
     adapterRegistry: promptAssetAdapterRegistry,
   });
-  registerMachinePromptRegistriesRpcHandlers({
-    rpcHandlerManager,
-    registry: promptRegistryAdapterRegistry,
-    assetRegistry: promptAssetAdapterRegistry,
-    deps: {
-      homedir: params.deps?.promptAssetsHomedir,
-      happierHomeDir: params.deps?.promptAssetsHappierHomeDir,
-    },
-  });
-  registerMachineMarketplaceSourcesRpcHandlers({
-    rpcHandlerManager,
-    deps: {
-      happyHomeDir: params.deps?.promptAssetsHappierHomeDir?.(),
-    },
-  });
+  registerMachineRegistriesRpcHandlers({rpcHandlerManager,createHost:params.deps?.createRegistryHost});
+  registerMachinePluginInstallDecisionRpcHandlers({ rpcHandlerManager });
   registerPetRpcHandlers({
     rpcHandlerManager,
     createAccountPet: params.deps?.createAccountPet,
   });
-  const promptRegistryTransfers = registerMachinePromptRegistryTransferRpcHandlers({
+  const registryTransfers = registerMachineRegistryTransferRpcHandlers({
     rpcHandlerManager,
-    registry: promptRegistryAdapterRegistry,
+    createHost: params.deps?.createRegistryHost,
   });
   const transferRelayV2DownloadOwners: readonly TransferRelayV2DownloadSessionOwner[] = [
     ...(params.deps?.extraTransferRelayV2DownloadOwners ?? []),
@@ -821,9 +819,9 @@ function registerMachineRpcHandlersOnce(params: Readonly<{
       }),
     },
     {
-      store: promptRegistryTransfers.downloadStore,
+      store: registryTransfers.downloadStore,
       lifecycle: createTransferSessionLifecycle({
-        store: promptRegistryTransfers.downloadStore,
+        store: registryTransfers.downloadStore,
         chunkSizeBytes: configuration.filesTransferChunkBytes,
       }),
     },
@@ -1166,7 +1164,7 @@ function registerMachineRpcHandlersOnce(params: Readonly<{
       : [],
     transferRelayV2DownloadOwners,
     promptAssetTransfers,
-    promptRegistryTransfers,
+    registryTransfers,
     voiceSpeech: voiceSpeechRegistration,
     voiceClientCredentials: voiceClientCredentialRegistration,
     voiceClientMediatedCredentials: voiceClientMediatedCredentialRegistration,
@@ -1186,7 +1184,7 @@ function registerMachineRpcHandlersOnce(params: Readonly<{
         Promise.resolve(terminalRegistration.dispose()),
         Promise.resolve(externalSessionsRegistration.dispose()),
         promptAssetTransfers.dispose(),
-        promptRegistryTransfers.dispose(),
+        registryTransfers.dispose(),
         voiceSpeechRegistration.dispose(),
         voiceClientCredentialRegistration.dispose(),
         voiceClientMediatedCredentialRegistration.dispose(),

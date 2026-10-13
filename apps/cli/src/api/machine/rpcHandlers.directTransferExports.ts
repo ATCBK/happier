@@ -1,25 +1,24 @@
 import { ComposerContentHandleV1Schema, MAX_COMPOSER_CONTENT_INSPECT_BYTES_V1 } from '@happier-dev/protocol/runtime/input/composerContentV1';
-import { PromptAssetExternalRefV1Schema } from '@happier-dev/protocol/prompts/library/promptAssetsV1';
-import { PromptAssetScopeV1Schema } from '@happier-dev/protocol/prompts/library/promptAssetDescriptorsV1';
-import { PromptRegistryConfiguredSourceV1Schema } from '@happier-dev/protocol/prompts/library/promptRegistriesV1';
+import { FoundSkillDownloadRequestV1Schema, type FoundSkillDownloadRequestV1 } from '@happier-dev/protocol/prompts/library/skills/foundSkillTransferV1';
+import type { RegistryDownloadRequestV1 } from '@happier-dev/protocol/registries';
 import { WorkspaceSyncSeedExportPrepareV1Schema, WorkspaceSyncTargetConflictStageV1Schema, type WorkspaceSyncSeedExportPrepareV1 } from '@happier-dev/protocol/sessions/control/handoff/workspaceSyncSchemas';
-import type { ComposerContentHandleV1, PromptAssetReadRequest, PromptRegistryFetchItemRequestV1, TransferEndpointCandidate, WorkspaceSyncTargetConflictStageV1 } from '@happier-dev/protocol';
+import type { ComposerContentHandleV1, TransferEndpointCandidate, WorkspaceSyncTargetConflictStageV1 } from '@happier-dev/protocol';
 import { RPC_METHODS } from '@happier-dev/protocol/rpc/methods';
 import { z } from 'zod';
 
 import { asHostProtocolZod } from '@/plugins/runtime/protocolComposableZodAdapter';
 
-import type { RpcHandlerRegistrar } from '../rpc/types';
+import type { RpcHandlerRegistrar, RpcHandlerContext } from '../rpc/types';
 import type { PreparedFilesystemTransferScope } from '@/machines/transfer/preparedFilesystemTransferScope';
 import type { DaemonAdmissionDrain } from '@/daemon/lifecycle/admissionDrain';
 
 export type DirectTransferExportPrepareRequest =
     | Readonly<{
         t: 'prompt_asset_download_v1';
-    } & PromptAssetReadRequest>
+    } & FoundSkillDownloadRequestV1>
     | Readonly<{
         t: 'prompt_registry_download_v1';
-    } & PromptRegistryFetchItemRequestV1>
+    } & RegistryDownloadRequestV1>
     | Readonly<{
         t: 'workspace_file_download_v1';
         workingDirectory: string;
@@ -37,18 +36,13 @@ export type DirectTransferExportPrepareRequest =
     }>;
 
 const DirectTransferExportPrepareRequestSchema = z.union([
-    z.object({
-        t: z.literal('prompt_asset_download_v1'),
-        assetTypeId: z.string().min(1),
-        scope: asHostProtocolZod(PromptAssetScopeV1Schema),
-        directory: z.string().min(1).nullable().optional(),
-        externalRef: asHostProtocolZod(PromptAssetExternalRefV1Schema),
-    }).strict(),
+    asHostProtocolZod(FoundSkillDownloadRequestV1Schema.extend({ t: z.literal('prompt_asset_download_v1') }).strict()),
     z.object({
         t: z.literal('prompt_registry_download_v1'),
         sourceId: z.string().min(1),
-        itemId: z.string().min(1),
-        configuredSources: z.array(asHostProtocolZod(PromptRegistryConfiguredSourceV1Schema)).default([]),
+        kind: z.literal('skill'),
+        itemId: z.string(),
+        version: z.string().min(1),
     }).strict(),
     z.object({
         t: z.literal('workspace_file_download_v1'),
@@ -95,7 +89,7 @@ type DirectTransferExportPrepareResponse = Readonly<
 export function registerMachineDirectTransferExportRpcHandlers(params: Readonly<{
     admissionDrain?: Pick<DaemonAdmissionDrain, 'isQuiescing' | 'isFinalShutdown'>;
     rpcHandlerManager: RpcHandlerRegistrar;
-    prepareExportSession: (input: DirectTransferExportPrepareRequest, filesystemScope?: PreparedFilesystemTransferScope) => Promise<Readonly<{
+    prepareExportSession: (input: DirectTransferExportPrepareRequest, filesystemScope?: PreparedFilesystemTransferScope, context?: RpcHandlerContext) => Promise<Readonly<{
         transferId: string;
         expiresAt: number;
         endpointCandidates: readonly TransferEndpointCandidate[];
@@ -120,7 +114,9 @@ export function registerMachineDirectTransferExportRpcHandlers(params: Readonly<
         }
 
         try {
-            const prepared = await params.prepareExportSession(request);
+            const prepared = context
+                ? await params.prepareExportSession(request, undefined, context)
+                : await params.prepareExportSession(request);
             return {
                 success: true,
                 ...prepared,
@@ -129,7 +125,7 @@ export function registerMachineDirectTransferExportRpcHandlers(params: Readonly<
             return {
                 success: false,
                 error: error instanceof Error ? error.message : 'Direct transfer export prepare failed',
-                ...(request.t === 'workspace_sync_resolution_v1'
+                ...((request.t === 'workspace_sync_resolution_v1' || request.t === 'prompt_asset_download_v1')
                     && error && typeof error === 'object' && 'code' in error && typeof error.code === 'string'
                     ? { code: error.code }
                     : {}),

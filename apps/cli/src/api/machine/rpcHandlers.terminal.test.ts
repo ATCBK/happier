@@ -803,6 +803,7 @@ describe('registerMachineTerminalRpcHandlers', () => {
     try {
       await expect(h.invoke()).resolves.toMatchObject({ ok: false, errorCode: 'terminal_invalid_request', error: 'approvals_not_supported' });
       expect(h.provider.spawned).toHaveLength(0);
+      expect(h.runtime.workerAdmission.dependencies()).toEqual([]);
     } finally { await h.dispose(); }
   });
   it('refuses package-script execution without authenticated finite Project admission', async () => {

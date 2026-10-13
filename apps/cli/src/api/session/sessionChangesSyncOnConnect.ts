@@ -6,6 +6,7 @@ import { handleRequestAuthenticationFailure } from '@/api/connection/requestSupe
 import { readKnownPendingQueueState, readPendingExecutionRunIds, type KnownPendingQueueState } from './pendingQueueState';
 import type { SessionSnapshotRefreshReason } from './sessionSnapshotRefreshReason';
 import { readAccountSettingsVersionFromHint } from '@/settings/accountSettings/accountSettingsVersion';
+import { MCP_SERVER_CATALOG_ACCOUNT_KEY_V1 } from '@happier-dev/protocol/mcp/servers/serverRowsV1';
 import {
     publishPluginAccountSettingsWatchInvalidation,
     readPluginAccountSettingsWatchInvalidations,
@@ -43,12 +44,17 @@ export async function runSessionChangesSyncOnConnect(params: {
     applyPendingQueueState?: ((state: KnownPendingQueueState) => void) | null;
     reconcilePendingExecutionRunTarget?: ((runId: string) => Promise<void>) | null;
     refreshAccountSettingsForMinimumVersion?: (settingsVersion: number | null) => Promise<void>;
+    refreshDemandedMcpCatalog?: () => Promise<void>;
     connectionSupervisor?: ManagedConnectionSupervisor | null;
     onDebug: (message: string, data?: unknown) => void;
 }): Promise<void> {
     const requestSupervisionScope = params.connectionSupervisor?.captureProbeReportScope?.();
     const accountId = await params.getAccountId();
     if (!accountId) return;
+    const refreshDemandedMcpCatalog = async () => {
+        try { await params.refreshDemandedMcpCatalog?.(); }
+        catch { params.onDebug('[API] Demanded MCP catalog refresh unavailable'); }
+    };
 
     const CHANGES_PAGE_LIMIT = 200;
     const after = await params.readChangesCursor(accountId);
@@ -68,6 +74,7 @@ export async function runSessionChangesSyncOnConnect(params: {
             }
         }
         await params.refreshAccountSettingsForMinimumVersion?.(null);
+        await refreshDemandedMcpCatalog();
         publishPluginAccountSettingsWatchInvalidation({ kind: 'full' });
         const snapshotSucceeded = await params.syncSessionSnapshotFromServer({ reason: snapshotReasonForChangesFallback(params.reason) });
         if (transcriptCatchUpSucceeded && snapshotSucceeded) {
@@ -96,6 +103,7 @@ export async function runSessionChangesSyncOnConnect(params: {
                 reportReconnectCatchUpFailure(params, error);
             }
             await params.refreshAccountSettingsForMinimumVersion?.(null);
+            await refreshDemandedMcpCatalog();
             await params.syncSessionSnapshotFromServer({ reason: snapshotReasonForChangesFallback(params.reason) });
         }
         return;
@@ -117,6 +125,10 @@ export async function runSessionChangesSyncOnConnect(params: {
         await params.refreshAccountSettingsForMinimumVersion?.(highestAccountSettingsVersion);
     } else if (params.reason === 'reconnect' || changes.length >= CHANGES_PAGE_LIMIT) {
         await params.refreshAccountSettingsForMinimumVersion?.(null);
+    }
+    if (params.reason === 'reconnect' || highestAccountSettingsVersion !== null || changes.length >= CHANGES_PAGE_LIMIT
+        || changes.some(change => change.kind === 'account' && change.entityId === MCP_SERVER_CATALOG_ACCOUNT_KEY_V1)) {
+        await refreshDemandedMcpCatalog();
     }
     if (changes.length >= CHANGES_PAGE_LIMIT) {
         publishPluginAccountSettingsWatchInvalidation({ kind: 'full' });

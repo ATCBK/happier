@@ -34,6 +34,8 @@ import { resolveAccountSettingsScopeKey } from '@/settings/accountSettings/accou
 import { resetActiveAccountSettingsSnapshotForTests, setActiveAccountSettingsSnapshot } from '@/settings/accountSettings/activeAccountSettingsSnapshot';
 import { createCanonicalJsonSigningInput } from '@happier-dev/protocol/crypto/canonicalJson';
 import { QualifiedConnectedServiceUsageSourceV4Schema } from '@happier-dev/protocol/connect/qualifiedConnectedAccountsV4';
+import { ConnectedServiceQuotaGetResultV1Schema, QualifiedProviderAccountUsageHistoryRequestV4Schema } from '@happier-dev/protocol/connect/providerAccountUsageHistory';
+import { createCliConnectedServiceAction } from '@/session/actions/connectedServiceActionDeps';
 
 const socketBoundary = vi.hoisted(() => vi.fn());
 vi.mock('socket.io-client', () => ({ io: socketBoundary }));
@@ -85,7 +87,7 @@ describe('CLI and MCP personal usage Account transport', () => {
     app.get('/v1/account/encryption/currentness', async () => ({ mode, version: 1, signingKeyFingerprint: null,
       contentKeyFingerprint: null, updatedAt: 1 }));
     app.get('/v2/account/settings', async () => ({ content: { t: 'plain', v: {} }, version: 1 }));
-    app.get('/v1/profile', async () => ({ id: 'account', connectedAccountsV4: [], connectedAccountGroupsV4: [] }));
+    app.get('/v1/account/profile', async () => ({ id: 'account', connectedAccountsV4: [], connectedAccountGroupsV4: [] }));
     let revision = 40;
     let catalog: McpServerCatalogV1 = { v: 1, servers: [{ id: 'docs', name: 'docs', transport: 'stdio', stdio: { command: 'docs', args: [] },
         env: {}, createdAt: 1, updatedAt: 10 }], bindings: [{ id: 'docs-binding', serverId: 'docs', enabled: true,
@@ -212,10 +214,17 @@ describe('CLI and MCP personal usage Account transport', () => {
     let denied = false;
     let includeUnavailableAccount = false;
     let quotaUnavailable = false;
+    let pagedHistory = true;
+    const cursor = { id: 'history', observedAtMs: 150 };
+    const historyRequest = { range: { startAtMs: 100, endAtMs: 200 }, pageSize: 100 };
+    let releaseContinuation!: () => void;
+    const heldContinuation = new Promise<void>(resolve => { releaseContinuation = resolve; });
+    let enteredContinuation!: () => void;
+    const continuationEntered = new Promise<void>(resolve => { enteredContinuation = resolve; });
     const unavailableSource = { ...source, ref: { ...source.ref, accountId: 'unavailable' } };
     app.addHook('preHandler', async request => { expect(request.headers.authorization).toBe('Bearer owner-token'); });
     app.post('/v2/usage/query', async () => native);
-    app.get('/v1/profile', async (_request, reply) => denied ? reply.code(403).send({ error: 'denied' }) : ({ id: 'account', connectedAccountsV4: [{
+    app.get('/v1/account/profile', async (_request, reply) => denied ? reply.code(403).send({ error: 'denied' }) : ({ id: 'account', connectedAccountsV4: [{
       ref: source.ref, status: 'connected', authenticationModeId: null, revisionSemantics: 'revisioned',
       credentialRevision: 'csr_abcdefghijklmnopqrstuvwxyz', configurationReady: true, configurationRevision: '1', scopes: [],
     }, ...(includeUnavailableAccount ? [{ ref: unavailableSource.ref, status: 'connected', authenticationModeId: null,
@@ -241,13 +250,30 @@ describe('CLI and MCP personal usage Account transport', () => {
     });
     const record = { content: { t: 'plain', v: snapshot }, metadata: { fetchedAt: 150, staleAfterMs: 1000, status: 'ok' }, sources: [source] };
     app.get('/v4/connect/qualified/provider-account-usage/record', async () => record);
-    app.get('/v4/connect/qualified/provider-account-usage/history', async () => ({ entries: [{ id: 'history', observedAtMs: 150, record }], nextCursor: null }));
+    app.get('/v4/connect/qualified/provider-account-usage/history', async request => {
+      const requested = QualifiedProviderAccountUsageHistoryRequestV4Schema.parse(JSON.parse(z.object({ query: z.string() }).parse(request.query).query));
+      if (!('history' in requested)) throw new Error('Expected a range history read');
+      if (requested.history.cursor) {
+        expect(requested).toEqual({ recordId: snapshot.recordId, history: { ...historyRequest, cursor } });
+        enteredContinuation();
+        await heldContinuation;
+        return { entries: [{ id: 'next-history', observedAtMs: 175, record: { ...record,
+          metadata: { ...record.metadata, fetchedAt: 175 },
+          content: { t: 'plain', v: { ...snapshot, observedAtMs: 175, fetchedAtMs: 175 } } } }], nextCursor: null };
+      }
+      expect(requested).toEqual({ recordId: snapshot.recordId, history: historyRequest });
+      return { entries: [{ id: 'history', observedAtMs: 150, record }], nextCursor: pagedHistory ? cursor : null };
+    });
     app.post('/v2/pending/reset-starts/read', async () => ({ entries: [] }));
     cleanup = installAxiosFastifyAdapter({ app, origin: 'http://usage.test' });
     const credentials = { token: 'owner-token', encryption: null };
     const executor = createActionExecutor({ ...createAccountServerActionDeps({ token: credentials.token, credentials,
       serverId: 'home', serverHttpBaseUrl: 'http://usage.test' }),
       settingsDeclarationAction: createCliSettingsDeclarationAction({ credentials, serverHttpBaseUrl: 'http://usage.test' }),
+      connectedServiceAction: createCliConnectedServiceAction({ credentials, serverId: 'home', serverHttpBaseUrl: 'http://usage.test',
+        resolveHeaders: () => ({ Authorization: 'Bearer owner-token' }),
+        callMachineAction: async () => { throw new Error('Quota reads have no Machine effect'); },
+      }),
       isActionApprovalRequired: () => false,
     } as ActionExecutorDeps);
     const read = async () => {
@@ -255,6 +281,32 @@ describe('CLI and MCP personal usage Account transport', () => {
       expect(result.ok).toBe(true);
       return UsageQueryBatchResultSchema.parse(result.ok ? result.result : undefined).results[0]!;
     };
+    const snapshotRead = read();
+    try {
+      const first = await Promise.race([
+        snapshotRead.then(slice => ({ kind: 'snapshot' as const, slice })),
+        continuationEntered.then(() => ({ kind: 'continuation_before_snapshot' as const })),
+      ]);
+      expect(first.kind).toBe('snapshot');
+      if (first.kind !== 'snapshot') throw new Error('Usage withheld its current snapshot behind historical continuation');
+      expect(first.slice.pending).toBe(false);
+      expect(first.slice.quota).toMatchObject([{ source, current: snapshot,
+        history: { entries: [{ id: 'history' }], nextCursor: cursor }, unusedCapacity: { historyStatus: 'partial' }, targets }]);
+      expect(first.slice.sources).toEqual(expect.arrayContaining([
+        expect.objectContaining({ source: 'quota', status: 'partial' }),
+        expect.objectContaining({ source: `quota:${createCanonicalJsonSigningInput(source)}`, status: 'partial' }),
+      ]));
+      const quota = first.slice.quota![0]!;
+      const continuation = executor.execute('connectedServices.quota.get', { source: quota.source,
+        history: { ...historyRequest, cursor: quota.history!.nextCursor! } }, { surface: 'cli', serverId: 'home' });
+      await continuationEntered;
+      releaseContinuation();
+      const next = await continuation;
+      expect(next.ok, JSON.stringify(next)).toBe(true);
+      expect(ConnectedServiceQuotaGetResultV1Schema.parse(next.ok ? next.result : undefined)).toMatchObject({ source,
+        current: snapshot, history: { entries: [{ id: 'next-history', snapshot: { observedAtMs: 175 } }], nextCursor: null },
+        unusedCapacity: { historyStatus: 'returned_page' }, targets });
+    } finally { releaseContinuation(); await snapshotRead; pagedHistory = false; }
     const slice = await read();
     expect(slice.pending).toBe(false);
     expect(slice.quota).toMatchObject([{ current: snapshot, history: { entries: [{ id: 'history' }], nextCursor: null }, targets }]);

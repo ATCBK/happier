@@ -5,6 +5,7 @@ import type { SocketRpcRequestPayload as ProtocolSocketRpcRequestPayload } from 
 import { ACCEPTED_PENDING_SETTLEMENT_EVENT_V1 } from '@happier-dev/protocol/sessions/pending/acceptedPendingSettlementV1';
 import { StoredMachinePublishedMetadataV1Schema, MachinePublishedDaemonStateV1Schema, MachinePublishedTransferListenerV1Schema, MachinePublishedTransferRuntimeV1Schema } from '@happier-dev/protocol/machines/machinePublishedContentV1';
 import { CallerInputConstraintsV1Schema } from '@happier-dev/protocol/auth/callerInputConstraintsV1';
+import type { SessionCapabilityMetadataV1 } from '@happier-dev/protocol/reach/sessionCapabilityMetadataV1';
 import { SESSION_PENDING_ADMISSION_SETTLEMENT_EVENT_V1 } from '@happier-dev/protocol/sessions/messages/sessionPendingAdmissionSettlementV1';
 import { SESSION_PENDING_EXECUTION_RUN_MATERIALIZE_NEXT_EVENT_V2, SESSION_PENDING_EXECUTION_RUN_ACCEPTED_EVENT_V2, SESSION_PENDING_EXECUTION_RUN_BLOCK_EVENT_V2 } from '@happier-dev/protocol/sessions/messages/sessionPendingExecutionRunMachineAdmissionV2';
 import { SentFromSchema } from '@happier-dev/protocol/sentFrom';
@@ -589,7 +590,7 @@ export type SessionHandoffMetadataV1 = {
  */
 export type SessionOptionOverrideRuleV1 = AgentModelOptionOverrideRule;
 
-export type Metadata = Readonly<Partial<RuntimeDescriptorMetadataCarrier>> & Readonly<SessionIdentityAdditions> & {
+export type Metadata = Readonly<Partial<RuntimeDescriptorMetadataCarrier>> & Readonly<SessionIdentityAdditions> & SessionCapabilityMetadataV1 & {
   path: string,
   host: string,
   version?: string,
@@ -910,6 +911,8 @@ export type AgentState = {
           kind?: 'permission' | 'user_action' | string,
           arguments: any,
           createdAt: number
+          /** Host-resolved MCP identity and current policy for approval presentation. */
+          mcpTool?: import('@happier-dev/protocol/mcp/servers/tools/mcpToolIdentityV1').ResolvedMcpToolIdentityV1
           /** Exact host-stamped parent turn that owns this request. */
           turnId?: string
           /**

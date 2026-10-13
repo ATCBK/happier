@@ -504,7 +504,11 @@ export async function prepareExternalActionRequesterAccountAuthorization(input: 
       : SessionActionRpcOriginV1Schema.parse(input.sessionActionOrigin);
     if (sessionActionOrigin && sessionActionOrigin.requestId !== input.requestId) return null;
     if (sessionActionOrigin && !input.sourceMachineId?.trim()) return null;
-    const provenance = readAuthTokenProvenance(decodeJwtPayload(input.token), { allowLegacyHome: false });
+    // Installed Session proposals still use released paired Home credentials.
+    // This is only an associated-data candidate: Home verifies the credential,
+    // current Session and installation proof before issuing any authorization.
+    // Original headless requests retain their structured-provenance requirement.
+    const provenance = readAuthTokenProvenance(decodeJwtPayload(input.token), { allowLegacyHome: sessionActionOrigin !== undefined });
     if (provenance?.provenance.kind === 'account' && provenance.provenance.authority === 'present_user') authenticationKind = 'account';
     else if (provenance?.provenance.kind === 'terminal' && provenance.provenance.authority === 'account_automation') authenticationKind = 'terminal';
     else return null;

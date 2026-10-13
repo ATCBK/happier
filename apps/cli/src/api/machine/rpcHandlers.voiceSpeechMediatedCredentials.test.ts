@@ -1,38 +1,27 @@
-import { describe, expect, it, vi } from 'vitest';
+import { afterAll, afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
 import {
+  accountSettingsParse,
+  SavedSecretSchema,
   createRecipientContractDigestV1,
   type VoiceProviderContribution,
 } from '@happier-dev/protocol';
+import { ConnectedPurposeCatalogV1Schema } from '@happier-dev/protocol/connect/connectedAccountConfigurationRowsV1';
+import { VoiceCredentialBindingV1Schema } from '@happier-dev/protocol/voice/realtime/providerSettings';
+import { clearActiveAccountSettingsSnapshot, getActiveAccountSettingsSnapshot, setActiveAccountSettingsSnapshot, type ActiveAccountSettingsSnapshot } from '@/settings/accountSettings/activeAccountSettingsSnapshot';
 import { RPC_METHODS } from '@happier-dev/protocol/rpc';
-import type { HttpService } from '@happier-dev/plugin-sdk/http';
+import type { PluginApi } from '@happier-dev/plugin-sdk';
 import type { SpeechProviderRuntime } from '@happier-dev/plugin-sdk/voice/speech';
 
 import { readCanonicalPluginManifest } from '../../plugins/manifest/normalize';
 import { createPluginManifestV2Fixture } from '../../plugins/testkit/manifestV2Fixture';
 import { createVoiceProviderRecipientContract } from '@/plugins/voiceProviderRecipientContract';
-import type { ConnectedAccountPurposeBindingOwner } from '@/daemon/connectedServices/purposeBindings/ConnectedAccountPurposeBindingOwner';
-
-const runtimeLeaseMocks = vi.hoisted(() => ({
-  acquire: vi.fn(),
-  activateContributionsOnDemand: vi.fn(async () => []),
-  release: vi.fn(async () => undefined),
-}));
-const transportMocks = vi.hoisted(() => ({
-  request: vi.fn(),
-}));
-
-vi.mock('@/plugins/runtime/reload/runtimeLease', () => ({
-  acquireAuthoritativePluginRuntimeRegistryLease: runtimeLeaseMocks.acquire,
-}));
-vi.mock('@/plugins/runtime/fetch/globalFetchRuntime', () => ({
-  createGlobalFetchRuntime: () => ({
-    request: transportMocks.request,
-    openWebSocket: async () => {
-      throw new Error('WebSocket is not used by the mediated speech fixture');
-    },
-  }),
-}));
+import { createConnectedAccountPurposeBindingOwner, type ConnectedAccountPurposeBindingOwnerDependencies } from '@/daemon/connectedServices/purposeBindings/ConnectedAccountPurposeBindingOwner';
+import { createAuthoredAdmittedPluginRuntimeFixture } from '@/plugins/testkit/admittedRuntime';
+import { pluginReloadController } from '@/plugins/runtime/reload/singleton';
+import { RpcHandlerManager } from '@/api/rpc/RpcHandlerManager';
+const transportMocks = { request: vi.fn<typeof globalThis.fetch>() };
+beforeEach(() => { vi.stubGlobal('fetch', transportMocks.request); });
 
 import { registerMachineVoiceSpeechRpcHandlers } from './rpcHandlers.voiceSpeech';
 
@@ -174,28 +163,6 @@ function mediatedOnlySpeechManifest(options: Readonly<{
   return parsed;
 }
 
-function externalDeclaration(contribution: SpeechContribution) {
-  return Object.freeze({
-    pluginId: target.pluginId,
-    identity: Object.freeze({ ...target }),
-    definition: contribution,
-    provenance: 'external' as const,
-    source: Object.freeze({ kind: 'archive' }),
-    sourceSpec: Object.freeze({
-      kind: 'archive',
-      locator: 'https://registry.example.test/acme-speech-1.0.0.tgz',
-      trustPolicy: 'committed-registry',
-    }),
-    manifestPath: '/tmp/acme.speech/plugin.json',
-  });
-}
-
-function approvedDigestFor(contribution: SpeechContribution): string {
-  const contract = createVoiceProviderRecipientContract(externalDeclaration(contribution));
-  if (!contract) throw new Error('mediated speech fixture must project a recipient contract');
-  return createRecipientContractDigestV1(contract);
-}
-
 function accountSnapshot(options: Readonly<{
   contribution: SpeechContribution;
   approvedRecipientContractDigest?: string;
@@ -203,20 +170,22 @@ function accountSnapshot(options: Readonly<{
   settingsVersion?: number;
   includeUnrelatedProvider?: boolean;
   model?: string;
-}>) {
+}>): ActiveAccountSettingsSnapshot {
   return {
     source: 'network' as const,
     scopeKey: 'account-scope',
     settingsVersion: options.settingsVersion ?? 1,
     loadedAtMs: 1,
     settingsSecretsReadKeys: [],
-    settings: {
-      secrets: [{
+    settings: accountSettingsParse({
+      secrets: [SavedSecretSchema.parse({
         id: 'external-speech-key',
         name: 'External speech key',
         kind: 'apiKey',
         encryptedValue: { _isSecretValue: true, value: SECRET },
-      }],
+        createdAt: 1,
+        updatedAt: 1,
+      })],
       voiceSettingsV1: {
         providers: {
           [`${target.pluginId}/${target.localId}`]: {
@@ -236,15 +205,15 @@ function accountSnapshot(options: Readonly<{
           contribution: { ...target },
           credentialSlotId: 'api_key',
           credentialSource: { kind: options.credentialSource ?? 'savedSecret' },
-          approvedRecipientContractDigest:
-            options.approvedRecipientContractDigest ?? approvedDigestFor(options.contribution),
+          ...(options.approvedRecipientContractDigest ? { approvedRecipientContractDigest: options.approvedRecipientContractDigest } : {}),
           credentialBindings: { account: { api_key: 'external-speech-key' } },
         }],
       },
-      ...(options.credentialSource === 'connectedAccount' ? {
-        connectedAccountPurposeBindingsV1: {
+    }),
+    connectedPurposeCatalog: { status: 'ready', revision: 1, record: {
+      key: 'purposes', value: ConnectedPurposeCatalogV1Schema.parse({
           v: 1,
-          bindings: [{
+          bindings: options.credentialSource === 'connectedAccount' ? [{
             purpose: { consumer: target, purpose: 'voice.speech' },
             target: {
               kind: 'account',
@@ -253,96 +222,116 @@ function accountSnapshot(options: Readonly<{
                 accountId: 'speech-account',
               },
             },
-          }],
-        },
-      } : {}),
-    } as never,
+          }] : [],
+      }),
+    } },
   };
 }
 
 function manager() {
-  const handlers = new Map<string, (raw: unknown) => Promise<unknown>>();
+  const registrar = new RpcHandlerManager({ scopePrefix: 'machine-a', encryptionMode: 'plain', logger() {} });
   return {
-    handlers,
-    registrar: {
-      unregisterHandler() {},
-      registerHandler(method: string, handler: (raw: unknown) => Promise<unknown>) {
-        handlers.set(method, handler);
-      },
-    },
+    handlers: { get: (method: string) => (raw: unknown) => registrar.invokeLocal(method, raw) },
+    registrar,
   };
 }
 
-function registerCatalog(options: Readonly<{
+const admittedFixtures: Awaited<ReturnType<typeof createAuthoredAdmittedPluginRuntimeFixture>>[] = [];
+afterAll(async () => {
+  const fixtures = admittedFixtures.splice(0).reverse();
+  await Promise.all(fixtures.map((fixture) => fixture.lease.release()));
+  for (const fixture of fixtures) await fixture.dispose();
+});
+afterEach(() => {
+  clearActiveAccountSettingsSnapshot();
+  vi.unstubAllGlobals();
+});
+
+async function registerCatalog(options: Readonly<{
   manifest: ReturnType<typeof mediatedOnlySpeechManifest>;
   list: NonNullable<SpeechProviderRuntime['catalog']>['list'];
-  isCurrent?: () => boolean;
   snapshot?: ReturnType<typeof accountSnapshot>;
   readSnapshot?: () => ReturnType<typeof accountSnapshot>;
-  connectedAccounts?: Pick<ConnectedAccountPurposeBindingOwner, 'materialize'>;
+  materializeAccount?: ConnectedAccountPurposeBindingOwnerDependencies['materializeAccount'];
 }>) {
   const { handlers, registrar } = manager();
   const contribution = options.manifest.contributes.voiceProviders?.[0];
   if (!contribution || contribution.kind !== 'speech') {
     throw new Error('mediated speech fixture must include its speech contribution');
   }
-  const isCurrent = options.isCurrent ?? (() => true);
   const snapshot = options.snapshot ?? accountSnapshot({ contribution });
-  const readSnapshot = options.readSnapshot ?? (() => snapshot);
-  runtimeLeaseMocks.acquire.mockResolvedValueOnce({
-    registry: {
-      activateContributionsOnDemand: runtimeLeaseMocks.activateContributionsOnDemand,
-      generation: 4,
-      contributes: {
-        activationTargets: [{ pluginId: target.pluginId, manifest: options.manifest }],
-        voiceProviders: [externalDeclaration(contribution)],
+  const readUnapprovedSnapshot = options.readSnapshot ?? (() => snapshot);
+  let approvedRecipientContractDigest: string;
+  const readSnapshot = () => {
+    const current = readUnapprovedSnapshot();
+    const voice = current.settings.voiceSettingsV1;
+    if (!voice || typeof voice !== 'object' || Array.isArray(voice) || !('credentialBindings' in voice)
+      || !Array.isArray(voice.credentialBindings)) throw new Error('Expected fixture Voice credential bindings');
+    setActiveAccountSettingsSnapshot({ ...current, settings: accountSettingsParse({ ...current.settings,
+      voiceSettingsV1: { ...voice,
+        credentialBindings: voice.credentialBindings.map((rawBinding) => {
+          const binding = VoiceCredentialBindingV1Schema.parse(rawBinding);
+          return { ...binding, approvedRecipientContractDigest: binding.approvedRecipientContractDigest ?? approvedRecipientContractDigest };
+        }),
       },
-      voiceSpeechProviders: {
-        read: vi.fn(() => ({
-          generation: '4',
-          runtime: Object.freeze({ kind: 'speech' as const, catalog: { list: options.list } }),
-          contribution,
-          isCurrent,
-          retirementSignal: new AbortController().signal,
-          createHttp: (): Pick<HttpService, 'request'> => ({
-            request: async () => {
-              throw new Error('the mediated fixture must not use the contributor HTTP service');
-            },
-          }),
-        })),
+    }) });
+    const admitted = getActiveAccountSettingsSnapshot();
+    if (!admitted) throw new Error('Expected admitted Account snapshot');
+    return admitted;
+  };
+  const unexpected = async (): Promise<never> => { throw new Error('Unexpected Account selection or listing'); };
+  const connectedAccounts = createConnectedAccountPurposeBindingOwner({
+    store: {
+      read: async () => {
+        const catalog = readSnapshot().connectedPurposeCatalog;
+        if (catalog?.status !== 'ready' || catalog.record.key !== 'purposes') throw new Error('Purpose catalog unavailable');
+        return catalog.record.value;
       },
-      resolveVoiceProviderRuntimeLifecycle: () => ({
-        generation: 'immutable-generation-4',
-        isCurrent,
-        retirementSignal: new AbortController().signal,
-      }),
-      resolveCurrentPluginMaterializationRef: () => ({
-        pluginId: target.pluginId,
-        machineId: 'machine-a',
-        materializationId: 'materialization-4',
-      }),
-      resolveConnectedAccountPurposeBindingOwner: () => options.connectedAccounts ?? null,
+      update: unexpected,
+      subscribe: () => ({ dispose() {} }),
     },
-    release: runtimeLeaseMocks.release,
+    selectTarget: unexpected,
+    resolveTarget: async (selection) => selection.kind === 'account'
+      ? { account: selection.account, displayName: 'Speech Account' } : null,
+    // Only the remote credential producer is doubled; selection/currentness are real.
+    materializeAccount: options.materializeAccount ?? unexpected,
+    projectTargetAccounts: unexpected,
+    assertTargetAccountMaterializable: unexpected,
   });
+  const fixture = await createAuthoredAdmittedPluginRuntimeFixture({
+    controller: pluginReloadController,
+    runtimeOptions: { connectedAccounts, resolveCurrentMachineId: () => 'machine-a' },
+    plugins: [{
+      manifest: options.manifest,
+      files: { 'daemon.mjs': `export function activate(api) { api.voiceProviders.register('${target.localId}', {kind:'speech',catalog:{list:async()=>[]}}); }` },
+      instantiateCommittedModule: () => ({
+        activate(api: PluginApi) { api.voiceProviders.register(target.localId, {
+          kind: 'speech', catalog: { list: options.list },
+          async transcribe() { throw new Error('Catalog fixture must not invoke native transcription'); },
+        }); },
+      }),
+    }],
+  });
+  admittedFixtures.push(fixture);
+  const admittedProvider = fixture.registry.contributes.voiceProviders?.find((provider) => provider.pluginId === target.pluginId && provider.identity.localId === target.localId);
+  if (!admittedProvider) throw new Error('Expected admitted speech declaration');
+  const contract = createVoiceProviderRecipientContract(admittedProvider);
+  if (!contract) throw new Error('Expected declared recipient contract');
+  approvedRecipientContractDigest = createRecipientContractDigestV1(contract);
+  readSnapshot();
   const registration = registerMachineVoiceSpeechRpcHandlers({
-    rpcHandlerManager: registrar as never,
+    rpcHandlerManager: registrar,
     machineId: 'machine-a',
     resolveRawCredentialDependencies: async () => ({
       grants: { list: async () => ({ grants: [], pendingRequests: [] }) },
       getAccountSettingsSnapshot: readSnapshot,
     }),
   });
-  return { handlers, registration, contribution };
+  return { handlers, registration, contribution, fixture };
 }
 
 function jsonResponse(body: unknown) {
-  return {
-    status: 200,
-    finalUrl: `${ORIGIN}/v1/models`,
-    headers: { 'content-type': 'application/json' },
-    body: new TextEncoder().encode(JSON.stringify(body)),
-  };
+  return new Response(JSON.stringify(body), { status: 200, headers: { 'content-type': 'application/json' } });
 }
 
 describe('daemon speech host-mediated Voice Account operations', () => {
@@ -361,37 +350,39 @@ describe('daemon speech host-mediated Voice Account operations', () => {
         'X-Workspace-Id': 'workspace-a',
       },
     }));
-    const { handlers, registration } = registerCatalog({
+    const { handlers, registration, fixture } = await registerCatalog({
       manifest,
       snapshot: accountSnapshot({ contribution, credentialSource: 'connectedAccount' }),
-      connectedAccounts: { materialize },
+      materializeAccount: materialize,
       list: async (_request, context) => {
         const result = await context.credentials.mediated!.request({
           operationId: 'list-models',
           parameters: {},
           signal: context.signal,
         });
-        return (JSON.parse(new TextDecoder().decode(result.body)) as { models: any[] }).models;
+        return (JSON.parse(new TextDecoder().decode(result.body)) as { models: readonly { id: string; name: string }[] }).models;
       },
     });
 
-    await expect(handlers.get(RPC_METHODS.DAEMON_VOICE_SPEECH_CATALOG)?.({
+    const response = await handlers.get(RPC_METHODS.DAEMON_VOICE_SPEECH_CATALOG)?.({
       target,
       catalog: 'models',
-    })).resolves.toMatchObject({ ok: true });
+    });
+    expect(response, JSON.stringify(fixture.registry.pluginDiagnosticsByPluginId[target.pluginId])).toEqual({
+      ok: true, items: [{ id: 'connected-stt-1', name: 'Connected STT', metadata: {} }],
+    });
     expect(materialize).toHaveBeenCalledWith(expect.objectContaining({
-      purpose: { consumer: target, purpose: 'voice.speech' },
-      serviceRefs: [{ pluginId: 'acme.identity', localId: 'oauth' }],
-      expectedAccount: expect.objectContaining({ accountId: 'speech-account' }),
+      account: { service: { pluginId: 'acme.identity', localId: 'oauth' }, accountId: 'speech-account' },
+      request: expect.objectContaining({ kind: 'httpHeaders', origin: ORIGIN }),
     }));
     expect(transportMocks.request).toHaveBeenCalledWith(
+      `${ORIGIN}/v1/models`,
       expect.objectContaining({
         headers: {
           authorization: 'Bearer connected-token',
           'x-workspace-id': 'workspace-a',
         },
       }),
-      expect.anything(),
     );
     await registration.dispose();
   });
@@ -406,12 +397,10 @@ describe('daemon speech host-mediated Voice Account operations', () => {
     const manifest = mediatedOnlySpeechManifest({ connectedAccountMediation: true });
     const contribution = manifest.contributes.voiceProviders?.[0];
     if (!contribution || contribution.kind !== 'speech') throw new Error('fixture');
-    const { handlers, registration } = registerCatalog({
+    const { handlers, registration } = await registerCatalog({
       manifest,
       snapshot: accountSnapshot({ contribution, credentialSource: 'connectedAccount' }),
-      connectedAccounts: {
-        materialize: vi.fn(async () => ({ kind: 'httpHeaders' as const, headers })),
-      },
+      materializeAccount: vi.fn(async () => ({ kind: 'httpHeaders' as const, headers })),
       list: async (_request, context) => {
         await context.credentials.mediated!.request({
           operationId: 'list-models', parameters: {}, signal: context.signal,
@@ -434,7 +423,7 @@ describe('daemon speech host-mediated Voice Account operations', () => {
     }));
     let observedRaw: unknown = 'unset';
     let observedPhase: unknown = 'unset';
-    const { handlers, registration } = registerCatalog({
+    const { handlers, registration } = await registerCatalog({
       manifest: mediatedOnlySpeechManifest(),
       list: async (_request, context) => {
         observedPhase = context.credentials.phase;
@@ -464,8 +453,8 @@ describe('daemon speech host-mediated Voice Account operations', () => {
     expect(observedPhase).toBe('speech');
     expect(observedRaw).toBeNull();
     expect(transportMocks.request).toHaveBeenCalledOnce();
-    expect(transportMocks.request.mock.calls[0]?.[0]).toMatchObject({
-      url: `${ORIGIN}/v1/models`,
+    expect(transportMocks.request.mock.calls[0]?.[0]).toBe(`${ORIGIN}/v1/models`);
+    expect(transportMocks.request.mock.calls[0]?.[1]).toMatchObject({
       method: 'GET',
       redirect: 'error',
       headers: { authorization: `Bearer ${SECRET}` },
@@ -476,7 +465,7 @@ describe('daemon speech host-mediated Voice Account operations', () => {
   it('fails closed for an undeclared operation without reaching the provider origin', async () => {
     transportMocks.request.mockReset();
     let observedCode: unknown = null;
-    const { handlers, registration } = registerCatalog({
+    const { handlers, registration } = await registerCatalog({
       manifest: mediatedOnlySpeechManifest(),
       list: async (_request, context) => {
         try {
@@ -503,7 +492,7 @@ describe('daemon speech host-mediated Voice Account operations', () => {
     transportMocks.request.mockReset();
     let observedMediated: unknown = 'unset';
     let observedRaw: unknown = 'unset';
-    const { handlers, registration } = registerCatalog({
+    const { handlers, registration } = await registerCatalog({
       manifest: mediatedOnlySpeechManifest({
         declareProjection: false,
         declareRawAlternative: true,
@@ -530,7 +519,7 @@ describe('daemon speech host-mediated Voice Account operations', () => {
   it('fails closed for a declared operation no source projects into the speech phase', async () => {
     transportMocks.request.mockReset();
     let observedCode: unknown = null;
-    const { handlers, registration } = registerCatalog({
+    const { handlers, registration } = await registerCatalog({
       manifest: mediatedOnlySpeechManifest({ declareUnprojectedOperation: true }),
       list: async (_request, context) => {
         try {
@@ -560,9 +549,9 @@ describe('daemon speech host-mediated Voice Account operations', () => {
     const contribution = manifest.contributes.voiceProviders?.[0];
     if (!contribution || contribution.kind !== 'speech') throw new Error('fixture');
     const selected = accountSnapshot({ contribution });
-    const cleared = accountSnapshot({ contribution, credentialSource: 'none' });
+    const cleared = accountSnapshot({ contribution, credentialSource: 'none', settingsVersion: 2 });
     let current = selected;
-    const { handlers, registration } = registerCatalog({
+    const { handlers, registration } = await registerCatalog({
       manifest,
       readSnapshot: () => current,
       list: async (_request, context) => {
@@ -602,7 +591,7 @@ describe('daemon speech host-mediated Voice Account operations', () => {
       includeUnrelatedProvider: true,
     });
     let current = selected;
-    const { handlers, registration } = registerCatalog({
+    const { handlers, registration } = await registerCatalog({
       manifest,
       readSnapshot: () => current,
       list: async (_request, context) => {
@@ -645,7 +634,7 @@ describe('daemon speech host-mediated Voice Account operations', () => {
       model: 'external-stt-2',
     });
     let current = selected;
-    const { handlers, registration } = registerCatalog({
+    const { handlers, registration } = await registerCatalog({
       manifest,
       readSnapshot: () => current,
       list: async (_request, context) => {
@@ -676,7 +665,7 @@ describe('daemon speech host-mediated Voice Account operations', () => {
     const manifest = mediatedOnlySpeechManifest();
     const contribution = manifest.contributes.voiceProviders?.[0];
     if (!contribution || contribution.kind !== 'speech') throw new Error('fixture');
-    const { handlers, registration } = registerCatalog({
+    const { handlers, registration } = await registerCatalog({
       manifest,
       snapshot: accountSnapshot({
         contribution,
@@ -705,13 +694,18 @@ describe('daemon speech host-mediated Voice Account operations', () => {
 
   it('refuses the operation once the contributor generation retires mid-invocation', async () => {
     transportMocks.request.mockReset();
-    let current = true;
     let observedCode: unknown = null;
-    const { handlers, registration } = registerCatalog({
+    const { handlers, registration } = await registerCatalog({
       manifest: mediatedOnlySpeechManifest(),
-      isCurrent: () => current,
       list: async (_request, context) => {
-        current = false;
+        const successor = await createAuthoredAdmittedPluginRuntimeFixture({
+          controller: pluginReloadController,
+          plugins: [{
+            manifest: createPluginManifestV2Fixture({ id: target.pluginId }),
+            files: { 'daemon.mjs': 'export function activate() {}' },
+          }],
+        });
+        admittedFixtures.push(successor);
         try {
           await context.credentials.mediated!.request({
             operationId: 'list-models',

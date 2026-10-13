@@ -56,7 +56,7 @@ describe('rpcHandlers.mcpServers (byId)', () => {
           loadedAtMs: 0,
           whenRefreshed: null,
         }),
-        probeMcpStdioServerTools: async () => [{ name: 'echo' }],
+        probeMcpStdioServerTools: async () => ({ tools: [{ name: 'echo', inputSchema: { type: 'object' } }] }),
       },
     } as any);
 

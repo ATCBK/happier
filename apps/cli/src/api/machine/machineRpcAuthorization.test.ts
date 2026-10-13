@@ -11,6 +11,20 @@ import { MACHINE_ACCESS_LOSS_SERVER_ORIGIN, SOCKET_RPC_AUTHORIZATION_CONTEXT_KIN
 import { authorizeMachineRpcRequest, verifyMachineRpcAdmissionCurrent, verifyManagedActivityTargetCurrent, type MachineRpcAdmissionBoundary } from './machineRpcAuthorization';
 
 describe('authorizeMachineRpcRequest', () => {
+  it.each([RPC_METHODS.SESSION_FORK, RPC_METHODS.SESSION_FORK_PROVIDER_SAFE, RPC_METHODS.SESSION_CONTINUE_WITH_REPLAY])(
+    'binds %s to the source Session in the decrypted request', async method => {
+      const params = method === RPC_METHODS.SESSION_CONTINUE_WITH_REPLAY
+        ? { replay: { previousSessionId: 'source-session' } }
+        : { parentSessionId: 'source-session', sessionId: 'untrusted-selector' };
+      const request = { method: `machine:${method}`, params,
+        authorization: { kind: 'session.write' as const, sessionId: 'source-session' } };
+      expect(await authorizeMachineRpcRequest(request)).toEqual({ ok: true });
+      expect(await authorizeMachineRpcRequest({ ...request, authorization: undefined }))
+        .toMatchObject({ ok: false, errorCode: RPC_ERROR_CODES.FORBIDDEN });
+      expect(await authorizeMachineRpcRequest({ ...request, authorization: { kind: 'session.write', sessionId: 'untrusted-selector' } }))
+        .toMatchObject({ ok: false, errorCode: RPC_ERROR_CODES.FORBIDDEN });
+    },
+  );
   it.each([RPC_METHODS.DAEMON_PLUGIN_UI_RESOURCE_READ, RPC_METHODS.DAEMON_PLUGIN_UI_ARTIFACT_BYTES_READ])(
     'admits %s through the connected Home regardless of caller-local labels, retaining Machine custody', async method => {
       const machineAdmission = { actorAccountId: 'owner', custodianAccountId: 'owner', machineId: 'machine',

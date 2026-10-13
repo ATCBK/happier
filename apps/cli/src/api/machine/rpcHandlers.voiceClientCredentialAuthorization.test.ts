@@ -1,11 +1,29 @@
-import { describe, expect, it, vi } from 'vitest';
+import axios, { AxiosHeaders } from 'axios';
+import { randomUUID } from 'node:crypto';
+import { afterAll, afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
 import {
+  accountSettingsParse,
   PluginInstallReviewPrincipalDigestSchema,
-  type PluginMachineMaterializationRefV1,
+  SavedSecretSchema,
+  PluginPermissionGrantRequestActionInputV1Schema,
+  type PluginPermissionGrantRequestActionInputV1,
 } from '@happier-dev/protocol';
+import { ConnectedPurposeCatalogV1Schema } from '@happier-dev/protocol/connect/connectedAccountConfigurationRowsV1';
+import type { ActiveAccountSettingsSnapshot } from '@/settings/accountSettings/activeAccountSettingsSnapshot';
 import { RPC_METHODS } from '@happier-dev/protocol/rpc';
-import type { RpcHandler, RpcHandlerRegistrar } from '../rpc/types';
+import { RpcHandlerManager } from '@/api/rpc/RpcHandlerManager';
+import { configuration, reloadConfiguration } from '@/configuration';
+import { updateSettings, writeCredentialsTokenOnlyForServerId } from '@/persistence';
+import { resolveCurrentPluginPermissionGrantAuthoritySource } from '@/daemon/identity/currentMachineInstallation';
+import { createAuthoredAdmittedPluginRuntimeFixture } from '@/plugins/testkit/admittedRuntime';
+import { pluginReloadController } from '@/plugins/runtime/reload/singleton';
+import { createRegistryInstallReviewPrincipalReader } from '@/plugins/runtime/credentials/registryInstallReviewPrincipalReader';
+import { resolvePluginStorePaths } from '@/plugins/store/paths';
+import { persistInstallationStateRevision, readInstallationStateRevision } from '@/plugins/store/registry/generationStore';
+import { replacePluginRegistryCommitRecord } from '@/plugins/store/registry/commitRecord';
+import { createEnvKeyScope } from '@/testkit/env/envScope';
+import { createTempDir, removeTempDir } from '@/testkit/fs/tempDir';
 
 import { readCanonicalPluginManifest } from '../../plugins/manifest/normalize';
 import { createPluginManifestV2Fixture } from '../../plugins/testkit/manifestV2Fixture';
@@ -15,10 +33,31 @@ import {
   registerMachineVoiceClientCredentialAuthorizationRpcHandlers,
 } from './rpcHandlers.voiceClientCredentialAuthorization';
 
-const daemonGrantAuthority = Object.freeze({
-  kind: 'machine_installation' as const,
-  machineId: 'machine-1',
-  installationId: 'installation-1',
+const envKeys = ['HAPPIER_SERVER_URL', 'HAPPIER_HOME_DIR', 'HAPPIER_TOKEN', 'HAPPIER_SESSION_REQUESTER_CREDENTIAL_FILE'] as const;
+let envScope = createEnvKeyScope(envKeys);
+let home: string;
+beforeEach(async () => {
+  home = await createTempDir('happier-voice-authorization-');
+  envScope = createEnvKeyScope(envKeys);
+  envScope.patch({ HAPPIER_SERVER_URL: 'http://voice-authorization.test', HAPPIER_HOME_DIR: home,
+    HAPPIER_TOKEN: undefined, HAPPIER_SESSION_REQUESTER_CREDENTIAL_FILE: undefined });
+  reloadConfiguration();
+  await writeCredentialsTokenOnlyForServerId(configuration.activeServerId, { token: 'account-token' });
+  await updateSettings((settings) => ({ ...settings,
+    machineIdByServerId: { ...settings.machineIdByServerId, [configuration.activeServerId]: 'machine-1' },
+  }));
+});
+afterEach(async () => {
+  vi.restoreAllMocks();
+  envScope.restore();
+  reloadConfiguration();
+  await removeTempDir(home);
+});
+const admittedFixtures: Awaited<ReturnType<typeof createAuthoredAdmittedPluginRuntimeFixture>>[] = [];
+afterAll(async () => {
+  const fixtures = admittedFixtures.splice(0).reverse();
+  await Promise.all(fixtures.map((fixture) => fixture.lease.release()));
+  for (const fixture of fixtures) await fixture.dispose();
 });
 
 const contribution = Object.freeze({ pluginId: 'acme.voice', localId: 'browser' });
@@ -67,6 +106,7 @@ function manifest() {
     id: contribution.pluginId,
     displayName: 'Acme Voice',
     version: '2.0.0',
+    description: 'Private source metadata https://user:password@example.test/private.tgz?token=secret',
     contributes: {
       voiceProviders: [{
         id: contribution.localId,
@@ -99,82 +139,80 @@ function manifest() {
 }
 
 function manager() {
-  const handlers = new Map<string, RpcHandler>();
-  const registrar: RpcHandlerRegistrar = {
-    registerHandler(method, handler) {
-      handlers.set(method, handler);
-    },
-  };
+  const registrar = new RpcHandlerManager({ scopePrefix: 'machine-a', encryptionMode: 'plain', logger() {} });
   return {
-    handlers,
+    handlers: { get: (method: string) => (raw: unknown) => registrar.invokeLocal(method, raw) },
     registrar,
   };
 }
 
-function createHarness(overrides: Readonly<{
-  current?: () => boolean;
-  materialization?: () => PluginMachineMaterializationRefV1 | null;
-  principalSnapshot?: typeof principalSnapshot;
-  accountSettingsSnapshot?: unknown;
+async function createHarness(overrides: Readonly<{
+  retireBeforeInspection?: boolean;
+  materializationUnavailable?: boolean;
+  rejectedPrincipalSnapshot?: typeof principalSnapshot;
+  accountSettingsSnapshot?: ActiveAccountSettingsSnapshot | null;
 }> = {}) {
   const exactManifest = manifest();
-  const release = vi.fn(async () => undefined);
-  const requesterRequest = vi.fn();
-  const materialization = Object.freeze({
-    pluginId: contribution.pluginId,
-    machineId: 'machine-1',
-    materializationId: 'materialization-1',
+  const requesterRequest = vi.fn<(input: PluginPermissionGrantRequestActionInputV1) => void>();
+  const fixture = await createAuthoredAdmittedPluginRuntimeFixture({
+    controller: pluginReloadController,
+    runtimeOptions: { resolveCurrentMachineId: () => overrides.materializationUnavailable ? null : 'machine-1' },
+    plugins: [{ manifest: exactManifest, files: { 'daemon.mjs': 'export function activate() {}' } }],
   });
-  const resolveCurrentPluginMaterializationRef = vi.fn(
-    overrides.materialization ?? ((pluginId: string) => (
-      pluginId === contribution.pluginId ? materialization : null
-    )),
-  );
-  const resolveVoiceProviderRuntimeLifecycle = vi.fn((identity: typeof contribution) => (
-    identity.pluginId === contribution.pluginId && identity.localId === contribution.localId
-      ? {
-          generation: 'generation-1',
-          isCurrent: overrides.current ?? (() => true),
-          retirementSignal: new AbortController().signal,
-        }
-      : null
-  ));
+  admittedFixtures.push(fixture);
+  await fixture.registry.activateContributionsOnDemand([{ pluginId: contribution.pluginId, family: 'voiceProviders', localId: contribution.localId }]);
+  const commit = fixture.committed.commit;
+  if (!commit) throw new Error('Expected committed authored installation');
+  const paths = resolvePluginStorePaths({ happyHomeDir: fixture.happyHomeDir });
+  const state = await readInstallationStateRevision({ paths, reference: commit.installationState, commit });
+  const installation = state.plugins[contribution.pluginId];
+  if (!installation) throw new Error('Expected admitted installation state');
+  const reviewed = overrides.rejectedPrincipalSnapshot ?? principalSnapshot;
+  const nextState = (includePresentation: boolean) => ({ ...state, revisionId: `state-${randomUUID()}`,
+    createdAtMs: Date.now(), plugins: { ...state.plugins, [contribution.pluginId]: { ...installation,
+      installReviewPrincipalDigest: reviewed.digest,
+      ...(includePresentation ? { installReviewPrincipalPresentation: reviewed.presentation } : {}),
+    } },
+  });
+  if (overrides.rejectedPrincipalSnapshot) {
+    // An inconsistent pair cannot enter canonical storage. The valid
+    // digest-only record then exercises the existing unavailable-review path.
+    await expect(persistInstallationStateRevision({ paths, state: nextState(true) })).rejects.toMatchObject({
+      issues: expect.arrayContaining([expect.objectContaining({ code: 'custom',
+        path: ['plugins', contribution.pluginId, 'installReviewPrincipalPresentation'],
+      })]),
+    });
+  }
+  const installationState = await persistInstallationStateRevision({
+    paths, state: nextState(!overrides.rejectedPrincipalSnapshot),
+  });
+  await replacePluginRegistryCommitRecord({ paths, expectedCurrent: commit, next: {
+    ...commit, revision: commit.revision + 1, baseRevision: commit.revision,
+    transactionId: `fixture-review-${randomUUID()}`, installationState, createdAtMs: Date.now(),
+  } });
+  const materialization = fixture.registry.resolveCurrentPluginMaterializationRef?.(contribution.pluginId);
+  if (overrides.retireBeforeInspection) {
+    const successor = await createAuthoredAdmittedPluginRuntimeFixture({
+      controller: pluginReloadController,
+      plugins: [{ manifest: createPluginManifestV2Fixture({ id: contribution.pluginId }), files: { 'daemon.mjs': 'export function activate() {}' } }],
+    });
+    admittedFixtures.push(successor);
+  }
+  vi.spyOn(axios, 'post').mockImplementation(async (_url, rawInput) => {
+    const input = PluginPermissionGrantRequestActionInputV1Schema.parse(rawInput);
+    requesterRequest(input);
+    const authoritySource = await resolveCurrentPluginPermissionGrantAuthoritySource();
+    if (!authoritySource) throw new Error('Expected actual installation publisher authority');
+    return { status: 200, statusText: 'OK', headers: {}, config: { headers: new AxiosHeaders() }, data: {
+      pendingRequest: { v: 1, id: 'request-1', accountId: 'account-1', pluginId: input.pluginId,
+        capability: input.capability, targetScope: input.targetScope, subject: input.subject,
+        requester: input.requester, reason: input.reason, authoritySource,
+        status: 'pending', createdAt: 1, updatedAt: 1 },
+    } };
+  });
   const service = createMachineVoiceClientCredentialAuthorizationService({
     machineId: 'machine-1',
-    acquireRuntimeLease: async () => ({
-      registry: {
-        contributes: {
-          voiceProviders: [{
-            provenance: 'external',
-            source: { kind: 'package' },
-            pluginId: contribution.pluginId,
-            pluginVersion: exactManifest.version,
-            identity: contribution,
-            manifestPath: '/plugins/acme.voice/plugin.json',
-            sourceSpec: {
-              kind: 'package',
-              locator: 'https://user:password@example.test/private.tgz?token=secret',
-              trustPolicy: 'prompt',
-              installPolicy: 'managed_install',
-            },
-            definition: exactManifest.contributes.voiceProviders![0]!,
-          }],
-        },
-        resolveVoiceProviderRuntimeLifecycle,
-        resolveCurrentPluginMaterializationRef,
-      },
-      release,
-    } as never),
-    readManifest: async () => ({
-      ok: true as const,
-      manifestPath: '/plugins/acme.voice/plugin.json',
-      manifestRawText: '{}',
-      manifest: exactManifest,
-    }),
-    currentInstallReviewPrincipal: {
-      readCurrent: async () => overrides.principalSnapshot ?? principalSnapshot,
-    },
-    readCurrentGrantAuthoritySource: async () => daemonGrantAuthority,
+    currentInstallReviewPrincipal: createRegistryInstallReviewPrincipalReader({ happyHomeDir: fixture.happyHomeDir }),
     getAccountSettingsSnapshot: () => overrides.accountSettingsSnapshot === undefined
       ? {
           source: 'network' as const,
@@ -182,15 +220,18 @@ function createHarness(overrides: Readonly<{
           settingsVersion: 1,
           loadedAtMs: 1,
           settingsSecretsReadKeys: [],
-          settings: {
-            secrets: [{
+          connectedPurposeCatalog: { status: 'ready', revision: 1, record: {
+            key: 'purposes', value: ConnectedPurposeCatalogV1Schema.parse({ v: 1, bindings: [] }),
+          } },
+          settings: accountSettingsParse({
+            secrets: [SavedSecretSchema.parse({
               id: 'saved-secret',
               name: 'Voice API key',
               kind: 'apiKey',
               encryptedValue: { _isSecretValue: true, value: 'not-disclosed' },
               createdAt: 1,
               updatedAt: 1,
-            }],
+            })],
             voiceSettingsV1: {
               credentialBindings: [{
                 contribution,
@@ -199,46 +240,22 @@ function createHarness(overrides: Readonly<{
                 credentialBindings: { account: { api_key: 'saved-secret' } },
               }],
             },
-          } as never,
-        }
-      : overrides.accountSettingsSnapshot as never,
+          }),
+        } satisfies ActiveAccountSettingsSnapshot
+      : overrides.accountSettingsSnapshot,
     ensureAccountSettingsSnapshot: async () => undefined,
-    readStoredCredentials: async () => ({ token: 'account-token' } as never),
-    createGrantRequester: () => ({
-      request: async (input) => {
-        requesterRequest(input);
-        return {
-          pendingRequest: {
-            v: 1,
-            id: 'request-1',
-            accountId: 'account-1',
-            pluginId: input.pluginId,
-            capability: input.capability,
-            targetScope: input.targetScope,
-            subject: input.subject,
-            requester: input.requester,
-            reason: input.reason,
-            authoritySource: daemonGrantAuthority,
-            status: 'pending',
-            createdAt: 1,
-            updatedAt: 1,
-          },
-        };
-      },
-    }),
   });
   return {
     service,
-    release,
     requesterRequest,
-    resolveVoiceProviderRuntimeLifecycle,
-    resolveCurrentPluginMaterializationRef,
+    fixture,
+    materialization,
   };
 }
 
 describe('Voice client raw credential authorization RPC', () => {
   it('inspects the current host-derived subject and exact normalized disclosure without creating a request', async () => {
-    const { service, requesterRequest, release, resolveVoiceProviderRuntimeLifecycle } = createHarness();
+    const { service, requesterRequest, fixture } = await createHarness();
 
     const inspected = await service.inspect({
       contribution,
@@ -279,12 +296,11 @@ describe('Voice client raw credential authorization RPC', () => {
     expect(requesterRequest).not.toHaveBeenCalled();
     expect(JSON.stringify(inspected)).not.toContain('password');
     expect(JSON.stringify(inspected)).not.toContain('token=secret');
-    expect(resolveVoiceProviderRuntimeLifecycle).toHaveBeenCalledWith(contribution);
-    expect(release).toHaveBeenCalledOnce();
+    expect(fixture.registry.resolveVoiceProviderRuntimeLifecycle?.(contribution)?.isCurrent()).toBe(true);
   });
 
   it('requests only the exact daemon-derived subject for the current installed contribution', async () => {
-    const { service, requesterRequest } = createHarness();
+    const { service, requesterRequest, materialization } = await createHarness();
 
     await expect(service.request({
       contribution,
@@ -300,16 +316,12 @@ describe('Voice client raw credential authorization RPC', () => {
       subject: expect.objectContaining({ contribution, credentialSlotId: 'api_key' }),
       requester: { kind: 'plugin', pluginId: contribution.pluginId },
       reason: 'Voice provider raw credential access review',
-      caller: {
-        pluginId: contribution.pluginId,
-        machineId: 'machine-1',
-        materializationId: 'materialization-1',
-      },
+      caller: materialization,
     }));
   });
 
   it('fails closed before requesting when the exact current materialization is unavailable', async () => {
-    const { service, requesterRequest } = createHarness({ materialization: () => null });
+    const { service, requesterRequest } = await createHarness({ materializationUnavailable: true });
 
     await expect(service.request({ contribution, rawGrant: webConnectionAuthorizationGrant })).rejects.toMatchObject({
       code: 'plugin_voice_credential_access_unavailable',
@@ -318,7 +330,7 @@ describe('Voice client raw credential authorization RPC', () => {
   });
 
   it('fails closed when Account Settings has no selected raw credential authority', async () => {
-    const { service } = createHarness({ accountSettingsSnapshot: null });
+    const { service } = await createHarness({ accountSettingsSnapshot: null });
 
     await expect(service.inspect({ contribution, rawGrant: webConnectionAuthorizationGrant })).rejects.toMatchObject({
       code: 'plugin_voice_credential_access_unavailable',
@@ -330,7 +342,7 @@ describe('Voice client raw credential authorization RPC', () => {
       ...principalSnapshot,
       digest: PluginInstallReviewPrincipalDigestSchema.parse('a'.repeat(64)),
     });
-    const { service } = createHarness({ principalSnapshot: mismatchedPrincipalSnapshot });
+    const { service } = await createHarness({ rejectedPrincipalSnapshot: mismatchedPrincipalSnapshot });
 
     await expect(service.inspect({ contribution, rawGrant: webConnectionAuthorizationGrant })).resolves.toMatchObject({
       review: {
@@ -342,13 +354,14 @@ describe('Voice client raw credential authorization RPC', () => {
   });
 
   it('rejects stale runtime authority and strict caller attempts to supply a subject', async () => {
-    const stale = createHarness({ current: () => false });
+    const stale = await createHarness({ retireBeforeInspection: true });
+    expect(stale.fixture.registry.resolveVoiceProviderRuntimeLifecycle?.(contribution)?.isCurrent()).toBe(false);
     await expect(stale.service.inspect({ contribution, rawGrant: webConnectionAuthorizationGrant })).rejects.toMatchObject({
       code: 'plugin_voice_credential_access_unavailable',
     });
 
     const { handlers, registrar } = manager();
-    const service = createHarness().service;
+    const { service } = await createHarness();
     registerMachineVoiceClientCredentialAuthorizationRpcHandlers({
       rpcHandlerManager: registrar,
       service,
@@ -362,7 +375,7 @@ describe('Voice client raw credential authorization RPC', () => {
   });
 
   it('derives independent permission subjects and disclosure rows for exact raw tuples', async () => {
-    const { service } = createHarness();
+    const { service } = await createHarness();
 
     const web = await service.inspect({
       contribution,

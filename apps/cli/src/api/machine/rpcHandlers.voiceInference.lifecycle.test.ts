@@ -1,63 +1,40 @@
-import { afterEach, describe, expect, it, vi } from 'vitest';
-import { mkdtempSync, rmSync, writeFileSync } from 'node:fs';
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
+import { mkdirSync, mkdtempSync, readdirSync, rmSync, writeFileSync } from 'node:fs';
+import { createHash } from 'node:crypto';
 import { access } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 
-import type {
-  DaemonVoiceInferenceAudioOutput,
-  DaemonVoiceInferenceModelStatus,
-  DaemonVoiceInferenceNormalizationDecision,
-} from '@happier-dev/protocol';
+import { ModelPackManifestSchema } from '@happier-dev/protocol';
 import { RPC_METHODS } from '@happier-dev/protocol/rpc';
 
-import { configuration } from '@/configuration';
+import { configuration, reloadConfiguration } from '@/configuration';
+import { createEnvKeyScope } from '@/testkit/env/envScope';
+import { startVoiceInferenceWorker, type VoiceInferenceWorkerHandle } from '@/daemon/voiceInference/voiceInferenceWorker';
 import { createEncryptedTransferChunkEnvelope } from '@happier-dev/transfers/node';
 import { resolveVoiceInferencePaths } from '@/daemon/voiceInference/voiceInferencePaths';
 
 import { registerMachineVoiceInferenceRpcHandlers } from './rpcHandlers.voiceInference';
 
-type Handler = (data: any) => Promise<any>;
+import { RpcHandlerManager } from '../rpc/RpcHandlerManager';
+import type { RpcHandler as Handler } from '../rpc/types';
 
-type VoiceInferenceWorkerHandleLike = Readonly<{
-  stop: () => Promise<void> | void;
-  getStatus: () => Promise<Readonly<{
-    serviceState: 'unavailable' | 'idle' | 'warming' | 'ready' | 'degraded';
-    normalization: DaemonVoiceInferenceNormalizationDecision;
-    models: readonly DaemonVoiceInferenceModelStatus[];
-  }>>;
-  listModels: () => Promise<readonly DaemonVoiceInferenceModelStatus[]>;
-  getModelsStatus: (packIds?: readonly string[] | null) => Promise<readonly DaemonVoiceInferenceModelStatus[]>;
-  installModel: (input: Readonly<{ packId: string }>) => Promise<DaemonVoiceInferenceModelStatus>;
-  removeModel: (packId: string) => Promise<void>;
-  synthesizeTts: (input: Readonly<{
-    requestId: string;
-    text: string;
-    packId: string | null;
-    voiceId: string | null;
-    speed: number | null;
-    output: DaemonVoiceInferenceAudioOutput;
-    signal?: AbortSignal | null;
-  }>) => Promise<Readonly<{
-    requestId: string;
-    output: DaemonVoiceInferenceAudioOutput;
-    filePath: string;
-    sizeBytes: number;
-    name: string;
-  }>>;
-  cancelTts: (requestId: string) => Promise<void>;
-  transcribeAudio: () => Promise<never>;
-  cancelStt: (requestId: string) => Promise<void>;
-}>;
 
-function createRpcHandlerManager(): { handlers: Map<string, Handler>; registerHandler: (method: string, handler: Handler) => void } {
-  const handlers = new Map<string, Handler>();
-  return {
-    handlers,
-    registerHandler(method, handler) {
-      handlers.set(method, handler);
-    },
-  };
+function createRpcHandlerManager(): RpcHandlerManager {
+  return new RpcHandlerManager({
+    scopePrefix: 'voice-inference-test',
+    encryptionKey: new Uint8Array(32),
+    encryptionVariant: 'legacy',
+    encryptionMode: 'plain',
+    logger: () => {},
+  });
+}
+
+function getHandler(manager: RpcHandlerManager, method: string): Handler | undefined {
+  if (!manager.hasHandler(method)) return undefined;
+  return async (params, context) => await manager.invokeLocal(method, params, {
+    signal: context?.signal,
+  });
 }
 
 function createEncryptedUploadChunkRequest(input: Readonly<{
@@ -85,48 +62,68 @@ async function expectPathMissing(path: string): Promise<void> {
   await expect(access(path)).rejects.toMatchObject({ code: 'ENOENT' });
 }
 
-afterEach(() => {
+const workers: VoiceInferenceWorkerHandle[] = [];
+const registrations: Array<ReturnType<typeof registerMachineVoiceInferenceRpcHandlers>> = [];
+const homes: string[] = [];
+let envScope = createEnvKeyScope(['HAPPIER_HOME_DIR']);
+
+beforeEach(() => {
+  const home = mkdtempSync(join(tmpdir(), 'voice-rpc-lifecycle-home-'));
+  homes.push(home);
+  process.env.HAPPIER_HOME_DIR = home;
+  reloadConfiguration();
+});
+
+async function createWorker(bytes = Buffer.from('tts-audio')) {
+  const packId = 'kokoro-82m-v1.0-onnx-q8-wasm';
+  const packDir = join(resolveVoiceInferencePaths().packsRootDir, packId);
+  mkdirSync(packDir, { recursive: true });
+  const model = Buffer.from('native-model-fixture');
+  const manifest = ModelPackManifestSchema.parse({
+    packId, kind: 'tts_sherpa', model: 'kokoro', version: '2026-02-15',
+    files: [{
+      path: 'model.onnx', url: 'https://example.test/model.onnx',
+      sha256: createHash('sha256').update(model).digest('hex'), sizeBytes: model.byteLength,
+    }],
+  });
+  writeFileSync(join(packDir, 'pack.json'), JSON.stringify(manifest));
+  writeFileSync(join(packDir, 'model.onnx'), model);
+  // Native model execution is the genuine external boundary. The worker owns
+  // warmup, cancellation, output staging, and upload cleanup.
+  const worker = await startVoiceInferenceWorker({
+    runtimeLoader: async () => ({
+      synthesizeTts: async ({ output }) => ({ bytes, output, name: 'tts.wav' }),
+      transcribeAudio: async () => { throw new Error('unused native recognition'); },
+    }),
+  });
+  workers.push(worker);
+  return worker;
+}
+
+afterEach(async () => {
+  await Promise.all(registrations.splice(0).map((registration) => registration.dispose()));
+  await Promise.all(workers.splice(0).map((worker) => worker.stop()));
   vi.useRealTimers();
   vi.restoreAllMocks();
+  envScope.restore();
+  envScope = createEnvKeyScope(['HAPPIER_HOME_DIR']);
+  reloadConfiguration();
+  for (const home of homes.splice(0)) rmSync(home, { recursive: true, force: true });
 });
 
 describe('registerMachineVoiceInferenceRpcHandlers transfer lifecycle', () => {
   it('expires an abandoned STT upload without any later transfer traffic', async () => {
     vi.useFakeTimers();
-    const worker: VoiceInferenceWorkerHandleLike = {
-      stop: async () => {},
-      getStatus: async () => ({
-        serviceState: 'ready',
-        normalization: {
-          inputTransport: 'upload_transfer',
-          strategy: 'daemon_decode',
-          systemFfmpegAllowed: false,
-        },
-        models: [],
-      }),
-      listModels: async () => [],
-      getModelsStatus: async () => [],
-      installModel: async () => {
-        throw new Error('unused');
-      },
-      removeModel: async () => {},
-      synthesizeTts: async () => {
-        throw new Error('unused');
-      },
-      cancelTts: async () => {},
-      transcribeAudio: async () => {
-        throw new Error('unused');
-      },
-      cancelStt: async () => {},
-    };
+    const worker = await createWorker();
 
     const mgr = createRpcHandlerManager();
     const registration = registerMachineVoiceInferenceRpcHandlers({
-      rpcHandlerManager: mgr as any,
-      voiceInferenceWorker: worker as any,
+      rpcHandlerManager: mgr,
+      voiceInferenceWorker: worker,
     });
+    registrations.push(registration);
     try {
-      const sttUploadInit = mgr.handlers.get(RPC_METHODS.DAEMON_VOICE_INFERENCE_STT_UPLOAD_INIT);
+      const sttUploadInit = getHandler(mgr, RPC_METHODS.DAEMON_VOICE_INFERENCE_STT_UPLOAD_INIT);
       if (!sttUploadInit) {
         throw new Error('expected voice inference upload init handler');
       }
@@ -157,56 +154,26 @@ describe('registerMachineVoiceInferenceRpcHandlers transfer lifecycle', () => {
     vi.useFakeTimers();
     const workspace = mkdtempSync(join(tmpdir(), 'happier-voice-inference-lifecycle-'));
     const outputBytes = Buffer.from('tts-audio');
-    const outputPath = join(workspace, 'tts.wav');
-    writeFileSync(outputPath, outputBytes);
 
     try {
-      const worker: VoiceInferenceWorkerHandleLike = {
-        stop: async () => {},
-        getStatus: async () => ({
-          serviceState: 'ready',
-          normalization: {
-            inputTransport: 'upload_transfer',
-            strategy: 'daemon_decode',
-            systemFfmpegAllowed: false,
-          },
-          models: [],
-        }),
-        listModels: async () => [],
-        getModelsStatus: async () => [],
-        installModel: async () => {
-          throw new Error('unused');
-        },
-        removeModel: async () => {},
-        synthesizeTts: async (input) => ({
-          requestId: input.requestId,
-          output: input.output,
-          filePath: outputPath,
-          sizeBytes: outputBytes.length,
-          name: 'tts.wav',
-        }),
-        cancelTts: async () => {},
-        transcribeAudio: async () => {
-          throw new Error('unused');
-        },
-        cancelStt: async () => {},
-      };
+      const worker = await createWorker(outputBytes);
 
       const mgr = createRpcHandlerManager();
       const registration = registerMachineVoiceInferenceRpcHandlers({
-        rpcHandlerManager: mgr as any,
-        voiceInferenceWorker: worker as any,
+        rpcHandlerManager: mgr,
+        voiceInferenceWorker: worker,
       });
+      registrations.push(registration);
       expect(registration).toBeTruthy();
 
-      const ttsSynthesize = mgr.handlers.get(RPC_METHODS.DAEMON_VOICE_INFERENCE_TTS_SYNTHESIZE);
-      const ttsChunk = mgr.handlers.get(RPC_METHODS.DAEMON_VOICE_INFERENCE_TTS_CHUNK);
-      const sttUploadInit = mgr.handlers.get(RPC_METHODS.DAEMON_VOICE_INFERENCE_STT_UPLOAD_INIT);
-      const sttUploadChunk = mgr.handlers.get(RPC_METHODS.DAEMON_VOICE_INFERENCE_STT_UPLOAD_CHUNK);
-      const sttUploadFinalize = mgr.handlers.get(RPC_METHODS.DAEMON_VOICE_INFERENCE_STT_UPLOAD_FINALIZE);
-      const sttTranscribe = mgr.handlers.get(RPC_METHODS.DAEMON_VOICE_INFERENCE_STT_TRANSCRIBE);
-      const sttStreamStart = mgr.handlers.get(RPC_METHODS.DAEMON_VOICE_INFERENCE_STT_STREAM_START);
-      const sttStreamStatus = mgr.handlers.get(RPC_METHODS.DAEMON_VOICE_INFERENCE_STT_STREAM_STATUS);
+      const ttsSynthesize = getHandler(mgr, RPC_METHODS.DAEMON_VOICE_INFERENCE_TTS_SYNTHESIZE);
+      const ttsChunk = getHandler(mgr, RPC_METHODS.DAEMON_VOICE_INFERENCE_TTS_CHUNK);
+      const sttUploadInit = getHandler(mgr, RPC_METHODS.DAEMON_VOICE_INFERENCE_STT_UPLOAD_INIT);
+      const sttUploadChunk = getHandler(mgr, RPC_METHODS.DAEMON_VOICE_INFERENCE_STT_UPLOAD_CHUNK);
+      const sttUploadFinalize = getHandler(mgr, RPC_METHODS.DAEMON_VOICE_INFERENCE_STT_UPLOAD_FINALIZE);
+      const sttTranscribe = getHandler(mgr, RPC_METHODS.DAEMON_VOICE_INFERENCE_STT_TRANSCRIBE);
+      const sttStreamStart = getHandler(mgr, RPC_METHODS.DAEMON_VOICE_INFERENCE_STT_STREAM_START);
+      const sttStreamStatus = getHandler(mgr, RPC_METHODS.DAEMON_VOICE_INFERENCE_STT_STREAM_STATUS);
       if (!ttsSynthesize || !ttsChunk || !sttUploadInit || !sttUploadChunk || !sttUploadFinalize || !sttTranscribe || !sttStreamStart || !sttStreamStatus) {
         throw new Error('expected voice inference transfer handlers');
       }
@@ -220,6 +187,8 @@ describe('registerMachineVoiceInferenceRpcHandlers transfer lifecycle', () => {
         output: { codec: 'wav', mimeType: 'audio/wav' },
       });
       expect(synth).toMatchObject({ ok: true, downloadId: expect.any(String) });
+      const outputPath = join(resolveVoiceInferencePaths().tempDir,
+        readdirSync(resolveVoiceInferencePaths().tempDir).find((name) => name.endsWith('-tts.wav'))!);
       expect(registration.voiceInferenceTransfers.downloadStore.getDownloadSession(synth.downloadId)).toBeTruthy();
       await expect(access(outputPath)).resolves.toBeUndefined();
 
@@ -260,6 +229,7 @@ describe('registerMachineVoiceInferenceRpcHandlers transfer lifecycle', () => {
 
       await registration.dispose();
       await registration.dispose();
+      await worker.stop();
 
       expect(registration.voiceInferenceTransfers.downloadStore.getDownloadSession(synth.downloadId)).toBeNull();
       expect(registration.voiceInferenceTransfers.uploadStore.getUploadSession(upload.uploadId)).toBeNull();

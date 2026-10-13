@@ -1,12 +1,14 @@
 import { describe, expect, it } from 'vitest';
 import { accountSettingsParse, VoiceProviderContributionSchema } from '@happier-dev/protocol';
+import { ConnectedPurposeCatalogV1Schema } from '@happier-dev/protocol/connect/connectedAccountConfigurationRowsV1';
 import { RPC_METHODS } from '@happier-dev/protocol/rpc';
-import type { HttpService } from '@happier-dev/plugin-sdk/http';
-import type { ActiveAccountSettingsSnapshot } from '@/settings/accountSettings/activeAccountSettingsSnapshot';
+import { clearActiveAccountSettingsSnapshot, setActiveAccountSettingsSnapshot, type ActiveAccountSettingsSnapshot } from '@/settings/accountSettings/activeAccountSettingsSnapshot';
+import type { PinnedHttpStreamTransport } from '@/network/pinnedHttp';
+import { createAdmittedPluginRuntimeFixture } from '@/plugins/testkit/admittedRuntime';
+import { pluginReloadController } from '@/plugins/runtime/reload/singleton';
 import { createEncryptedTransferChunkEnvelope } from '@happier-dev/transfers/node';
 import { RpcHandlerManager } from '@/api/rpc/RpcHandlerManager';
 import { PLUGIN_MANIFEST } from '../../../../../packages/plugins/openai-compat/src/manifest';
-import { OPENAI_COMPAT_STT_RUNTIME } from '../../../../../packages/plugins/openai-compat/src/voice/speech';
 import { registerMachineVoiceSpeechRpcHandlers } from './rpcHandlers.voiceSpeech';
 import { readVoiceSpeechSettingsSnapshot } from './voiceSpeechSettings';
 
@@ -16,10 +18,12 @@ const declaration = VoiceProviderContributionSchema.parse((PLUGIN_MANIFEST.contr
 if (declaration.kind !== 'speech') throw new Error('expected actual speech contribution');
 const contribution = declaration;
 
-function snapshot(language: string | null): ActiveAccountSettingsSnapshot {
-  return { source: 'network', scopeKey: 'language-account', settingsVersion: 1, loadedAtMs: 1, settingsSecretsReadKeys: [], settings: accountSettingsParse({ voiceSettingsV1: {
+function snapshot(language: string | null, settingsVersion = 1): ActiveAccountSettingsSnapshot {
+  return { source: 'network', scopeKey: 'language-account', settingsVersion, loadedAtMs: 1, settingsSecretsReadKeys: [],
+    connectedPurposeCatalog: { status: 'ready', revision: 1, record: { key: 'purposes', value: ConnectedPurposeCatalogV1Schema.parse({ v: 1, bindings: [] }) } },
+    settings: accountSettingsParse({ voiceSettingsV1: {
     assistantLanguage: 'es', dictation: { language },
-    providers: { [providerId]: { schemaVersion: contribution.settings.schemaVersion, config: Object.fromEntries(contribution.settings.fields.map((field) => [field.id, field.id === 'language' ? 'fr' : field.id === 'baseUrl' ? 'https://speech.example.test/v1' : field.default])) } },
+    providers: { [providerId]: { schemaVersion: contribution.settings.schemaVersion, config: Object.fromEntries(contribution.settings.fields.map((field) => [field.id, field.id === 'language' ? 'fr' : field.id === 'baseUrl' ? 'https://93.184.216.34/v1' : field.default])) } },
   } }) };
 }
 
@@ -39,25 +43,30 @@ describe('registered speech recognition language at the real daemon/plugin bound
     let current = snapshot('de');
     const bodies: string[] = [];
     let changeLanguageDuringRequest = false;
-    // Only external HTTP and persisted Account snapshots are fixtures. The actual
-    // plugin codec, admitted settings reader, RPC, upload and schemas stay real.
-    const http: Pick<HttpService, 'request'> = { request: async (request) => {
+    const publishLanguage = (language: string | null) => {
+      current = snapshot(language, current.settingsVersion + 1);
+      setActiveAccountSettingsSnapshot(current);
+    };
+    setActiveAccountSettingsSnapshot(current);
+    // Only the DNS/socket and Account inputs are fixtures; source admission,
+    // the first-party module, codec, HTTP policy, RPC and upload stay real.
+    const openPinnedStream: PinnedHttpStreamTransport = async (request) => {
       if (!(request.body instanceof Uint8Array)) throw new Error('expected actual multipart bytes');
       bodies.push(new TextDecoder().decode(request.body));
-      if (changeLanguageDuringRequest) current = snapshot('it');
-      return { status: 200, finalUrl: request.url, headers: { 'content-type': 'application/json' }, body: new TextEncoder().encode(JSON.stringify({ text: 'recognized' })) };
-    } };
+      if (changeLanguageDuringRequest) publishLanguage('it');
+      let body: Uint8Array | null = new TextEncoder().encode(JSON.stringify({ text: 'recognized' }));
+      return { status: 200, headers: { 'content-type': 'application/json' }, contentLength: body.byteLength,
+        async read() { const next = body; body = null; return next; }, cancel() { body = null; } };
+    };
+    const fixture = await createAdmittedPluginRuntimeFixture({
+      controller: pluginReloadController,
+      runtimeOptions: { pluginIds: [target.pluginId], networkDependencies: {
+        resolveNetworkAddresses: async () => ['93.184.216.34'], openPinnedStream,
+      } },
+    });
     const handlers = new RpcHandlerManager({ scopePrefix: 'speech-language-test', encryptionMode: 'plain', logger: () => {} });
     const registration = registerMachineVoiceSpeechRpcHandlers({
       rpcHandlerManager: handlers,
-      resolveSpeechRuntime: async () => ({
-        runtime: OPENAI_COMPAT_STT_RUNTIME, contribution,
-        readSettings: (capturePurpose?: 'dictation' | 'conversation') => ({
-          ...readVoiceSpeechSettingsSnapshot({ providerId, contribution, readSnapshot: () => current, isRuntimeCurrent: () => true, capturePurpose }),
-          resolveCredentials: () => ({ phase: 'speech', mediated: null, raw: null }),
-        }),
-        createHttp: () => http, isCurrent: () => true, retirementSignal: new AbortController().signal, release: async () => {},
-      }),
     });
     const invoke = async (capturePurpose?: 'dictation' | 'conversation') => {
       const init = await handlers.invokeLocal(RPC_METHODS.DAEMON_VOICE_SPEECH_TRANSCRIBE_UPLOAD_INIT, { target, sizeBytes: 3, mimeType: 'audio/wav', fileName: 'recording.wav' });
@@ -74,14 +83,18 @@ describe('registered speech recognition language at the real daemon/plugin bound
       expect(bodies[0]).toContain('name="language"\r\n\r\nfr\r\n');
       await expect(invoke('dictation')).resolves.toEqual({ ok: true, requestId: 'language-request', text: 'recognized' });
       expect(bodies[1]).toContain('name="language"\r\n\r\nde\r\n');
-      current = snapshot(null);
+      publishLanguage(null);
       await expect(invoke('dictation')).resolves.toMatchObject({ ok: true });
       expect(bodies[2]).not.toContain('name="language"');
       const root = current.settings.voiceSettingsV1;
       expect(root).toMatchObject({ assistantLanguage: 'es', providers: { [providerId]: { config: { language: 'fr' } } } });
-      current = snapshot('de');
+      publishLanguage('de');
       changeLanguageDuringRequest = true;
       await expect(invoke('dictation')).resolves.toMatchObject({ ok: false, errorCode: 'provider_unavailable' });
-    } finally { await registration.dispose(); }
+    } finally {
+      await registration.dispose();
+      await fixture.dispose();
+      clearActiveAccountSettingsSnapshot();
+    }
   });
 });

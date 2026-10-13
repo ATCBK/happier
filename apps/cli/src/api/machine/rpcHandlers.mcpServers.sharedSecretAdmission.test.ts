@@ -91,7 +91,7 @@ describe('rpcHandlers.mcpServers (shared Saved Secret admission)', () => {
       // Unrelated optional history maintenance is unavailable in this fixture.
       throw new Error(`History transport unavailable: ${path}`);
     });
-    const probeMcpStdioServerTools = vi.fn(async () => [{ name: 'echo' }]);
+    const probeMcpStdioServerTools = vi.fn(async () => ({ tools: [{ name: 'echo', inputSchema: { type: 'object' as const } }] }));
     const handlers = new Map<string, (raw: unknown) => Promise<unknown>>();
 
     registerMachineMcpServersRpcHandlers({

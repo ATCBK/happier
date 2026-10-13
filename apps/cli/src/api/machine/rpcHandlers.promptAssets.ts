@@ -1,4 +1,4 @@
-import { PromptAssetDeleteRequestSchema, PromptAssetDiscoverRequestSchema } from '@happier-dev/protocol/prompts/library/promptAssetsV1';
+import { PromptAssetDeleteRequestSchema } from '@happier-dev/protocol/prompts/library/promptAssetsV1';
 import type { PromptAssetListTypesResponseV1, PromptAssetMutationResponseV1 } from '@happier-dev/protocol';
 import { RPC_METHODS } from '@happier-dev/protocol/rpc/methods';
 
@@ -8,7 +8,7 @@ import { createPromptAssetAdapterRegistry } from '@/prompts/assets/createPromptA
 import { registerActionSpecRpcHandlers } from '@/rpc/handlers/registerActionSpecRpcHandlers';
 import type { RpcActionExecutor } from '@/rpc/handlers/_actionDispatchAdapter';
 import { PROMPT_ASSET_RPC_SCOPES } from '@/rpc/handlers/actionSpecRpcRegistration';
-import { deletePromptAsset, discoverPromptAssets } from '@/prompts/assets/actions';
+import { deletePromptAsset } from '@/prompts/assets/actions';
 
 function invalidRequest(error: string): Exclude<PromptAssetMutationResponseV1, { ok: true }> {
   return { ok: false, errorCode: 'invalid_request', error };
@@ -19,20 +19,6 @@ function createPromptAssetRpcActionExecutor(
 ): RpcActionExecutor {
   return {
     execute: async (actionId, input, context) => {
-      if (actionId === 'daemon.promptAssets.discover') {
-        const parsed = PromptAssetDiscoverRequestSchema.safeParse(input);
-        if (!parsed.success) return { ok: true, result: invalidRequest('invalid_request') };
-
-        return {
-          ok: true,
-          result: await discoverPromptAssets({
-            registry,
-            request: parsed.data,
-            ...(context?.signal ? { signal: context.signal } : {}),
-          }),
-        };
-      }
-
       if (actionId === 'daemon.promptAssets.delete') {
         const parsed = PromptAssetDeleteRequestSchema.safeParse(input);
         if (!parsed.success) return { ok: true, result: invalidRequest('invalid_request') };

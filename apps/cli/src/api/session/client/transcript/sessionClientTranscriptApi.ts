@@ -652,6 +652,7 @@ export function createSessionClientTranscriptApi(
                     provider: extracted.provider,
                     sidechainId: extracted.sidechainId,
                     localId,
+                    seq: result.committedSequence,
                     source: 'committed',
                 });
             }

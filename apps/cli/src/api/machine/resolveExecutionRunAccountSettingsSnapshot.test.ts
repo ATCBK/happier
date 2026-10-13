@@ -57,6 +57,44 @@ function captureHomeReads(onCatalogRead?: () => void, sharedSecret = false) {
 }
 
 describe('Machine Execution Run owner account snapshot', () => {
+    it('withdraws a demanded captured catalog when its Home refresh is unavailable', async () => {
+        const reads = captureHomeReads();
+        const resolver = createExecutionRunAccountSettingsSnapshotResolver({ machineId: 'run-machine', serverHttpBaseUrl: 'https://run-owner.test',
+            readCredentials: async () => credentials, isOwnerCurrent: () => true, onSettings() {} });
+        await resolver({ mcpServerCatalog: true });
+        const operation = resolver.readOperationContext();
+        reads.mockRejectedValueOnce(new Error('Home unavailable'));
+        await expect(resolver.refreshDemandedMcpCatalog()).rejects.toThrow();
+        expect(operation?.readSnapshot()?.mcpServerCatalog).toMatchObject({ status: 'unavailable', reason: 'encryption-material-unavailable' });
+        await resolver.refreshDemandedMcpCatalog();
+        expect(operation?.readSnapshot()?.mcpServerCatalog?.status).toBe('ready');
+        await resolver.dispose();
+    });
+    it('publishes demanded MCP rows in the captured invocation holder without retargeting the focused Account', async () => {
+        setActiveAccountSettingsSnapshot({ source: 'network', settings: accountSettingsParse({}), settingsVersion: 99,
+            loadedAtMs: 1, settingsSecretsReadKeys: [], scopeKey: resolveAccountSettingsScopeKey({ token: 'focused-other-account', encryption: null }) });
+        const incumbent = getActiveAccountSettingsSnapshot();
+        captureHomeReads();
+        let current = true;
+        const resolver = createExecutionRunAccountSettingsSnapshotResolver({ machineId: 'run-machine', serverHttpBaseUrl: 'https://run-owner.test',
+            readCredentials: async () => current ? credentials : null, isOwnerCurrent: () => true, onSettings: () => {} });
+        await resolver({ mcpServerCatalog: true });
+        const operation = resolver.readOperationContext();
+        expect(operation?.readSnapshot()?.mcpServerCatalog).toMatchObject({ status: 'ready', revision: 2 });
+        await resolver({ mcpServerCatalog: true });
+        expect(resolver.readOperationContext()).toBe(operation);
+        expect(getActiveAccountSettingsSnapshot()).toBe(incumbent);
+        current = false;
+        await expect(resolver.refreshDemandedMcpCatalog()).rejects.toMatchObject({ code: 'provider_authorization_changed' });
+        expect(operation?.readSnapshot()).toBeNull();
+        expect(getActiveAccountSettingsSnapshot()).toBe(incumbent);
+        current = true;
+        await resolver({ mcpServerCatalog: true });
+        expect(resolver.readOperationContext()).not.toBe(operation);
+        expect(resolver.readOperationContext()?.readSnapshot()?.mcpServerCatalog?.status).toBe('ready');
+        expect(operation?.readSnapshot()).toBeNull();
+        await resolver.dispose();
+    });
     it('admits only selected MCP shared-secret references through the owner Home before materializing', async () => {
         setActiveAccountSettingsSnapshot({ source: 'network', settings: accountSettingsParse({ preferredLanguage: 'de' }),
             settingsVersion: 99, loadedAtMs: 1, settingsSecretsReadKeys: [],

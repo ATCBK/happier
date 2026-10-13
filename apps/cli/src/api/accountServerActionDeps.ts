@@ -56,7 +56,7 @@ import { projectNativeJsonValueForTransport } from '@happier-dev/protocol/json/s
 import { resolveUsagePageAggregation, resolveUsagePageAccountingReads, resolveUsageAccountingAsOfMs, type UsageAccountingSourceSnapshot, type UsagePoolSourceSnapshot, type UsageQueryPoolSnapshot, type UsageQuerySourceState } from '@happier-dev/protocol/usage/resolveUsagePageAggregation';
 import { createCanonicalJsonSigningInput } from '@happier-dev/protocol/crypto/canonicalJson';
 import { ConnectedServicePoolSelectionGetResponseV1Schema } from '@happier-dev/protocol/connect/connectedServicePoolSelection';
-import { ConnectedServiceQuotaGetResultV1Schema, projectProviderAccountUsageQuotaReadV1, type ConnectedServiceQuotaGetResultV1 } from '@happier-dev/protocol/connect/providerAccountUsageHistory';
+import { ConnectedServiceQuotaGetResultV1Schema, type ConnectedServiceQuotaGetResultV1 } from '@happier-dev/protocol/connect/providerAccountUsageHistory';
 import { AccountProfileResponseSchema } from '@happier-dev/protocol/account/profile';
 import { AccountSettingsV2GetResponseSchema } from '@happier-dev/protocol/account/settings/accountSettingsApiV2';
 import { accountSettingsParse } from '@happier-dev/protocol/account/settings/accountSettings';
@@ -505,7 +505,8 @@ export function createAccountServerActionDeps(input: Readonly<{
           const parsedSettings = accountSettingsParse(settings.raw);
           preferences = parsedSettings.usageCoachPreferencesV1;
           pricingOverrides = parsedSettings.usageModelPriceOverridesV1;
-          const profile = AccountProfileResponseSchema.parse(await read('/v1/profile'));
+          const profileRequest = bindHomeDomainActionHttpRequestV1('account.profile.get', {});
+          const profile = AccountProfileResponseSchema.parse(await read(profileRequest.path));
           accountId = profile.id;
           pools = await Promise.all(request.queries.map(async query => ({ query,
             value: await Promise.all(profile.connectedAccountGroupsV4.map(async group => {
@@ -551,30 +552,23 @@ export function createAccountServerActionDeps(input: Readonly<{
             ? { startAtMs: Math.min(...starts), endAtMs: Math.max(...ends) } : undefined;
           const rows = await Promise.all(accounts.map(async account => {
             const source = { bindingKind: 'account' as const, ref: account.ref };
-            // Paging exhausts the requested range; page size is not a history result ceiling.
+            // A finite snapshot retains the canonical page and its continuation,
+            // rather than withholding current facts until history is exhausted.
             const history = range && range.endAtMs > range.startAtMs ? { range, pageSize: 100 } : undefined;
-            let page = await readQuota({ source, ...(history ? { history } : {}) }, context);
-            if ('ok' in page) return { source, result: page };
-            const entries = [...(page.history?.entries ?? [])];
-            while (page.history?.nextCursor && history) {
-              await check();
-              page = await readQuota({ source, history: { ...history, cursor: page.history.nextCursor } }, context);
-              if ('ok' in page) return { source, result: page };
-              entries.push(...(page.history?.entries ?? []));
-            }
-            return { source, result: projectProviderAccountUsageQuotaReadV1({ input: { source, ...(history ? { history } : {}) }, current: page.current,
-              ...(history ? { history: { entries, nextCursor: null } } : {}), nowMs: accountingNowMs, targets: page.targets, waitingWork: page.waitingWork }) };
+            return { source, result: await readQuota({ source, ...(history ? { history } : {}) }, context) };
           }));
           await check();
           quotaSources = rows.map(({ source, result }) => ({ source: `quota:${createCanonicalJsonSigningInput(source)}`,
             ...('ok' in result ? { status: result.errorCode === 'unsupported' ? 'unsupported' as const : 'error' as const,
               errorCode: result.errorCode ?? 'usage_quota_read_failed' }
-              : { status: 'available' as const, ...(result.current ? { asOfMs: result.current.fetchedAtMs } : {}) }),
+              : { status: result.history?.nextCursor != null ? 'partial' as const : 'available' as const,
+                ...(result.current ? { asOfMs: result.current.fetchedAtMs } : {}) }),
           }));
           const values = rows.flatMap(({ result }) => 'ok' in result ? [] : [result]);
           const failures = rows.flatMap(({ result }) => 'ok' in result ? [result] : []);
           const times = values.flatMap(row => row.current ? [row.current.fetchedAtMs] : []);
-          quota = { status: failures.length ? values.length ? 'partial' : 'unknown' : 'available',
+          quota = { status: failures.length ? values.length ? 'partial' : 'unknown'
+            : values.some(row => row.history?.nextCursor != null) ? 'partial' : 'available',
             ...(failures.length ? { errorCode: failures[0]!.errorCode ?? 'usage_quota_read_failed' } : {}),
             ...(values.length || failures.length === 0 ? { value: values } : {}), ...(times.length ? { asOfMs: Math.min(...times) } : {}) };
         } catch (error) {

@@ -48,6 +48,7 @@ export function createSessionClientRecoveryRuntime(
         applyPendingQueueState: (state: KnownPendingQueueState) => void;
         reconcilePendingExecutionRunTarget?: (runId: string) => Promise<void>;
         refreshAccountSettingsForMinimumVersion?: (settingsVersion: number | null) => Promise<void>;
+        refreshDemandedMcpCatalog?: () => Promise<void>;
     }> & SessionStoredContentCryptoContext,
 ): SessionClientRecoveryRuntime {
     const serverUrl = params.serverUrl ?? resolveServerHttpBaseUrl();
@@ -240,6 +241,7 @@ export function createSessionClientRecoveryRuntime(
             applyPendingQueueState: (state) => params.applyPendingQueueState(state),
             reconcilePendingExecutionRunTarget: params.reconcilePendingExecutionRunTarget,
             refreshAccountSettingsForMinimumVersion: params.refreshAccountSettingsForMinimumVersion,
+            refreshDemandedMcpCatalog: params.refreshDemandedMcpCatalog,
             connectionSupervisor: params.getSessionConnectionSupervisor(),
             onDebug: (message, data) => logger.debug(message, data),
         }));

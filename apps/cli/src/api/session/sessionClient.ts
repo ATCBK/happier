@@ -1160,6 +1160,7 @@ export class ApiSessionClient extends EventEmitter {
                 }
             },
             reconcilePendingExecutionRunTarget: (runId) => this.notifyExecutionRunPendingTarget(runId),
+            refreshDemandedMcpCatalog: () => this.sessionHandlersRegistration.refreshDemandedMcpCatalog(),
         });
         this.commitQueueRuntime = createSessionClientCommitQueueRuntime({
             signal: this.socketAckAbortController.signal,
@@ -1669,6 +1670,7 @@ export class ApiSessionClient extends EventEmitter {
             },
             rpcHandlerManager: this.rpcHandlerManager,
             handleUserScopedUpdate: (data, socket) => this.handleUserScopedUpdate(data, socket),
+            onAccountCatalogInvalidated: () => this.sessionHandlersRegistration.refreshDemandedMcpCatalog(),
             installSessionSocketEventHandlers: (socket) => this.interactionApi.installSessionSocketEventHandlers(socket),
             classifyTransportErrorToProbeResult,
             onStateChange: (state) => {

@@ -1,22 +1,20 @@
-import { describe, expect, it, vi } from 'vitest';
+import { afterAll, describe, expect, it, vi } from 'vitest';
 
 import {
+  accountSettingsParse,
   PluginInstallReviewPrincipalDigestSchema,
   type PluginPermissionGrantListActionInputV1,
 } from '@happier-dev/protocol';
+import { ConnectedPurposeCatalogV1Schema } from '@happier-dev/protocol/connect/connectedAccountConfigurationRowsV1';
+import type { ActiveAccountSettingsSnapshot } from '@/settings/accountSettings/activeAccountSettingsSnapshot';
 import { RPC_METHODS } from '@happier-dev/protocol/rpc';
 
 import { readCanonicalPluginManifest } from '../../plugins/manifest/normalize';
 import { createPluginManifestV2Fixture } from '../../plugins/testkit/manifestV2Fixture';
-
-const runtimeLeaseMocks = vi.hoisted(() => ({
-  acquire: vi.fn(),
-  release: vi.fn(async () => undefined),
-}));
-
-vi.mock('@/plugins/runtime/reload/runtimeLease', () => ({
-  acquireAuthoritativePluginRuntimeRegistryLease: runtimeLeaseMocks.acquire,
-}));
+import { createAuthoredAdmittedPluginRuntimeFixture } from '@/plugins/testkit/admittedRuntime';
+import { pluginReloadController } from '@/plugins/runtime/reload/singleton';
+import { createConnectedAccountPurposeBindingOwner, type ConnectedAccountPurposeBindingOwnerDependencies } from '@/daemon/connectedServices/purposeBindings/ConnectedAccountPurposeBindingOwner';
+import { RpcHandlerManager } from '@/api/rpc/RpcHandlerManager';
 
 import { registerMachineVoiceClientCredentialRpcHandlers } from './rpcHandlers.voiceClientCredentials';
 
@@ -67,31 +65,49 @@ function manifest() {
 }
 
 function manager() {
-  const handlers = new Map<string, (raw: unknown) => Promise<unknown>>();
+  const registrar = new RpcHandlerManager({ scopePrefix: 'machine-a', encryptionMode: 'plain', logger() {} });
   return {
-    handlers,
-    registrar: {
-      registerHandler(method: string, handler: (raw: unknown) => Promise<unknown>) {
-        handlers.set(method, handler);
-      },
-    },
+    handlers: { get: (method: string) => (raw: unknown) => registrar.invokeLocal(method, raw) },
+    registrar,
   };
+}
+
+const admittedFixtures: Awaited<ReturnType<typeof createAuthoredAdmittedPluginRuntimeFixture>>[] = [];
+afterAll(async () => {
+  const fixtures = admittedFixtures.splice(0).reverse();
+  await Promise.all(fixtures.map((fixture) => fixture.lease.release()));
+  for (const fixture of fixtures) await fixture.dispose();
+});
+
+async function admitClient(readSnapshot: () => ActiveAccountSettingsSnapshot | null,
+  materializeAccount: ConnectedAccountPurposeBindingOwnerDependencies['materializeAccount']) {
+  const unexpected = async (): Promise<never> => { throw new Error('Unexpected Account selection or listing'); };
+  const connectedAccounts = createConnectedAccountPurposeBindingOwner({
+    store: {
+      read: async () => {
+        const catalog = readSnapshot()?.connectedPurposeCatalog;
+        if (catalog?.status !== 'ready' || catalog.record.key !== 'purposes') throw new Error('Purpose catalog unavailable');
+        return catalog.record.value;
+      }, update: unexpected, subscribe: () => ({ dispose() {} }),
+    },
+    selectTarget: unexpected,
+    resolveTarget: async (target) => target.kind === 'account' ? { account: target.account, displayName: 'Account A' } : null,
+    materializeAccount, projectTargetAccounts: unexpected, assertTargetAccountMaterializable: unexpected,
+  });
+  const fixture = await createAuthoredAdmittedPluginRuntimeFixture({
+    controller: pluginReloadController,
+    runtimeOptions: { connectedAccounts, resolveCurrentMachineId: () => 'machine-a' },
+    plugins: [{ manifest: manifest(), files: { 'daemon.mjs': 'export function activate() {}' } }],
+  });
+  admittedFixtures.push(fixture);
+  await fixture.registry.activateContributionsOnDemand([{ pluginId: contribution.pluginId, family: 'voiceProviders', localId: contribution.localId }]);
+  return fixture;
 }
 
 describe('Voice client raw credential machine RPC', () => {
   it('materializes headers only for the exact current client projection identity and declaration tuple', async () => {
     const { handlers, registrar } = manager();
-    const exactManifest = manifest();
-    const current = vi.fn(() => true);
-    const resolveVoiceProviderRuntimeLifecycle = vi.fn((candidate: typeof contribution) => (
-      candidate.pluginId === contribution.pluginId && candidate.localId === contribution.localId
-        ? {
-            generation: 'immutable-provider-generation-12',
-            isCurrent: current,
-            retirementSignal: new AbortController().signal,
-          }
-        : null
-    ));
+
     const revisionA = 'csr_0123456789ABCDEFGHJKMNPQRS';
     const revisionB = 'csr_ZYXWVUTSRQPONMLKJHGFEDCBA1';
     let credentialRevision = revisionA;
@@ -107,41 +123,33 @@ describe('Voice client raw credential machine RPC', () => {
       };
     });
     const listInputs: PluginPermissionGrantListActionInputV1[] = [];
-    runtimeLeaseMocks.acquire.mockResolvedValue({
-      registry: {
-        generation: 12,
-        contributes: {
-          activationTargets: [{
-            pluginId: contribution.pluginId,
-            manifest: exactManifest,
-          }],
-          voiceProviders: [{
-            pluginId: contribution.pluginId,
-            identity: contribution,
-            definition: exactManifest.contributes.voiceProviders![0]!,
-          }],
-        },
-        resolveVoiceProviderRuntimeLifecycle,
-        resolveCurrentPluginMaterializationRef: () => ({
-          pluginId: contribution.pluginId,
-          machineId: 'machine-a',
-          materializationId: 'materialization-a',
-        }),
-        resolveConnectedAccountPurposeBindingOwner: () => ({
-          getBinding: async () => ({
-            purpose: 'voice.browser',
-            service,
-            account: { service, accountId: 'account-a' },
-            target: { kind: 'account' as const, displayName: 'Account A' },
-          }),
-          materialize,
-        }),
-      },
-      release: runtimeLeaseMocks.release,
-    });
+
     const principal = PluginInstallReviewPrincipalDigestSchema.parse('a'.repeat(64));
+    const readSnapshot = () => ({
+          source: 'network', scopeKey: 'account-scope', settingsVersion: 1, loadedAtMs: 1,
+          settingsSecretsReadKeys: [],
+          settings: accountSettingsParse({
+            voiceSettingsV1: {
+              credentialBindings: [{
+                contribution,
+                credentialSlotId: 'api_key',
+                credentialSource: { kind: 'connectedAccount' },
+                credentialBindings: { account: {} },
+              }],
+            },
+          }),
+          connectedPurposeCatalog: { status: 'ready', revision: 1, record: {
+            key: 'purposes', value: ConnectedPurposeCatalogV1Schema.parse({
+              v: 1, bindings: [{
+                purpose: { consumer: contribution, purpose: 'voice.browser' },
+                target: { kind: 'account', account: { service, accountId: 'account-a' } },
+              }],
+            }),
+          } },
+        } satisfies ActiveAccountSettingsSnapshot);
+    const fixture = await admitClient(readSnapshot, materialize);
     registerMachineVoiceClientCredentialRpcHandlers({
-      rpcHandlerManager: registrar as never,
+      rpcHandlerManager: registrar,
       machineId: 'machine-a',
       resolveRawCredentialDependencies: async () => ({
         currentInstallReviewPrincipal: { readCurrent: async () => ({ digest: principal, presentation: null }) },
@@ -169,27 +177,7 @@ describe('Voice client raw credential machine RPC', () => {
             };
           },
         },
-        getAccountSettingsSnapshot: () => ({
-          source: 'network', scopeKey: 'account-scope', settingsVersion: 1, loadedAtMs: 1,
-          settingsSecretsReadKeys: [],
-          settings: {
-            voiceSettingsV1: {
-              credentialBindings: [{
-                contribution,
-                credentialSlotId: 'api_key',
-                credentialSource: { kind: 'connectedAccount' },
-                credentialBindings: { account: {} },
-              }],
-            },
-            connectedAccountPurposeBindingsV1: {
-              v: 1,
-              bindings: [{
-                purpose: { consumer: contribution, purpose: 'voice.browser' },
-                target: { kind: 'account', account: { service, accountId: 'account-a' } },
-              }],
-            },
-          } as never,
-        }),
+        getAccountSettingsSnapshot: readSnapshot,
       }),
     });
 
@@ -206,8 +194,7 @@ describe('Voice client raw credential machine RPC', () => {
       pluginId: contribution.pluginId,
       subject: { contribution },
     });
-    expect(current).toHaveBeenCalled();
-    expect(resolveVoiceProviderRuntimeLifecycle).toHaveBeenCalledWith(contribution);
+    expect(fixture.registry.resolveVoiceProviderRuntimeLifecycle?.(contribution)?.isCurrent()).toBe(true);
 
     const materializeRaw = handlers.get(
       RPC_METHODS.DAEMON_VOICE_CLIENT_RAW_CREDENTIAL_MATERIALIZE,
@@ -260,36 +247,12 @@ describe('Voice client raw credential machine RPC', () => {
 
   it('rejects browser environment access and an undeclared phase before reading a secret', async () => {
     const { handlers, registrar } = manager();
-    const exactManifest = manifest();
+
     const materialize = vi.fn();
-    runtimeLeaseMocks.acquire.mockResolvedValue({
-      registry: {
-        generation: 12,
-        contributes: {
-          activationTargets: [{
-            pluginId: contribution.pluginId,
-            manifest: exactManifest,
-          }],
-          voiceProviders: [{
-            pluginId: contribution.pluginId,
-            identity: contribution,
-            definition: exactManifest.contributes.voiceProviders![0]!,
-          }],
-        },
-        resolveVoiceProviderRuntimeLifecycle: () => ({
-          generation: '12', isCurrent: () => true, retirementSignal: new AbortController().signal,
-        }),
-        resolveCurrentPluginMaterializationRef: () => ({
-          pluginId: contribution.pluginId,
-          machineId: 'machine-a',
-          materializationId: 'materialization-a',
-        }),
-        resolveConnectedAccountPurposeBindingOwner: () => ({ materialize }),
-      },
-      release: runtimeLeaseMocks.release,
-    });
+
+    await admitClient(() => null, materialize);
     registerMachineVoiceClientCredentialRpcHandlers({
-      rpcHandlerManager: registrar as never,
+      rpcHandlerManager: registrar,
       machineId: 'machine-a',
       resolveRawCredentialDependencies: async () => ({
         currentInstallReviewPrincipal: { readCurrent: async () => ({

@@ -1,3 +1,7 @@
+import { readHttpStatus } from '@happier-dev/plugin-sdk/http';
+
+export { readHttpStatus } from '@happier-dev/plugin-sdk/http';
+
 export class HttpStatusError extends Error {
   readonly response: Readonly<{ status: number }>;
 
@@ -12,27 +16,6 @@ export class HttpStatusError extends Error {
 
 export function isAuthenticationStatus(status: number | null | undefined): status is 401 | 403 {
   return status === 401 || status === 403;
-}
-
-function asRecord(value: unknown): Record<string, unknown> | null {
-  if (!value || typeof value !== 'object' || Array.isArray(value)) return null;
-  return value as Record<string, unknown>;
-}
-
-function readFiniteStatus(value: unknown): number | null {
-  return typeof value === 'number' && Number.isFinite(value) ? value : null;
-}
-
-export function readHttpStatus(error: unknown): number | null {
-  const record = asRecord(error);
-  if (!record) return null;
-
-  const response = asRecord(record.response);
-  const responseStatus = readFiniteStatus(response?.status);
-  if (responseStatus !== null) return responseStatus;
-
-  const data = asRecord(record.data);
-  return readFiniteStatus(data?.statusCode) ?? readFiniteStatus(data?.status);
 }
 
 export function isAuthenticationError(error: unknown): boolean {

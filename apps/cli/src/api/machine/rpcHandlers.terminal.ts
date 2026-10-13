@@ -271,7 +271,7 @@ export function registerMachineTerminalRpcHandlers(params: Readonly<{
     try {
       if (runtime.isCurrent && !await runtime.isCurrent()) return err('terminal_forbidden');
       const rows = await runWithServerHttpBaseUrl(runtime.serverHttpBaseUrl, () => readProjectAccountRows({
-        ...projectRuntimeAccountRowsInput(runtime, context.callerInputAuthorization?.binding.actionId ?? 'machines.terminal.open'), serverId: runtime.serverId, signal: context.signal,
+        ...projectRuntimeAccountRowsInput(runtime), serverId: runtime.serverId, signal: context.signal,
       }));
       const cwd = resolveCwd(input.workspace?.rootPath ?? input.cwd);
       if (!cwd.ok) return cwd;
@@ -377,7 +377,7 @@ export function registerMachineTerminalRpcHandlers(params: Readonly<{
         }
       };
       await assertCurrent();
-      const accountAccess = projectRuntimeAccountRowsInput(runtime, context.callerInputAuthorization?.binding.actionId ?? 'machines.terminal.open');
+      const accountAccess = projectRuntimeAccountRowsInput(runtime);
       const association = await resolveProjectSetupAcceptedWorkspace({ ...accountAccess,
         serverId: runtime.serverId, serverHttpBaseUrl: runtime.serverHttpBaseUrl, signal: context.signal,
         address: { serverId: custody.serverId, workspaceId: custody.workspaceRefId, machineId: custody.machineId, rootPath: custody.rootPath } });
@@ -492,7 +492,7 @@ export function registerMachineTerminalRpcHandlers(params: Readonly<{
         return refused('project_requester_credentials_unavailable');
       }
       const rows = await runWithServerHttpBaseUrl(runtime.serverHttpBaseUrl, () => readProjectAccountRows({
-        ...projectRuntimeAccountRowsInput(runtime, 'projects.script.run'), serverId: runtime.serverId, signal: context.signal,
+        ...projectRuntimeAccountRowsInput(runtime), serverId: runtime.serverId, signal: context.signal,
       }));
       if (!await isCurrent()) return refused('machine_admission_changed');
       // Directory selects only an exact accepted checkout. Its stored Project anchor,

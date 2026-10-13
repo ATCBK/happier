@@ -11,6 +11,7 @@ import { publishMachineMetadataOnce, readOpenedMachineMetadataSnapshot } from '.
 import type { MachineMetadataFieldReadV1, MachineMetadataFieldPortV1 } from '@happier-dev/protocol/machines/machineMetadataFieldV1';
 import { registerDaemonMachineResourcesPolicyRpcHandlers, type DaemonMachineResourcesPolicyRoutes } from '@/rpc/handlers/daemonMachineResourcesPolicy';
 import { registerDaemonMachineGuardRpcHandlers, type DaemonMachineGuardRoutes } from '@/rpc/handlers/daemonMachineGuard';
+import { projectMachineAgentInventoryFromCliSnapshot } from '@/capabilities/snapshots/machineAgentInventory';
 import { dispatchActionFromRpc } from '@/rpc/handlers/_actionDispatchAdapter';
 import { registerDaemonStorageRpcHandlers, type DaemonStorageRoutes } from '@/rpc/handlers/storage';
 import { parseMachinePublishedMetadataV1, parseMachinePublishedDaemonStateV1, StoredMachinePublishedMetadataV1Schema, StoredMachinePublishedDaemonStateV1Schema, projectMachinePublishedMetadataFromRowV1 } from '@happier-dev/protocol/machines/machinePublishedContentV1';
@@ -51,6 +52,8 @@ import { resolveCliHomeTarget } from '@/server/homeTarget';
 import { MachineInstallationPublicIdentityV1Schema, type MachineInstallationPublicIdentityV1 } from '@happier-dev/protocol/machines/identity/installationIdentity';
 import { USAGE_SOURCES_INVALIDATION_EVENT_V1, type UsageSourcesInvalidationV1 } from '@happier-dev/protocol/usage/usageSources';
 import { readAccountIdFromToken } from '@/cloud/decodeJwtPayload';
+import { createMachineSkillHostService, resolveMachineSkillInstallTarget } from '@/prompts/skills/machineInstall/machineSkillHost';
+import { createMachineSkillActionExecutor } from '@/prompts/skills/machineInstall/machineSkillActionExecutor';
 import { createExternalActionMachineRpcExecution, verifyExternalActionExecutionAuthorizationCurrent } from './externalActionExecutionAuthorization';
 import { externalActionTargetsEqualV1 } from '@happier-dev/protocol/actions/externalActionApi';
 import { PendingActivationRequestedEphemeralV1Schema, type SessionInputMachineTargetV1 } from '@happier-dev/protocol/sessions/messages/sessionInputAdmission';
@@ -72,7 +75,8 @@ import { WorkspaceSyncSeedExportPrepareV1Schema, type WorkspaceSyncSeedExportPre
 import { buildActionExecutorContextForRpc, projectWorkspaceSyncPhysicalContextFromActionContext, type RpcActionExecutorContext } from '@/rpc/handlers/_actionDispatchAdapter';
 import { ExternalActionRequestEnvelopeSchema } from '@happier-dev/protocol/actions/externalActionApi';
 import { isExternalActionAuthorizationBoundToEnvelope } from '@happier-dev/protocol/actions/externalActionExecutionAuthorization';
-import { ProjectOpenSyncMaterializationResultV1Schema, type OpenProjectInputV1 } from '@happier-dev/protocol/projects/openProjectV1';
+import { OpenProjectInputV1Schema, OpenProjectResultV1Schema, ProjectOpenSyncMaterializationResultV1Schema, type OpenProjectInputV1, type OpenProjectResultV1 } from '@happier-dev/protocol/projects/openProjectV1';
+import { callExactMachineRpc } from '@/session/transport/rpc/machineRpc';
 import type { WorkspaceRefV1 } from '@happier-dev/protocol/workspaces/workspaceRefV1';
 import { resolveWorkspaceSyncTransportAddress } from '@happier-dev/protocol/workspaces/workspaceSyncTopology';
 import { readWorkspaceSyncChildMachineFacts } from '@/workspaces/sync/workspaceSyncTargetAuthority';
@@ -182,7 +186,10 @@ import { changesRequireSavedSecretCatalogRefresh } from '@/settings/secrets/save
 import { isProfileCatalogAccountChangeEntityIdV1 } from '@happier-dev/protocol/profiles/profileRecordV1';
 import { refreshDemandedActiveProfileCatalog } from '@/settings/profiles/hydrateProfileCatalog';
 import { parsePromptLibraryPhysicalKeyV1 } from '@happier-dev/protocol/prompts/library/promptLibraryRowsV1';
-import { refreshDemandedActivePromptLibraryCatalog } from '@/settings/prompts/hydratePromptLibraryCatalog';
+import { prepareActivePromptLibraryRecord, readActiveMachineSkillInstallArtifactIds, refreshDemandedActivePromptLibraryCatalog,
+    type MachineSkillInstallCatalogDemand } from '@/settings/prompts/hydratePromptLibraryCatalog';
+import { getActiveAccountSettingsSnapshot, getActiveAccountSettingsSnapshotLifetimeToken,
+    isActiveAccountSettingsSnapshotLifetimeCurrent } from '@/settings/accountSettings/activeAccountSettingsSnapshot';
 import { refreshDemandedActiveProviderConnectionsCatalog } from '@/providers/settings/hydrate';
 import { PROVIDER_CONNECTIONS_ACCOUNT_KV_KEY_V1 } from '@happier-dev/protocol/providers/connections/connectionRowsV1';
 import { refreshDemandedActiveMcpServerCatalog } from '@/settings/mcp/hydrateMcpServerCatalog';
@@ -412,6 +419,10 @@ export type ConnectedServicesProjectionNotification = Readonly<{
 }>;
 
 export type ApiMachineClientLifecycleDependencies = Readonly<{
+    /** The daemon's one outside-install copy owner consumes current Prompt Library reads. */
+    machineSkillInstalls?: MachineSkillInstallCatalogDemand & Readonly<{
+        refresh(input: Readonly<{ signal: AbortSignal; artifactIds?: readonly string[] }>): Promise<void>;
+    }>;
     readSpawnFailureLimits?: MachineRpcHandlerDeps['readSpawnFailureLimits'];
     ownerRemainder?: MachineRpcHandlerDeps['ownerRemainder'];
     requesterSessionRuntime?: MachineRpcHandlerDeps['requesterSessionRuntime'];
@@ -579,6 +590,7 @@ export class ApiMachineClient {
     private readonly transientSessionMediaReadAllowance = createTransientSessionMediaReadAllowance();
     private readonly fileSystemTransferRelayOwner: TransferRelayV2DownloadSessionOwner;
     private readonly rpcLifecycleRegistrations: MachineRpcLifecycleRegistration[] = [];
+    private executionRunAccountSnapshots: ReturnType<typeof createExecutionRunAccountSettingsSnapshotResolver> | null = null;
     private readonly executionBudgetRegistry = createExecutionBudgetRegistry();
     private readonly machineRuntimeServerHttpBaseUrl: string;
     private readonly machineRuntimeServerId = configuration.activeServerId;
@@ -1318,6 +1330,9 @@ export class ApiMachineClient {
             readCredentials: readExecutionRunAccountCredentials, isOwnerCurrent: executionRunAccountOwnerCurrent,
             onSettings: settings => { executionRunAccountSettings = settings; },
         });
+        const previousAccountSnapshots = this.executionRunAccountSnapshots;
+        this.executionRunAccountSnapshots = resolveExecutionRunAccountSettingsSnapshot;
+        void previousAccountSnapshots?.dispose();
         const workSummaryInstallation = readInstallationIdentityIfExistsSync();
         const workSummaryAccess = createAccountServerActionDeps({ token: this.token,
             serverId: executionRunServerId, serverHttpBaseUrl: this.machineRuntimeServerHttpBaseUrl,
@@ -1362,6 +1377,16 @@ export class ApiMachineClient {
             },
             deps: {
                 ...deps,
+                observeCapabilitiesCliSnapshot: async (observation) => {
+                    await this.updateMachineMetadata(metadata => {
+                        const current = metadata ?? this.machine.metadata;
+                        if (!current) throw new Error('Machine metadata is unavailable for Agent install facts.');
+                        if ((current.agentInventory?.checkedAt ?? -1) > observation.checkedAt) return current;
+                        return { ...current, agentInventory: projectMachineAgentInventoryFromCliSnapshot({
+                            ...observation, current: current.agentInventory,
+                        }) };
+                    });
+                },
                 sessionHandoffPreflight: {
                     readCredentials: readExecutionRunAccountCredentials,
                     callMachine: createSessionHandoffPreflightMachineRpc({ callMachine: callHandoffMachine,
@@ -1644,6 +1669,44 @@ export class ApiMachineClient {
                     : { kind: 'unknown' as const, code: 'project_setup_requester_review_unavailable' };
             } } : {}),
         });
+    }
+
+    /** Effect dependency reached only after the canonical Action admission. */
+    createMachineSkillActionExecutor(params: Readonly<{ credentials: StoredCredentials;
+        operationContext?: import('@/settings/secrets/hydrateSavedSecretCatalog').SavedSecretOperationContextV1;
+    }>): NonNullable<ActionExecutorDeps['skillMachineActionExecute']> {
+        return async request => {
+            const accountId = readAccountIdFromToken(params.credentials.token);
+            if (!accountId || accountId !== readAccountIdFromToken(this.token)) {
+                return { ok: false, errorCode: 'machine_skill_custodian_required', error: 'machine_skill_custodian_required' };
+            }
+            if (!request.input || typeof request.input !== 'object' || Reflect.get(request.input, 'machineId') !== this.machine.id) {
+                return { ok: false, errorCode: 'machine_target_mismatch', error: 'machine_target_mismatch' };
+            }
+            try {
+                request.context.signal?.throwIfAborted();
+                const operation = params.operationContext;
+                const isCurrent = async () => !this.projectionSchedulingClosed && (operation
+                    ? sameStoredCredentials(operation.credentials, params.credentials)
+                        && operation.serverHttpBaseUrl.replace(/\/+$/, '') === this.machineRuntimeServerHttpBaseUrl.replace(/\/+$/, '')
+                        && await operation.isCurrent()
+                    : sameStoredCredentials(params.credentials, await readStoredCredentialsForServerId(this.machineRuntimeServerId)));
+                if (!await isCurrent()) throw Object.assign(new Error('scope-retired'), { code: 'scope-retired' });
+                const target = await resolveMachineSkillInstallTarget({ serverId: this.machineRuntimeServerId,
+                    serverHttpBaseUrl: this.machineRuntimeServerHttpBaseUrl, machineId: this.machine.id, signal: request.context.signal });
+                if (!target) throw Object.assign(new Error('machine_skill_home_unavailable'), { code: 'machine_skill_home_unavailable' });
+                if (!await isCurrent()) throw Object.assign(new Error('scope-retired'), { code: 'scope-retired' });
+                request.context.signal?.throwIfAborted();
+                const service = createMachineSkillHostService({ credentials: params.credentials, target,
+                    serverId: this.machineRuntimeServerId, serverHttpBaseUrl: this.machineRuntimeServerHttpBaseUrl,
+                    ...(operation ? { operationContext: operation } : {}) });
+                return await createMachineSkillActionExecutor({ machineId: this.machine.id, service })(request);
+            } catch (error) {
+                const code: unknown = error && typeof error === 'object' ? Reflect.get(error, 'code') : undefined;
+                const errorCode = typeof code === 'string' ? code : 'skill_install_unavailable';
+                return { ok: false, errorCode, error: errorCode };
+            }
+        };
     }
 
     /** Effect dependency reached only after the canonical Action admission. */
@@ -2596,6 +2659,43 @@ export class ApiMachineClient {
         })(input.signal);
         if (!observed) throw new Error('Current workspace Home identity is unavailable');
         return assertResolvedHomeTargetIdentity(target, observed.serverIdentityId);
+    }
+
+    /** Forward the unchanged original Project root through this exact installed custodian. */
+    async callProjectOpen(input: Readonly<{
+        input: OpenProjectInputV1;
+        credentials: StoredCredentials;
+        context: RpcActionExecutorContext;
+    }>): Promise<OpenProjectResultV1> {
+        const request = OpenProjectInputV1Schema.parse(input.input);
+        const context = input.context;
+        const authorization = context.externalActionExecutionAuthorization;
+        const admission = context.machineAdmission;
+        const envelope = context.originalActionEnvelope;
+        const installation = readInstallationIdentityIfExistsSync();
+        const socket = this.socket;
+        const unavailable = () => Object.assign(new Error('Installed Project root authority is unavailable'), { code: 'peer_unavailable' });
+        if (!socket?.connected || !installation || !authorization || !admission || !envelope
+            || request.machineId !== this.machine.id || authorization.binding.actionId !== 'projects.open'
+            || authorization.binding.machineId !== this.machine.id || authorization.binding.serverIdentityId !== request.serverId
+            || authorization.binding.installationId !== installation.installationId
+            || admission.machineId !== this.machine.id || admission.installationId !== installation.installationId
+            || admission.actorAccountId !== authorization.binding.accountId
+            || admission.custodianAccountId !== readAccountIdFromToken(this.token)
+            || configuration.activeServerId !== this.machineRuntimeServerId
+            || !isExternalActionAuthorizationBoundToEnvelope(authorization.binding,
+                { actionId: 'projects.open', machineId: this.machine.id, envelope })
+            || !context.verifyMachineAdmissionCurrent || !await context.verifyMachineAdmissionCurrent()) throw unavailable();
+        const homeId = await this.readWorkspaceSyncHomeIdentity({ effectful: true, ...(context.signal ? { signal: context.signal } : {}) });
+        if (homeId !== request.serverId || this.socket !== socket || !socket.connected
+            || configuration.activeServerId !== this.machineRuntimeServerId
+            || readInstallationIdentityIfExistsSync()?.installationId !== installation.installationId) throw unavailable();
+        return OpenProjectResultV1Schema.parse(await callExactMachineRpc({ credentials: input.credentials,
+            machineId: this.machine.id, serverUrl: this.machineRuntimeServerHttpBaseUrl,
+            method: RPC_METHODS.PROJECTS_OPEN, request, requestId: context.actionRequestId,
+            projectOpenInstalledSocket: socket, timeoutMs: null,
+            externalAction: { context, effectActionId: 'projects.open', installationId: installation.installationId,
+                privateKey: installation.privateKey }, ...(context.signal ? { signal: context.signal } : {}) }));
     }
 
     /** The installed physical target requests only the active SOURCE operation's finite seed. */
@@ -4029,6 +4129,8 @@ export class ApiMachineClient {
         // retention and active local observers.
         retirePluginAccountCollectionWatchScope(resolveAccountSettingsScopeKeyForToken(this.token));
         this.projectionSchedulingClosed = true;
+        await this.executionRunAccountSnapshots?.dispose();
+        this.executionRunAccountSnapshots = null;
         this.activeTransportGeneration += 1;
         this.teardownActiveSocket();
         this.connectedServicesProjectionRetry.close();
@@ -4262,6 +4364,41 @@ export class ApiMachineClient {
         });
     }
 
+    private async refreshDemandedPromptLibraryCatalog(input: Readonly<{
+        signal: AbortSignal; initializeMachineInstallDemand?: boolean; artifactIds?: readonly string[];
+    }>): Promise<void> {
+        const installs = this.lifecycleDependencies.machineSkillInstalls;
+        const machineInstallDemand = installs?.target.machineId === this.machine.id ? installs : undefined;
+        const active = getActiveAccountSettingsSnapshot();
+        const captured = active?.scopeKey ? { scopeKey: active.scopeKey,
+            lifetimeToken: getActiveAccountSettingsSnapshotLifetimeToken() } : null;
+        const transportGeneration = this.activeTransportGeneration;
+        // A new daemon must observe the existing receipt row before it can know
+        // which installs demand the catalog. This is the same key-demand owner.
+        let prepared = false;
+        if (machineInstallDemand && input.initializeMachineInstallDemand && captured
+            && active?.promptLibraryCatalog === undefined
+            && captured.scopeKey === resolveAccountSettingsScopeKeyForToken(this.token)) {
+            const credentials = await readStoredCredentials();
+            input.signal.throwIfAborted();
+            if (credentials?.token === this.token) {
+                await prepareActivePromptLibraryRecord({ credentials, ...captured, key: 'external-links', signal: input.signal });
+                prepared = true;
+            }
+        }
+        const catalog = prepared ? getActiveAccountSettingsSnapshot()?.promptLibraryCatalog
+            : await refreshDemandedActivePromptLibraryCatalog({ token: this.token, signal: input.signal,
+                ...(machineInstallDemand ? { machineInstallDemand } : {}) });
+        input.signal.throwIfAborted();
+        if (!machineInstallDemand || !captured || !isActiveAccountSettingsSnapshotLifetimeCurrent(captured)
+            || !this.isActiveTransportGeneration(transportGeneration)
+            || (catalog?.status !== 'ready' && catalog?.status !== 'partial')
+            || readActiveMachineSkillInstallArtifactIds({ token: this.token, machineInstallDemand }).length === 0) return;
+        await machineInstallDemand.refresh({ signal: input.signal,
+            ...(input.artifactIds ? { artifactIds: input.artifactIds } : {}) });
+        input.signal.throwIfAborted();
+    }
+
     private async refreshAllDemandedAccountCatalogs(input: {
         token: string;
         signal: AbortSignal;
@@ -4269,7 +4406,7 @@ export class ApiMachineClient {
     }): Promise<void> {
         input.signal.throwIfAborted();
         await refreshDemandedActiveProfileCatalog(input);
-        await refreshDemandedActivePromptLibraryCatalog(input);
+        await this.refreshDemandedPromptLibraryCatalog({ signal: input.signal, initializeMachineInstallDemand: true });
         await refreshDemandedActiveProviderConnectionsCatalog(input);
         await refreshDemandedActiveMcpServerCatalog(input);
         await refreshDemandedActiveAcpCatalog(input);
@@ -4460,8 +4597,14 @@ export class ApiMachineClient {
             && change.entityId === NOTIFICATION_CHANNELS_ACCOUNT_KV_KEY_V1);
         const hasProfileCatalogChange = changes.some((change) => change.kind === 'account'
             && isProfileCatalogAccountChangeEntityIdV1(change.entityId));
-        const hasPromptLibraryChange = changes.some((change) => change.kind === 'account'
+        const hasPromptLibraryRowChange = changes.some((change) => change.kind === 'account'
             && parsePromptLibraryPhysicalKeyV1(change.entityId) !== null);
+        const machineSkillInstalls = this.lifecycleDependencies.machineSkillInstalls;
+        const installedArtifactIds = new Set(machineSkillInstalls?.target.machineId === this.machine.id
+            ? readActiveMachineSkillInstallArtifactIds({ token: this.token, machineInstallDemand: machineSkillInstalls }) : []);
+        const changedInstalledArtifactIds = [...new Set(changes.filter(change => change.kind === 'artifact'
+            && installedArtifactIds.has(change.entityId)).map(change => change.entityId))];
+        const hasPromptLibraryChange = hasPromptLibraryRowChange || changedInstalledArtifactIds.length > 0;
         const hasProviderConnectionsChange = changes.some((change) => change.kind === 'account'
             && change.entityId === PROVIDER_CONNECTIONS_ACCOUNT_KV_KEY_V1);
         const hasAcpCatalogChange = changes.some((change) => change.kind === 'account'
@@ -4544,7 +4687,9 @@ export class ApiMachineClient {
             await this.notifyAccountSettingsVersionHint({ settingsVersion: null, source: 'page-limit' });
         }
         if (opts.reason !== 'live' || hasPromptLibraryChange || highestAccountSettingsVersion !== null || changes.length >= CHANGES_PAGE_LIMIT) {
-            await refreshDemandedActivePromptLibraryCatalog({ token: this.token, signal });
+            await this.refreshDemandedPromptLibraryCatalog({ signal, initializeMachineInstallDemand: opts.reason !== 'live',
+                ...(opts.reason === 'live' && !hasPromptLibraryRowChange && highestAccountSettingsVersion === null
+                    && changes.length < CHANGES_PAGE_LIMIT ? { artifactIds: changedInstalledArtifactIds } : {}) });
             signal.throwIfAborted();
         }
         if (opts.reason !== 'live' || hasProviderConnectionsChange || highestAccountSettingsVersion !== null || changes.length >= CHANGES_PAGE_LIMIT) {
@@ -4557,6 +4702,13 @@ export class ApiMachineClient {
         }
         if (opts.reason !== 'live' || hasMcpServerCatalogChange || highestAccountSettingsVersion !== null || changes.length >= CHANGES_PAGE_LIMIT) {
             await refreshDemandedActiveMcpServerCatalog({ token: this.token, signal });
+            try {
+                await this.executionRunAccountSnapshots?.refreshDemandedMcpCatalog(signal);
+            } catch (error) {
+                signal.throwIfAborted();
+                if (asRecord(error)?.code === 'provider_authorization_changed') throw error;
+                logger.debug('[API MACHINE] Captured MCP catalog refresh unavailable');
+            }
             signal.throwIfAborted();
         }
         if (opts.reason !== 'live' || hasConnectedAccountCatalogChange || highestAccountSettingsVersion !== null || changes.length >= CHANGES_PAGE_LIMIT) {

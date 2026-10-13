@@ -39,7 +39,7 @@ it('uses one relative read range for accounting, comparison and quota history th
   app.get('/v1/account/encryption/currentness', async () => ({ mode: 'plain', version: 1, signingKeyFingerprint: null, contentKeyFingerprint: null, updatedAt: 1 }));
   app.get('/v1/account/encryption', async () => ({ mode: 'plain', updatedAt: 1 }));
   app.get('/v2/account/settings', async () => ({ content: { t: 'plain', v: {} }, version: 1 }));
-  app.get('/v1/profile', async () => ({ id: 'account', connectedAccountsV4: [{ ref: source.ref, status: 'connected',
+  app.get('/v1/account/profile', async () => ({ id: 'account', connectedAccountsV4: [{ ref: source.ref, status: 'connected',
     authenticationModeId: null, revisionSemantics: 'revisioned', credentialRevision: 'csr_abcdefghijklmnopqrstuvwxyz',
     configurationReady: true, configurationRevision: '1', scopes: [] }], connectedAccountGroupsV4: [] }));
   app.get('/v4/connect/qualified/provider-account-usage/sources/resolve', async () => ({ source, recordId: snapshot.recordId,

@@ -26,7 +26,10 @@ export async function createAccountServerWorkspaceWorkerPreferenceClient(input: 
   async function request(path: string, body?: unknown) {
     if (!await isCurrent()) throw new Error('workspace_execution_config_scope_retired');
     const method = body === undefined ? 'GET' : 'POST';
-    const headers = await input.resolveRequestHeaders({context: input.context, effectActionId: input.actionId, method, path, ...(body === undefined ? {} : {body})});
+    // A replayed Project operation can be enclosed by the exact decision root;
+    // preparation reads retain that admission rather than claiming another effect.
+    const effectActionId = input.context.externalActionExecutionAuthorization?.binding.actionId ?? input.actionId;
+    const headers = await input.resolveRequestHeaders({context: input.context, effectActionId, method, path, ...(body === undefined ? {} : {body})});
     if (!headers) throw new Error('workspace_execution_config_authorization_unavailable');
     if (!await isCurrent()) throw new Error('workspace_execution_config_scope_retired');
     // Mode and CAS-preparation reads have not handed off this Action's effect.

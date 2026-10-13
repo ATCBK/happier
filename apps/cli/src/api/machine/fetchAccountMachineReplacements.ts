@@ -2,6 +2,7 @@ import axios from 'axios';
 import { type MachineReplacementRecord } from '@happier-dev/protocol';
 
 import { resolveServerHttpBaseUrl } from '@/api/client/serverHttpBaseUrl';
+import { buildCurrentAccountStoredContentCompatibilityHttpHeaders } from '@/api/clientCompatibility/cliClientCompatibility';
 
 /**
  * The Account's machine rows, reduced to the identity a REPLACEMENT walk needs.
@@ -22,8 +23,8 @@ export async function fetchAccountMachineReplacements(params: Readonly<{
   timeoutMs?: number;
 }>): Promise<readonly MachineReplacementRecord[] | null> {
   try {
-    const response = await axios.get(`${resolveServerHttpBaseUrl()}/v1/machines`, {
-      headers: { Authorization: `Bearer ${params.credentials.token}` },
+    const response = await axios.get(`${resolveServerHttpBaseUrl()}/v1/machines?includeRevoked=true`, {
+      headers: { ...buildCurrentAccountStoredContentCompatibilityHttpHeaders(), Authorization: `Bearer ${params.credentials.token}` },
       timeout: params.timeoutMs && params.timeoutMs > 0 ? params.timeoutMs : 15_000,
     });
     if (!Array.isArray(response.data)) return null;

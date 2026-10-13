@@ -79,6 +79,7 @@ export function initializeSessionClientConnection(
         ) => Promise<boolean>;
         /** Content-free hint only; the destination reconciler re-observes durable authority. */
         onSessionFollowInvalidated?: () => void;
+        onAccountCatalogInvalidated?: () => Promise<void>;
     }>,
 ): Readonly<{
     userSocket: Socket<ServerToClientEvents, ClientToServerEvents> | null;
@@ -91,7 +92,12 @@ export function initializeSessionClientConnection(
     userSocket?.on('update', (data: Update) => {
         // Content-free AccountChange wakes trigger the same re-observation owner
         // as reconnect/relation hints; they never convey source read authority.
-        if (data.body?.t === 'account-change') params.onSessionFollowInvalidated?.();
+        if (data.body?.t === 'account-change') {
+            params.onSessionFollowInvalidated?.();
+            void params.onAccountCatalogInvalidated?.().catch(() => {
+                logger.debug('[MCP] Captured Account catalog refresh unavailable');
+            });
+        }
         params.handleUserScopedUpdate(data, userSocket);
     });
     userSocket?.on('session', () => {});

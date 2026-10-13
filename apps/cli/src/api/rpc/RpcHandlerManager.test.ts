@@ -928,8 +928,6 @@ describe('RpcHandlerManager registration receipts', () => {
     async (clientType) => {
       const rpc = new RpcHandlerManager({ scopePrefix: 'owner-1', encryptionMode: 'plain', logger: () => {} });
       const sessionMethods = [
-        RPC_METHODS.SESSION_AGENT_TRANSITION,
-        RPC_METHODS.SESSION_FORK,
         'execution.run.start',
         'execution.run.brokerAuthority.resolve.v1',
         'session.permission.respond',
@@ -942,6 +940,10 @@ describe('RpcHandlerManager registration receipts', () => {
       const machineMethods = [
         RPC_METHODS.BASH,
         RPC_METHODS.STOP_SESSION,
+        RPC_METHODS.SESSION_AGENT_TRANSITION,
+        RPC_METHODS.SESSION_FORK,
+        RPC_METHODS.SESSION_FORK_PROVIDER_SAFE,
+        RPC_METHODS.SESSION_CONTINUE_WITH_REPLAY,
         RPC_METHODS.SESSION_SPAWN_NEW,
         RPC_METHODS.SPAWN_HAPPY_SESSION,
         RPC_METHODS.DAEMON_TRANSFER_UPLOAD_INIT,
@@ -1170,6 +1172,27 @@ describe('RpcHandlerManager registration receipts', () => {
 });
 
 describe('RpcHandlerManager.invokeLocal', () => {
+  it('retains admitted requester authority locally without deriving it from public input or causal context', async () => {
+    const rpc = new RpcHandlerManager({ scopePrefix: 'machine', encryptionMode: 'plain', logger: () => {} });
+    const machineAdmission = { actorAccountId: 'bob', custodianAccountId: 'alice', machineId: 'machine',
+      installationId: 'installed', encryptionMode: 'plain' as const, role: 'use' as const };
+    let current = true;
+    rpc.registerHandler('demo.resume', async (_input, context) => {
+      if (!context?.machineAdmission || !context.verifyMachineAdmissionCurrent || !await context.verifyMachineAdmissionCurrent()) return { ok: false };
+      return { ok: true, accountId: context.machineAdmission.actorAccountId, authority: context.callerAuthority,
+        permissionModes: context.callerInputConstraints?.permissionModes };
+    });
+    const options = { signal: new AbortController().signal, rpcContext: {
+      machineAdmission, verifyMachineAdmissionCurrent: async () => current,
+      callerAuthority: 'account_automation' as const, callerInputConstraints: { models: null, permissionModes: ['read-only' as const] },
+    } };
+    await expect(rpc.invokeLocal('demo.resume', {}, options)).resolves.toEqual({ ok: true, accountId: 'bob',
+      authority: 'account_automation', permissionModes: ['read-only'] });
+    current = false;
+    await expect(rpc.invokeLocal('demo.resume', {}, options)).resolves.toEqual({ ok: false });
+    await expect(rpc.invokeLocal('demo.resume', { machineAdmission }, { localActionContext: { surface: 'ui', authority: 'present_user' } })).resolves.toEqual({ ok: false });
+  });
+
   it('invokes a registered handler without encryption', async () => {
     const rpc = new RpcHandlerManager({
       scopePrefix: 'sess_1',

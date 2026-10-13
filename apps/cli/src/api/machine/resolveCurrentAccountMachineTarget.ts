@@ -5,14 +5,18 @@ import type { ExternalActionExecutionAuthorizationV1 } from '@happier-dev/protoc
 import { AccessibleMachineAccessV1Schema, type AccessibleMachineAccessV1 } from '@happier-dev/protocol/machines/machineAccessV1';
 import { DevcontainerChildProjectionV1Schema, type DevcontainerChildProjectionV1 } from '@happier-dev/protocol/machines/managed/devcontainerV1';
 import { isMachineReachableV1 } from '@happier-dev/protocol/machines/machineReachabilityV1';
+import { StoredMachinePublishedMetadataV1Schema, type MachinePublishedMetadataV1 } from '@happier-dev/protocol/machines/machinePublishedContentV1';
+import type { StoredCredentials } from '@/persistence';
+import { resolvePublishedMachineContentCodec } from './machineDataEncryptionKey';
+import { readAccountEncryptionModeOnce } from '@/api/client/accountEncryptionMode';
 
 import { buildCurrentAccountStoredContentCompatibilityHttpHeaders } from '@/api/clientCompatibility/cliClientCompatibility';
 import { normalizeServerHttpBaseUrl, resolveServerHttpBaseUrl } from '@/api/client/serverHttpBaseUrl';
 
 // The machine bootstrap rows reuse the one Protocol-owned external Action
 // bootstrap projection; this parser extends it only with the legacy/full-account
-// `metadata` blob it genuinely needs. Labels remain a CLI projection of that
-// metadata and never alter machine identity.
+// `metadata` blob it genuinely needs. Labels and decoded platform facts remain
+// CLI projections of that metadata and never alter machine identity.
 const ACCOUNT_MACHINE_ROW_SCHEMA = ExternalActionMachineBootstrapV1Schema
   .extend({ metadata: z.string().optional(), activeAt: z.number().nullable().optional(), access: AccessibleMachineAccessV1Schema.optional(),
     devcontainerChild: z.optional(z.nullable(DevcontainerChildProjectionV1Schema)) })
@@ -28,6 +32,9 @@ export type CurrentAccountMachineInventoryItem = Readonly<{
   id: string; label: string; kind: 'persistent' | 'ephemeral_session_runner';
   active: boolean; revokedAt: number | null; replacedByMachineId: string | null;
   activeAt?: number | null;
+  platform?: string;
+  arch?: string;
+  agentInventory?: MachinePublishedMetadataV1['agentInventory'];
   access?: AccessibleMachineAccessV1;
   operationProtocolCapabilities?: unknown;
   operationProtocolCapabilitiesRevision?: unknown;
@@ -58,15 +65,9 @@ function unavailable(code: string, message: string): CurrentAccountMachineTarget
   return { kind: 'unavailable', code, message };
 }
 
-function projectCurrentMachineTarget(
-  row: z.infer<typeof ACCOUNT_MACHINE_ROW_SCHEMA>,
-): CurrentAccountMachineTarget | null {
-  if (!row.active || row.revokedAt !== null || row.replacedByMachineId !== null) return null;
-  return { machineId: row.id, machineLabel: readMachineLabel(row.metadata, row.id) };
-}
-
 export async function listCurrentAccountMachines(params: Readonly<{
   token?: string;
+  credentials?: StoredCredentials;
   authorization?: ExternalActionExecutionAuthorizationV1;
   effectActionId?: string;
   serverHttpBaseUrl?: string;
@@ -96,14 +97,41 @@ export async function listCurrentAccountMachines(params: Readonly<{
     if (projection && !await projection.isCurrent()) throw new Error('Requester Machine inventory authority retired');
     const inventory = ACCOUNT_MACHINE_INVENTORY_SCHEMA.safeParse(response.data);
     if (!inventory.success) throw new Error('invalid machine inventory');
-    return inventory.data.map((row) => ({
-      id: row.id, label: readMachineLabel(row.metadata, row.id), kind: row.kind, active: row.active,
+    let accountMode: Promise<'plain' | 'e2ee' | 'unknown'> | undefined;
+    const readAccountMode = (credentials: StoredCredentials) => accountMode ??= readAccountEncryptionModeOnce({ request: () => axios.get(
+      `${serverHttpBaseUrl}/v1/account/encryption`, { headers: { Authorization: `Bearer ${credentials.token}` },
+        timeout: 20_000, ...(params.signal ? { signal: params.signal } : {}) },
+    ) }).then(mode => mode.kind === 'resolved' ? mode.mode : 'unknown' as const).catch(() => 'unknown' as const);
+    return await Promise.all(inventory.data.map(async (row) => {
+      let metadata: ReturnType<typeof StoredMachinePublishedMetadataV1Schema.parse> | undefined;
+      if (params.credentials && row.metadata && (!row.access || row.access.accessState === 'ready')) {
+        try {
+          const declaredMode = row.access?.resourceMode ?? row.storageMode;
+          const expectedAccountMode = declaredMode === 'plain' || declaredMode === 'e2ee' ? declaredMode : await readAccountMode(params.credentials);
+          const codec = resolvePublishedMachineContentCodec({ credentials: params.credentials, machineId: row.id,
+            expectedAccountMode, access: row.access, publishedDataEncryptionKey: row.dataEncryptionKey,
+            machineKind: row.kind, installationId: typeof row.installationId === 'string' ? row.installationId : null,
+            runnerContentKeyBinding: row.runnerContentKeyBinding });
+          const decoded = StoredMachinePublishedMetadataV1Schema.safeParse(codec.decodeStored(row.metadata));
+          if (decoded.success) metadata = decoded.data;
+        } catch {
+          // Unavailable or inconsistent content is unknown, never a plain fallback.
+          params.signal?.throwIfAborted();
+        }
+      }
+      params.signal?.throwIfAborted();
+      return {
+      id: row.id, label: metadata ? nonEmptyString(metadata.host) ?? row.id
+        : params.credentials ? row.id : readMachineLabel(row.metadata, row.id), kind: row.kind, active: row.active,
       revokedAt: row.revokedAt, replacedByMachineId: row.replacedByMachineId,
       ...(row.activeAt === undefined ? {} : { activeAt: row.activeAt }),
+      ...(metadata ? { platform: metadata.platform, ...(metadata.arch === undefined ? {} : { arch: metadata.arch }) } : {}),
+      ...(metadata?.agentInventory ? { agentInventory: metadata.agentInventory } : {}),
       ...(row.access ? { access: row.access } : {}),
       ...(row.devcontainerChild ? { devcontainerChild: row.devcontainerChild } : {}),
       ...(row.operationProtocolCapabilities === undefined ? {} : { operationProtocolCapabilities: row.operationProtocolCapabilities }),
       ...(row.operationProtocolCapabilitiesRevision === undefined ? {} : { operationProtocolCapabilitiesRevision: row.operationProtocolCapabilitiesRevision }),
+      };
     }));
   } catch (error) {
     params.signal?.throwIfAborted();

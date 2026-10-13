@@ -27,7 +27,7 @@ import {
     setActiveAccountSettingsSnapshot,
 } from '@/settings/accountSettings/activeAccountSettingsSnapshot';
 import { createPromptAssetAdapterRegistry } from '@/prompts/assets/createPromptAssetAdapterRegistry';
-import { createPromptRegistryAdapterRegistry } from '@/prompts/registries/createPromptRegistryAdapterRegistry';
+import { createCliRegistryHostV1 } from '@/registries/createCliRegistryHost';
 import { bindApiSessionSocketMock, createApiSessionSocketStub } from '@/testkit/backends/apiSessionSocketHarness';
 import { createDeferred } from '@/testkit/async/deferred';
 import { logger } from '@/ui/logger';
@@ -401,7 +401,7 @@ describe('ApiMachineClient /v2/changes reconnect', () => {
             spawnSession: async () => ({ type: 'success', sessionId: 'unused' }), stopSession: async () => ({ status: 'stopped' }),
             isSessionAlreadyRunning: async () => false, loadLocalSessionMetadataForHandoff: async () => null,
             beforeShutdown: async () => {}, requestShutdown: () => {}, directPeerServerLifecycle: null,
-            directTransferPromptAssetAdapterRegistry: createPromptAssetAdapterRegistry(), directTransferPromptRegistryRegistry: createPromptRegistryAdapterRegistry(),
+            directTransferPromptAssetAdapterRegistry: createPromptAssetAdapterRegistry(), directTransferRegistryHost: createCliRegistryHostV1(),
             connectedServiceRefreshLoopHandle: null, connectedServiceQuotasLoopHandle: null, daemonServerWorkScheduler: {} as never,
         });
         try {
@@ -1315,7 +1315,7 @@ describe('ApiMachineClient /v2/changes reconnect', () => {
             requestShutdown: vi.fn(),
             directPeerServerLifecycle: null,
             directTransferPromptAssetAdapterRegistry: createPromptAssetAdapterRegistry(),
-            directTransferPromptRegistryRegistry: createPromptRegistryAdapterRegistry(),
+            directTransferRegistryHost: createCliRegistryHostV1(),
             connectedServiceRefreshLoopHandle: null,
             connectedServiceQuotasLoopHandle: null,
             daemonServerWorkScheduler: {} as never,

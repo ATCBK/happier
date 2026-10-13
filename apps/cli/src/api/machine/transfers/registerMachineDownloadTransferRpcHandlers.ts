@@ -1,4 +1,4 @@
-import type { RpcHandlerRegistrar } from '@/api/rpc/types';
+import type { RpcHandlerRegistrar, RpcHandlerContext } from '@/api/rpc/types';
 import { configuration } from '@/configuration';
 import { TransferSessionStore } from '@happier-dev/transfers/node';
 import { registerDownloadTransferLifecycleHandlers } from '@/transfers/rpc/registerDownloadTransferLifecycleHandlers';
@@ -7,7 +7,7 @@ import type { DownloadTransferSource } from '@happier-dev/transfers/node';
 
 export type MachineDownloadTransferInitResponse =
   | Readonly<{ success: true; downloadId: string; chunkSizeBytes: number; sizeBytes: number; name: string }>
-  | Readonly<{ success: false; error: string }>;
+  | Readonly<{ success: false; error: string; code?: string }>;
 
 export type MachineDownloadTransferRpcRegistration = Readonly<{
   transferSessionStore: TransferSessionStore;
@@ -22,6 +22,7 @@ type ResolvedMachineDownloadSource = Readonly<{
 type RejectedMachineDownloadSource = Readonly<{
   success: false;
   error: string;
+  code?: string;
 }>;
 
 function isRejectedMachineDownloadSource(
@@ -39,7 +40,7 @@ export function registerMachineDownloadTransferRpcHandlers<TRequest>(params: Rea
     abort: string;
   }>;
   parseRequest: (data: unknown) => TRequest | null;
-  resolveSource: (request: TRequest) => Promise<ResolvedMachineDownloadSource | RejectedMachineDownloadSource>;
+  resolveSource: (request: TRequest, context?: RpcHandlerContext) => Promise<ResolvedMachineDownloadSource | RejectedMachineDownloadSource>;
   initFailureMessage: string;
   store?: TransferSessionStore;
 }>): MachineDownloadTransferRpcRegistration {
@@ -50,7 +51,7 @@ export function registerMachineDownloadTransferRpcHandlers<TRequest>(params: Rea
     rpcHandlerManager: params.rpcHandlerManager,
     store,
     methods: params.methods,
-    resolveInit: async (data) => {
+    resolveInit: async (data, context) => {
       const requestData = data && typeof data === 'object' ? { ...(data as Record<string, unknown>) } : null;
       const recipientPublicKeyBase64 = typeof requestData?.recipientPublicKeyBase64 === 'string'
         ? requestData.recipientPublicKeyBase64.trim()
@@ -72,7 +73,7 @@ export function registerMachineDownloadTransferRpcHandlers<TRequest>(params: Rea
         };
       }
 
-      const source = await params.resolveSource(request);
+      const source = await params.resolveSource(request, context);
       if (isRejectedMachineDownloadSource(source)) {
         return {
           kind: 'rejected',

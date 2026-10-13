@@ -1,26 +1,27 @@
-import { unexpectedProjectNativeAdapterResolution } from "@/plugins/testkit/unexpectedProjectNativeAdapterResolution";
-import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
+import { afterAll, afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
 import { accountSettingsParse, VoiceProviderContributionSchema } from '@happier-dev/protocol';
 import { RPC_METHODS } from '@happier-dev/protocol/rpc';
-import type { RpcHandler, RpcHandlerRegistrar } from '../rpc/types';
+import { RpcHandlerManager } from '@/api/rpc/RpcHandlerManager';
 import type { ActiveAccountSettingsSnapshot } from '@/settings/accountSettings/activeAccountSettingsSnapshot';
 import { createConnectedAccountPurposeBindingOwner, type ConnectedAccountPurposeBindingOwnerDependencies } from '@/daemon/connectedServices/purposeBindings/ConnectedAccountPurposeBindingOwner';
-import type { ResolvedExecutablePluginRuntimeRegistry } from '@/plugins/runtime/resolveExecutablePluginRuntimeRegistry';
-import { createPluginRuntimeOccurrenceId } from '@/plugins/runtime/runtimeSlots';
+import { createAdmittedPluginRuntimeFixture } from '@/plugins/testkit/admittedRuntime';
+import { pluginReloadController } from '@/plugins/runtime/reload/singleton';
+import { PLUGIN_MANIFEST } from '../../../../../packages/plugins/openai/src/manifest';
+import { registerMachineVoiceClientMediatedCredentialRpcHandlers } from './rpcHandlers.voiceClientMediatedCredentials';
 
-
-const contribution = Object.freeze({ pluginId: 'happier.voice.openai', localId: 'realtime-openai' });
+const contribution = Object.freeze({ pluginId: PLUGIN_MANIFEST.id, localId: 'realtime-openai' });
+const declaration = VoiceProviderContributionSchema.parse(
+  PLUGIN_MANIFEST.contributes.voiceProviders?.find((provider) => provider.id === contribution.localId),
+);
+if (declaration.kind !== 'conversation' || !declaration.credentials) throw new Error('Expected actual OpenAI conversation declaration');
 const service = Object.freeze({ pluginId: 'happier.agent.codex', localId: 'openai-codex' });
-const bindingPurpose = Object.freeze({ consumer: contribution, purpose: 'voice.credential-slot' });
-const operationPurpose = Object.freeze({ consumer: contribution, purpose: 'voice.client-auth' });
+const bindingPurpose = Object.freeze({ consumer: contribution, purpose: declaration.credentials.slot.purpose });
 const materializationRequest = Object.freeze({
   kind: 'httpHeaders' as const,
   origin: 'https://api.openai.com',
   headerNames: Object.freeze(['authorization', 'chatgpt-account-id']),
 });
-const DAEMON_REGISTRY_GENERATION = 12;
-let nextRegistryRevision = DAEMON_REGISTRY_GENERATION;
 
 function accountTarget(accountId: string) {
   return Object.freeze({
@@ -29,86 +30,13 @@ function accountTarget(accountId: string) {
   });
 }
 
-function projectedAuthority(_projectionGeneration: number) {
+function projectedAuthority() {
   return Object.freeze({
     kind: 'projected' as const,
     cacheIdentity: Object.freeze({
       artifactDigest: `sha256:${'a'.repeat(64)}`,
     }),
   });
-}
-
-function manager(): Readonly<{
-  handlers: Map<string, RpcHandler>;
-  registrar: RpcHandlerRegistrar;
-}> {
-  const handlers = new Map<string, RpcHandler>();
-  const registrar: RpcHandlerRegistrar = {
-    registerHandler(method, handler) {
-      handlers.set(method, handler);
-    },
-  };
-  return {
-    handlers,
-    registrar,
-  };
-}
-
-function manifest() {
-  const voiceProvider = VoiceProviderContributionSchema.parse({
-    id: contribution.localId,
-    title: 'OpenAI Realtime',
-    kind: 'conversation',
-    roles: ['realtime_conversation'],
-    platforms: ['web'],
-    capabilities: { turn: { cancelResponse: true, bargeIn: true } },
-    credentials: {
-      slot: { id: 'api_key', purpose: bindingPurpose.purpose, title: 'OpenAI credential' },
-      requirement: { kind: 'always' },
-      sources: [{
-        kind: 'connectedAccount',
-        service,
-        operationProjections: [{
-          kind: 'materializedHttpHeaders',
-          operation: 'client-auth',
-          phase: 'prepare',
-          request: materializationRequest,
-          requiredHeaderNames: ['authorization'],
-          allowedHeaderNames: materializationRequest.headerNames,
-        }],
-      }],
-      hostMediated: { operations: [{
-        id: 'client-auth',
-        purpose: operationPurpose.purpose,
-        credentialSlotId: 'api_key',
-        effect: 'read',
-        request: {
-          origin: 'https://api.openai.com',
-          pathTemplate: '/v1/realtime/client_secrets',
-          queryTemplate: [],
-          headerTemplate: [],
-          bodyTemplate: { kind: 'json', value: {} },
-          method: 'POST',
-          credential: { kind: 'httpHeader', name: 'authorization', format: 'bearer' },
-          redirect: 'error',
-          maxBodyBytes: 65_536,
-          contentTypes: ['application/json'],
-        },
-        parameters: {
-          schema: { type: 'object', properties: {}, additionalProperties: false },
-          mapping: [],
-        },
-        response: { maxBytes: 65_536, contentTypes: ['application/json'] },
-      }] },
-    },
-    client: { artifactId: 'browser-client', exportName: 'activate' },
-  });
-  return {
-    id: contribution.pluginId,
-    contributes: {
-      voiceProviders: [voiceProvider],
-    },
-  };
 }
 
 function groupTarget(groupId: string) {
@@ -209,76 +137,37 @@ function connectedAccountsOwner(input: Readonly<{
   return Object.freeze({ ...owner, materialize, calls });
 }
 
+const admittedFixtures: Awaited<ReturnType<typeof createAdmittedPluginRuntimeFixture>>[] = [];
+afterAll(async () => {
+  const fixtures = admittedFixtures.splice(0).reverse();
+  await Promise.all(fixtures.map((fixture) => fixture.lease.release()));
+  for (const fixture of fixtures) await fixture.dispose();
+});
+
 async function registerHandler(input: Readonly<{
-  registryGeneration?: number;
   connectedAccounts: ReturnType<typeof connectedAccountsOwner>;
   currentSnapshot: ActiveAccountSettingsSnapshot | null;
   getSnapshot?: () => ActiveAccountSettingsSnapshot | null;
 }>) {
-  // Initialize fixture protocol declarations before loading the runtime host.
-  const { pluginReloadController } = await import('@/plugins/runtime/reload/singleton');
-  const { registerMachineVoiceClientMediatedCredentialRpcHandlers } = await import('./rpcHandlers.voiceClientMediatedCredentials');
-  const { handlers, registrar } = manager();
-  const retirement = new AbortController();
-  const registryRevision = Math.max(nextRegistryRevision, input.registryGeneration ?? 0);
-  nextRegistryRevision = registryRevision + 1;
-  const occurrenceId = createPluginRuntimeOccurrenceId(contribution.pluginId);
-  // A prepared plugin module is the daemon composition input. Registry leasing,
-  // publication and currentness stay on the real controller beneath this fixture.
-  const registry: ResolvedExecutablePluginRuntimeRegistry = {
-      claimReleaseLessDeclarations: async () => undefined,
-      durableRevision: registryRevision,
-      contributes: {
-        agents: [], providers: [], actions: [], resources: [], uiViewsV2: [],
-        uiRenderersV2: [], uiTranslationsV2: [], activationTargets: [],
-        catalogEntriesById: {}, agentDefinitionsById: new Map(), pluginDiagnosticsByPluginId: {},
-        voiceProviders: [{
-        provenance: 'first_party',
-        source: { kind: 'bundled' },
-        pluginId: contribution.pluginId,
-        manifestPath: '/plugins/openai/happier.plugin.json',
-        identity: contribution,
-        definition: manifest().contributes.voiceProviders[0],
-      }] },
-      hookHandlersByHookId: new Map(), agentRuntimesByAgentId: new Map(), scmHostingProvidersById: new Map(),
-      pluginDiagnosticsByPluginId: {}, activatedPluginIds: new Set([contribution.pluginId]),
-      activateContributionsOnDemand: async () => [], resolvePromptAssetBlocks: async () => [],
-      resolveCaptureSource: async () => null,
-      resolveProjectNativeAdapter: unexpectedProjectNativeAdapterResolution,
-      addRuntimeDisposable: (_pluginId, disposable) => disposable,
-      createAgentInvocationServices: async () => {
-        const { createUnavailablePluginServices } = await import('@/plugins/runtime/invocation/services/unavailable');
-        return createUnavailablePluginServices();
-      },
-      retireConsumers: () => retirement.abort(),
-      retirePluginConsumers: async () => retirement.abort(),
-      dispose: async () => retirement.abort(),
-      resolveVoiceProviderRuntimeLifecycle: (candidate) => (
-        candidate.pluginId === contribution.pluginId && candidate.localId === contribution.localId
-          ? {
-              occurrenceId,
-              isCurrent: () => pluginReloadController.isRuntimeRegistryCurrent(registry),
-              retirementSignal: retirement.signal,
-            }
-          : null
-      ),
-      resolveConnectedAccountPurposeBindingOwner: () => input.connectedAccounts,
-  };
-  const adopted = await pluginReloadController.adoptPreparedRuntimeRegistry({
-    registry,
-    changedPluginIds: [contribution.pluginId],
-    durableRevision: registryRevision,
-    runningSessionDisposition: 'retainRunningSessions',
+  const registrar = new RpcHandlerManager({ scopePrefix: 'machine-voice', encryptionMode: 'plain', logger() {} });
+  const fixture = await createAdmittedPluginRuntimeFixture({
+    controller: pluginReloadController,
+    runtimeOptions: { pluginIds: [PLUGIN_MANIFEST.id], connectedAccounts: input.connectedAccounts },
   });
-  if (!adopted.ok) throw new Error('fixture runtime adoption failed');
+  admittedFixtures.push(fixture);
+  await fixture.registry.activateContributionsOnDemand([{ pluginId: contribution.pluginId, family: 'voiceProviders', localId: contribution.localId }]);
+  const admitted = fixture.registry.contributes.voiceProviders?.find((provider) => (
+    provider.identity.pluginId === contribution.pluginId && provider.identity.localId === contribution.localId
+  ));
+  if (admitted?.provenance !== 'first_party' || admitted.source.kind !== 'bundled') {
+    throw new Error('Expected actual admitted bundled OpenAI declaration');
+  }
   registerMachineVoiceClientMediatedCredentialRpcHandlers({
     rpcHandlerManager: registrar,
     getAccountSettingsSnapshot: input.getSnapshot ?? (() => input.currentSnapshot),
     ensureAccountSettingsSnapshot: async () => {},
   });
-  const handler = handlers.get(RPC_METHODS.DAEMON_VOICE_CLIENT_ACCOUNT_OPERATION);
-  if (!handler) throw new Error('mediated credential handler was not registered');
-  return handler;
+  return (raw: unknown) => registrar.invokeLocal(RPC_METHODS.DAEMON_VOICE_CLIENT_ACCOUNT_OPERATION, raw);
 }
 
 const ephemeralBody = JSON.stringify({ value: 'ephemeral-client-secret', expires_at: 2_000_000_000 });
@@ -298,8 +187,8 @@ describe('Voice client mediated Connected Account credential RPC', () => {
     try {
       const handler = await registerHandler({ connectedAccounts: owner, currentSnapshot: snapshot('account-a') });
       const result = await handler({
-        contribution, platform: 'web', phase: 'prepare', operationId: 'client-auth',
-        declarationAuthority: projectedAuthority(DAEMON_REGISTRY_GENERATION),
+        contribution, platform: 'web', phase: 'prepare', operationId: 'client-auth', parameters: { body: {} },
+        declarationAuthority: projectedAuthority(),
         expectedSelection: accountTarget('account-a'),
       });
       expect(result).toEqual({
@@ -326,7 +215,7 @@ describe('Voice client mediated Connected Account credential RPC', () => {
     const owner = connectedAccountsOwner({ resolvedAccountId: 'account-a' });
     const handler = await registerHandler({ connectedAccounts: owner, currentSnapshot: snapshot('account-a') });
     await expect(handler({
-      contribution, platform: 'web', phase: 'prepare', operationId: 'client-auth',
+      contribution, platform: 'web', phase: 'prepare', operationId: 'client-auth', parameters: { body: {} },
       declarationAuthority: { kind: 'bundled' }, expectedSelection: accountTarget('account-a'),
     })).resolves.toEqual({ ok: false, errorCode });
   });
@@ -340,7 +229,7 @@ describe('Voice client mediated Connected Account credential RPC', () => {
     const owner = connectedAccountsOwner({ resolvedAccountId: 'account-a' });
     const handler = await registerHandler({ connectedAccounts: owner, currentSnapshot: current, getSnapshot: () => current });
     await expect(handler({
-      contribution, platform: 'web', phase: 'prepare', operationId: 'client-auth',
+      contribution, platform: 'web', phase: 'prepare', operationId: 'client-auth', parameters: { body: {} },
       declarationAuthority: { kind: 'bundled' }, expectedSelection: accountTarget('account-a'),
     })).resolves.toEqual({ ok: false, errorCode: 'plugin_voice_credential_access_unavailable' });
   });
@@ -356,8 +245,8 @@ describe('Voice client mediated Connected Account credential RPC', () => {
       contribution,
       platform: 'web',
       phase: 'prepare',
-      operationId: 'client-auth',
-      declarationAuthority: projectedAuthority(DAEMON_REGISTRY_GENERATION),
+      operationId: 'client-auth', parameters: { body: {} },
+      declarationAuthority: projectedAuthority(),
       expectedSelection: accountTarget('account-a'),
     })).resolves.toEqual({
       ok: true,
@@ -374,8 +263,8 @@ describe('Voice client mediated Connected Account credential RPC', () => {
       contribution,
       platform: 'web',
       phase: 'connection',
-      operationId: 'client-auth',
-      declarationAuthority: projectedAuthority(DAEMON_REGISTRY_GENERATION),
+      operationId: 'client-auth', parameters: { body: {} },
+      declarationAuthority: projectedAuthority(),
       expectedSelection: accountTarget('account-a'),
     })).resolves.toEqual({
       ok: false,
@@ -400,8 +289,8 @@ describe('Voice client mediated Connected Account credential RPC', () => {
       contribution,
       platform: 'web',
       phase: 'prepare',
-      operationId: 'client-auth',
-      declarationAuthority: projectedAuthority(DAEMON_REGISTRY_GENERATION),
+      operationId: 'client-auth', parameters: { body: {} },
+      declarationAuthority: projectedAuthority(),
       expectedSelection: accountTarget('account-a'),
     })).resolves.toEqual({
       ok: true,
@@ -421,8 +310,8 @@ describe('Voice client mediated Connected Account credential RPC', () => {
       contribution,
       platform: 'web',
       phase: 'prepare',
-      operationId: 'client-auth',
-      declarationAuthority: projectedAuthority(DAEMON_REGISTRY_GENERATION),
+      operationId: 'client-auth', parameters: { body: {} },
+      declarationAuthority: projectedAuthority(),
       expectedSelection: accountTarget('account-a'),
     })).resolves.toEqual({
       ok: false,
@@ -445,8 +334,8 @@ describe('Voice client mediated Connected Account credential RPC', () => {
       contribution,
       platform: 'web',
       phase: 'prepare',
-      operationId: 'client-auth',
-      declarationAuthority: projectedAuthority(DAEMON_REGISTRY_GENERATION),
+      operationId: 'client-auth', parameters: { body: {} },
+      declarationAuthority: projectedAuthority(),
       expectedSelection: accountTarget('account-a'),
     })).resolves.toEqual({
       ok: false,
@@ -455,10 +344,9 @@ describe('Voice client mediated Connected Account credential RPC', () => {
     expect(owner.calls).toEqual([{ expectedAccount: { service, accountId: 'account-a' } }]);
   });
 
-  it('materializes a fresh invocation that names this daemon generation and its current account', async () => {
+  it('materializes a fresh invocation against this daemon’s current runtime and account', async () => {
     const owner = connectedAccountsOwner({ resolvedAccountId: 'account-b' });
     const handler = await registerHandler({
-      registryGeneration: DAEMON_REGISTRY_GENERATION + 1,
       connectedAccounts: owner,
       currentSnapshot: snapshot('account-b'),
     });
@@ -467,8 +355,8 @@ describe('Voice client mediated Connected Account credential RPC', () => {
       contribution,
       platform: 'web',
       phase: 'prepare',
-      operationId: 'client-auth',
-      declarationAuthority: projectedAuthority(DAEMON_REGISTRY_GENERATION + 1),
+      operationId: 'client-auth', parameters: { body: {} },
+      declarationAuthority: projectedAuthority(),
       expectedSelection: accountTarget('account-b'),
     })).resolves.toEqual({
       ok: true,
@@ -487,7 +375,7 @@ describe('Voice client mediated Connected Account credential RPC', () => {
       contribution,
       platform: 'web',
       phase: 'prepare',
-      operationId: 'client-auth',
+      operationId: 'client-auth', parameters: { body: {} },
       declarationAuthority: { kind: 'bundled' },
       expectedSelection: accountTarget('account-a'),
     })).resolves.toEqual({
@@ -512,8 +400,8 @@ describe('Voice client mediated Connected Account credential RPC', () => {
       contribution,
       platform: 'web',
       phase: 'prepare',
-      operationId: 'client-auth',
-      declarationAuthority: projectedAuthority(DAEMON_REGISTRY_GENERATION),
+      operationId: 'client-auth', parameters: { body: {} },
+      declarationAuthority: projectedAuthority(),
       expectedSelection: groupTarget('group-a'),
     })).resolves.toEqual({
       ok: false,
@@ -533,8 +421,8 @@ describe('Voice client mediated Connected Account credential RPC', () => {
       contribution,
       platform: 'web',
       phase: 'prepare',
-      operationId: 'client-auth',
-      declarationAuthority: projectedAuthority(DAEMON_REGISTRY_GENERATION),
+      operationId: 'client-auth', parameters: { body: {} },
+      declarationAuthority: projectedAuthority(),
       expectedSelection: groupTarget('group-a'),
     })).resolves.toEqual({
       ok: true,

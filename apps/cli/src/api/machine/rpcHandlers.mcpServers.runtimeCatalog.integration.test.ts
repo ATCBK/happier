@@ -1,11 +1,17 @@
 import axios from 'axios';
-import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
+import { readFile } from 'node:fs/promises';
+import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it, vi } from 'vitest';
 import { RPC_METHODS } from '@happier-dev/protocol/rpc';
 import { McpServersSettingsV1Schema } from '@happier-dev/protocol/mcp/servers/settingsV1';
 import { bootstrapAccountSettingsContext, resetInMemoryAccountSettingsContextForTests } from '@/settings/accountSettings/bootstrapAccountSettingsContext';
 import { resolveAccountSettingsCachePath } from '@/settings/accountSettings/accountSettingsCache';
 import { getActiveAccountSettingsSnapshot, setActiveAccountSettingsSnapshot, subscribeActiveAccountSettingsSnapshot } from '@/settings/accountSettings/activeAccountSettingsSnapshot';
 import { registerMachineMcpServersRpcHandlers } from './rpcHandlers.mcpServers';
+import type { McpServerProbeResult, probeMcpStdioServerTools } from '@/mcp/servers/probeMcpStdioServerTools';
+import { PromptLibraryCatalogKeyV1Schema, PROMPT_LIBRARY_ROWS_ROUTE_V1 } from '@happier-dev/protocol/prompts/library/promptLibraryRowsV1';
+import { emptyPromptLibraryRecordV1 } from '@happier-dev/protocol/prompts/library/promptLibraryCatalogV1';
+import { createAdmittedPluginRuntimeFixture } from '@/plugins/testkit/admittedRuntime';
+import { pluginReloadController } from '@/plugins/runtime/reload/singleton';
 
 // Home transport/cache-file I/O and process probing are real system boundaries.
 vi.mock('axios', () => ({ default: { get: vi.fn(), post: vi.fn(), isAxiosError: () => false } }));
@@ -25,15 +31,18 @@ const settings = McpServersSettingsV1Schema.parse({ v: 1, strictMode: true,
 });
 const catalog = { v: 1 as const, servers: settings.servers, bindings: settings.bindings };
 
-function register(input: Readonly<{ unavailable?: boolean; retire?: boolean; retireDuringMaterialization?: boolean;
+function register(input: Readonly<{ unavailable?: boolean; retire?: boolean; retireDuringMaterialization?: boolean; project?: boolean;
   retireDuringDetection?: boolean; reenterDuringHandoff?: boolean;
-  probeResult?: () => Promise<ReadonlyArray<Readonly<{ name: string }>>> }> = {}) {
+  probeResult?: () => Promise<McpServerProbeResult> }> = {}) {
   const handlers = new Map<string, (raw: unknown) => Promise<unknown>>();
   let reentered = false;
   let probeObservedReentry = false;
-  const probe = vi.fn(async () => {
+  let observedProtectedEnv: unknown;
+  const probe = vi.fn(async ({ config }: Parameters<typeof probeMcpStdioServerTools>[0]) => {
     probeObservedReentry = reentered;
-    return input.probeResult ? input.probeResult() : [{ name: 'echo' }];
+    const configPath = config.env?.HAPPIER_MCP_STDIO_LAUNCHER_CONFIG_FILE;
+    if (configPath) observedProtectedEnv = JSON.parse(await readFile(configPath, 'utf8')).env;
+    return input.probeResult ? input.probeResult() : { tools: [{ name: 'echo', inputSchema: { type: 'object' as const } }] };
   });
   let handoffScheduled = false;
   const stopHandoffObservation = input.reenterDuringHandoff ? subscribeActiveAccountSettingsSnapshot((_previous, next) => {
@@ -61,9 +70,14 @@ function register(input: Readonly<{ unavailable?: boolean; retire?: boolean; ret
     const path = new URL(String(url)).pathname;
     if (path === '/v1/account/encryption/currentness') return { status: 200, data: { mode: 'plain', version: 0,
       signingKeyFingerprint: null, contentKeyFingerprint: null, updatedAt: 0 } };
+    if (path === '/v1/account/encryption') return { status: 200, data: { mode: 'plain', updatedAt: 0 } };
+    if (path === PROMPT_LIBRARY_ROWS_ROUTE_V1) return { status: 200, data: { status: 'listed', rows: PromptLibraryCatalogKeyV1Schema.options.map(key => ({
+      key, revision: 1, content: { t: 'plain', v: emptyPromptLibraryRecordV1(key) } })) } };
+    if (path === '/v1/artifacts') return { status: 200, data: [] };
     if (path === '/v1/account/entity-rows/mcp') {
       if (input.retire) retireAccount();
-      const rowCatalog = input.retireDuringMaterialization ? { ...catalog, servers: catalog.servers.map(server => ({ ...server,
+      const rowCatalog = input.project ? { ...catalog, bindings: catalog.bindings.map(rule => ({ ...rule,
+        target: { t: 'project' as const, projectKey: 'project' } })) } : input.retireDuringMaterialization ? { ...catalog, servers: catalog.servers.map(server => ({ ...server,
         env: { ...server.env, KEEP: { t: 'literal' as const, v: '${RETIRE_ACCOUNT}' } },
       })) } : catalog;
       return { status: 200, data: input.unavailable ? { status: 'account-mode-mismatch' }
@@ -72,6 +86,7 @@ function register(input: Readonly<{ unavailable?: boolean; retire?: boolean; ret
     if (path === '/v2/account/settings') return { status: 200, data: { version: 4, content: { t: 'plain', v: {} } } };
     throw new Error(`Unexpected HTTP path: ${path}`);
   });
+  vi.mocked(axios.post).mockResolvedValue({ status: 200, data: { status: 'updated', revision: 4, cursor: 1 } });
   registerMachineMcpServersRpcHandlers({
     rpcHandlerManager: { registerHandler: (method: string, handler: (raw: unknown) => Promise<unknown>) => { handlers.set(method, handler); } } as never,
     deps: {
@@ -89,10 +104,15 @@ function register(input: Readonly<{ unavailable?: boolean; retire?: boolean; ret
       },
     },
   });
-  return { handlers, probe, stopHandoffObservation, didReenter: () => reentered, probeObservedReentry: () => probeObservedReentry };
+  return { handlers, probe, stopHandoffObservation, didReenter: () => reentered,
+    probeObservedReentry: () => probeObservedReentry, readObservedProtectedEnv: () => observedProtectedEnv };
 }
 
 describe('Machine MCP catalog admission', () => {
+  let runtime: Awaited<ReturnType<typeof createAdmittedPluginRuntimeFixture>>;
+  beforeAll(async () => { runtime = await createAdmittedPluginRuntimeFixture({ controller: pluginReloadController,
+    runtimeOptions: { pluginIds: ['claude', 'codex'] } }); });
+  afterAll(async () => { await runtime?.dispose(); });
   beforeEach(() => { resetInMemoryAccountSettingsContextForTests(); vi.mocked(axios.get).mockReset(); });
   afterEach(() => resetInMemoryAccountSettingsContextForTests());
 
@@ -111,15 +131,28 @@ describe('Machine MCP catalog admission', () => {
       .toMatchObject({ ok: false, errorCode: 'invalid_request' });
   });
 
+  it('forwards the authoritative Project key to the existing preview producer without a directory-derived association', async () => {
+    const { handlers } = register({ project: true });
+    const preview = handlers.get(RPC_METHODS.DAEMON_MCP_SERVERS_PREVIEW)!;
+    const target = { machineId: 'm1', directory: 'C:\\workspace', agentId: 'claude' };
+    expect(await preview({ ...target, projectKey: 'project' })).toMatchObject({ ok: true,
+      managed: [{ serverId: 'srv-row', selected: true }] });
+    expect(await preview({ ...target, projectKey: 'other' })).toMatchObject({ ok: true,
+      managed: [{ serverId: 'srv-row', selected: false }] });
+    expect(await preview(target)).toMatchObject({ ok: true, managed: [{ serverId: 'srv-row', selected: false }] });
+    expect(await preview({ ...target, projectKey: 1 })).toMatchObject({ ok: false, errorCode: 'invalid_request' });
+  });
+
   it('tests a saved row server with Windows binding roots and nullable env patches', async () => {
-    const { handlers, probe } = register();
+    const { handlers, probe, readObservedProtectedEnv } = register();
     const result = await handlers.get(RPC_METHODS.DAEMON_MCP_SERVERS_TEST)!({
       t: 'byId', machineId: 'm1', directory: 'C:\\workspace\\child', serverId: 'srv-row', bindingId: 'binding-row',
     });
-    expect(result).toEqual({ ok: true, toolCount: 1, toolNamesSample: ['echo'], durationMs: expect.any(Number) });
+    expect(result).toMatchObject({ ok: true, toolCount: 1, toolNamesSample: ['echo'], durationMs: expect.any(Number) });
     expect(probe).toHaveBeenCalledWith(expect.objectContaining({ config: expect.objectContaining({
-      env: { KEEP: 'present', EXTRA: 'override' },
+      env: expect.objectContaining({ HAPPIER_MCP_STDIO_LAUNCHER_CONFIG_FILE: expect.any(String) }),
     }) }));
+    expect(readObservedProtectedEnv()).toEqual({ KEEP: 'present', EXTRA: 'override' });
   });
 
   it('returns a typed refusal for unavailable catalog facts before probing', async () => {
@@ -182,8 +215,8 @@ describe('Machine MCP catalog admission', () => {
     let markProbeStarted = () => {};
     const probeStarted = new Promise<void>(resolve => { markProbeStarted = resolve; });
     let releaseProbe = () => {};
-    const probeResult = new Promise<ReadonlyArray<Readonly<{ name: string }>>>(resolve => {
-      releaseProbe = () => resolve([{ name: 'retired-account-private-tool' }]);
+    const probeResult = new Promise<McpServerProbeResult>(resolve => {
+      releaseProbe = () => resolve({ tools: [{ name: 'retired-account-private-tool', inputSchema: { type: 'object' } }] });
     });
     const { handlers } = register({ probeResult: async () => { markProbeStarted(); return probeResult; } });
     const request = handlers.get(RPC_METHODS.DAEMON_MCP_SERVERS_TEST)!({
@@ -197,7 +230,7 @@ describe('Machine MCP catalog admission', () => {
       setActiveAccountSettingsSnapshot({ ...original });
       releaseProbe();
       const result = await request;
-      expect(result).toMatchObject({ ok: false, errorCode: 'mcp_list_tools_failed' });
+      expect(result).toMatchObject({ ok: false, errorCode: 'materialization_failed' });
       expect(JSON.stringify(result)).not.toContain('retired-account-private-tool');
     } finally {
       releaseProbe();

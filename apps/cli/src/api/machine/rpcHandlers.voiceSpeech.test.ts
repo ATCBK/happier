@@ -1,5 +1,5 @@
 
-import { describe, expect, it, vi } from 'vitest';
+import { afterAll, afterEach, describe, expect, it, vi } from 'vitest';
 
 import { RPC_METHODS } from '@happier-dev/protocol/rpc';
 import {
@@ -11,26 +11,22 @@ import {
 import type { VoiceCredentialAccess } from '@happier-dev/plugin-sdk/voice';
 import type { SpeechProviderRuntime } from '@happier-dev/plugin-sdk/voice/speech';
 import type { HttpService } from '@happier-dev/plugin-sdk/http';
+import type { PluginApi } from '@happier-dev/plugin-sdk';
 
 import { readCanonicalPluginManifest } from '../../plugins/manifest/normalize';
 import { createPluginManifestV2Fixture } from '../../plugins/testkit/manifestV2Fixture';
-import type { ActiveAccountSettingsSnapshot } from '@/settings/accountSettings/activeAccountSettingsSnapshot';
+import { clearActiveAccountSettingsSnapshot, getActiveAccountSettingsSnapshot, setActiveAccountSettingsSnapshot, type ActiveAccountSettingsSnapshot } from '@/settings/accountSettings/activeAccountSettingsSnapshot';
+import { createAuthoredAdmittedPluginRuntimeFixture } from '@/plugins/testkit/admittedRuntime';
+import { pluginReloadController } from '@/plugins/runtime/reload/singleton';
+import { RpcHandlerManager } from '@/api/rpc/RpcHandlerManager';
+import { createConnectedAccountPurposeBindingOwner, type ConnectedAccountPurposeBindingOwnerDependencies } from '@/daemon/connectedServices/purposeBindings/ConnectedAccountPurposeBindingOwner';
+import { ConnectedPurposeCatalogV1Schema } from '@happier-dev/protocol/connect/connectedAccountConfigurationRowsV1';
 
 import {
   createEncryptedTransferChunkEnvelope,
   createTransferRecipientKeyPair,
   decryptEncryptedTransferChunkEnvelope,
 } from '@happier-dev/transfers/node';
-
-const runtimeLeaseMocks = vi.hoisted(() => ({
-  acquire: vi.fn(),
-  activateContributionsOnDemand: vi.fn(async () => []),
-  release: vi.fn(async () => undefined),
-}));
-
-vi.mock('@/plugins/runtime/reload/runtimeLease', () => ({
-  acquireAuthoritativePluginRuntimeRegistryLease: runtimeLeaseMocks.acquire,
-}));
 
 import {
   registerMachineVoiceSpeechRpcHandlers,
@@ -43,22 +39,22 @@ const daemonGrantAuthority = Object.freeze({
   installationId: 'installation-1',
 });
 
-const target = Object.freeze({ pluginId: 'happier.voice.google', localId: 'gemini-stt' });
+const target = Object.freeze({ pluginId: 'acme.speech', localId: 'gemini-stt' });
 const credentials: VoiceCredentialAccess<'speech'> = Object.freeze({
   phase: 'speech', mediated: null, raw: null,
 });
-const http: HttpService = Object.freeze({
-  request: vi.fn(async () => ({
-    status: 200,
-    finalUrl: 'https://speech.example.test',
-    headers: Object.freeze({}),
-    body: new Uint8Array(),
-  })),
-  openWebSocket: async () => {
-    throw new Error('WebSocket is not used by the voice speech fixture');
-  },
-});
 const settings = Object.freeze({ model: 'gemini-2.5-flash' });
+// The public SDK requires the operation matching each declared speech role.
+// Unused provider-native boundaries refuse effects instead of returning data.
+const unexpectedTranscribe: NonNullable<SpeechProviderRuntime['transcribe']> = async () => {
+  throw new Error('Fixture must not invoke native transcription');
+};
+const unexpectedSynthesize: NonNullable<SpeechProviderRuntime['synthesize']> = async () => {
+  throw new Error('Fixture must not invoke native synthesis');
+};
+const unexpectedCatalog: NonNullable<SpeechProviderRuntime['catalog']> = {
+  async list() { throw new Error('Fixture must not invoke native catalog access'); },
+};
 const rawRequest = Object.freeze({
   kind: 'httpHeaders' as const,
   origin: 'https://speech.example.test',
@@ -168,42 +164,85 @@ function contribution(overrides: Partial<SpeechContribution> = {}): SpeechContri
   };
 }
 
-function resolveRuntime(
+const admittedFixtures: Awaited<ReturnType<typeof createAuthoredAdmittedPluginRuntimeFixture>>[] = [];
+afterAll(async () => {
+  const fixtures = admittedFixtures.splice(0).reverse();
+  await Promise.all(fixtures.map((fixture) => fixture.lease.release()));
+  for (const fixture of fixtures) await fixture.dispose();
+});
+afterEach(() => {
+  clearActiveAccountSettingsSnapshot();
+});
+
+async function admitSpeech(
   runtime: SpeechProviderRuntime,
   definition: SpeechContribution = contribution(),
-  current: () => boolean = () => true,
-): (_target: Readonly<{ pluginId: string; localId: string }>) => Promise<VoiceSpeechRuntimeLease> {
-  const operationSettings = Object.freeze(Object.fromEntries(
+  options: Readonly<{
+    snapshot?: ActiveAccountSettingsSnapshot;
+    readSnapshot?: () => ActiveAccountSettingsSnapshot | null;
+    settings?: Readonly<Record<string, unknown>>;
+    settingsVersion?: number;
+    materializeAccount?: ConnectedAccountPurposeBindingOwnerDependencies['materializeAccount'];
+    manifest?: ReturnType<typeof speechManifest>;
+    target?: typeof target | Readonly<{ pluginId: string; localId: string }>;
+  }> = {},
+) {
+  const providerTarget = options.target ?? target;
+  const operationSettings = options.settings ?? Object.freeze(Object.fromEntries(
     definition.settings.fields.map((field) => [field.id, field.default]),
   ));
-  return vi.fn(async (): Promise<VoiceSpeechRuntimeLease> => ({
-    runtime,
-    contribution: definition,
-    readSettings: () => Object.freeze({
-      settings: operationSettings,
-      resolveCredentials: () => credentials,
-      isCurrent: current,
-    }),
-    createHttp: () => http,
-    isCurrent: current,
-    retirementSignal: new AbortController().signal,
-    release: vi.fn(async () => undefined),
-  }));
+  const snapshot = options.snapshot ?? {
+    source: 'network', scopeKey: 'account-scope', settingsVersion: options.settingsVersion ?? 1, loadedAtMs: 1, settingsSecretsReadKeys: [],
+    settings: accountSettingsParse({ voiceSettingsV1: { providers: {
+      [`${providerTarget.pluginId}/${providerTarget.localId}`]: { schemaVersion: definition.settings.schemaVersion, config: operationSettings },
+    } } }),
+  } satisfies ActiveAccountSettingsSnapshot;
+  setActiveAccountSettingsSnapshot(snapshot);
+  const readSnapshot = options.readSnapshot ?? (() => getActiveAccountSettingsSnapshot());
+  const unexpected = async (): Promise<never> => { throw new Error('Unexpected Account selection or listing'); };
+  const connectedAccounts = createConnectedAccountPurposeBindingOwner({
+    store: {
+      read: async () => {
+        const catalog = readSnapshot()?.connectedPurposeCatalog;
+        if (catalog?.status !== 'ready' || catalog.record.key !== 'purposes') throw new Error('Purpose catalog unavailable');
+        return catalog.record.value;
+      }, update: unexpected, subscribe: () => ({ dispose() {} }),
+    },
+    selectTarget: unexpected,
+    resolveTarget: async (selection) => selection.kind === 'account' ? { account: selection.account, displayName: 'Google Account' } : null,
+    materializeAccount: options.materializeAccount ?? unexpected,
+    projectTargetAccounts: unexpected, assertTargetAccountMaterializable: unexpected,
+  });
+  const fixture = await createAuthoredAdmittedPluginRuntimeFixture({
+    controller: pluginReloadController,
+    runtimeOptions: { connectedAccounts, resolveCurrentMachineId: () => 'machine-a' },
+    plugins: [{
+      manifest: options.manifest ?? createPluginManifestV2Fixture({ id: providerTarget.pluginId, contributes: { voiceProviders: [definition] } }),
+      files: { 'daemon.mjs': `export function activate(api) { api.voiceProviders.register('${providerTarget.localId}', {kind:'speech'}); }` },
+      instantiateCommittedModule: () => ({ activate(api: PluginApi) { api.voiceProviders.register(providerTarget.localId, runtime); } }),
+    }],
+  });
+  admittedFixtures.push(fixture);
+  return fixture;
+}
+
+async function retireSpeech() {
+  const fixture = await createAuthoredAdmittedPluginRuntimeFixture({
+    controller: pluginReloadController,
+    plugins: [{ manifest: createPluginManifestV2Fixture({ id: target.pluginId }), files: { 'daemon.mjs': 'export function activate() {}' } }],
+  });
+  admittedFixtures.push(fixture);
 }
 
 function manager() {
-  const handlers = new Map<string, (raw: unknown, context?: Readonly<{ signal: AbortSignal }>) => Promise<unknown>>();
+  const registrar = new RpcHandlerManager({ scopePrefix: 'machine-a', encryptionMode: 'plain', logger() {} });
   return {
-    handlers,
-    registrar: {
-      registerHandler(method: string, handler: (raw: unknown, context?: Readonly<{ signal: AbortSignal }>) => Promise<unknown>) {
-        handlers.set(method, handler);
-      },
-    },
+    handlers: { get: (method: string) => (raw: unknown, context?: Readonly<{ signal: AbortSignal }>) => registrar.invokeLocal(method, raw, context) },
+    registrar,
   };
 }
 
-function registerDefaultCatalogWithNoCredentialSource(options: Readonly<{
+async function registerDefaultCatalogWithNoCredentialSource(options: Readonly<{
   requirement: SpeechCredentialRequirement;
   credentialModeDefault?: boolean;
   list: NonNullable<SpeechProviderRuntime['catalog']>['list'];
@@ -225,25 +264,7 @@ function registerDefaultCatalogWithNoCredentialSource(options: Readonly<{
     presentation: null,
   });
   const connectedMaterialize = vi.fn();
-  runtimeLeaseMocks.acquire.mockResolvedValueOnce({
-    registry: {
-      activateContributionsOnDemand: runtimeLeaseMocks.activateContributionsOnDemand,
-      generation: 8,
-      contributes: { activationTargets: [{ pluginId: target.pluginId, manifest }] },
-      voiceSpeechProviders: {
-        read: vi.fn(() => ({
-          generation: '8',
-          runtime: Object.freeze({ kind: 'speech' as const, catalog: { list: options.list } }),
-          contribution: declaredContribution,
-          isCurrent: () => true,
-          retirementSignal: new AbortController().signal,
-          createHttp: () => http,
-        })),
-      },
-      resolveConnectedAccountPurposeBindingOwner: () => ({ materialize: connectedMaterialize }),
-    },
-    release: runtimeLeaseMocks.release,
-  });
+
   const snapshot = {
     source: 'network' as const,
     scopeKey: 'account-scope',
@@ -251,8 +272,8 @@ function registerDefaultCatalogWithNoCredentialSource(options: Readonly<{
     loadedAtMs: 1,
     settingsSecretsReadKeys: [],
     connectedPurposeCatalog: { status: 'ready', revision: 1,
-      record: { key: 'purposes', value: { v: 1, bindings: [] } } } satisfies NonNullable<ActiveAccountSettingsSnapshot['connectedPurposeCatalog']>,
-    settings: {
+      record: { key: 'purposes', value: ConnectedPurposeCatalogV1Schema.parse({ v: 1, bindings: [] }) } },
+    settings: accountSettingsParse({
       voiceSettingsV1: {
         providers: {
           [`${target.pluginId}/${target.localId}`]: {
@@ -262,10 +283,11 @@ function registerDefaultCatalogWithNoCredentialSource(options: Readonly<{
         },
         credentialBindings: [],
       },
-    } as never,
-  };
+    }),
+  } satisfies ActiveAccountSettingsSnapshot;
+  await admitSpeech({kind: 'speech', catalog: {list: options.list}, transcribe: unexpectedTranscribe}, declaredContribution, {snapshot, manifest, materializeAccount: connectedMaterialize});
   const registration = registerMachineVoiceSpeechRpcHandlers({
-    rpcHandlerManager: registrar as never,
+    rpcHandlerManager: registrar,
     machineId: 'machine-a',
     resolveRawCredentialDependencies: async () => ({
       currentInstallReviewPrincipal: { readCurrent: async () => currentInstallReviewPrincipal },
@@ -278,7 +300,7 @@ function registerDefaultCatalogWithNoCredentialSource(options: Readonly<{
 }
 
 async function upload(
-  handlers: Map<string, (raw: unknown) => Promise<unknown>>,
+  handlers: ReturnType<typeof manager>['handlers'],
   bytes: Uint8Array,
 ) {
   const init = await handlers.get(RPC_METHODS.DAEMON_VOICE_SPEECH_TRANSCRIBE_UPLOAD_INIT)?.({
@@ -309,14 +331,14 @@ describe('unified Voice speech machine RPC', () => {
     const synthesize = vi.fn<NonNullable<SpeechProviderRuntime['synthesize']>>(async (request, context) => {
       expect(request).toMatchObject({ voiceName: 'session-custom-voice', format: 'wav' });
       expect(context.settings).toEqual({ voiceName: preference.value, format: 'wav' });
-      expect(context.credentials).toBe(credentials);
+      expect(context.credentials).toEqual(credentials);
       return { requestId: request.requestId, bytes: new Uint8Array([1]), mimeType: 'audio/wav' };
     });
-    const registration = registerMachineVoiceSpeechRpcHandlers({
-      rpcHandlerManager: registrar as never,
-      resolveSpeechRuntime: resolveRuntime({ kind: 'speech', synthesize }, contribution({
+    await admitSpeech({ kind: 'speech', synthesize, catalog: unexpectedCatalog }, contribution({
         roles: ['conversation_tts'], catalogs: [{ kind: 'voices', settingFieldId: 'voiceName', allowCustom: true }],
-      })),
+      }));
+    const registration = registerMachineVoiceSpeechRpcHandlers({
+      rpcHandlerManager: registrar,
     });
     const recipient = createTransferRecipientKeyPair();
     try {
@@ -336,7 +358,6 @@ describe('unified Voice speech machine RPC', () => {
     const { handlers, registrar } = manager();
     const principal = PluginInstallReviewPrincipalDigestSchema.parse('a'.repeat(64));
     const manifest = speechManifest({ requirement: { kind: 'optional' } });
-    const isCurrent = vi.fn(() => true);
     let retainedRaw: NonNullable<VoiceCredentialAccess<'speech'>['raw']> | null = null;
     const revisionA = 'csr_0123456789ABCDEFGHJKMNPQRS';
     const revisionB = 'csr_ZYXWVUTSRQPONMLKJHGFEDCBA1';
@@ -387,51 +408,40 @@ describe('unified Voice speech machine RPC', () => {
       catalog: Object.freeze({ list: catalogList }),
       async transcribe(request) { return { requestId: request.requestId, text: '' }; },
     });
-    const registryLease = {
-      registry: {
-        activateContributionsOnDemand: runtimeLeaseMocks.activateContributionsOnDemand,
-        generation: 7,
-        contributes: {
-          activationTargets: [{ pluginId: target.pluginId, manifest }],
-        },
-        voiceSpeechProviders: {
-          read: vi.fn(() => ({
-            generation: '7',
-            runtime,
-            contribution: manifest.contributes.voiceProviders?.[0],
-            isCurrent,
-            retirementSignal: new AbortController().signal,
-            createHttp: () => http,
-          })),
-        },
-        resolveVoiceProviderRuntimeLifecycle: () => ({
-          generation: 'immutable-generation-7',
-          isCurrent,
-          retirementSignal: new AbortController().signal,
-        }),
-        resolveCurrentPluginMaterializationRef: () => ({
-          pluginId: target.pluginId,
-          machineId: 'machine-a',
-          materializationId: 'materialization-7',
-        }),
-        resolveConnectedAccountPurposeBindingOwner: () => ({
-          getBinding: async () => ({
-            purpose: 'voice.speech',
-            service: { pluginId: 'happier.google', localId: 'oauth' },
-            account: {
-              service: { pluginId: 'happier.google', localId: 'oauth' },
-              accountId: 'google-a',
-            },
-            target: { kind: 'account' as const, displayName: 'Google A' },
-          }),
-          materialize,
-        }),
-      },
-      release: runtimeLeaseMocks.release,
-    };
-    runtimeLeaseMocks.acquire.mockResolvedValueOnce(registryLease).mockResolvedValueOnce(registryLease);
+
+    const readSnapshot = (() => {
+          const snapshot = {
+            source: 'network' as const,
+            scopeKey: 'account-scope',
+            settingsVersion: 1,
+            loadedAtMs: 1,
+            settingsSecretsReadKeys: [],
+            connectedPurposeCatalog: { status: 'ready', revision: 1, record: { key: 'purposes', value: ConnectedPurposeCatalogV1Schema.parse({ v: 1, bindings: [{
+              purpose: { consumer: target, purpose: 'voice.speech' }, target: { kind: 'account',
+                account: { service: { pluginId: 'happier.google', localId: 'oauth' }, accountId: 'google-a' } },
+            }] }) } },
+            settings: accountSettingsParse({
+              voiceSettingsV1: {
+                providers: {
+                  [`${target.pluginId}/${target.localId}`]: {
+                    schemaVersion: 2,
+                    config: { model: 'gemini-2.5-flash' },
+                  },
+                },
+                credentialBindings: [{
+                  contribution: target,
+                  credentialSlotId: 'api_key',
+                  credentialSource: { kind: 'connectedAccount' },
+                  credentialBindings: { account: {} },
+                }],
+              },
+            }),
+          } satisfies ActiveAccountSettingsSnapshot;
+          return () => snapshot;
+        })();
+    const fixture = await admitSpeech(runtime, manifest.contributes.voiceProviders!.find((candidate): candidate is SpeechContribution => candidate.kind === 'speech')!, { snapshot: readSnapshot(), readSnapshot, manifest, materializeAccount: materialize });
     const registration = registerMachineVoiceSpeechRpcHandlers({
-      rpcHandlerManager: registrar as never,
+      rpcHandlerManager: registrar,
       machineId: 'machine-a',
       resolveRawCredentialDependencies: async () => ({
         currentInstallReviewPrincipal: { readCurrent: async () => ({ digest: principal, presentation: null }) },
@@ -456,36 +466,7 @@ describe('unified Voice speech machine RPC', () => {
             pendingRequests: [],
           }),
         },
-        getAccountSettingsSnapshot: (() => {
-          const snapshot = {
-            source: 'network' as const,
-            scopeKey: 'account-scope',
-            settingsVersion: 1,
-            loadedAtMs: 1,
-            settingsSecretsReadKeys: [],
-            connectedPurposeCatalog: { status: 'ready', revision: 1, record: { key: 'purposes', value: { v: 1, bindings: [{
-              purpose: { consumer: target, purpose: 'voice.speech' }, target: { kind: 'account',
-                account: { service: { pluginId: 'happier.google', localId: 'oauth' }, accountId: 'google-a' } },
-            }] } } } satisfies NonNullable<ActiveAccountSettingsSnapshot['connectedPurposeCatalog']>,
-            settings: {
-              voiceSettingsV1: {
-                providers: {
-                  'happier.voice.google/gemini-stt': {
-                    schemaVersion: 2,
-                    config: { model: 'gemini-2.5-flash' },
-                  },
-                },
-                credentialBindings: [{
-                  contribution: target,
-                  credentialSlotId: 'api_key',
-                  credentialSource: { kind: 'connectedAccount' },
-                  credentialBindings: { account: {} },
-                }],
-              },
-            } as never,
-          };
-          return () => snapshot;
-        })(),
+        getAccountSettingsSnapshot: readSnapshot,
       }),
     });
 
@@ -502,14 +483,9 @@ describe('unified Voice speech machine RPC', () => {
       code: 'plugin_voice_credential_access_unavailable',
     });
 
-    expect(runtimeLeaseMocks.activateContributionsOnDemand).toHaveBeenCalledWith([{
-      pluginId: target.pluginId,
-      family: 'voiceProviders',
-      localId: target.localId,
-    }]);
+    expect(fixture.registry.voiceSpeechProviders?.read(target)?.isCurrent()).toBe(true);
     expect(materialize).toHaveBeenNthCalledWith(1, expect.objectContaining({
-      purpose: { consumer: target, purpose: 'voice.speech' },
-      serviceRefs: [{ pluginId: 'happier.google', localId: 'oauth' }],
+      account: { service: { pluginId: 'happier.google', localId: 'oauth' }, accountId: 'google-a' },
       credentialRevisionBasis: {
         expectedCredentialRevision: null,
         captureCredentialRevision: expect.any(Function),
@@ -528,7 +504,6 @@ describe('unified Voice speech machine RPC', () => {
       }),
     }));
     expect(materialize).toHaveBeenCalledTimes(3);
-    expect(isCurrent).toHaveBeenCalled();
     await registration.dispose();
   });
 
@@ -536,21 +511,20 @@ describe('unified Voice speech machine RPC', () => {
     const { handlers, registrar } = manager();
     const principal = PluginInstallReviewPrincipalDigestSchema.parse('c'.repeat(64));
     const manifest = speechManifest({ requirement: { kind: 'optional' } });
-    const runtimeIsCurrent = vi.fn(() => true);
-    const snapshotFor = (accountId: string): ActiveAccountSettingsSnapshot => Object.freeze({
+    const snapshotFor = (accountId: string, revision = 1): ActiveAccountSettingsSnapshot => Object.freeze({
       source: 'network' as const,
       scopeKey: 'account-scope',
-      settingsVersion: 1,
+      settingsVersion: revision,
       loadedAtMs: 1,
       settingsSecretsReadKeys: [],
-      connectedPurposeCatalog: { status: 'ready', revision: 1, record: { key: 'purposes', value: { v: 1, bindings: [{
+      connectedPurposeCatalog: { status: 'ready', revision, record: { key: 'purposes', value: ConnectedPurposeCatalogV1Schema.parse({ v: 1, bindings: [{
         purpose: { consumer: target, purpose: 'voice.speech' }, target: { kind: 'account',
           account: { service: { pluginId: 'happier.google', localId: 'oauth' }, accountId } },
-      }] } } } satisfies NonNullable<ActiveAccountSettingsSnapshot['connectedPurposeCatalog']>,
+      }] }) } },
       settings: accountSettingsParse({
         voiceSettingsV1: {
           providers: {
-            'happier.voice.google/gemini-stt': {
+            [`${target.pluginId}/${target.localId}`]: {
               schemaVersion: 2,
               config: { model: 'gemini-2.5-flash' },
             },
@@ -566,16 +540,11 @@ describe('unified Voice speech machine RPC', () => {
     });
     let currentSnapshot = snapshotFor('google-a');
     const credentialRevision = 'csr_0123456789ABCDEFGHJKMNPQRS';
-    const materialize = vi.fn(async (input: Readonly<{
-      expectedAccount?: Readonly<{ accountId?: string }>;
-      credentialRevisionBasis?: Readonly<{
-        captureCredentialRevision(credentialRevision: string): void;
-      }>;
-    }>) => {
+    const materialize = vi.fn<ConnectedAccountPurposeBindingOwnerDependencies['materializeAccount']>(async (input) => {
       input.credentialRevisionBasis?.captureCredentialRevision(credentialRevision);
       return Object.freeze({
         kind: 'httpHeaders' as const,
-        headers: { authorization: `Bearer ${input.expectedAccount?.accountId ?? 'missing'}` },
+        headers: { authorization: `Bearer ${input.account.accountId}` },
       });
     });
     let secondMaterializationError: unknown = null;
@@ -585,7 +554,8 @@ describe('unified Voice speech machine RPC', () => {
         kind: 'httpHeaders',
         headers: { authorization: 'Bearer google-a' },
       });
-      currentSnapshot = snapshotFor('google-b');
+      currentSnapshot = snapshotFor('google-b', 2);
+      setActiveAccountSettingsSnapshot(currentSnapshot);
       try {
         await context.credentials.raw.materialize(rawRequest);
       } catch (error) {
@@ -598,57 +568,10 @@ describe('unified Voice speech machine RPC', () => {
       catalog: Object.freeze({ list: listCatalog }),
       async transcribe(request) { return { requestId: request.requestId, text: '' }; },
     });
-    const registryLease = {
-      registry: {
-        activateContributionsOnDemand: runtimeLeaseMocks.activateContributionsOnDemand,
-        generation: 9,
-        contributes: {
-          activationTargets: [{ pluginId: target.pluginId, manifest }],
-        },
-        voiceSpeechProviders: {
-          read: vi.fn(() => ({
-            generation: '9',
-            runtime,
-            contribution: manifest.contributes.voiceProviders?.[0],
-            isCurrent: runtimeIsCurrent,
-            retirementSignal: new AbortController().signal,
-            createHttp: () => http,
-          })),
-        },
-        resolveVoiceProviderRuntimeLifecycle: () => ({
-          generation: 'immutable-generation-9',
-          isCurrent: runtimeIsCurrent,
-          retirementSignal: new AbortController().signal,
-        }),
-        resolveCurrentPluginMaterializationRef: () => ({
-          pluginId: target.pluginId,
-          machineId: 'machine-a',
-          materializationId: 'materialization-9',
-        }),
-        resolveConnectedAccountPurposeBindingOwner: () => ({
-          getBinding: async () => {
-            const purposes = currentSnapshot.connectedPurposeCatalog;
-            if (purposes?.status !== 'ready' || purposes.record.key !== 'purposes') throw new Error('Purpose catalog unavailable');
-            const selectedTarget = purposes.record.value.bindings[0]!.target;
-            if (selectedTarget.kind !== 'account') throw new Error('speech fixture requires an account target');
-            return {
-              purpose: 'voice.speech',
-              service: { pluginId: 'happier.google', localId: 'oauth' },
-              account: {
-                service: { pluginId: 'happier.google', localId: 'oauth' },
-                accountId: selectedTarget.account.accountId,
-              },
-              target: { kind: 'account' as const, displayName: 'Selected Google account' },
-            };
-          },
-          materialize,
-        }),
-      },
-      release: runtimeLeaseMocks.release,
-    };
-    runtimeLeaseMocks.acquire.mockResolvedValueOnce(registryLease);
+
+    await admitSpeech(runtime, manifest.contributes.voiceProviders!.find((candidate): candidate is SpeechContribution => candidate.kind === 'speech')!, { snapshot: currentSnapshot, readSnapshot: () => currentSnapshot, manifest, materializeAccount: materialize });
     const registration = registerMachineVoiceSpeechRpcHandlers({
-      rpcHandlerManager: registrar as never,
+      rpcHandlerManager: registrar,
       machineId: 'machine-a',
       resolveRawCredentialDependencies: async () => ({
         currentInstallReviewPrincipal: { readCurrent: async () => ({ digest: principal, presentation: null }) },
@@ -689,7 +612,7 @@ describe('unified Voice speech machine RPC', () => {
     });
     expect(materialize).toHaveBeenCalledTimes(1);
     expect(materialize).toHaveBeenCalledWith(expect.objectContaining({
-      expectedAccount: expect.objectContaining({ accountId: 'google-a' }),
+      account: expect.objectContaining({ accountId: 'google-a' }),
     }));
     expect(response).toMatchObject({ ok: false, errorCode: 'provider_unavailable' });
     await registration.dispose();
@@ -713,11 +636,11 @@ describe('unified Voice speech machine RPC', () => {
     requirement,
     credentialModeDefault,
   }) => {
-    const list = vi.fn(async (_request, context) => {
+    const list = vi.fn<NonNullable<SpeechProviderRuntime['catalog']>['list']>(async (_request, context) => {
       expect(context.credentials).toEqual({ phase: 'speech', mediated: null, raw: null });
       return [];
     });
-    const { handlers, registration, connectedMaterialize } = registerDefaultCatalogWithNoCredentialSource({
+    const { handlers, registration, connectedMaterialize } = await registerDefaultCatalogWithNoCredentialSource({
       requirement,
       credentialModeDefault,
       list,
@@ -750,8 +673,8 @@ describe('unified Voice speech machine RPC', () => {
     requirement,
     credentialModeDefault,
   }) => {
-    const list = vi.fn(async () => []);
-    const { handlers, registration, connectedMaterialize } = registerDefaultCatalogWithNoCredentialSource({
+    const list = vi.fn<NonNullable<SpeechProviderRuntime['catalog']>['list']>(async () => []);
+    const { handlers, registration, connectedMaterialize } = await registerDefaultCatalogWithNoCredentialSource({
       requirement,
       credentialModeDefault,
       list,
@@ -773,20 +696,17 @@ describe('unified Voice speech machine RPC', () => {
 
   it('calls the final catalog ABI with declaration-bound catalog and credentials', async () => {
     const { handlers, registrar } = manager();
-    const list = vi.fn(async (_request, context) => {
-      expect(context.credentials).toBe(credentials);
+    const list = vi.fn<NonNullable<SpeechProviderRuntime['catalog']>['list']>(async (_request, context) => {
+      expect(context.credentials).toEqual(credentials);
       expect(context.settings).toEqual(settings);
       expect(Object.isFrozen(context.settings)).toBe(true);
-      expect(context.http).toBe(http);
+      expect(context.http.request).toEqual(expect.any(Function));
       expect(context.signal.aborted).toBe(false);
       return [{ id: 'gemini-2.5-flash', name: 'Gemini 2.5 Flash', metadata: {} }];
     });
+    await admitSpeech({ kind: 'speech', catalog: { list }, transcribe: vi.fn() }, contribution({ catalogs: [{ kind: 'models', settingFieldId: 'model', allowCustom: true }] }));
     const registration = registerMachineVoiceSpeechRpcHandlers({
-      rpcHandlerManager: registrar as never,
-      resolveSpeechRuntime: resolveRuntime(
-        { kind: 'speech', catalog: { list }, transcribe: vi.fn() },
-        contribution({ catalogs: [{ kind: 'models', settingFieldId: 'model', allowCustom: true }] }),
-      ),
+      rpcHandlerManager: registrar,
     });
 
     const response = await handlers.get(RPC_METHODS.DAEMON_VOICE_SPEECH_CATALOG)?.({
@@ -826,30 +746,18 @@ describe('unified Voice speech machine RPC', () => {
         }],
       },
     });
-    const list = vi.fn(async (_request, context) => {
+    const list = vi.fn<NonNullable<SpeechProviderRuntime['catalog']>['list']>(async (_request, context) => {
       mutableSettings.model = 'changed-after-dispatch';
       mutableSettings.options.language = 'fr';
       expect(context.settings).toEqual({ model: 'gemini-2.5-flash', options: { language: 'en' } });
       expect(Object.isFrozen(context.settings)).toBe(true);
       expect(Object.isFrozen(context.settings.options)).toBe(true);
-      expect(context.http).toBe(http);
+      expect(context.http.request).toEqual(expect.any(Function));
       return [];
     });
+    await admitSpeech({ kind: 'speech' as const, catalog: { list }, transcribe: unexpectedTranscribe }, nestedContribution, { settings: mutableSettings });
     const registration = registerMachineVoiceSpeechRpcHandlers({
-      rpcHandlerManager: registrar as never,
-      resolveSpeechRuntime: vi.fn(async () => ({
-        runtime: { kind: 'speech' as const, catalog: { list } },
-        contribution: nestedContribution,
-        readSettings: () => ({
-          settings: mutableSettings,
-          resolveCredentials: () => credentials,
-          isCurrent: () => true,
-        }),
-        createHttp: () => http,
-        isCurrent: () => true,
-        retirementSignal: new AbortController().signal,
-        release: vi.fn(async () => undefined),
-      })),
+      rpcHandlerManager: registrar,
     });
 
     await expect(handlers.get(RPC_METHODS.DAEMON_VOICE_SPEECH_CATALOG)?.({
@@ -861,66 +769,42 @@ describe('unified Voice speech machine RPC', () => {
 
   it('rejects undeclared settings before HTTP binding or provider effects', async () => {
     const { handlers, registrar } = manager();
-    const list = vi.fn(async () => []);
-    const createHttp = vi.fn(() => http);
+    const list = vi.fn<NonNullable<SpeechProviderRuntime['catalog']>['list']>(async () => []);
+    await admitSpeech({ kind: 'speech' as const, catalog: { list }, transcribe: unexpectedTranscribe }, contribution({ catalogs: [{ kind: 'models', settingFieldId: 'model', allowCustom: true }] }), { settings: { model: 'gemini-2.5-flash', apiKey: 'must-not-project' } });
     const registration = registerMachineVoiceSpeechRpcHandlers({
-      rpcHandlerManager: registrar as never,
-      resolveSpeechRuntime: vi.fn(async () => ({
-        runtime: { kind: 'speech' as const, catalog: { list } },
-        contribution: contribution({ catalogs: [{ kind: 'models', settingFieldId: 'model', allowCustom: true }] }),
-        readSettings: () => ({
-          settings: { model: 'gemini-2.5-flash', apiKey: 'must-not-project' },
-          resolveCredentials: () => credentials,
-          isCurrent: () => true,
-        }),
-        createHttp,
-        isCurrent: () => true,
-        retirementSignal: new AbortController().signal,
-        release: vi.fn(async () => undefined),
-      })),
+      rpcHandlerManager: registrar,
     });
 
     await expect(handlers.get(RPC_METHODS.DAEMON_VOICE_SPEECH_CATALOG)?.({
       target, catalog: 'models',
     })).resolves.toMatchObject({ ok: false, errorCode: 'invalid_parameters' });
-    expect(createHttp).not.toHaveBeenCalled();
     expect(list).not.toHaveBeenCalled();
     await registration.dispose();
   });
 
   it('retires publication and the bound HTTP service when the settings snapshot changes', async () => {
     const { handlers, registrar } = manager();
-    let settingsCurrent = true;
-    let boundCurrentness: (() => boolean) | undefined;
-    const createHttp = vi.fn((_signal: AbortSignal, isCurrent?: () => boolean) => {
-      boundCurrentness = isCurrent;
-      return http;
-    });
-    const list = vi.fn(async () => {
-      settingsCurrent = false;
+    let boundHttp: Pick<HttpService, 'request'> | undefined;
+    const list = vi.fn<NonNullable<SpeechProviderRuntime['catalog']>['list']>(async (_request, context) => {
+      boundHttp = context.http;
+      const snapshot = getActiveAccountSettingsSnapshot();
+      if (!snapshot) throw new Error('Expected admitted speech settings');
+      setActiveAccountSettingsSnapshot({ ...snapshot, settingsVersion: 2,
+        settings: accountSettingsParse({ voiceSettingsV1: { providers: {
+          [`${target.pluginId}/${target.localId}`]: { schemaVersion: 2, config: { model: 'changed-model' } },
+        } } }),
+      });
       return [];
     });
+    await admitSpeech({ kind: 'speech' as const, catalog: { list }, transcribe: unexpectedTranscribe }, contribution({ catalogs: [{ kind: 'models', settingFieldId: 'model', allowCustom: true }] }), { settings: settings });
     const registration = registerMachineVoiceSpeechRpcHandlers({
-      rpcHandlerManager: registrar as never,
-      resolveSpeechRuntime: vi.fn(async () => ({
-        runtime: { kind: 'speech' as const, catalog: { list } },
-        contribution: contribution({ catalogs: [{ kind: 'models', settingFieldId: 'model', allowCustom: true }] }),
-        readSettings: () => ({
-          settings,
-          resolveCredentials: () => credentials,
-          isCurrent: () => settingsCurrent,
-        }),
-        createHttp,
-        isCurrent: () => true,
-        retirementSignal: new AbortController().signal,
-        release: vi.fn(async () => undefined),
-      })),
+      rpcHandlerManager: registrar,
     });
 
     await expect(handlers.get(RPC_METHODS.DAEMON_VOICE_SPEECH_CATALOG)?.({
       target, catalog: 'models',
     })).resolves.toMatchObject({ ok: false, errorCode: 'provider_unavailable' });
-    expect(boundCurrentness?.()).toBe(false);
+    await expect(boundHttp?.request({ method: 'GET', url: 'https://speech.example.test' })).rejects.toMatchObject({ code: 'plugin_final_generation_retired' });
     await registration.dispose();
   });
 
@@ -928,18 +812,15 @@ describe('unified Voice speech machine RPC', () => {
     const { handlers, registrar } = manager();
     let markStarted: (() => void) | null = null;
     const started = new Promise<void>((resolve) => { markStarted = resolve; });
-    const list = vi.fn(async (_request, context) => await new Promise<never>((_resolve, reject) => {
+    const list = vi.fn<NonNullable<SpeechProviderRuntime['catalog']>['list']>(async (_request, context) => await new Promise<never>((_resolve, reject) => {
       markStarted?.();
       const rejectAbort = () => reject(Object.assign(new Error('catalog aborted'), { name: 'AbortError' }));
       if (context.signal.aborted) rejectAbort();
       else context.signal.addEventListener('abort', rejectAbort, { once: true });
     }));
+    await admitSpeech({ kind: 'speech', catalog: { list }, transcribe: unexpectedTranscribe }, contribution({ catalogs: [{ kind: 'models', settingFieldId: 'model', allowCustom: true }] }));
     const registration = registerMachineVoiceSpeechRpcHandlers({
-      rpcHandlerManager: registrar as never,
-      resolveSpeechRuntime: resolveRuntime(
-        { kind: 'speech', catalog: { list } },
-        contribution({ catalogs: [{ kind: 'models', settingFieldId: 'model', allowCustom: true }] }),
-      ),
+      rpcHandlerManager: registrar,
     });
     const controller = new AbortController();
     const pending = handlers.get(RPC_METHODS.DAEMON_VOICE_SPEECH_CATALOG)?.(
@@ -960,37 +841,23 @@ describe('unified Voice speech machine RPC', () => {
 
   it('cancels provider work when the admitted generation retires', async () => {
     const { handlers, registrar } = manager();
-    const retirement = new AbortController();
     let markStarted: (() => void) | null = null;
     const started = new Promise<void>((resolve) => { markStarted = resolve; });
-    const list = vi.fn(async (_request, context) => await new Promise<never>((_resolve, reject) => {
+    const list = vi.fn<NonNullable<SpeechProviderRuntime['catalog']>['list']>(async (_request, context) => await new Promise<never>((_resolve, reject) => {
       markStarted?.();
       const rejectAbort = () => reject(Object.assign(new Error('catalog retired'), { name: 'AbortError' }));
       if (context.signal.aborted) rejectAbort();
       else context.signal.addEventListener('abort', rejectAbort, { once: true });
     }));
-    const release = vi.fn(async () => undefined);
+    await admitSpeech({ kind: 'speech' as const, catalog: { list }, transcribe: unexpectedTranscribe }, contribution({ catalogs: [{ kind: 'models', settingFieldId: 'model', allowCustom: true }] }), { settings: settings });
     const registration = registerMachineVoiceSpeechRpcHandlers({
-      rpcHandlerManager: registrar as never,
-      resolveSpeechRuntime: vi.fn(async () => ({
-        runtime: { kind: 'speech' as const, catalog: { list } },
-        contribution: contribution({ catalogs: [{ kind: 'models', settingFieldId: 'model', allowCustom: true }] }),
-        readSettings: () => Object.freeze({
-          settings,
-          resolveCredentials: () => credentials,
-          isCurrent: () => !retirement.signal.aborted,
-        }),
-        createHttp: () => http,
-        isCurrent: () => !retirement.signal.aborted,
-        retirementSignal: retirement.signal,
-        release,
-      })),
+      rpcHandlerManager: registrar,
     });
     const pending = handlers.get(RPC_METHODS.DAEMON_VOICE_SPEECH_CATALOG)?.({
       target, catalog: 'models',
     });
     await started;
-    retirement.abort();
+    await retireSpeech();
 
     await expect(pending).resolves.toEqual({
       ok: false,
@@ -998,28 +865,25 @@ describe('unified Voice speech machine RPC', () => {
       error: 'provider_unavailable',
       retryable: false,
     });
-    expect(release).toHaveBeenCalledTimes(1);
+    expect(pluginReloadController.getState().activeRegistry?.voiceSpeechProviders?.read(target)).toBeNull();
     await registration.dispose();
   });
 
   it('cancels provider work at the host operation deadline', async () => {
-    vi.useFakeTimers();
     try {
       const { handlers, registrar } = manager();
       let markStarted: (() => void) | null = null;
       const started = new Promise<void>((resolve) => { markStarted = resolve; });
-      const list = vi.fn(async (_request, context) => await new Promise<never>((_resolve, reject) => {
+      const list = vi.fn<NonNullable<SpeechProviderRuntime['catalog']>['list']>(async (_request, context) => await new Promise<never>((_resolve, reject) => {
         markStarted?.();
         const rejectAbort = () => reject(Object.assign(new Error('catalog timed out'), { name: 'AbortError' }));
         if (context.signal.aborted) rejectAbort();
         else context.signal.addEventListener('abort', rejectAbort, { once: true });
       }));
+      await admitSpeech({ kind: 'speech', catalog: { list }, transcribe: unexpectedTranscribe }, contribution({ catalogs: [{ kind: 'models', settingFieldId: 'model', allowCustom: true }] }));
+      vi.useFakeTimers();
       const registration = registerMachineVoiceSpeechRpcHandlers({
-        rpcHandlerManager: registrar as never,
-        resolveSpeechRuntime: resolveRuntime(
-          { kind: 'speech', catalog: { list } },
-          contribution({ catalogs: [{ kind: 'models', settingFieldId: 'model', allowCustom: true }] }),
-        ),
+        rpcHandlerManager: registrar,
       });
       const pending = handlers.get(RPC_METHODS.DAEMON_VOICE_SPEECH_CATALOG)?.({
         target, catalog: 'models',
@@ -1041,10 +905,10 @@ describe('unified Voice speech machine RPC', () => {
 
   it('rejects retired nested selectors and targetless predecessor upload-init requests', async () => {
     const { handlers, registrar } = manager();
-    const resolveSpeechRuntime = vi.fn();
+    const list = vi.fn<NonNullable<SpeechProviderRuntime['catalog']>['list']>(async () => []);
+    await admitSpeech({ kind: 'speech', catalog: { list }, transcribe: unexpectedTranscribe }, contribution({ catalogs: [{ kind: 'models', settingFieldId: 'model', allowCustom: true }] }));
     const registration = registerMachineVoiceSpeechRpcHandlers({
-      rpcHandlerManager: registrar as never,
-      resolveSpeechRuntime,
+      rpcHandlerManager: registrar,
     });
 
     await expect(handlers.get(RPC_METHODS.DAEMON_VOICE_SPEECH_CATALOG)?.({
@@ -1086,23 +950,20 @@ describe('unified Voice speech machine RPC', () => {
       error: 'invalid_parameters',
       errorCode: 'invalid_parameters',
     });
-    expect(resolveSpeechRuntime).not.toHaveBeenCalled();
+    expect(list).not.toHaveBeenCalled();
     await registration.dispose();
   });
 
   it('passes host-owned bytes through the final transcribe ABI and enforces provider input limits', async () => {
     const { handlers, registrar } = manager();
-    const transcribe = vi.fn(async (request, context) => {
+    const transcribe = vi.fn<NonNullable<SpeechProviderRuntime['transcribe']>>(async (request, context) => {
       expect([...request.bytes]).toEqual([1, 2, 3]);
-      expect(context.credentials).toBe(credentials);
+      expect(context.credentials).toEqual(credentials);
       return { requestId: request.requestId, text: 'hello' };
     });
+    await admitSpeech({ kind: 'speech', transcribe }, contribution({ limits: { transcribe: { maxInputBytes: 3 } } }));
     const registration = registerMachineVoiceSpeechRpcHandlers({
-      rpcHandlerManager: registrar as never,
-      resolveSpeechRuntime: resolveRuntime(
-        { kind: 'speech', transcribe },
-        contribution({ limits: { transcribe: { maxInputBytes: 3 } } }),
-      ),
+      rpcHandlerManager: registrar,
     });
     const uploadId = await upload(handlers, new Uint8Array([1, 2, 3]));
 
@@ -1123,7 +984,7 @@ describe('unified Voice speech machine RPC', () => {
   ])('enforces declared input units and selected settings before synthesis: $limits', async ({ limits, input, valid }) => {
     const { handlers, registrar } = manager();
     const base = contribution({ roles: ['conversation_tts'] });
-    const synthesize = vi.fn(async (request) => ({
+    const synthesize = vi.fn<NonNullable<SpeechProviderRuntime['synthesize']>>(async (request) => ({
       requestId: request.requestId, bytes: new Uint8Array([1]), mimeType: 'audio/wav' as const,
     }));
     const definition = contribution({
@@ -1133,9 +994,9 @@ describe('unified Voice speech machine RPC', () => {
         default: 5, presentation: { control: 'number', step: 1 },
       }] },
     });
+    await admitSpeech({ kind: 'speech', synthesize }, definition);
     const registration = registerMachineVoiceSpeechRpcHandlers({
-      rpcHandlerManager: registrar as never,
-      resolveSpeechRuntime: resolveRuntime({ kind: 'speech', synthesize }, definition),
+      rpcHandlerManager: registrar,
     });
     const recipient = createTransferRecipientKeyPair();
     const invoke = (text: string) => handlers.get(RPC_METHODS.DAEMON_VOICE_SPEECH_SYNTHESIZE)?.({
@@ -1150,17 +1011,14 @@ describe('unified Voice speech machine RPC', () => {
 
   it('rejects the first provider output byte over the effective host cap', async () => {
     const { handlers, registrar } = manager();
-    const synthesize = vi.fn(async (request) => ({
+    const synthesize = vi.fn<NonNullable<SpeechProviderRuntime['synthesize']>>(async (request) => ({
       requestId: request.requestId,
       bytes: new Uint8Array([1, 2, 3, 4]),
       mimeType: 'audio/wav' as const,
     }));
+    await admitSpeech({ kind: 'speech', synthesize }, contribution({ roles: ['conversation_tts'], limits: { synthesize: { maxOutputBytes: 3 } } }));
     const registration = registerMachineVoiceSpeechRpcHandlers({
-      rpcHandlerManager: registrar as never,
-      resolveSpeechRuntime: resolveRuntime(
-        { kind: 'speech', synthesize },
-        contribution({ roles: ['conversation_tts'], limits: { synthesize: { maxOutputBytes: 3 } } }),
-      ),
+      rpcHandlerManager: registrar,
     });
     const recipient = createTransferRecipientKeyPair();
 
@@ -1173,33 +1031,31 @@ describe('unified Voice speech machine RPC', () => {
 
   it('rejects an invalid transfer key before runtime or credential access', async () => {
     const { handlers, registrar } = manager();
-    const resolveSpeechRuntime = vi.fn();
+    // A misordered runtime lookup would return provider_unavailable from this
+    // real admitted registry instead of the required key-validation refusal.
+    await retireSpeech();
     const registration = registerMachineVoiceSpeechRpcHandlers({
-      rpcHandlerManager: registrar as never,
-      resolveSpeechRuntime,
+      rpcHandlerManager: registrar,
     });
 
     await expect(handlers.get(RPC_METHODS.DAEMON_VOICE_SPEECH_SYNTHESIZE)?.({
       target, requestId: 'tts-invalid-key', input: 'Hello',
       recipientPublicKeyBase64: Buffer.alloc(31).toString('base64'),
     })).resolves.toEqual({ ok: false, errorCode: 'invalid_parameters' });
-    expect(resolveSpeechRuntime).not.toHaveBeenCalled();
+    expect(pluginReloadController.getState().activeRegistry?.voiceSpeechProviders?.read(target)).toBeNull();
     await registration.dispose();
   });
 
   it('rejects a provider result with another request id before publication', async () => {
     const { handlers, registrar } = manager();
-    const synthesize = vi.fn(async () => ({
+    const synthesize = vi.fn<NonNullable<SpeechProviderRuntime['synthesize']>>(async () => ({
       requestId: 'another-request',
       bytes: new Uint8Array([1, 2, 3]),
       mimeType: 'audio/wav' as const,
     }));
+    await admitSpeech({ kind: 'speech', synthesize }, contribution({ roles: ['conversation_tts'] }));
     const registration = registerMachineVoiceSpeechRpcHandlers({
-      rpcHandlerManager: registrar as never,
-      resolveSpeechRuntime: resolveRuntime(
-        { kind: 'speech', synthesize },
-        contribution({ roles: ['conversation_tts'] }),
-      ),
+      rpcHandlerManager: registrar,
     });
     const recipient = createTransferRecipientKeyPair();
 
@@ -1215,21 +1071,18 @@ describe('unified Voice speech machine RPC', () => {
     const backing = new Uint8Array(new SharedArrayBuffer(5));
     backing.set([9, 1, 2, 3, 9]);
     const providerBytes = backing.subarray(1, 4);
-    const synthesize = vi.fn(async (request, context) => {
+    const synthesize = vi.fn<NonNullable<SpeechProviderRuntime['synthesize']>>(async (request, context) => {
       expect(request).toEqual({
         requestId: 'tts-1', input: 'Hello', model: null, voiceName: 'en-US-A',
         languageCode: null, format: 'wav', speakingRate: null, pitch: null,
       });
       expect(request).not.toHaveProperty('recipientPublicKeyBase64');
-      expect(context.credentials).toBe(credentials);
+      expect(context.credentials).toEqual(credentials);
       return { requestId: request.requestId, bytes: providerBytes, mimeType: 'audio/wav' as const };
     });
+    await admitSpeech({ kind: 'speech', synthesize }, contribution({ roles: ['conversation_tts'], limits: { synthesize: { maxOutputBytes: 3 } } }));
     const registration = registerMachineVoiceSpeechRpcHandlers({
-      rpcHandlerManager: registrar as never,
-      resolveSpeechRuntime: resolveRuntime(
-        { kind: 'speech', synthesize },
-        contribution({ roles: ['conversation_tts'], limits: { synthesize: { maxOutputBytes: 3 } } }),
-      ),
+      rpcHandlerManager: registrar,
     });
     const recipient = createTransferRecipientKeyPair();
     const response = await handlers.get(RPC_METHODS.DAEMON_VOICE_SPEECH_SYNTHESIZE)?.({
@@ -1288,9 +1141,9 @@ describe('unified Voice speech machine RPC', () => {
       settings: authoredSettings,
     }).synthesize).toMatchObject({ voiceName: 'synthetic-voice', format: 'wav' });
     const { handlers, registrar } = manager();
+    await admitSpeech(textToSpeechRuntime, authored, { target: { pluginId: 'examples.public-sdk-review-assistant', localId: 'speech-tts' } });
     const registration = registerMachineVoiceSpeechRpcHandlers({
-      rpcHandlerManager: registrar as never,
-      resolveSpeechRuntime: resolveRuntime(textToSpeechRuntime, authored),
+      rpcHandlerManager: registrar,
     });
     const recipient = createTransferRecipientKeyPair();
     const response = await handlers.get(RPC_METHODS.DAEMON_VOICE_SPEECH_SYNTHESIZE)?.({
@@ -1340,7 +1193,7 @@ describe('unified Voice speech machine RPC', () => {
         ],
       },
     });
-    const synthesize = vi.fn(async (request) => {
+    const synthesize = vi.fn<NonNullable<SpeechProviderRuntime['synthesize']>>(async (request) => {
       expect(request).toEqual({
         requestId: 'tts-snapshot',
         input: 'Hello',
@@ -1349,21 +1202,9 @@ describe('unified Voice speech machine RPC', () => {
       });
       return { requestId: request.requestId, bytes: new Uint8Array([1]), mimeType: 'audio/wav' as const };
     });
+    await admitSpeech({ kind: 'speech', synthesize }, definition, { settings: snapshotSettings });
     const registration = registerMachineVoiceSpeechRpcHandlers({
-      rpcHandlerManager: registrar as never,
-      resolveSpeechRuntime: vi.fn(async (): Promise<VoiceSpeechRuntimeLease> => ({
-        runtime: { kind: 'speech', synthesize },
-        contribution: definition,
-        readSettings: () => Object.freeze({
-          settings: snapshotSettings,
-          resolveCredentials: () => credentials,
-          isCurrent: () => true,
-        }),
-        createHttp: () => http,
-        isCurrent: () => true,
-        retirementSignal: new AbortController().signal,
-        release: vi.fn(async () => undefined),
-      })),
+      rpcHandlerManager: registrar,
     });
     const recipient = createTransferRecipientKeyPair();
 
@@ -1381,18 +1222,13 @@ describe('unified Voice speech machine RPC', () => {
 
   it('rejects stale or malformed provider output before publishing a download', async () => {
     const { handlers, registrar } = manager();
-    let current = true;
-    const synthesize = vi.fn(async () => {
-      current = false;
+    const synthesize = vi.fn<NonNullable<SpeechProviderRuntime['synthesize']>>(async () => {
+      await retireSpeech();
       return { requestId: 'tts-2', bytes: new Uint8Array([1]), mimeType: 'audio/wav' as const };
     });
+    await admitSpeech({ kind: 'speech', synthesize }, contribution({ roles: ['conversation_tts'] }));
     const registration = registerMachineVoiceSpeechRpcHandlers({
-      rpcHandlerManager: registrar as never,
-      resolveSpeechRuntime: resolveRuntime(
-        { kind: 'speech', synthesize },
-        contribution({ roles: ['conversation_tts'] }),
-        () => current,
-      ),
+      rpcHandlerManager: registrar,
     });
     const recipient = createTransferRecipientKeyPair();
     const response = await handlers.get(RPC_METHODS.DAEMON_VOICE_SPEECH_SYNTHESIZE)?.({
@@ -1431,8 +1267,8 @@ describe('unified Voice speech machine RPC', () => {
       loadedAtMs: 1,
       settingsSecretsReadKeys: [],
       connectedPurposeCatalog: { status: 'ready', revision: 1,
-        record: { key: 'purposes', value: { v: 1, bindings: [] } } } satisfies NonNullable<ActiveAccountSettingsSnapshot['connectedPurposeCatalog']>,
-      settings: {
+        record: { key: 'purposes', value: ConnectedPurposeCatalogV1Schema.parse({ v: 1, bindings: [] }) } },
+      settings: accountSettingsParse({
         voiceSettingsV1: {
           providers: {
             [providerId]: {
@@ -1442,17 +1278,17 @@ describe('unified Voice speech machine RPC', () => {
           },
           credentialBindings: [],
         },
-      } as never,
+      }),
     };
     const execute = vi.fn(async () => {
       snapshot = {
         ...snapshot,
         settingsVersion: 2,
-        connectedPurposeCatalog: { status: 'ready', revision: 2, record: { key: 'purposes', value: { v: 1, bindings: [{
+        connectedPurposeCatalog: { status: 'ready', revision: 2, record: { key: 'purposes', value: ConnectedPurposeCatalogV1Schema.parse({ v: 1, bindings: [{
           purpose: { consumer: target, purpose: 'voice.speech' }, target: { kind: 'account',
             account: { service: { pluginId: 'happier.google', localId: 'oauth' }, accountId: 'google-a' } },
-        }] } } } satisfies NonNullable<ActiveAccountSettingsSnapshot['connectedPurposeCatalog']>,
-        settings: {
+        }] }) } },
+        settings: accountSettingsParse({
           voiceSettingsV1: {
             providers: {
               [providerId]: {
@@ -1467,8 +1303,9 @@ describe('unified Voice speech machine RPC', () => {
               credentialBindings: { account: {} },
             }],
           },
-        } as never,
+        }),
       };
+      setActiveAccountSettingsSnapshot(snapshot);
       return { patch: { model: 'refreshed-model' } };
     });
     const runtime: SpeechProviderRuntime & Readonly<{
@@ -1476,48 +1313,18 @@ describe('unified Voice speech machine RPC', () => {
     }> = Object.freeze({
       kind: 'speech',
       settingsActions: Object.freeze({ execute }),
+      transcribe: unexpectedTranscribe,
+      catalog: unexpectedCatalog,
     });
-    const current = () => true;
     const currentInstallReviewPrincipal = Object.freeze({
       digest: PluginInstallReviewPrincipalDigestSchema.parse('d'.repeat(64)),
       presentation: null,
     });
     const connectedMaterialize = vi.fn();
-    runtimeLeaseMocks.acquire.mockResolvedValueOnce({
-      registry: {
-        activateContributionsOnDemand: runtimeLeaseMocks.activateContributionsOnDemand,
-        generation: 8,
-        contributes: {
-          activationTargets: [{ pluginId: target.pluginId, manifest }],
-        },
-        voiceSpeechProviders: {
-          read: vi.fn(() => ({
-            generation: '8',
-            runtime,
-            contribution: declaredContribution,
-            isCurrent: current,
-            retirementSignal: new AbortController().signal,
-            createHttp: () => http,
-          })),
-        },
-        resolveVoiceProviderRuntimeLifecycle: () => ({
-          generation: 'immutable-generation-8',
-          isCurrent: current,
-          retirementSignal: new AbortController().signal,
-        }),
-        resolveCurrentPluginMaterializationRef: () => ({
-          pluginId: target.pluginId,
-          machineId: 'machine-a',
-          materializationId: 'materialization-8',
-        }),
-        resolveConnectedAccountPurposeBindingOwner: () => ({
-          materialize: connectedMaterialize,
-        }),
-      },
-      release: runtimeLeaseMocks.release,
-    });
+
+    await admitSpeech(runtime, declaredContribution, { snapshot, readSnapshot: () => snapshot, manifest, materializeAccount: connectedMaterialize });
     const registration = registerMachineVoiceSpeechRpcHandlers({
-      rpcHandlerManager: registrar as never,
+      rpcHandlerManager: registrar,
       machineId: 'machine-a',
       resolveRawCredentialDependencies: async () => ({
         currentInstallReviewPrincipal: { readCurrent: async () => currentInstallReviewPrincipal },
@@ -1549,18 +1356,17 @@ describe('unified Voice speech machine RPC', () => {
     const settingsActionCredentials: VoiceCredentialAccess<'settings'> = Object.freeze({
       phase: 'settings', mediated: null, raw: null,
     });
-    let current = true;
     let retireAfterExecution = false;
     const execute: NonNullable<VoiceSpeechRuntimeLease['runtime']['settingsActions']>['execute'] = vi.fn(async (input, context) => {
       expect(input).toEqual({
         actionId: 'refresh-voice',
         settings: { voiceName: 'lagging-daemon-voice', format: 'wav' },
       });
-      expect(context.credentials).toBe(settingsActionCredentials);
+      expect(context.credentials).toEqual(settingsActionCredentials);
       expect(context.credentials.phase).toBe('settings');
       expect(context.signal.aborted).toBe(false);
       expect(context.tools).toEqual([]);
-      if (retireAfterExecution) current = false;
+      if (retireAfterExecution) await retireSpeech();
       return { patch: { voiceName: 'refreshed-voice' } };
     });
     const definition = contribution({
@@ -1591,29 +1397,10 @@ describe('unified Voice speech machine RPC', () => {
     });
     const runtime: SpeechProviderRuntime & Readonly<{
       settingsActions: Readonly<{ execute: typeof execute }>;
-    }> = { kind: 'speech', settingsActions: { execute } };
-    const resolveCredentials: ReturnType<VoiceSpeechRuntimeLease['readSettings']>['resolveCredentials'] = (
-      _settings,
-      _signal,
-      phase = 'speech',
-    ) => phase === 'settings' ? settingsActionCredentials : credentials;
-    let daemonSettingsVersion = 7;
+    }> = { kind: 'speech', settingsActions: { execute }, synthesize: unexpectedSynthesize };
+    await admitSpeech(runtime, definition, { settings: Object.freeze({ voiceName: 'lagging-daemon-voice', format: 'wav' }), settingsVersion: 7 });
     const registration = registerMachineVoiceSpeechRpcHandlers({
-      rpcHandlerManager: registrar as never,
-      resolveSpeechRuntime: vi.fn(async (): Promise<VoiceSpeechRuntimeLease> => ({
-        runtime,
-        contribution: definition,
-        readSettings: () => Object.freeze({
-          settings: Object.freeze({ voiceName: 'lagging-daemon-voice', format: 'wav' }),
-          settingsVersion: daemonSettingsVersion,
-          resolveCredentials,
-          isCurrent: () => current,
-        }),
-        createHttp: () => http,
-        isCurrent: () => current,
-        retirementSignal: new AbortController().signal,
-        release: vi.fn(async () => undefined),
-      })),
+      rpcHandlerManager: registrar,
     });
     const executeSettingsAction = handlers.get('daemon.voice.speech.settingsAction.execute');
     if (!executeSettingsAction) {

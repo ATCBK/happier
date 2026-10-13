@@ -14,6 +14,9 @@ vi.mock('@/api/client/serverHttpBaseUrl', () => ({
 }));
 
 import { listCurrentAccountMachines, resolveCurrentAccountMachineTarget } from './resolveCurrentAccountMachineTarget';
+import { createMachineContentCodec } from './machineStoredContent';
+import { MachinePublishedMetadataV1Schema } from '@happier-dev/protocol/machines/machinePublishedContentV1';
+import { AccountEncryptionModeResponseSchema } from '@happier-dev/protocol/account/encryptionMode';
 
 function currentMachine(id: string, host?: string) {
   return {
@@ -30,6 +33,45 @@ beforeEach(() => {
 });
 
 describe('resolveCurrentAccountMachineTarget', () => {
+  it.each(['plain', 'e2ee'] as const)('projects platform facts through the canonical %s Machine content reader', async mode => {
+    const secret = new Uint8Array(32).fill(7);
+    const metadata = MachinePublishedMetadataV1Schema.parse({ host: 'worker', platform: 'linux', arch: 'arm64',
+      happyCliVersion: 'test', homeDir: '/home/worker', happyHomeDir: '/home/worker/.happier',
+      agentInventory: { checkedAt: 122, installedAgentIds: ['claude'] } });
+    const codec = createMachineContentCodec(mode === 'plain' ? { encryptionMode: 'plain' }
+      : { encryptionMode: 'e2ee', encryptionVariant: 'legacy', encryptionKey: secret });
+    boundaries.axiosGet.mockResolvedValue({ data: [{ ...currentMachine('machine'), metadata: codec.encodeStored(metadata),
+      storageMode: mode, dataEncryptionKey: null, activeAt: 123 }] });
+    const machines = await listCurrentAccountMachines({ token: 'token', credentials: {
+      token: 'token', encryption: mode === 'plain' ? null : { type: 'legacy', secret },
+    } });
+    expect(machines).toEqual([expect.objectContaining({ id: 'machine', kind: 'persistent', platform: 'linux', arch: 'arm64', activeAt: 123,
+      agentInventory: metadata.agentInventory })]);
+    boundaries.axiosGet.mockResolvedValue({ data: [{ ...currentMachine('machine'), metadata: 'unreadable',
+      storageMode: mode, dataEncryptionKey: 'broken-key' }] });
+    const unavailable = await listCurrentAccountMachines({ token: 'token', credentials: {
+      token: 'token', encryption: mode === 'plain' ? null : { type: 'legacy', secret },
+    } });
+    expect(unavailable[0]).not.toHaveProperty('platform');
+    expect(unavailable[0]).not.toHaveProperty('arch');
+    expect(unavailable[0]).not.toHaveProperty('agentInventory');
+  });
+  it('reads the Account mode in the exact Home when legacy Machine rows do not declare it', async () => {
+    const secret = new Uint8Array(32).fill(9);
+    const codec = createMachineContentCodec({ encryptionMode: 'e2ee', encryptionVariant: 'legacy', encryptionKey: secret });
+    const metadata = MachinePublishedMetadataV1Schema.parse({ host: 'worker', platform: 'linux', arch: 'x64',
+      happyCliVersion: 'test', homeDir: '/home/worker', happyHomeDir: '/home/worker/.happier' });
+    boundaries.axiosGet.mockImplementation(async (url: string) => url.endsWith('/v1/account/encryption')
+      ? { status: 200, data: AccountEncryptionModeResponseSchema.parse({ mode: 'e2ee', updatedAt: 1 }) } : { data: [
+        { ...currentMachine('one'), metadata: codec.encodeStored(metadata), dataEncryptionKey: null },
+        { ...currentMachine('two'), metadata: codec.encodeStored(metadata), dataEncryptionKey: null },
+      ] });
+    const inventory = await listCurrentAccountMachines({ token: 'token', serverHttpBaseUrl: 'https://fixed-home.example.test',
+      credentials: { token: 'token', encryption: { type: 'legacy', secret } } });
+    expect(inventory.map(machine => machine.platform)).toEqual(['linux', 'linux']);
+    expect(boundaries.axiosGet).toHaveBeenCalledWith('https://fixed-home.example.test/v1/account/encryption',
+      expect.objectContaining({ headers: { Authorization: 'Bearer token' } }));
+  });
   it('preserves accessible Machine readiness and never auto-selects a pending shared target', async () => {
     const access = { custodian: { accountId: 'alice', displayName: 'Alice' }, role: 'use', resourceMode: 'e2ee', accessState: 'key_pending' };
     boundaries.axiosGet.mockResolvedValue({ data: [{ ...currentMachine('shared'), access }] });

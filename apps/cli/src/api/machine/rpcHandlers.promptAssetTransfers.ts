@@ -1,15 +1,16 @@
-import { PromptAssetMutationResponseV1Schema, PromptAssetReadRequestSchema } from '@happier-dev/protocol/prompts/library/promptAssetsV1';
+import { PromptAssetMutationResponseV1Schema } from '@happier-dev/protocol/prompts/library/promptAssetsV1';
+import { FoundSkillDownloadRequestV1Schema } from '@happier-dev/protocol/prompts/library/skills/foundSkillTransferV1';
 import { RPC_METHODS } from '@happier-dev/protocol/rpc/methods';
-import type { PromptAssetMutationResponseV1, PromptAssetReadRequest } from '@happier-dev/protocol';
+import type { PromptAssetMutationResponseV1 } from '@happier-dev/protocol';
 
 import { configuration } from '@/configuration';
 import type { PromptAssetAdapter } from '@happier-dev/plugin-sdk/resources';
 import { TransferSessionStore } from '@happier-dev/transfers/node';
 import { registerUploadTransferLifecycleHandlers } from '@/transfers/rpc/registerUploadTransferLifecycleHandlers';
-import { resolvePromptAssetDownloadSource } from '@/transfers/targets/resolvePromptAssetDownloadSource';
+import { resolveFoundSkillDownloadSource, type FoundSkillReadOptions } from '@/prompts/skills/native/resolveFoundSkillDownloadSource';
 import { resolvePromptAssetUploadTarget } from '@/transfers/targets/resolvePromptAssetUploadTarget';
 
-import type { RpcHandlerManager } from '../rpc/RpcHandlerManager';
+import type { RpcHandlerRegistrar } from '../rpc/types';
 import { registerMachineDownloadTransferRpcHandlers } from './transfers/registerMachineDownloadTransferRpcHandlers';
 
 export type MachinePromptAssetTransferRpcRegistration = Readonly<{
@@ -27,8 +28,9 @@ type PromptAssetUploadFinalizeResponse =
   | Readonly<{ success: false; error: string }>;
 
 export function registerMachinePromptAssetTransferRpcHandlers(params: Readonly<{
-  rpcHandlerManager: RpcHandlerManager;
+  rpcHandlerManager: RpcHandlerRegistrar;
   adapterRegistry: ReadonlyMap<string, PromptAssetAdapter>;
+  foundSkills?: Omit<FoundSkillReadOptions, 'signal'>;
 }>): MachinePromptAssetTransferRpcRegistration {
   const store = new TransferSessionStore({ ttlMs: configuration.filesTransferSessionTtlMs });
 
@@ -42,12 +44,13 @@ export function registerMachinePromptAssetTransferRpcHandlers(params: Readonly<{
       abort: RPC_METHODS.DAEMON_PROMPT_ASSETS_DOWNLOAD_ABORT,
     },
     parseRequest: (data) => {
-      const parsed = PromptAssetReadRequestSchema.safeParse(data);
-      return parsed.success ? (parsed.data as PromptAssetReadRequest) : null;
+      const parsed = FoundSkillDownloadRequestV1Schema.safeParse(data);
+      return parsed.success ? parsed.data : null;
     },
-    resolveSource: async (request) => {
-      const source = await resolvePromptAssetDownloadSource({
-        adapterRegistry: params.adapterRegistry,
+    resolveSource: async (request, context) => {
+      const source = await resolveFoundSkillDownloadSource({
+        ...params.foundSkills,
+        ...(context ? { signal: context.signal } : {}),
         request,
       });
       if (!source.success) {
@@ -61,7 +64,7 @@ export function registerMachinePromptAssetTransferRpcHandlers(params: Readonly<{
         },
       };
     },
-    initFailureMessage: 'Prompt asset download init failed',
+    initFailureMessage: 'Found skill download init failed',
   });
 
   registerUploadTransferLifecycleHandlers<
