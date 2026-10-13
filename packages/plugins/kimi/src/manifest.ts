@@ -81,6 +81,7 @@ export const KIMI_PLUGIN = definePlugin({
         },
         primary: 'sessions',
         catalog: {
+          acpRegistryIds: [...AGENT_DEFINITION.acpRegistryIds],
           vendorResume: { support: AGENT_DEFINITION.core.resume.vendorResume },
         },
         // Resume-only: current Kimi Code answers `session/list`, so the host
@@ -100,7 +101,8 @@ export const KIMI_PLUGIN = definePlugin({
           },
         },
         capabilities: projectAgentCapabilitiesV2FromDefinition(AGENT_DEFINITION.core, {
-          skills: { delivery: 'none', nativeDisable: 'unsupported', liveReload: 'unsupported' },
+          skills: { delivery: 'none', nativeDisable: 'unsupported', liveReload: 'unsupported',
+            nativeRoots: { user: [['.config', 'agents', 'skills'], ['.agents', 'skills'], ['.kimi', 'skills'], ['.claude', 'skills'], ['.codex', 'skills']], project: [['.agents', 'skills'], ['.kimi', 'skills'], ['.claude', 'skills'], ['.codex', 'skills']] } },
           surfaces: ['externalSessions'],
           sessions: {
             open: ['create', 'resume'],

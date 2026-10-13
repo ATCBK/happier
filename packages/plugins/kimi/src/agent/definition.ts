@@ -3,6 +3,7 @@ const KIMI_AGENT_ID = 'kimi';
 // IMPORTANT: this must stay JSON-serializable (data-only).
 export const AGENT_DEFINITION = Object.freeze({
   id: KIMI_AGENT_ID,
+  acpRegistryIds: ['kimi'] as const,
   core: {
     id: KIMI_AGENT_ID,
     cliSubcommand: 'kimi',

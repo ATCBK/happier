@@ -23,6 +23,54 @@
               "fork"
             ]
           },
+          "skills": {
+            "delivery": "none",
+            "liveReload": "unsupported",
+            "nativeDisable": "unsupported",
+            "nativeRoots": {
+              "project": [
+                [
+                  ".agents",
+                  "skills"
+                ],
+                [
+                  ".kimi",
+                  "skills"
+                ],
+                [
+                  ".claude",
+                  "skills"
+                ],
+                [
+                  ".codex",
+                  "skills"
+                ]
+              ],
+              "user": [
+                [
+                  ".config",
+                  "agents",
+                  "skills"
+                ],
+                [
+                  ".agents",
+                  "skills"
+                ],
+                [
+                  ".kimi",
+                  "skills"
+                ],
+                [
+                  ".claude",
+                  "skills"
+                ],
+                [
+                  ".codex",
+                  "skills"
+                ]
+              ]
+            }
+          },
           "surfaces": [
             "terminal",
             "externalSessions"
@@ -32,6 +80,9 @@
           }
         },
         "catalog": {
+          "acpRegistryIds": [
+            "kimi"
+          ],
           "vendorResume": {
             "support": "supported"
           }
@@ -201,6 +252,7 @@
     "projectNativeAdapters": [],
     "promptAssets": [],
     "providers": [],
+    "registrySources": [],
     "requestInterceptors": [],
     "resources": [],
     "roles": [],
