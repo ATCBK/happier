@@ -24,7 +24,7 @@ import {
     type UsageTrendPoint,
 } from './usageAnalytics';
 import type { UsageDataPoint } from './apiUsage';
-import type { UsageAnalyticsQueryResponse } from '@happier-dev/protocol';
+import { UsageAnalyticsQueryResponseSchema, type UsageAnalyticsQueryResponse } from '@happier-dev/protocol';
 
 const baseState: UsageFilterState = {
     period: '7days',
@@ -843,7 +843,14 @@ describe('buildUsageAnalyticsViewModel', () => {
             },
         };
 
-        const viewModel = buildUsageAnalyticsViewModel(response, baseState);
+        // Page selection needs the witnessed contribution detail, not a copied
+        // aggregate whose already-selected invoice cannot be reconstructed.
+        const admitted = UsageAnalyticsQueryResponseSchema.parse({ ...response, contributions: [{
+            id: 'reported-request', observedAtMs: 100, sessionId: null, turnId: null, agentId: null,
+            modelId: null, machineId: null, projectKey: null, workspaceId: null, source: null,
+            tokens: response.totals.tokens, cost: response.totals.cost,
+        }] });
+        const viewModel = buildUsageAnalyticsViewModel(admitted, baseState);
 
         expect(viewModel.costPresentation).toEqual({
             mode: 'auto',

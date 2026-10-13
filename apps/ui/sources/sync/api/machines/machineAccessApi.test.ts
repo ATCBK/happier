@@ -3,8 +3,25 @@ import { createFrontDoorActionExecute } from '@/sync/ops/actions/frontDoorRuntim
 import { createDefaultActionExecutor } from '@/sync/ops/actions/defaultActionExecutor';
 import { serveAccountHomes, serveActionHomes } from '@/dev/testkit/harness/actionHomesHttpHarness';
 import { executeMachineAccessHttpAction } from './machineAccessApi';
+import { setServerProfileIdentityForUrl, resolveServerProfileScopeIdForIdentifier } from '@/sync/domains/server/serverProfiles';
 
 describe('Machine access through the real Action front door', () => {
+    it('accepts a bound local profile target at the captured Home while rejecting another Home', async () => {
+        const home = await serveAccountHomes({ homes: [{ key: 'machine', serverUrl: 'https://machine-alias.test', accountId: 'alice' }],
+            route: request => request.path.endsWith('/access') ? Response.json({ kind: 'saved',
+                grant: { machineId: 'machine', principal: { kind: 'account', accountId: 'bob' }, level: 'view' },
+                readiness: 'ready', canPrepareKeys: false }) : undefined });
+        try {
+            await setServerProfileIdentityForUrl(home.homes.machine!.serverUrl, 'srv_machine_alias');
+            const scope = { serverId: resolveServerProfileScopeIdForIdentifier(home.homes.machine!.id), accountId: 'alice' };
+            const input = { serverId: home.homes.machine!.id, machineId: 'machine', principal: { kind: 'account', accountId: 'bob' }, level: 'view' };
+            expect(await executeMachineAccessHttpAction({ scope, actionId: 'machines.access.grant.set', input }))
+                .toMatchObject({ kind: 'saved' });
+            await expect(executeMachineAccessHttpAction({ scope, actionId: 'machines.access.grant.set', input: { ...input, serverId: 'srv_foreign_home' } }))
+                .rejects.toMatchObject({ code: 'machine_access_stale_scope' });
+            expect(home.requests.filter(request => request.path.endsWith('/access'))).toHaveLength(1);
+        } finally { await home.dispose(); }
+    });
     it('does not classify an issued permission write as replayable when its captured view retires before acknowledgement', async () => {
         let current = true;
         const home = await serveAccountHomes({ homes: [{ key: 'machine', serverUrl: 'https://machine-retired.test', accountId: 'alice' }],
@@ -29,7 +46,7 @@ describe('Machine access through the real Action front door', () => {
                 actionId: 'machines.access.grants.list', input: target,
             })).rejects.toMatchObject({ code: 'machine_access_stale_scope' });
             expect(home.requests.filter(request => request.path.endsWith('/access')).map(request => request.method)).toEqual(['PUT', 'GET']);
-        } finally { home.dispose(); }
+        } finally { await home.dispose(); }
     });
     it('captures the qualified Home and Account for permission-only grants and leave, rejecting Edit before HTTP', async () => {
         const home = await serveActionHomes({ homes: [
@@ -63,6 +80,6 @@ describe('Machine access through the real Action front door', () => {
                 { home: 'machine', accountId: 'alice', body: {} },
             ]);
             expect(home.requests.filter(request => request.path.includes('data-key-envelopes'))).toEqual([]);
-        } finally { home.dispose(); }
+        } finally { await home.dispose(); }
     });
 });

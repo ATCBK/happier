@@ -249,7 +249,7 @@ export function requireUpdatedMcpServerCatalogMutation(result: McpServerCatalogR
 }
 
 export async function mutateMcpServerCatalogInContext(context: McpServerCatalogAccountContext,
-    input: Readonly<{ expectedRevision: number | 'absent'; change: McpServerCatalogMutationV1 }>,
+    input: Readonly<{ expectedRevision: number | 'absent'; change: McpServerCatalogMutationV1; pluginItemIds?: readonly string[] }>,
     signal?: AbortSignal): Promise<McpServerCatalogMutationResponseV1> {
     let snapshot: McpServerCatalogSnapshotV1;
     try {
@@ -264,7 +264,7 @@ export async function mutateMcpServerCatalogInContext(context: McpServerCatalogA
     }
     if (snapshot.revision !== input.expectedRevision) return { status: 'conflict', revision: snapshot.revision };
     return commitMcpServerCatalogMutationV1({ catalog: snapshot.catalog, revision: snapshot.revision, change: input.change,
-        ctx: { nowMs: Date.now(), newId: randomUUID },
+        ctx: { nowMs: Date.now(), newId: randomUUID, pluginItemIds: input.pluginItemIds },
         scope: { serverId: context.serverId, accountId: context.accountId },
         writeCatalog: value => writeMcpServerCatalogAndPublishInContext(context, value, signal) });
 }

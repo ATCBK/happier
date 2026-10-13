@@ -3,6 +3,7 @@ import { getActionSpec } from '@happier-dev/protocol/actions/actionSpecs';
 import { bindMachineAccessActionHttpRequestV1, classifyHomeDomainHttpMutationFailureV1, MachineAccessActionIdSchema } from '@happier-dev/protocol/actions';
 import { MachineTargetV1Schema, MachineAccessRefusalV1Schema } from '@happier-dev/protocol/machines/machineAccessV1';
 import type { ServerAccountScope } from '@/sync/domains/scope/serverAccountScope';
+import { areServerProfileIdentifiersEquivalent } from '@/sync/domains/server/serverProfiles';
 import { runWithServerRequestAuthorityForServerAccountScope } from '@/sync/runtime/orchestration/serverScopedRpc/createServerRequestWithServerScope';
 import { runWithServerAccountScopeRequestGuard } from '@/sync/runtime/orchestration/serverScopedRpc/serverAccountScopeRequestGuard';
 
@@ -28,7 +29,7 @@ export async function executeMachineAccessHttpAction(params: Readonly<{
         serverId: (input as Readonly<{ serverId: string }>).serverId,
         machineId: (input as Readonly<{ machineId: string }>).machineId,
     });
-    if (target.serverId !== params.scope.serverId) throw new MachineAccessApiError('machine_access_stale_scope');
+    if (!areServerProfileIdentifiersEquivalent(target.serverId, params.scope.serverId)) throw new MachineAccessApiError('machine_access_stale_scope');
     return runWithServerAccountScopeRequestGuard({
         scope: params.scope, isCurrent: params.isCurrent, signal: params.signal,
         staleError: () => new MachineAccessApiError('machine_access_stale_scope'),

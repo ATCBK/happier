@@ -112,7 +112,8 @@ describe('apiSocket inbound machine-scoped reverse RPC (RU2 G1)', () => {
 
     it.each(['cancel', 'disconnect', 'retire'] as const)('delivers reverse RPC %s to the deferred page owner', async (interruption) => {
         const { socket, trigger } = createSocketStub();
-        await bootApiSocket({ socket, getMachineEncryption: () => createMachineEncryption() });
+        const machineEncryption = createMachineEncryption();
+        await bootApiSocket({ socket, getMachineEncryption: () => machineEncryption });
         const view = { browserSessionId: 'socket-session', viewId: 'socket-view', sessionId: 'happier-session' };
         let began!: () => void;
         const started = new Promise<void>(resolve => { began = resolve; });
@@ -162,7 +163,8 @@ describe('apiSocket inbound machine-scoped reverse RPC (RU2 G1)', () => {
 
     it('dispatches encrypted automation to the existing mounted owner and retires its exact handler', async () => {
         const { socket } = createSocketStub();
-        const apiSocket = await bootApiSocket({ socket, getMachineEncryption: () => createMachineEncryption() });
+        const machineEncryption = createMachineEncryption();
+        const apiSocket = await bootApiSocket({ socket, getMachineEncryption: () => machineEncryption });
         const view = { browserSessionId: 'socket-session', viewId: 'socket-view', sessionId: 'happier-session' };
         const service = createBrowserAutomationControlService({ nowMs: Date.now });
         service.registerOwner({ ...view, ownerId: 'socket-engine', authority: 'uiLocal', navigationGeneration: 0,

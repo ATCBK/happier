@@ -2,7 +2,8 @@ import { loadPromptLibraryCatalogV1, readPromptLibraryCatalogRecordV1, type Prom
 import { applyRoleOverrideMutationV1, type RoleOverrideMutationV1 } from '@happier-dev/protocol/prompts/roles/roleOverrideRecordV1';
 import { createRoleArtifactStoreV1, retainLegacyRoleArtifactsV1 } from '@happier-dev/protocol/prompts/roles/accountRoleActions';
 import { PROMPT_LIBRARY_ROWS_ROUTE_V1, PromptLibraryRowsListResponseV1Schema, PromptLibraryRowMutationV1Schema,
-    PromptLibraryRowMutationResponseV1Schema, sealPromptLibraryContentV1, type PromptLibraryRecordV1 } from '@happier-dev/protocol/prompts/library/promptLibraryRowsV1';
+    PromptLibraryRowMutationResponseV1Schema, PromptLibraryRowReadResponseV1Schema, sealPromptLibraryContentV1,
+    type PromptLibraryCatalogKeyV1, type PromptLibraryRecordV1 } from '@happier-dev/protocol/prompts/library/promptLibraryRowsV1';
 import type { AccountScopedCryptoMaterial } from '@happier-dev/protocol/crypto/accountScopedCipher';
 import type { ServerAccountScope } from '@/sync/domains/scope/serverAccountScope';
 import { resolveAccountScopedCryptoMaterialFromCredentials } from '@/sync/domains/connectedServices/resolveAccountScopedCryptoMaterialFromCredentials';
@@ -13,6 +14,10 @@ import { getRandomBytes } from '@/platform/cryptoRandom';
 import { classifyHttpMutationRequestFailure } from '@/sync/http/mutationRequestOutcome';
 import { applyPromptLibraryCatalogAcknowledgedRecord, type PromptLibraryCatalogProjection } from '@/sync/store/settings/promptLibraryCatalogSnapshot';
 import { fireAndForget } from '@/utils/system/fireAndForget';
+import { areServerProfileIdentifiersEquivalent } from '@/sync/domains/server/serverProfiles';
+import { captureSavedSecretReferenceRevisionsInContext } from './apiSavedSecretCatalog';
+import { listSavedSecretReferenceCatalogRefsV1 } from '@happier-dev/protocol/account/settings/savedSecretMutationOwner';
+import { parseSavedSecretRefV1 } from '@happier-dev/protocol/account/settings/savedSecretReferenceV1';
 
 export type PromptLibraryAccountContext = Awaited<ReturnType<typeof import('@/sync/ops/actions/actionAccountContext').captureLazyActionAccountContext>>;
 export type PromptLibraryRowMutationResponseV1 = ReturnType<typeof PromptLibraryRowMutationResponseV1Schema.parse>;
@@ -64,6 +69,7 @@ type PromptLibraryReadPublication = Readonly<{
 }>;
 async function readPromptLibraryCatalogWithMaintenanceInContext(context: PromptLibraryAccountContext, signal?: AbortSignal,
     publication?: PromptLibraryReadPublication): Promise<PromptLibraryCatalogProjection> {
+    const artifactStore = createRoleArtifactStoreV1({ ...context.workflowArtifacts, read: context.readArtifactContent });
     try {
         return await admit(context, async (mode, material) => {
             const source: { value: Awaited<ReturnType<typeof readAccountSettingsBaseline>> | null } = { value: null };
@@ -75,6 +81,16 @@ async function readPromptLibraryCatalogWithMaintenanceInContext(context: PromptL
                     rawSettings: source.value?.raw ?? {}, sourceSettingsVersion: source.value?.version ?? 0 };
             };
             const catalog = await loadPromptLibraryCatalogV1({ mode, material, signal, readRows: () => readRows(context, signal),
+                skillMigration: {
+                    writeRecord: input => writePromptLibraryRecordInContext(context, input, signal),
+                    readArtifact: async ref => {
+                        if (ref.serverId !== undefined && !areServerProfileIdentifiersEquivalent(ref.serverId, context.serverId)) return null;
+                        context.assertCurrent();
+                        const artifact = await artifactStore.read(ref.artifactId, { signal });
+                        context.assertCurrent();
+                        return artifact;
+                    },
+                },
                 hasPendingCleanup: publication?.hasPendingCleanup,
                 ...(publication?.onReady ? { onReadyBeforeCleanup: async catalog => {
                     const projection = await project(catalog);
@@ -97,7 +113,7 @@ async function readPromptLibraryCatalogWithMaintenanceInContext(context: PromptL
                     return result;
                 },
                 retainLegacyRoleArtifacts: raw => retainLegacyRoleArtifactsV1({ rawSettings: raw, accountId: context.accountId,
-                    artifactStore: createRoleArtifactStoreV1(context.workflowArtifacts), signal }),
+                    artifactStore, signal }),
                 normalizeHistory: async input => normalizeAccountSettingsHistoryAfterTransfer({
                     credentials: context.credentials, encryption: (await context.resolveAccountEncryption()).encryption,
                     settingsScope: { serverId: context.serverId, accountId: context.accountId },
@@ -131,16 +147,52 @@ export async function readPromptLibraryCatalogProjection(scope: ServerAccountSco
     catch (error) { return { catalog: failure(error, signal), rawSettings: {}, sourceSettingsVersion: 0 }; }
 }
 
-export type PromptLibraryRecordWriteInput = Readonly<{ record: PromptLibraryRecordV1; expectedRevision: number | 'absent'; sourceSettingsVersion?: number }>;
+export type PromptLibraryRecordWriteInput = Readonly<{ record: PromptLibraryRecordV1; expectedRevision: number | 'absent'; sourceSettingsVersion?: number;
+    savedSecretRevisions?: readonly Readonly<{resourceId:string;expectedRevision:number}>[];pendingResourceIds?:readonly string[] }>;
+/** Raw destination read for reference census; it never activates or cleans retained sources. */
+export async function readPromptLibraryRowInContext(context: PromptLibraryAccountContext, key: PromptLibraryCatalogKeyV1,
+    signal?: AbortSignal) {
+    const response = await context.request(`${PROMPT_LIBRARY_ROWS_ROUTE_V1}/${encodeURIComponent(key)}`, { method: 'GET', signal }, { retry: 'none' });
+    context.assertCurrent();
+    if (!response.ok) throw new PromptLibraryRowOperationError(response.status === 401 ? 'unauthorized'
+        : response.status === 403 ? 'forbidden' : response.status === 404 ? 'unsupported' : 'unreachable');
+    const row = PromptLibraryRowReadResponseV1Schema.parse(await response.json());
+    context.assertCurrent();
+    return row;
+}
+
+/** Preparation is shared by the sole row writer and atomic credential promotion. */
+export function preparePromptLibraryRecordMutationInContext(context: PromptLibraryAccountContext, input: PromptLibraryRecordWriteInput, signal?:AbortSignal) {
+    return admit(context, async (mode, material) => {
+        if (input.expectedRevision === 'absent' && input.sourceSettingsVersion === undefined) throw new PromptLibraryRowOperationError('source-currentness-unavailable');
+        const references=input.record.key==='registry-sources'?listSavedSecretReferenceCatalogRefsV1({profileRecords:[],registrySources:input.record.value}).map(ref=>ref.secretId):[];
+        const proofs=references.length?await captureSavedSecretReferenceRevisionsInContext(context,{references:references.filter(ref=>parseSavedSecretRefV1(ref).kind==='shared_resource'),
+            savedSecretRevisions:input.savedSecretRevisions,pendingResourceIds:input.pendingResourceIds,signal}):null;
+        const mutation = PromptLibraryRowMutationV1Schema.parse({ expectedRevision: input.expectedRevision,
+            content: sealPromptLibraryContentV1({ mode, material, record: input.record, randomBytes: getRandomBytes }),
+            ...(proofs?{referencedSavedSecretIds:references,savedSecretRevisions:proofs.savedSecretRevisions}:{}),
+            ...(input.sourceSettingsVersion === undefined ? {} : { sourceSettingsVersion: input.sourceSettingsVersion }) });
+        context.assertCurrent();
+        return mutation;
+    });
+}
 /** Every screen/Action uses the same captured Account CAS; ambiguity is never replayed blindly. */
 export function writePromptLibraryRecordInContext(context: PromptLibraryAccountContext, input: PromptLibraryRecordWriteInput,
     signal?: AbortSignal): Promise<PromptLibraryRowMutationResponseV1> {
-    return admit(context, async (mode, material) => {
-        if (input.expectedRevision === 'absent' && input.sourceSettingsVersion === undefined) throw new PromptLibraryRowOperationError('source-currentness-unavailable');
-        const mutation = PromptLibraryRowMutationV1Schema.parse({ expectedRevision: input.expectedRevision,
-            content: sealPromptLibraryContentV1({ mode, material, record: input.record, randomBytes: getRandomBytes }),
-            ...(input.sourceSettingsVersion === undefined ? {} : { sourceSettingsVersion: input.sourceSettingsVersion }) });
-        context.assertCurrent();
+    return (async () => {
+        let mutation: Awaited<ReturnType<typeof preparePromptLibraryRecordMutationInContext>>;
+        try {
+            mutation = await preparePromptLibraryRecordMutationInContext(context, input, signal);
+            context.assertCurrent();
+        } catch (error) {
+            if (error instanceof PromptLibraryRowOperationError) throw error;
+            const classified = failure(error, signal);
+            // No row mutation was issued. Keep known preparation refusals in
+            // the same typed boundary used to retain earlier effect receipts.
+            if (classified.status === 'unavailable' && classified.reason !== 'unreachable')
+                throw new PromptLibraryRowOperationError(classified.reason, error);
+            throw error;
+        }
         let response: Response;
         try {
             response = await context.request(`${PROMPT_LIBRARY_ROWS_ROUTE_V1}/${encodeURIComponent(input.record.key)}`, {
@@ -152,7 +204,7 @@ export function writePromptLibraryRecordInContext(context: PromptLibraryAccountC
         const parsed = PromptLibraryRowMutationResponseV1Schema.safeParse(await response.json().catch(() => null));
         if (!parsed.success) throw new PromptLibraryRowOperationError(response.ok ? 'outcome_unknown' : `prompt_library_row_http_${response.status}`);
         return parsed.data;
-    });
+    })();
 }
 export function writePromptLibraryRecord(scope: ServerAccountScope, input: PromptLibraryRecordWriteInput,
     signal?: AbortSignal): Promise<PromptLibraryRowMutationResponseV1> {

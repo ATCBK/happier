@@ -16,7 +16,7 @@ const dashboard = { purpose: 'dashboard' as const, ref: { kind: 'doc' as const, 
 const repository = { provider: { id: 'github', kind: 'github', displayName: 'GitHub', baseUrl: 'https://github.com' },
     repository: { nameWithOwner: 'owner/repo', visibility: 'private' }, protocol: 'https' } satisfies ProjectSourceRepositorySelectorV1;
 let fixture: Awaited<ReturnType<typeof createPlainArtifactHomeFixture>> | undefined;
-afterEach(() => { fixture?.dispose(); fixture = undefined; resetRuntimeFetch(); vi.restoreAllMocks(); });
+afterEach(async () => { await fixture?.dispose(); fixture = undefined; resetRuntimeFetch(); vi.restoreAllMocks(); });
 
 describe('authenticated Source Action transport', () => {
     it('refuses attachment kind mismatches before issuing a Source mutation', async () => {

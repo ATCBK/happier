@@ -26,14 +26,21 @@ describe('Machine reachability through the authenticated socket ingress', () => 
         const scope = { serverId: home.id, accountId: 'account-a' };
         const otherAccount = { ...scope, accountId: 'account-b' };
         const otherHome = { ...scope, serverId: 'other-home' };
-        for (const identity of [scope, otherAccount, otherHome]) owner.recordMachineRequestFailed({ ...identity, machineId: 'machine' });
+        for (const identity of [scope, otherAccount, otherHome]) {
+            owner.recordMachineRequestFailed({ ...identity, machineId: 'machine' });
+            owner.recordMachineRequestFailed({ ...identity, machineId: 'machine', route: 'loopback_direct' });
+        }
         socket.trigger('ephemeral', { type: 'machine-activity', id: 'machine', active: true, activeAt: Date.now() });
         expect(owner.readMachineRequestReachabilityObservation(scope, 'machine')?.outcome).toBe('failed');
+        expect(owner.readMachineRequestReachabilityObservation(scope, 'machine', 'loopback_direct')?.outcome).toBe('failed');
         socket.trigger('disconnect', 'transport close');
         socket.trigger('connect');
         expect(owner.readMachineRequestReachabilityObservation(scope, 'machine')).toBeNull();
+        expect(owner.readMachineRequestReachabilityObservation(scope, 'machine', 'loopback_direct')).toBeNull();
         expect(owner.readMachineRequestReachabilityObservation(otherAccount, 'machine')?.outcome).toBe('failed');
         expect(owner.readMachineRequestReachabilityObservation(otherHome, 'machine')?.outcome).toBe('failed');
+        expect(owner.readMachineRequestReachabilityObservation(otherAccount, 'machine', 'loopback_direct')?.outcome).toBe('failed');
+        expect(owner.readMachineRequestReachabilityObservation(otherHome, 'machine', 'loopback_direct')?.outcome).toBe('failed');
     });
 
     it('heals only the admitted Machine reconnect and ignores malformed, inactive and retired ingress', () => {

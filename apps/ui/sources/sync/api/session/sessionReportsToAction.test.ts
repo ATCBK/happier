@@ -1,5 +1,9 @@
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import { SessionCreationKeyV1Schema } from '@happier-dev/protocol';
+import { SessionReportsToOptionsV1Schema } from '@happier-dev/protocol/sessions/relations/sessionReportsToV1';
+import { createSessionListRenderableSessionFixture } from '@/dev/testkit/fixtures/sessionFixtures';
+import { selectSessionRelationRecords } from '@/components/sessions/work/reportSubtree';
+import { resolvePutUnderEligibility } from '@/components/sessions/work/putUnderCandidates';
 
 const machineRpc = vi.hoisted(() => vi.fn());
 // The exact daemon is a remote boundary; creation and source-key adapters stay real.
@@ -62,6 +66,22 @@ const input = { sessionId: 'child/id', leadSessionId: 'lead', expectedLeadSessio
 const context = { surface: 'ui', authority: 'present_user' } as const;
 
 describe('reportsTo captured Home Action transport', () => {
+    it('admits an unopened list candidate from the current HTTP eligibility read despite an older local lead', async () => {
+        const env = await setup();
+        try {
+            env.request.mockResolvedValue(Response.json(SessionReportsToOptionsV1Schema.parse({
+                sessionId: input.sessionId, currentLeadSessionId: null, candidates: [{ sessionId: 'lead', allowed: true }],
+            })));
+            const evidence = await loadSessionReportsToEligibility({ serverId: env.home.id, sessionId: input.sessionId, candidateSessionIds: ['lead'] });
+            const sessions = selectSessionRelationRecords({}, env.home.id, { [env.home.id]: {
+                [input.sessionId]: createSessionListRenderableSessionFixture({ id: input.sessionId, reportsTo: { sessionId: 'lead' } }),
+                lead: createSessionListRenderableSessionFixture({ id: 'lead' }),
+            } });
+            expect(resolvePutUnderEligibility(sessions, input.sessionId, 'lead', evidence, { serverId: env.home.id, accountId: 'account' }))
+                .toEqual({ allowed: true, expectedLeadSessionId: null });
+            evidence?.dispose();
+        } finally { env.account.dispose(); }
+    });
     it('loads one qualified read-only eligibility batch and retires it with the captured credential', async () => {
         const env = await setup();
         try {
@@ -136,10 +156,8 @@ describe('reportsTo captured Home Action transport', () => {
             ), { status: 200 }));
             const result = await env.execute({ ...input, context, serverId: env.home.id });
             expect(result).toEqual(encryptionMode === 'plain' ? committed : {
-                ok: false, errorCode: 'session_follow_source_key_preparation_waiting',
-                error: 'session_follow_source_key_preparation_waiting', details: {
-                    status: 'waiting', reason: 'source_key_unavailable', edgeCommitted: true, source: committed,
-                },
+                ...committed,
+                sourceKeyPreparation: { kind: 'waiting', reason: 'source_key_unavailable' },
             });
             expect(env.request.mock.calls.some(([url]) => new URL(url).pathname === '/v2/sessions/child%2Fid')).toBe(true);
         } finally { env.account.dispose(); }

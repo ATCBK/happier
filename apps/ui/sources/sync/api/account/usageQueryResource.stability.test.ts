@@ -1,3 +1,4 @@
+import { projectNativeJsonValueForTransport } from '@happier-dev/protocol/json/strictJsonValue';
 import { afterEach, expect, it, vi } from 'vitest';
 import { serveAccountHomes } from '@/dev/testkit/harness/actionHomesHttpHarness';
 import { standardCleanup } from '@/dev/testkit';
@@ -8,10 +9,10 @@ import { UsageAnalyticsQueryRequestSchema, type UsageAnalyticsQueryResponse } fr
 import { captureUiUsageQueryAccountContext, decodeUsageQueryResource, getUsageQueryResourceStore } from './usageQueryResource';
 
 let home: Awaited<ReturnType<typeof serveAccountHomes>> | undefined;
-afterEach(() => {
+afterEach(async () => {
     standardCleanup();
     retireActiveServerAccountScopeLifetime();
-    home?.dispose();
+    await home?.dispose();
     home = undefined;
     vi.restoreAllMocks();
 });
@@ -37,7 +38,7 @@ it('preserves an unchanged batched slice across Resource revisions without shari
     const queries = ['claude', 'codex'].map(agent => normalizeUsageQuery({
         period: { startMs: 1000, endMs: 2000 }, agents: [agent],
     }));
-    const reference = { hostRead: 'usage.query' as const, input: { queries } };
+    const reference = { hostRead: 'usage.query' as const, input: projectNativeJsonValueForTransport({ queries }) };
     const captured = captureUiUsageQueryAccountContext(credentials);
     if (!captured) throw new Error('Expected admitted Account');
     const entry = getUsageQueryResourceStore(captured).getEntry(reference);

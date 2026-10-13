@@ -44,7 +44,7 @@ describe('captured Machine recipient preparation transport', () => {
                 .toEqual({ kind: 'unavailable', code: 'machine_unavailable' });
             expect(home.requests.slice(beforeExplicit).map(request => [request.method, request.path]))
                 .toEqual([['GET', '/v1/machines/retired-machine']]);
-        } finally { home.dispose(); }
+        } finally { await home.dispose(); }
     });
 
     it.each(['dataKey', 'legacy', 'mixed-legacy', 'malformed-present', 'lost-ack'] as const)('prepares %s custody under the resource Home and preserves edited content', async variant => {
@@ -248,6 +248,6 @@ describe('captured Machine recipient preparation transport', () => {
                     .toMatchObject({ kind: 'unavailable' });
                 expect(home.requests.slice(beforeRetiredScope)).toEqual([]);
             }
-        } finally { fetches.mockRestore(); home.dispose(); }
+        } finally { fetches.mockRestore(); await home.dispose(); }
     });
 });

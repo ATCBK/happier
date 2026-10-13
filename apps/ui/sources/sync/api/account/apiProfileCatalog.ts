@@ -29,6 +29,8 @@ import { getStorage } from '@/sync/domains/state/storageStore';
 import { applyAcknowledgedProfileRecord } from '@/sync/store/settings/profileCatalogSnapshot';
 import { fireAndForget } from '@/utils/system/fireAndForget';
 import { areAccountSettingsScopesEqual } from '@/sync/domains/settings/scope/accountSettingsScope';
+import { areServerProfileIdentifiersEquivalent } from '@/sync/domains/server/serverProfiles';
+import type { PromptArtifactRefV1 } from '@happier-dev/protocol/prompts/library/promptArtifactRefsV1';
 import { PROFILE_TRANSFER_ROUTE_V1, ProfileTransferRowReadResponseV1Schema, ProfileTransferMutationV1Schema,
     ProfileTransferMutationResponseV1Schema, assertProfileTransferContentForModeV1,
     type ProfileTransferMutationV1, type ProfileTransferMutationResponseV1 } from '@happier-dev/protocol/profiles/profileTransferV1';
@@ -80,9 +82,24 @@ async function readResponse(context: ProfileAccountContext, path: string, signal
 
 /** Full opened inventory; partial data can be displayed but cannot authorize a write or conversion. */
 async function readCapturedProfileCatalog(context: ProfileAccountContext, mode: 'plain' | 'e2ee', material: AccountScopedCryptoMaterial | null,
-    signal?: AbortSignal, readSource?: () => Promise<unknown>, onPage?: (page: ProfileRowsListResponseV1) => void): Promise<ProfileCatalogSnapshotV1> {
+    signal?: AbortSignal, readSource?: () => Promise<unknown>, onPage?: (page: ProfileRowsListResponseV1) => void,
+    migrateSkills = false): Promise<ProfileCatalogSnapshotV1> {
     const catalog = await loadProfileCatalogV1({ mode, material, signal,
         ...(readSource ? { readSource } : {}),
+        ...(migrateSkills ? { skillMigration: {
+            readArtifact: async (ref: PromptArtifactRefV1) => {
+                if (ref.serverId !== undefined && !areServerProfileIdentifiersEquivalent(ref.serverId, context.serverId)) return null;
+                context.assertCurrent();
+                const artifact = await context.workflowArtifacts.read(ref.artifactId, { signal });
+                context.assertCurrent();
+                return artifact;
+            },
+            writeRecord: async (record: ProfileRecordV1, expectedRevision: number) => {
+                const written = await writeCapturedProfileRecord(context, mode, material, { record, expectedRevision, operation: 'update' }, signal);
+                return written.status === 'updated' ? { status: 'updated' as const, revision: written.revision }
+                    : { status: written.status === 'conflict' ? 'conflict' as const : 'unavailable' as const };
+            },
+        } } : {}),
         readPage: async cursor => {
             const page = ProfileRowsListResponseV1Schema.parse(await readResponse(context,
                 `${PROFILE_ROWS_ROUTE_V1}${cursor ? `?cursor=${encodeURIComponent(cursor)}` : ''}`, signal));
@@ -154,7 +171,7 @@ async function readCapturedProfileCatalogProjection(context: ProfileAccountConte
     let catalog = await readCapturedProfileCatalog(context, mode, material, signal, async () => {
         capturedSource.baseline = await readProfileTransferSourceInContext(context);
         return capturedSource.baseline.source.raw;
-    });
+    }, undefined, true);
     if (catalog.status !== 'ready' && catalog.status !== 'partial') return { catalog, artifactsById: new Map(), source: null };
     // An opened active control is destination authority even when stale source roots remain.
     // Every other case needs the genuine baseline; row presence never decides the source.
@@ -202,7 +219,7 @@ async function readCapturedProfileCatalogProjection(context: ProfileAccountConte
         });
         context.assertCurrent();
         if (transfer.status === 'active') {
-            catalog = await readCapturedProfileCatalog(context, mode, material, signal);
+            catalog = await readCapturedProfileCatalog(context, mode, material, signal, undefined, undefined, true);
             if (catalog.status !== 'ready' || catalog.control?.record.phase !== 'active'
                 || catalog.control.revision !== transfer.revision) return { catalog: { status: 'unavailable', reason: 'reference-conflict' }, artifactsById: new Map(), source: null };
             source = resolveProfileCatalogAuthorityV1({ rawSettings: undefined, control: catalog.control.record });

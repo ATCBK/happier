@@ -2,7 +2,6 @@ import { afterEach, beforeAll, beforeEach, describe, expect, it, vi } from 'vite
 import { TokenStorage, type AuthCredentials } from '@/auth/storage/tokenStorage';
 import { getStorage } from '@/sync/domains/state/storage';
 import { loadSyncSingletonForTests } from '@/dev/testkit/harness/syncSingletonLoader';
-import { installDisconnectedServerSocketBoundary } from '@/dev/testkit/harness/serverAccountConnectionHarness';
 import { createRootLayoutFeaturesResponse } from '@/dev/testkit/fixtures/featureFixtures';
 import { createPlainAccountEncryptionCurrentnessFixture } from '@/dev/testkit/fixtures/accountEncryptionCurrentness';
 import { disconnectActiveServerConnection, restoreConnectionToActiveServer } from '@/sync/runtime/orchestration/connectionManager';
@@ -17,7 +16,7 @@ import * as savedSecretCatalogApi from './apiSavedSecretCatalog';
 import { PROFILE_TRANSFER_ROUTE_V1, ProfileTransferMutationV1Schema, type ProfileTransferRowReadResponseV1 } from '@happier-dev/protocol/profiles/profileTransferV1';
 import type { ProfileRowV1 } from '@happier-dev/protocol/profiles/profileRecordV1';
 import { AIBackendProfileSchema } from '@happier-dev/protocol/profiles/backendProfileSchema';
-import { ProfileRowMutationV1Schema, type ProfileRowMutationV1, PROFILE_RECORDS_ROUTE_V1, PROFILE_ROWS_ROUTE_V1 } from '@happier-dev/protocol/profiles/profileRecordV1';
+import { ProfileRecordV1Schema, openProfileRecordContentV1, ProfileRowMutationV1Schema, type ProfileRowMutationV1, PROFILE_RECORDS_ROUTE_V1, PROFILE_ROWS_ROUTE_V1 } from '@happier-dev/protocol/profiles/profileRecordV1';
 import { AccountSettingsV2UpdateRequestSchema } from '@happier-dev/protocol/account/settings/accountSettingsApiV2';
 import { PROFILE_REFERENCE_GUARD_ROUTE_V1, buildProfilePhysicalKey } from '@happier-dev/protocol/profiles/profileRecordV1';
 import { observeProfileCatalog, resetProfileCatalogEngineForTests } from '@/sync/engine/settings/profileCatalogEngine';
@@ -38,12 +37,14 @@ import { REMOTE_HOST_ROWS_ROUTE_V1 } from '@happier-dev/protocol/remoteHosts/rem
 import { MCP_SERVER_CATALOG_ROWS_ROUTE_V1 } from '@happier-dev/protocol/mcp/servers/serverRowsV1';
 import { ACP_CATALOG_ROWS_ROUTE_V1 } from '@happier-dev/protocol/acp/catalog/catalogRowsV1';
 import { PROVIDER_CONNECTIONS_ROWS_ROUTE_V1 } from '@happier-dev/protocol/providers/connections/connectionRowsV1';
+import { PROMPT_LIBRARY_ROWS_ROUTE_V1 } from '@happier-dev/protocol/prompts/library/promptLibraryRowsV1';
 import { CONNECTED_ACCOUNT_CATALOG_ROWS_ROUTE_V1 } from '@happier-dev/protocol/connect/connectedAccountConfigurationRowsV1';
 import { NOTIFICATION_CHANNELS_ROUTE_V1 } from '@happier-dev/protocol/account/settings/notificationChannelRecordV1';
 import { createDeferred } from '@/dev/testkit';
 import { refreshProfileCatalog, invalidateProfileCatalogProjection } from '@/sync/engine/settings/profileCatalogEngine';
 
-installDisconnectedServerSocketBoundary();
+vi.mock('socket.io-client', async (importOriginal) =>
+    (await import('@/dev/testkit/harness/serverAccountConnectionHarness')).createSocketIoClientBoundary(importOriginal));
 beforeAll(loadSyncSingletonForTests);
 const http = vi.fn<RuntimeFetch>();
 let scope: { serverId: string; accountId: string };
@@ -57,7 +58,7 @@ function readAbsentReferenceCatalogFixture(path: string, init?: RequestInit): Re
     if ((init?.method ?? 'GET') !== 'GET') return;
     if ([REMOTE_HOST_ROWS_ROUTE_V1, NOTIFICATION_CHANNELS_ROUTE_V1, MCP_SERVER_CATALOG_ROWS_ROUTE_V1, ACP_CATALOG_ROWS_ROUTE_V1,
         PROVIDER_CONNECTIONS_ROWS_ROUTE_V1, `${CONNECTED_ACCOUNT_CATALOG_ROWS_ROUTE_V1}/configurations`,
-        `${CONNECTED_ACCOUNT_CATALOG_ROWS_ROUTE_V1}/purposes`].includes(path)) {
+        `${CONNECTED_ACCOUNT_CATALOG_ROWS_ROUTE_V1}/purposes`, `${PROMPT_LIBRARY_ROWS_ROUTE_V1}/registry-sources`].includes(path)) {
         return Response.json({ status: 'absent' });
     }
 }
@@ -74,9 +75,9 @@ async function activateHome(name: string) {
     getStorage().setState({ profileScope: next, settingsScope: next });
     return next;
 }
-const page = { status: 'listed', rows: [{ id: 'p', revision: 2, content: { t: 'plain', v: {
+const page = { status: 'listed', rows: [{ id: 'p', revision: 2, content: { t: 'plain', v: ProfileRecordV1Schema.parse({
     v: 1, id: 'p', definition: { kind: 'artifact', artifactId: 'a' }, enabled: true, promptStack: [], secretBindings: {},
-} } }], nextCursor: null, complete: true, diagnostics: [], referenceGuardRevision: 3, transferControl: { status: 'absent' } };
+}) } }], nextCursor: null, complete: true, diagnostics: [], referenceGuardRevision: 3, transferControl: { status: 'absent' } };
 beforeEach(async () => {
     retireActiveServerAccountScopeLifetime();
     http.mockReset();
@@ -116,6 +117,50 @@ afterEach(async () => {
     resetRuntimeFetch();
 });
 describe('Profile catalog captured Account transport', () => {
+    it('adds Profile seeds through the real captured projection while keeping raw censuses read-only and legacy ids intact', async () => {
+        let record = ProfileRecordV1Schema.parse({ v: 1, id: 'profile', enabled: true, secretBindings: {}, skillSeeds: ['existing'],
+            definition: { kind: 'inline', profile: { v: 2, id: 'profile', name: 'Profile', createdAt: 1, updatedAt: 1 } },
+            promptStack: [{ id: 'legacy-skill', enabled: true, placement: 'skill_instructions', ref: { kind: 'bundle', artifactId: 'a' } }] });
+        const retainedStack = record.promptStack;
+        profileArtifact = { id: 'a', ownerAccountId: scope.accountId, access: 'owner', encryptionMode: 'plain',
+            header: encodePlainArtifactStoredContent({ v: 1, kind: 'prompt_bundle.v2', title: 'Skill', bundleSchemaId: 'skills.skill_md_v1' }),
+            body: encodePlainArtifactStoredContent({ body: JSON.stringify({ v: 1, entries: [{ path: 'SKILL.md', contentKind: 'utf8',
+                contentBase64: Buffer.from('---\nname: skill\ndescription: Profile skill\n---\nProfile skill').toString('base64') }], createdAtMs: 1, updatedAtMs: 1 }) }),
+            dataEncryptionKey: ARTIFACT_PLAIN_DATA_KEY_MARKER, headerVersion: 1, bodyVersion: 1, seq: 1, createdAt: 1, updatedAt: 1 };
+        let revision = 2;
+        const mutations: ProfileRowMutationV1[] = [];
+        http.mockImplementation(async (_url, init) => {
+            if (init?.method === 'POST') {
+                const mutation = ProfileRowMutationV1Schema.parse(JSON.parse(String(init.body)));
+                expect(mutation).toMatchObject({ operation: 'update', expectedRevision: revision, artifactRevision: null });
+                const opened = openProfileRecordContentV1({ mode: 'plain', material: null, expectedId: record.id, content: mutation.content });
+                if (opened.status !== 'opened') throw new Error('Expected a valid captured Profile producer');
+                record = opened.record;
+                mutations.push(mutation);
+                return Response.json({ status: 'updated', revision: ++revision, cursor: 1, referenceGuardRevision: ++guardRevision });
+            }
+            return Response.json({ ...page, referenceGuardRevision: guardRevision,
+                rows: [{ id: record.id, revision, content: { t: 'plain', v: record } }] });
+        });
+        expect(await readProfileCatalog(scope)).toMatchObject({ status: 'ready', records: [{ record: { skillSeeds: ['existing'] } }] });
+        expect(mutations).toHaveLength(0);
+        const first = await withProfileAccount(scope, undefined, context => readProfileCatalogProjectionInContext(context, undefined, { deferCleanup: true }));
+        expect(first.catalog).toMatchObject({ status: 'ready', referenceGuardRevision: 4,
+            records: [{ revision: 3, record: { skillSeeds: ['existing', 'a'],
+                promptStack: retainedStack.map(entry => ({ ...entry, skillMigrationV1: true })) } }] });
+        const second = await withProfileAccount(scope, undefined, context => readProfileCatalogProjectionInContext(context, undefined, { deferCleanup: true }));
+        expect(second.catalog).toMatchObject({ status: 'ready', referenceGuardRevision: 4 });
+        expect(mutations).toHaveLength(1);
+        record = ProfileRecordV1Schema.parse({ ...record, skillSeeds: ['existing'] });
+        revision++;
+        guardRevision++;
+        for (let pass = 0; pass < 2; pass++) {
+            const reloaded = await withProfileAccount(scope, undefined,
+                context => readProfileCatalogProjectionInContext(context, undefined, { deferCleanup: true }));
+            expect(reloaded.catalog).toMatchObject({ status: 'ready', records: [{ record: { skillSeeds: ['existing'] } }] });
+            expect(mutations).toHaveLength(1);
+        }
+    });
     it('publishes active destination Profiles before history cleanup without borrowing retired maintenance', async () => {
         const history = createDeferred<Response>();
         const replacementHistory = createDeferred<Response>();
@@ -189,8 +234,8 @@ describe('Profile catalog captured Account transport', () => {
         await refreshSavedSecretCatalog(scope);
         expect(getSavedSecretCatalogSnapshot(scope)).toMatchObject({ status: 'ready',
             materializedSecrets: [{ id: 'happier:shared-secret:v1:already-ready', encryptedValue: { value: 'current-private' } }] });
-        expect(getSavedSecretCatalogSnapshot(scope)?.legacyImport)
-            .toMatchObject({ status: 'pending', reason: 'source-uncharacterized' });
+        await vi.waitFor(() => expect(getSavedSecretCatalogSnapshot(scope)?.legacyImport)
+            .toMatchObject({ status: 'pending', reason: 'source-uncharacterized' }));
         expect(sourceRaw).toBe(source);
     });
     it('selects composite import only from captured legacy source and keeps fresh native inactive control on update', async () => {
@@ -204,7 +249,7 @@ describe('Profile catalog captured Account transport', () => {
             const catalog = await readProfileCatalogInContext(context, undefined, { readSourceBaseline: true });
             if (catalog.status !== 'ready') throw new Error(`fixture_catalog_${catalog.status}`);
             const source = catalog.source;
-            const input = { catalog, records: [{ revision: 2, record: { ...record,
+            const input = { catalog, artifactsById: new Map<string, never>(), records: [{ revision: 2, record: { ...record,
                 secretBindings: { ...(source === 'legacy' ? { OTHER: otherPersonal } : {}), TOKEN: 'happier:shared-secret:v1:new' } } }],
                 expectedMode: 'plain' as const, savedSecretRevisions: [{ resourceId: 'new', expectedRevision: 1 }] };
             return prepareProfileRecordMutationsInContext(context, input);
@@ -265,7 +310,7 @@ describe('Profile catalog captured Account transport', () => {
         let version = 4;
         const contentKeyFingerprint = material ? convertContentPublicKeyFingerprintToAccountEncryptionMigrateKeyFingerprintV1(
             createAccountScopedCryptoMaterialSnapshotV1({ accountEncryptionMode: 'e2ee', material }).contentPublicKeyFingerprint) : null;
-        const rawEnvelope = () => mode === 'plain' ? { t: 'plain', v: sourceRaw } : { t: 'encrypted',
+        const rawEnvelope = () => !material ? { t: 'plain', v: sourceRaw } : { t: 'encrypted',
             c: sealAccountScopedBlobCiphertext({ kind: 'account_settings', material, payload: sourceRaw,
                 randomBytes: length => new Uint8Array(length).fill(11) }) };
         const committed: ReturnType<typeof SharedSavedSecretPromoteInputV1Schema.parse>[] = [];
@@ -294,8 +339,11 @@ describe('Profile catalog captured Account transport', () => {
                         connectedConfigurations: 'absent', connectedPurposes: 'absent' } });
                 expect(mutation.profileMutations).toEqual([]);
                 if (mutation.nextSettings?.t === 'plain') sourceRaw = mutation.nextSettings.v;
-                else if (mutation.nextSettings?.t === 'encrypted') sourceRaw = AccountSettingsPersistedObjectSchema.parse(
-                    openAccountScopedBlobCiphertext({ kind: 'account_settings', material, ciphertext: mutation.nextSettings.c })?.value);
+                else if (mutation.nextSettings?.t === 'encrypted') {
+                    if (!material) throw new Error('fixture_requires_e2ee_material');
+                    sourceRaw = AccountSettingsPersistedObjectSchema.parse(
+                        openAccountScopedBlobCiphertext({ kind: 'account_settings', material, ciphertext: mutation.nextSettings.c })?.value);
+                }
                 else throw new Error('fixture_requires_settings');
                 committed.push(mutation);
                 const envelope = mutation.keyEnvelopes?.[0];
@@ -324,6 +372,8 @@ describe('Profile catalog captured Account transport', () => {
         const resourceId = deriveSavedSecretImportResourceIdV1({ accountId: scope.accountId,
             source: { kind: 'personal-saved-secret', secretId: secret.id } });
         const resourceRef = `happier:shared-secret:v1:${resourceId}`;
+        await vi.waitFor(() => expect(getSavedSecretCatalogSnapshot(scope)).toMatchObject({ status: 'ready',
+            materializedSecrets: [{ id: resourceRef, encryptedValue: { value: 'fixture-private' } }] }));
         expect(committed).toHaveLength(1);
         expect(sourceRaw).toMatchObject({ secrets: [], secretBindingsByProfileId: { 'builtin-default': { TOKEN: resourceRef } },
             futureSibling: { preserve: true } });
@@ -369,7 +419,8 @@ describe('Profile catalog captured Account transport', () => {
         await expect(withProfileAccount(scope, undefined, async context => {
             const catalog = await readProfileCatalogInContext(context, undefined, { readSourceBaseline: true });
             if (catalog.status !== 'ready') throw new Error(`fixture_catalog_${catalog.status}`);
-            return prepareProfileRecordMutationsInContext(context, { catalog, records: [{ record, revision: 2 }], expectedMode: 'plain' });
+            return prepareProfileRecordMutationsInContext(context, { catalog, artifactsById: new Map<string, never>(),
+                records: [{ record, revision: 2 }], expectedMode: 'plain' });
         }))
             .rejects.toMatchObject({ code: 'profile-secret-promotion-required' });
         const publicRecord = { ...record, definition: { kind: 'legacy' as const, profile: { ...profile,
@@ -385,11 +436,15 @@ describe('Profile catalog captured Account transport', () => {
         await expect(withProfileAccount(scope, undefined, async context => {
             const catalog = await readProfileCatalogInContext(context, undefined, { readSourceBaseline: true });
             if (catalog.status !== 'ready') throw new Error(`fixture_catalog_${catalog.status}`);
-            return prepareProfileRecordMutationsInContext(context, { catalog, records: [{ record: boundRecord, revision: 2 }], expectedMode: 'plain' });
+            return prepareProfileRecordMutationsInContext(context, { catalog, artifactsById: new Map<string, never>(),
+                records: [{ record: boundRecord, revision: 2 }], expectedMode: 'plain' });
         }))
             .resolves.toMatchObject([{ savedSecretRevisions: [{ resourceId: 'bound', expectedRevision: 2 }] }]);
     });
     it('refetches a demanded Profile catalog on the incumbent Account row wake without advancing Settings or loading a sibling Home', async () => {
+        // Account connection starts its independent Settings bootstrap. Capture
+        // the unchanged-version baseline only after that real HTTP read lands.
+        await vi.waitFor(() => expect(getStorage().getState().settingsVersion).toBe(4));
         const release = observeProfileCatalog(scope);
         try {
             await vi.waitFor(() => expect(getProfileCatalogSnapshot(scope)?.catalog.status).toBe('ready'));

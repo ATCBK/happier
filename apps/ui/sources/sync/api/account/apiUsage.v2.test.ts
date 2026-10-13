@@ -4,8 +4,9 @@ import { UsageAnalyticsQueryRequestSchema } from '@happier-dev/protocol/usage/us
 
 afterEach(() => {
     vi.unstubAllGlobals();
+    vi.unstubAllEnvs();
     vi.resetModules();
-    vi.clearAllMocks();
+    vi.restoreAllMocks();
 });
 
 const credentials: AuthCredentials = { token: 'test-token', secret: 'test-secret' };
@@ -41,24 +42,21 @@ describe('apiUsage v2 analytics query', () => {
         const { upsertAndActivateServer } = await import('@/sync/domains/server/serverRuntime');
         await upsertAndActivateServer({ serverUrl: 'https://api.example.test', scope: 'tab' });
 
-        const fetchMock = vi.fn(async () => ({
-            ok: true,
-            status: 200,
-            json: async () => ({
-                v: 1,
-                totals: {
-                    eventCount: 0,
-                    tokens: { input: 0, output: 0, reasoning: 0, cacheRead: 0, cacheWrite: 0, total: 0 },
-                    cost: { reportedUsd: 0, estimatedUsd: 0, currency: 'USD' },
-                },
-            }),
+        const fetchMock = vi.fn(async (_input: RequestInfo | URL, _init?: RequestInit) => Response.json({
+            v: 1,
+            totals: {
+                eventCount: 0,
+                tokens: { input: 0, output: 0, reasoning: 0, cacheRead: 0, cacheWrite: 0, total: 0 },
+                cost: { reportedUsd: 0, estimatedUsd: 0, currency: 'USD' },
+            },
         }));
-        vi.stubGlobal('fetch', fetchMock as unknown as typeof fetch);
+        vi.stubGlobal('fetch', fetchMock);
 
         const { getUsageForPeriod } = await import('./apiUsage');
-        await getUsageForPeriod(credentials, '7days');
+        const result = await getUsageForPeriod(credentials, '7days');
+        expect(result).toMatchObject({ v: 1, totals: { eventCount: 0, tokens: { total: 0 } } });
 
-        const usageCalls = fetchMock.mock.calls as unknown as Array<[RequestInfo | URL, RequestInit?]>;
+        const usageCalls = fetchMock.mock.calls;
         const usageCall = usageCalls.find(([url]) => String(url).includes('/usage/query'));
         expect(usageCall).toBeDefined();
         if (!usageCall) {
@@ -68,6 +66,7 @@ describe('apiUsage v2 analytics query', () => {
         expect(String(url)).toContain('/v2/usage/query');
 
         const body = JSON.parse(String(options?.body));
+        expect(UsageAnalyticsQueryRequestSchema.safeParse(body).success).toBe(true);
         expect(body).toMatchObject({
             granularity: 'day',
             timeZoneOffsetMinutes: -new Date().getTimezoneOffset() || 0,
@@ -92,33 +91,25 @@ describe('apiUsage v2 analytics query', () => {
         const { upsertAndActivateServer } = await import('@/sync/domains/server/serverRuntime');
         await upsertAndActivateServer({ serverUrl: 'https://api.example.test', scope: 'tab' });
 
-        const fetchMock = vi.fn(async (input: RequestInfo | URL) => {
+        const fetchMock = vi.fn(async (input: RequestInfo | URL, _init?: RequestInit) => {
             const url = String(input);
             if (url.includes('/v2/usage/query')) {
-                return {
-                    ok: false,
-                    status: 404,
-                    json: async () => ({ error: 'not found' }),
-                };
+                return Response.json({ error: 'not found' }, { status: 404 });
             }
-            return {
-                ok: true,
-                status: 200,
-                json: async () => ({
-                    usage: [
-                        {
-                            timestamp: 1_700_000_000,
-                            tokens: { total: 15, input: 10, output: 5 },
-                            cost: { total: 1.25 },
-                            reportCount: 1,
-                        },
-                    ],
-                    groupBy: 'day',
-                    totalReports: 1,
-                }),
-            };
+            return Response.json({
+                usage: [
+                    {
+                        timestamp: 1_700_000_000,
+                        tokens: { total: 15, input: 10, output: 5 },
+                        cost: { total: 1.25 },
+                        reportCount: 1,
+                    },
+                ],
+                groupBy: 'day',
+                totalReports: 1,
+            });
         });
-        vi.stubGlobal('fetch', fetchMock as unknown as typeof fetch);
+        vi.stubGlobal('fetch', fetchMock);
 
         const { getUsageForPeriod } = await import('./apiUsage');
         const response = await getUsageForPeriod(credentials, '7days');
@@ -133,42 +124,35 @@ describe('apiUsage v2 analytics query', () => {
             },
         ]);
 
-        const urls = (fetchMock.mock.calls as Array<[RequestInfo | URL, RequestInit?]>).map(([url]) => String(url));
+        const urls = fetchMock.mock.calls.map(([url]) => String(url));
         expect(urls.some((url) => url.includes('/v2/usage/query'))).toBe(true);
         expect(urls.some((url) => url.includes('/v1/usage/query'))).toBe(true);
     });
 
     it('uses a year-long date range with month granularity for the year filter and downgrades legacy fallback grouping to day', async () => {
+        vi.stubEnv('TZ', 'UTC');
         const { upsertAndActivateServer } = await import('@/sync/domains/server/serverRuntime');
         await upsertAndActivateServer({ serverUrl: 'https://api.example.test', scope: 'tab' });
 
         vi.spyOn(Date, 'now').mockReturnValue(1_735_689_600_000);
 
-        const fetchMock = vi.fn(async (input: RequestInfo | URL) => {
+        const fetchMock = vi.fn(async (input: RequestInfo | URL, _init?: RequestInit) => {
             const url = String(input);
             if (url.includes('/v2/usage/query')) {
-                return {
-                    ok: false,
-                    status: 404,
-                    json: async () => ({ error: 'not found' }),
-                };
+                return Response.json({ error: 'not found' }, { status: 404 });
             }
-            return {
-                ok: true,
-                status: 200,
-                json: async () => ({
-                    usage: [],
-                    groupBy: 'day',
-                    totalReports: 0,
-                }),
-            };
+            return Response.json({
+                usage: [],
+                groupBy: 'day',
+                totalReports: 0,
+            });
         });
-        vi.stubGlobal('fetch', fetchMock as unknown as typeof fetch);
+        vi.stubGlobal('fetch', fetchMock);
 
         const { getUsageForPeriod } = await import('./apiUsage');
-        await getUsageForPeriod(credentials, 'year');
+        expect(await getUsageForPeriod(credentials, 'year')).toEqual([]);
 
-        const usageCalls = fetchMock.mock.calls as unknown as Array<[RequestInfo | URL, RequestInit?]>;
+        const usageCalls = fetchMock.mock.calls;
         const v2Call = usageCalls.find(([url]) => String(url).includes('/v2/usage/query'));
         expect(v2Call).toBeDefined();
         if (!v2Call) {
@@ -181,8 +165,9 @@ describe('apiUsage v2 analytics query', () => {
             granularity: 'month',
         });
         expect(v2Body.dateRange).toEqual({
-            startMs: 1_704_153_600_000,
-            endMs: 1_735_689_600_000,
+            // The canonical relative year includes today among its 365 calendar dates.
+            startMs: Date.UTC(2024, 0, 3),
+            endMs: Date.UTC(2025, 0, 1),
         });
 
         const v1Call = usageCalls.find(([url]) => String(url).includes('/v1/usage/query'));
@@ -195,8 +180,8 @@ describe('apiUsage v2 analytics query', () => {
         const v1Body = JSON.parse(String(v1Options?.body));
         expect(v1Body).toMatchObject({
             groupBy: 'day',
-            startTime: 1_704_153_600,
-            endTime: 1_735_689_600,
+            startTime: Date.UTC(2024, 0, 3) / 1000,
+            endTime: Date.UTC(2025, 0, 1) / 1000,
         });
     });
 });

@@ -7,11 +7,15 @@ import { resetServerProfilesRuntimeForTests } from '@/sync/domains/server/server
 import { resetRuntimeFetch, setRuntimeFetch, type RuntimeFetch } from '@/utils/system/runtimeFetch';
 
 import { TokenStorage } from '@/auth/storage/tokenStorage';
-import { createBundledHostedConversationService } from '@/voice/registry/bundledConversationRuntimeHost';
+import { createBundledHostedConversationService, createBundledConversationRuntimeHostLease } from '@/voice/registry/bundledConversationRuntimeHost';
+import { voiceSettingsParse, writeVoiceProviderSettingsConfig } from '@/sync/domains/settings/voiceSettings';
 import { createElevenLabsSessionLifecycle } from '../../../../../../packages/plugins/elevenlabs/src/ui/voice/runtime/sessionLifecycle';
+import { createElevenLabsSessionPreparationService } from '../../../../../../packages/plugins/elevenlabs/src/ui/voice/runtime/sessionPreparation';
+import { ELEVENLABS_VOICE_PROVIDER_DEFAULT_SETTINGS } from '../../../../../../packages/plugins/elevenlabs/src/protocol/voice/index';
 
 const credentials = { token: 'test' } satisfies AuthCredentials;
 const fetchSpy = vi.fn<RuntimeFetch>();
+let credentialWrite: Awaited<ReturnType<typeof TokenStorage.setCredentialsForServerUrlWithRollback>> = null;
 
 describe('apiVoice', () => {
     beforeEach(async () => {
@@ -21,8 +25,12 @@ describe('apiVoice', () => {
         setRuntimeFetch(fetchSpy);
         const home = await upsertAndActivateServer({ serverUrl: 'https://api.example.test', scope: 'device' });
         expect(getActiveServerSnapshot()).toMatchObject({ serverId: home.id, serverUrl: home.serverUrl });
+        credentialWrite = await TokenStorage.setCredentialsForServerUrlWithRollback(home.serverUrl, { serverId: home.id }, credentials);
+        expect(credentialWrite).not.toBeNull();
     });
-    afterEach(() => {
+    afterEach(async () => {
+        await credentialWrite?.rollback();
+        credentialWrite = null;
         resetRuntimeFetch();
         resetServerProfilesRuntimeForTests();
         vi.restoreAllMocks();
@@ -103,7 +111,6 @@ describe('apiVoice', () => {
 
     describe('completeHappierVoiceSession', () => {
         it.each(['processing', 'transport'])('retries retained hosted lifecycle identity through HTTP after %s failure', async (failure) => {
-            vi.spyOn(TokenStorage, 'getCredentials').mockResolvedValue(credentials);
             let completionAttempts = 0;
             const completedBodies: unknown[] = [];
             fetchSpy.mockImplementation(async (input, init) => {
@@ -123,21 +130,42 @@ describe('apiVoice', () => {
                 return new Response(JSON.stringify({ ok: true, durationSeconds: 5 }));
             });
             const service = createBundledHostedConversationService({ signal: new AbortController().signal, isCurrent: () => true });
-            await service.start({ sessionId: 'session-1' });
-            const lifecycle = createElevenLabsSessionLifecycle({ takeHostedConversation: () => service });
-            const prepared = { sessionConfig: {}, sessionState: { billingMode: 'happier' as const, leaseId: 'lease-1', expiresAtMs: 12_000 } };
-            lifecycle.prepared(1, prepared);
-            lifecycle.started({ controlSessionId: 'control-1', conversationId: 'conversation-1', attemptId: 1, prepared });
-            await expect(lifecycle.ended()).rejects.toThrow();
-            await expect(service.complete({ providerConversationId: 'conversation-2' })).rejects.toMatchObject({
-                code: 'hosted_conversation_identity_mismatch',
-            });
-            await lifecycle.ended();
-            await lifecycle.ended();
-            expect(completedBodies).toEqual([
-                { leaseId: 'lease-1', providerConversationId: 'conversation-1' },
-                { leaseId: 'lease-1', providerConversationId: 'conversation-1' },
-            ]);
+            const host = createBundledConversationRuntimeHostLease();
+            try {
+                // Feed the provider's real preparation output into its lifecycle;
+                // a copied sessionState could conceal a producer/consumer drift.
+                const providerId = 'happier.voice.elevenlabs/realtime-elevenlabs';
+                const preparation = createElevenLabsSessionPreparationService({
+                    providerId,
+                    projectVoiceSettings: host.host.projectVoiceSettings,
+                    alert: () => { throw new Error('Unexpected hosted admission alert'); },
+                });
+                const prepared = await preparation.prepare({
+                    controlSessionId: 'control-1', requestedTargetSessionId: 'session-1',
+                    settings: { voiceSettingsV1: writeVoiceProviderSettingsConfig(
+                        voiceSettingsParse({ providerId }), providerId, ELEVENLABS_VOICE_PROVIDER_DEFAULT_SETTINGS,
+                    ) },
+                    credentials: { phase: 'prepare', mediated: null, raw: null },
+                    hostedConversation: service, signal: new AbortController().signal,
+                    platform: 'web', textOnly: false,
+                });
+                if (prepared.kind !== 'prepared') throw new Error('Expected hosted provider preparation');
+                const lifecycle = createElevenLabsSessionLifecycle({ takeHostedConversation: () => service });
+                lifecycle.prepared(1, prepared.session);
+                lifecycle.started({ controlSessionId: 'control-1', conversationId: 'conversation-1', attemptId: 1, prepared: prepared.session });
+                await expect(lifecycle.ended()).rejects.toThrow();
+                await expect(service.complete({ providerConversationId: 'conversation-2' })).rejects.toMatchObject({
+                    code: 'hosted_conversation_identity_mismatch',
+                });
+                await lifecycle.ended();
+                await lifecycle.ended();
+                expect(completedBodies).toEqual([
+                    { leaseId: 'lease-1', providerConversationId: 'conversation-1' },
+                    { leaseId: 'lease-1', providerConversationId: 'conversation-1' },
+                ]);
+            } finally {
+                host.revoke();
+            }
         });
 
         it('passes an AbortSignal to fetch', async () => {

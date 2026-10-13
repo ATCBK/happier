@@ -15,15 +15,11 @@ describe('apiUsage server generation guard', () => {
         await upsertAndActivateServer({ serverUrl: 'https://api.example.test', scope: 'tab' });
 
         const fetchMock = vi.fn(async (input: RequestInfo | URL) => {
-            if (new URL(String(input)).pathname !== '/v1/usage/query') return Response.json({});
+            if (new URL(String(input)).pathname !== '/v2/usage/query') return Response.json({});
             await upsertAndActivateServer({ serverUrl: 'https://other.example.test', scope: 'tab' });
-            return {
-                ok: true,
-                status: 200,
-                json: async () => ({ usage: [] }),
-            };
+            return Response.json({ usage: [] });
         });
-        vi.stubGlobal('fetch', fetchMock as unknown as typeof fetch);
+        vi.stubGlobal('fetch', fetchMock);
 
         const { queryUsage } = await import('./apiUsage');
         await expect(queryUsage(credentials, {})).rejects.toMatchObject({ name: 'StaleServerGenerationError' });

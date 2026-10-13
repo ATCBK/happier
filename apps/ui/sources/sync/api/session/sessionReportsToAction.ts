@@ -1,6 +1,6 @@
 import { getActionSpec } from '@happier-dev/protocol/actions/actionSpecs';
-import { SessionReportsToSetRequestV1Schema, SessionReportsToSetResultV1Schema } from '@happier-dev/protocol/sessions/relations/sessionReportsToV1';
-import { projectSessionFollowSourceKeyPreparationAfterSetV1, type SessionFollowSourceKeyPreparationResultV1 } from '@happier-dev/protocol/sessions/follow/sessionFollowSourceKeyPreparationV1';
+import { SessionReportsToSetRequestV1Schema, SessionReportsToSetResultV1Schema, projectSessionReportsToSourceKeyPreparationV1 } from '@happier-dev/protocol/sessions/relations/sessionReportsToV1';
+import type { SessionFollowSourceKeyPreparationResultV1 } from '@happier-dev/protocol/sessions/follow/sessionFollowSourceKeyPreparationV1';
 import type { ActionExecutorDeps } from '@happier-dev/protocol/actions/executor/types';
 
 import { areServerProfileIdentifiersEquivalent } from '@/sync/domains/server/serverProfiles';
@@ -46,8 +46,7 @@ export function createSessionReportsToAction(
                     preparation = { kind: 'waiting', reason: 'runner_unreachable' };
                 }
                 account.assertCurrent();
-                const projected = projectSessionFollowSourceKeyPreparationAfterSetV1({ source: result }, preparation);
-                return 'ok' in projected ? projected : result;
+                return projectSessionReportsToSourceKeyPreparationV1(result, preparation);
             }
         }
         const errorCode = response.status === 401 ? 'not_authenticated'

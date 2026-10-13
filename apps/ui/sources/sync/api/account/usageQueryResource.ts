@@ -254,7 +254,7 @@ async function readOpenedQuotaHistory(context: UsageQueryAccountContext, periods
         source: `quota:${createCanonicalJsonSigningInput(source)}`, status: 'pending',
     }));
     const failures = new Map<number, string>();
-    const projectQuota = (status: 'available' | 'partial' | 'stale' | 'error') => {
+    const projectQuota = (status: 'available' | 'partial' | 'stale' | 'error'): OpenedQuotaRead => {
         const value = progressValues.filter((row): row is ConnectedServiceQuotaGetResultV1 => row !== null);
         const clocks = value.flatMap(row => row.current ? [row.current.fetchedAtMs] : []);
         // A failure answering first cannot turn the still-unanswered accounts

@@ -1,3 +1,4 @@
+import { projectNativeJsonValueForTransport } from '@happier-dev/protocol/json/strictJsonValue';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import { serveAccountHomes } from '@/dev/testkit/harness/actionHomesHttpHarness';
 import { publishAppliedActiveServerSnapshot } from '@/sync/runtime/orchestration/appliedActiveServerRuntime';
@@ -51,7 +52,7 @@ vi.mock('@/sync/runtime/orchestration/serverScopedRpc/serverScopedMachineRpc', a
 });
 
 let home: Awaited<ReturnType<typeof serveAccountHomes>> | undefined;
-afterEach(() => { standardCleanup(); retireActiveServerAccountScopeLifetime(); clearMachineRequestReachabilityForTest(); home?.dispose(); home = undefined;
+afterEach(async () => { standardCleanup(); retireActiveServerAccountScopeLifetime(); clearMachineRequestReachabilityForTest(); await home?.dispose(); home = undefined;
   // Digest and clock spies are system boundaries scoped to one case; leaving
   // them installed changes later Resource progress and timing observations.
   vi.restoreAllMocks();
@@ -100,9 +101,9 @@ describe('usage query captured Resource adapter', () => {
     storage.setState({ profileScope: captured.accountLifetime.scope,
       profile: AccountProfileSchema.parse({ id: captured.accountLifetime.scope.accountId }),
       sessions: { 'work-session': createSessionFixture({ id: 'work-session', serverId: captured.accountLifetime.scope.serverId }) } });
-    const entry = getUsageQueryResourceStore(captured).getEntry({ hostRead: 'usage.query', input: { queries: [
+    const entry = getUsageQueryResourceStore(captured).getEntry({ hostRead: 'usage.query', input: projectNativeJsonValueForTransport({ queries: [
       normalizeUsageQuery({ period: { startMs: 0, endMs: 1000 }, includeSessionEvidence: false, includeWorkEvidence: false }),
-    ] } });
+    ] }) });
     const release = entry.subscribe(() => {}, true);
     try {
       await expect.poll(() => entry.getSnapshot().pending).toBe('idle');
@@ -127,7 +128,7 @@ describe('usage query captured Resource adapter', () => {
       return await originalDigest(algorithm, bytes);
     });
     const entry = getUsageQueryResourceStore(captured)
-      .getEntry({ hostRead: 'usage.query', input: { queries: [{ period: { relative: '7days' } }] } });
+      .getEntry({ hostRead: 'usage.query', input: projectNativeJsonValueForTransport({ queries: [{ period: { relative: '7days' } }] }) });
     const release = entry.subscribe(() => {}, false);
     try {
       await expect.poll(() => digest.mock.calls.length).toBeGreaterThan(0);
@@ -149,7 +150,7 @@ describe('usage query captured Resource adapter', () => {
       return await originalDigest(algorithm, bytes);
     });
     const entry = getUsageQueryResourceStore(captured)
-      .getEntry({ hostRead: 'usage.query', input: { queries: [{ period: { relative: '7days' } }] } });
+      .getEntry({ hostRead: 'usage.query', input: projectNativeJsonValueForTransport({ queries: [{ period: { relative: '7days' } }] }) });
     const release = entry.subscribe(() => {}, false);
     try {
       await expect.poll(() => digest.mock.calls.length).toBe(1);
@@ -205,7 +206,7 @@ describe('usage query captured Resource adapter', () => {
     updateProviderAccountUsageCacheEntries(providerScope, () => ({ [snapshot.recordId]: {
       snapshot: opened, loading: true, hadError: false, nextFetchAtMs: now, consecutiveErrors: 0 } }));
     hold = true;
-    const entry = getUsageQueryResourceStore(captured).getEntry({ hostRead: 'usage.query', input: { queries: [{ period: { relative: '7days' } }] } });
+    const entry = getUsageQueryResourceStore(captured).getEntry({ hostRead: 'usage.query', input: projectNativeJsonValueForTransport({ queries: [{ period: { relative: '7days' } }] }) });
     const release = entry.subscribe(() => {}, false);
     try {
       await expect.poll(() => {
@@ -226,7 +227,7 @@ describe('usage query captured Resource adapter', () => {
         connectedAccountsV4: status ? [{ ref: { service: { pluginId: 'happier.agent.claude', localId: 'claude-subscription' },
           accountId: 'reauth-account' }, status, authenticationModeId: 'oauth', revisionSemantics: 'revisioned',
           credentialRevision: 'csr_abcdefghijklmnopqrstuvwxyz', configurationReady: false, configurationRevision: null, scopes: [] }] : [] }) });
-    const entry = getUsageQueryResourceStore(captured).getEntry({ hostRead: 'usage.query', input: { queries: [{ period: { relative: '7days' } }] } });
+    const entry = getUsageQueryResourceStore(captured).getEntry({ hostRead: 'usage.query', input: projectNativeJsonValueForTransport({ queries: [{ period: { relative: '7days' } }] }) });
     const release = entry.subscribe(() => {}, false);
     try {
       await expect.poll(() => entry.getSnapshot().pending).toBe('idle');
@@ -306,7 +307,7 @@ describe('usage query captured Resource adapter', () => {
       settings: settingsParse({ usageModelPriceOverridesV1: { 'private-model': { kind: 'rates', inputUsdPerMillion, outputUsdPerMillion: 4 } } }) });
     setPrice(2);
     const query = normalizeUsageQuery({ period: { startMs: 0, endMs: 1000 } });
-    const entry = getUsageQueryResourceStore(captured).getEntry({ hostRead: 'usage.query', input: { queries: [query] } });
+    const entry = getUsageQueryResourceStore(captured).getEntry({ hostRead: 'usage.query', input: projectNativeJsonValueForTransport({ queries: [query] }) });
     const release = entry.subscribe(() => {}, true);
     const read = () => decodeUsageQueryResource(entry.getSnapshot().value!).results[0]!;
     try {
@@ -352,7 +353,7 @@ describe('usage query captured Resource adapter', () => {
           sticky: true, orderedEligibleCandidates: [selected], candidates: [] } } };
     });
     const query = normalizeUsageQuery({ machines: ['selected'] });
-    const entry = getUsageQueryResourceStore(captured).getEntry({ hostRead: 'usage.query', input: { queries: [query] } });
+    const entry = getUsageQueryResourceStore(captured).getEntry({ hostRead: 'usage.query', input: projectNativeJsonValueForTransport({ queries: [query] }) });
     const release = entry.subscribe(() => {}, true);
     try {
       await entry.refresh();
@@ -402,7 +403,7 @@ describe('usage query captured Resource adapter', () => {
     });
     const current = normalizeUsageQuery({ period: { startMs: 1000, endMs: 2000 }, agents: ['claude'] });
     const other = normalizeUsageQuery({ ...current, agents: ['codex'] });
-    const entry = getUsageQueryResourceStore(captured).getEntry({ hostRead: 'usage.query', input: { queries: [current, other] } });
+    const entry = getUsageQueryResourceStore(captured).getEntry({ hostRead: 'usage.query', input: projectNativeJsonValueForTransport({ queries: [current, other] }) });
     const startedAt = performance.now();
     const release = entry.subscribe(() => {}, false);
     try {
@@ -441,7 +442,7 @@ describe('usage query captured Resource adapter', () => {
     storage.getState().applyMachines([createMachineFixture({ id: 'work-machine' })]);
     scmTransport.mockImplementation(() => held ? work.promise : Promise.resolve({ success: true, pullRequests: [] }));
     const query = normalizeUsageQuery({ ...(explicit ? { session: 'work-session' } : {}), period: { startMs: 0, endMs: 1000 } });
-    const entry = getUsageQueryResourceStore(captured).getEntry({ hostRead: 'usage.query', input: { queries: [query] } });
+    const entry = getUsageQueryResourceStore(captured).getEntry({ hostRead: 'usage.query', input: projectNativeJsonValueForTransport({ queries: [query] }) });
     const release = entry.subscribe(() => {}, false);
     try {
       await entry.refresh();
@@ -493,7 +494,7 @@ describe('usage query captured Resource adapter', () => {
     storage.setState({ settingsScope: captured.accountLifetime.scope,
       settings: settingsParse({ usageNightHoursV1: { startHour: 22, endHour: 6 } }) });
     const query = normalizeUsageQuery({ session: 'work-session', period: { startMs: 0, endMs: 86400000 }, timeZoneOffsetMinutes: 120 });
-    const entry = getUsageQueryResourceStore(captured).getEntry({ hostRead: 'usage.query', input: { queries: [query] } });
+    const entry = getUsageQueryResourceStore(captured).getEntry({ hostRead: 'usage.query', input: projectNativeJsonValueForTransport({ queries: [query] }) });
     const release = entry.subscribe(() => {}, true);
     const night = () => decodeUsageQueryResource(entry.getSnapshot().value!).results[0]?.howYouWork?.nightShift;
     const refreshing = entry.refresh();
@@ -510,7 +511,7 @@ describe('usage query captured Resource adapter', () => {
   it('keeps the mounted Account owner and its subscription through an identical exact-Home credential write', async () => {
     let response = value;
     const captured = await context(request => request.path === '/v2/usage/query' ? Response.json(response) : undefined);
-    const reference = { hostRead: 'usage.query' as const, input: { queries: [normalizeUsageQuery({})] } };
+    const reference = { hostRead: 'usage.query' as const, input: projectNativeJsonValueForTransport({ queries: [normalizeUsageQuery({})] }) };
     const entry = getUsageQueryResourceStore(captured).getEntry(reference);
     const advanced = createDeferred<void>();
     const release = entry.subscribe(() => {
@@ -627,7 +628,7 @@ describe('usage query captured Resource adapter', () => {
       connectedAccountsV4: [ref, slowRef].map(ref => ({ ref, status: 'connected', authenticationModeId: 'manual', revisionSemantics: 'revisioned',
         credentialRevision: 'csr_abcdefghijklmnopqrstuvwxyz', configurationReady: false, configurationRevision: null, scopes: [] })) }) });
     await getServerFeaturesSnapshot({ serverId: captured.accountLifetime.scope.serverId, force: true });
-    const entry = getUsageQueryResourceStore(captured).getEntry({ hostRead: 'usage.query', input: { queries: [{ period: { relative: '7days' } }] } });
+    const entry = getUsageQueryResourceStore(captured).getEntry({ hostRead: 'usage.query', input: projectNativeJsonValueForTransport({ queries: [{ period: { relative: '7days' } }] }) });
     const slice = () => { const content = entry.getSnapshot().value; return content ? decodeUsageQueryResource(content).results[0] : undefined; };
     const slowState = () => slice()?.sources.find(state => state.source.startsWith('quota:') && state.source.includes('slow'));
     readStarted = performance.now();
@@ -667,12 +668,12 @@ describe('usage query captured Resource adapter', () => {
       expect(screen.findByTestId('quota-capacity.cell.ready')).toBeTruthy();
       expect(screen.findByTestId('quota-capacity.cell.slow')).toBeTruthy();
       expect(screen.findByTestId('quota-fit.plan.slow')).toBeTruthy();
-      if (!failureFirst) expect(screen.findHostByTestId('quota-capacity.cell.slow.state')).toBeTruthy();
+      if (!failureFirst) expect(screen.findHostByTestId('quota-capacity.state')).toBeTruthy();
       slow.resolve(Response.json({ error: 'snapshot_read_failed' }, { status: 503 }));
       await expect.poll(slowState).toMatchObject({ status: 'error', errorCode: 'snapshot_read_failed' });
       await screen.update(body());
-      expect(screen.findByTestId('quota-capacity.cell.slow.state-action')).toBeTruthy();
-      expect(screen.findByTestId('quota-fit.plan.slow.state-action')).toBeTruthy();
+      expect(screen.findByTestId('quota-capacity.state-action')).toBeTruthy();
+      expect(screen.findByTestId('quota-fit.state-action')).toBeTruthy();
       expect(screen.findByTestId('quota-capacity.cell.ready')?.props.accessibilityLabel).toContain('60%');
       expect(slice()?.quota?.[0]?.current).toEqual(snapshot);
       expect(entry.getSnapshot().pending).toBe('initial');
@@ -683,12 +684,12 @@ describe('usage query captured Resource adapter', () => {
       expect(slice()?.quota?.[0]?.source).toEqual(source);
       expect(slice()?.quota?.some(read => read.source.ref.accountId === slowSource.ref.accountId)).toBe(false);
       retrySlow = true;
-      await screen.pressByTestIdAsync('quota-capacity.cell.slow.state-action');
+      await screen.pressByTestIdAsync('quota-capacity.state-action');
       await expect.poll(() => slice()?.quota?.find(read => read.source.ref.accountId === 'slow')?.current).toEqual(slowSnapshot);
       await expect.poll(slowState).toMatchObject({ status: 'available' });
       await screen.update(body());
-      expect(screen.findHostByTestId('quota-capacity.cell.slow.state')).toBeNull();
-      expect(screen.findHostByTestId('quota-fit.plan.slow.state')).toBeNull();
+      expect(screen.findHostByTestId('quota-capacity.state')).toBeNull();
+      expect(screen.findHostByTestId('quota-fit.state')).toBeNull();
       expect(screen.findByTestId('quota-capacity.cell.slow')?.props.accessibilityLabel).toContain('60%');
       console.info('PERF-PLANS source hop timings', JSON.stringify({ failureFirst, ...timings }));
     } finally { accounting.resolve(Response.json(value)); current.resolve(currentResponse()); slow.resolve(Response.json({ error: 'snapshot_read_failed' }, { status: 503 }));
@@ -804,7 +805,7 @@ describe('usage query captured Resource adapter', () => {
     const providerScope = buildProviderAccountUsageScopeKey({ serverId: captured.accountLifetime.scope.serverId,
       generation: getActiveServerSnapshot().generation, credentialScope: resolveAuthCredentialsScopeKey(captured.credentials) });
     expect(getProviderAccountUsageCacheState().entriesByCredentialScope[providerScope]?.[snapshot.recordId]?.snapshot).toBeUndefined();
-    const entry = getUsageQueryResourceStore(captured).getEntry({ hostRead: 'usage.query', input: { queries: [{ period: { relative: '7days' } }] } });
+    const entry = getUsageQueryResourceStore(captured).getEntry({ hostRead: 'usage.query', input: projectNativeJsonValueForTransport({ queries: [{ period: { relative: '7days' } }] }) });
     const release = entry.subscribe(() => {}, false);
     try {
       await expect.poll(() => {
@@ -920,7 +921,7 @@ describe('usage query captured Resource adapter', () => {
     updateProviderAccountUsageCacheEntries(providerScope, () => ({ [snapshot.recordId]: {
       snapshot: null, loading: true, hadError: false, nextFetchAtMs: now, consecutiveErrors: 0 } }));
     const query = normalizeUsageQuery({});
-    const entry = getUsageQueryResourceStore(captured).getEntry({ hostRead: 'usage.query', input: { queries: [query] } });
+    const entry = getUsageQueryResourceStore(captured).getEntry({ hostRead: 'usage.query', input: projectNativeJsonValueForTransport({ queries: [query] }) });
     const advanced = createDeferred<void>();
     const release = entry.subscribe(() => {
       const content = entry.getSnapshot().value;
@@ -1062,7 +1063,7 @@ describe('usage query captured Resource adapter', () => {
     scmTransport.mockImplementation(() => work.promise);
     const query = normalizeUsageQuery({ session: 'staged-session', period: { startMs: 0, endMs: 1000 } });
     const entry = getUsageQueryResourceStore(captured)
-      .getEntry({ hostRead: 'usage.query', input: { queries: [query] } });
+      .getEntry({ hostRead: 'usage.query', input: projectNativeJsonValueForTransport({ queries: [query] }) });
     const detailCompleted = createDeferred<void>();
     const release = entry.subscribe(() => {
       const content = entry.getSnapshot().value;
@@ -1171,7 +1172,7 @@ describe('usage query captured Resource adapter', () => {
     const reread = await readUiUsageQueryBatch(captured, { queries: [result.results[0]!.requestedQuery] });
     expect(reread.results[0]?.coach?.findings.find(row => row.evidenceKey === finding.evidenceKey)?.state.dismissed).toBe(true);
     const entry = getUsageQueryResourceStore(captured).getEntry({ hostRead: 'usage.query',
-      input: { queries: [result.results[0]!.requestedQuery] } });
+      input: projectNativeJsonValueForTransport({ queries: [result.results[0]!.requestedQuery] }) });
     const release = entry.subscribe(() => {}, true);
     try {
       await entry.refresh();
@@ -1451,12 +1452,12 @@ describe('usage query captured Resource adapter', () => {
         serverId: captured.accountLifetime.scope.serverId, encryptionMode: 'plain' })]),
     ) });
     const store = getUsageQueryResourceStore(captured);
-    const broad = store.getEntry({ hostRead: 'usage.query', input: { queries: [normalizeUsageQuery({
+    const broad = store.getEntry({ hostRead: 'usage.query', input: projectNativeJsonValueForTransport({ queries: [normalizeUsageQuery({
       period: { startMs: 0, endMs: 1000 },
-    })] } });
-    const pinned = store.getEntry({ hostRead: 'usage.query', input: { queries: [normalizeUsageQuery({
+    })] }) });
+    const pinned = store.getEntry({ hostRead: 'usage.query', input: projectNativeJsonValueForTransport({ queries: [normalizeUsageQuery({
       period: { startMs: 0, endMs: 1000 }, session: 'shared', metric: 'cost',
-    })] } });
+    })] }) });
     const countReads = (path: string) => home!.requests.filter(request => request.path === path).length;
     const ready = async (entry: typeof broad) => {
       await expect.poll(() => entry.getSnapshot().pending).toBe('idle');
@@ -1561,8 +1562,8 @@ describe('usage query captured Resource adapter', () => {
     });
     storage.setState({ profileScope: captured.accountLifetime.scope, sessions: {
       work: createSessionFixture({ id: 'work', serverId: captured.accountLifetime.scope.serverId }) } });
-    const entry = getUsageQueryResourceStore(captured).getEntry({ hostRead: 'usage.query', input: { queries: [normalizeUsageQuery({
-      session: 'work', period: { startMs: 0, endMs: 1000 } })] } });
+    const entry = getUsageQueryResourceStore(captured).getEntry({ hostRead: 'usage.query', input: projectNativeJsonValueForTransport({ queries: [normalizeUsageQuery({
+      session: 'work', period: { startMs: 0, endMs: 1000 } })] }) });
     const release = entry.subscribe(() => {}, true);
     const latency = () => entry.getSnapshot().value
       && decodeUsageQueryResource(entry.getSnapshot().value!).results[0]?.howYouWork?.permissions?.decisionLatencyMs;
@@ -1589,8 +1590,8 @@ describe('usage query captured Resource adapter', () => {
     expect(result.results.every(slice => slice.accounting?.totals.tokens.total === 15)).toBe(true);
     expect(result.results[0]?.comparison?.accounting?.totals.tokens.total).toBe(15);
     const store = getUsageQueryResourceStore(captured);
-    const first = store.getEntry({ hostRead: 'usage.query', input: { queries: [query] } });
-    const second = store.getEntry({ hostRead: 'usage.query', input: { queries: [equivalent] } });
+    const first = store.getEntry({ hostRead: 'usage.query', input: projectNativeJsonValueForTransport({ queries: [query] }) });
+    const second = store.getEntry({ hostRead: 'usage.query', input: projectNativeJsonValueForTransport({ queries: [equivalent] }) });
     const release = first.subscribe(() => {}, false);
     await first.refresh();
     expect(second.getSnapshot()).toBe(first.getSnapshot());
@@ -1604,7 +1605,7 @@ describe('usage query captured Resource adapter', () => {
         status: pending ? 'pending' : 'available', eventCount: 1 }], missingDimensions: [],
         range: { complete: false }, ranked: [] },
     }) : undefined);
-    const entry = getUsageQueryResourceStore(captured).getEntry({ hostRead: 'usage.query', input: { queries: [{}] } });
+    const entry = getUsageQueryResourceStore(captured).getEntry({ hostRead: 'usage.query', input: projectNativeJsonValueForTransport({ queries: [{}] }) });
     const release = entry.subscribe(() => {}, true);
     try {
       await entry.refresh();
@@ -1779,7 +1780,7 @@ describe('usage query Work composition', () => {
     const detail = createDeferred<unknown>();
     scmTransport.mockImplementation(() => detail.promise);
     const store = getUsageQueryResourceStore(context);
-    const entry = store.getEntry({ hostRead: 'usage.query', input: { queries: [query] } });
+    const entry = store.getEntry({ hostRead: 'usage.query', input: projectNativeJsonValueForTransport({ queries: [query] }) });
     const observed: Array<{ pending: boolean; accounting: boolean; allocated: boolean }> = [];
     const unsubscribe = entry.subscribe(() => {
       const value = entry.getSnapshot().value;
