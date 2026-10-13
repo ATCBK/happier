@@ -1,4 +1,11 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
+import Fastify from 'fastify';
+import { configuration } from '@/configuration';
+import { installAxiosFastifyAdapter } from '@/testkit/http/axiosAdapter';
+import { ExternalActionRequestEnvelopeV1Schema, ExternalActionResponseEnvelopeV1Schema } from '@happier-dev/protocol/actions/externalActionApi';
+import { AccountApiTokenBearerV1Schema } from '@happier-dev/protocol/auth/accountApiTokens';
+
+const API_TOKEN = AccountApiTokenBearerV1Schema.parse(`hap_v1_00000000-0000-4000-8000-000000000001_${'A'.repeat(43)}`);
 
 const credentialBoundary = vi.hoisted(() => ({ readStoredCredentials: vi.fn() }));
 vi.mock('@/persistence', async (importOriginal) => ({
@@ -6,17 +13,12 @@ vi.mock('@/persistence', async (importOriginal) => ({
   readStoredCredentials: credentialBoundary.readStoredCredentials,
 }));
 
-const executorBoundary = vi.hoisted(() => ({ execute: vi.fn(), create: vi.fn() }));
-vi.mock('@/session/actions/createCliActionExecutorFromCredentials', () => ({
-  createCliActionExecutorFromCredentials: (params: unknown) => {
-    executorBoundary.create(params);
-    return { execute: executorBoundary.execute };
-  },
-}));
-
 import { handleMachinesCommand } from './machines';
 import { findCompiledActionCliCommand, listCompiledActionCliCommands } from '@/cli/actions/compiledCommands';
 import { runCompiledActionCliCommand } from '@/cli/actions/executeCommand';
+
+// Collect the real executor graph before a behavior test starts its runner budget.
+await import('@/session/actions/createCliActionExecutorFromCredentials');
 
 function machinesListCommand() {
   const command = findCompiledActionCliCommand(['machines', 'list'], listCompiledActionCliCommands());
@@ -31,13 +33,40 @@ async function runMachinesList(rest: readonly string[]): Promise<void> {
   });
 }
 
-beforeEach(() => {
-  executorBoundary.execute.mockReset();
-  executorBoundary.create.mockReset();
+let app = Fastify();
+let restoreHttp = () => {};
+let originalServerUrl = '';
+const requests: Array<{ path: string; input: unknown; authorization: string | undefined }> = [];
+
+beforeEach(async () => {
+  requests.length = 0;
+  app = Fastify();
+  app.get('/v1/account/encryption', async () => ({ mode: 'plain', updatedAt: 1 }));
+  app.get('/v1/machines', async request => {
+    requests.push({ path: request.url, input: request.query, authorization: request.headers.authorization });
+    const pat = request.headers.authorization === `Bearer ${API_TOKEN}`;
+    return [{ id: 'machine-1', kind: 'persistent', active: pat, activeAt: Date.now(), revokedAt: null,
+      replacedByMachineId: pat ? null : 'machine-2' }];
+  });
+  app.post('/v1/actions/machines.list', async request => {
+    const envelope = ExternalActionRequestEnvelopeV1Schema.parse(request.body);
+    requests.push({ path: request.url, input: envelope.input, authorization: request.headers.authorization });
+    return ExternalActionResponseEnvelopeV1Schema.parse({ v: 1, actionId: 'machines.list', requestId: envelope.requestId,
+      execution: { ok: true, result: { items: [{ id: 'machine-1', active: true, revokedAt: null, replacedByMachineId: null }] } } });
+  });
+  originalServerUrl = configuration.apiServerUrl;
+  configuration.apiServerUrl = await app.listen({ host: '127.0.0.1', port: 0 });
+  restoreHttp = installAxiosFastifyAdapter({ app, origin: configuration.apiServerUrl });
   credentialBoundary.readStoredCredentials.mockReset();
 });
 
-afterEach(() => { vi.restoreAllMocks(); process.exitCode = undefined; });
+afterEach(async () => {
+  restoreHttp();
+  await app.close();
+  configuration.apiServerUrl = originalServerUrl;
+  vi.restoreAllMocks();
+  process.exitCode = undefined;
+});
 
 describe('machines list through the canonical Action', () => {
   it('shows the compiled help without reading credentials', async () => {
@@ -52,34 +81,20 @@ describe('machines list through the canonical Action', () => {
 
   it('invokes machines.list with the friendly page bound and preserves the released output', async () => {
     credentialBoundary.readStoredCredentials.mockResolvedValue({
-      token: 'pat', encryption: null, credentialProvenance: 'api_token',
-    });
-    executorBoundary.execute.mockResolvedValue({
-      ok: true,
-      result: { items: [{ id: 'machine-1', active: true, revokedAt: null, replacedByMachineId: null }] },
+      token: API_TOKEN, encryption: null, credentialProvenance: 'api_token',
     });
     const log = vi.spyOn(console, 'log').mockImplementation(() => undefined);
 
     await runMachinesList([]);
 
-    expect(credentialBoundary.readStoredCredentials).toHaveBeenCalledOnce();
-    expect(executorBoundary.create).toHaveBeenCalledWith(
-      expect.objectContaining({ credentials: expect.objectContaining({ credentialProvenance: 'api_token' }) }),
-    );
-    expect(executorBoundary.execute).toHaveBeenCalledWith(
-      'machines.list',
-      { limit: 200 },
-      expect.objectContaining({ surface: 'cli' }),
-    );
+    expect(credentialBoundary.readStoredCredentials).toHaveBeenCalled();
     expect(log.mock.calls.flat().join('\n')).toContain('machine-1');
+    expect(requests).toContainEqual({ path: '/v1/actions/machines.list', input: { limit: 200 }, authorization: `Bearer ${API_TOKEN}` });
+    expect(process.exitCode).toBeUndefined();
   });
 
   it('keeps the released machines_list JSON envelope', async () => {
     credentialBoundary.readStoredCredentials.mockResolvedValue({ token: 'token', encryption: null });
-    executorBoundary.execute.mockResolvedValue({
-      ok: true,
-      result: { items: [{ id: 'machine-1', active: false, revokedAt: null, replacedByMachineId: 'machine-2' }] },
-    });
     let output = '';
     vi.spyOn(process.stdout, 'write').mockImplementation(((chunk: unknown, ...args: unknown[]) => {
       output += String(chunk);
@@ -96,6 +111,7 @@ describe('machines list through the canonical Action', () => {
       kind: 'machines_list',
       data: { machines: [{ id: 'machine-1', active: false, replacedByMachineId: 'machine-2' }] },
     });
+    expect(requests).toContainEqual({ path: '/v1/machines', input: {}, authorization: 'Bearer token' });
   });
 
   it('rejects an unknown option before reading credentials', async () => {
@@ -113,18 +129,20 @@ describe('machines list through the canonical Action', () => {
       v: 1, ok: false, kind: 'machines_list', error: { code: 'invalid_arguments' },
     });
     expect(credentialBoundary.readStoredCredentials).not.toHaveBeenCalled();
-    expect(executorBoundary.execute).not.toHaveBeenCalled();
+    expect(requests).toEqual([]);
     expect(process.exitCode).toBe(1);
   });
 
-  it('classifies an unexpected inventory exception as exit 2', async () => {
-    credentialBoundary.readStoredCredentials.mockResolvedValue({ token: 'token', encryption: null });
-    executorBoundary.execute.mockRejectedValue(new Error('dependency exploded'));
+  it('classifies an unexpected credential IO exception as exit 2', async () => {
+    // Disk credential IO is the genuine boundary; internal inventory failures
+    // now have a named machine_inventory_unavailable contract.
+    credentialBoundary.readStoredCredentials.mockRejectedValue(new Error('dependency exploded'));
     vi.spyOn(console, 'error').mockImplementation(() => undefined);
 
     await runMachinesList([]);
 
     expect(process.exitCode).toBe(2);
+    expect(requests).toEqual([]);
   });
 });
 
