@@ -177,6 +177,26 @@ function homeResponse<T>(data: T, status = 200): AxiosResponse<T> {
 }
 
 describe('Custom ACP fresh daemon launch composition', () => {
+  it('reads retained bundled Agent resources from the admitted development source root', async () => {
+    const registration = [...runtime.registry.agentRuntimesByAgentId.values()]
+      .find(value => value.pluginId === CUSTOM_ACP_AGENT_CONTRIBUTION_IDENTITY_V1.pluginId);
+    const binding = registration?.sessionRunnerFactoryBinding;
+    const createServices = runtime.registry.createRetainedRunnerAgentInvocationServices;
+    if (!binding || !createServices) throw new Error('Expected real admitted retained Agent services');
+    const lifetime = new AbortController();
+    try {
+      const invocation = await createServices({ binding, sessionId: 'cdf41resources000000000001',
+        correlationId: 'df41-retained-resource', cwd: storage.home, environment: {},
+        providerBindingActive: false, signal: lifetime.signal, isOccurrenceCurrent: () => true });
+      const resource = await invocation.services.resources.read('brand-icon');
+      expect(resource).toMatchObject({ kind: 'asset', contentType: 'image/png' });
+      expect(resource.bytes).toEqual(new Uint8Array(await readFile(new URL(
+        '../../../../../packages/plugins/custom-acp/assets/brand.png', import.meta.url))));
+    } finally {
+      lifetime.abort();
+    }
+  });
+
   it('retains the qualified spawn target through installed runner startup and permission seeding to the first native model call', async () => {
     const fatal = vi.spyOn(logger, 'fatal').mockImplementation(() => {});
     const exit = vi.spyOn(process, 'exit').mockImplementation(() => { throw new Error('df41-child-exit'); });
