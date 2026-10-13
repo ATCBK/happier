@@ -10,6 +10,7 @@ import type {
 import type { ActionOperationQueryScope, ActionOperationScope } from './actionOperationTypes';
 import { RequesterWorkAttributionV1Schema, type RequesterWorkAttributionV1 } from '@/daemon/lifecycle/requesterWorkAttribution';
 import type { LiveWorkCategoryV1, LiveWorkItemV1, LiveWorkInventoryV1 } from '@/daemon/lifecycle/managedActivity';
+import { isDeepStrictEqual } from 'node:util';
 
 const SETTLED_RETENTION_LIMIT = 50;
 const SETTLED_RETENTION_MS = 24 * 60 * 60 * 1_000;
@@ -127,7 +128,9 @@ export function createActionOperationStore(options?: Readonly<{
     const current = snapshots.get(operationId);
     if (!current) return null;
     if (isTerminal(current)) return current;
-    const next = freezeSnapshot(update(current));
+    const updated = update(current);
+    if (updated === current) return current;
+    const next = freezeSnapshot(updated);
     snapshots.set(operationId, next);
     notify(next);
     if (isTerminal(next)) prune();
@@ -239,7 +242,7 @@ export function createActionOperationStore(options?: Readonly<{
     },
 
     updateProgress(operationId: string, progress: ActionOperationProgressV1): ActionOperationSnapshotV1 | null {
-      return mutate(operationId, (current) => ({
+      return mutate(operationId, (current) => isDeepStrictEqual(current.progress, progress) ? current : ({
         ...current,
         revision: current.revision + 1,
         progress,
@@ -263,6 +266,7 @@ export function createActionOperationStore(options?: Readonly<{
 
     updateSetupReview(operationId: string, setupReview: ActionOperationSnapshotV1['setupReview']): ActionOperationSnapshotV1 | null {
       return mutate(operationId, current => {
+        if (isDeepStrictEqual(current.setupReview, setupReview)) return current;
         const { setupReview: _review, ...live } = current;
         return { ...live, revision: current.revision + 1, ...(setupReview ? { setupReview } : {}) };
       });

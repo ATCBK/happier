@@ -1,4 +1,4 @@
-import { ActionOperationCancelV1RequestSchema, ActionOperationCancelV1ResponseSchema, ActionOperationGetV1RequestSchema, ActionOperationGetV1ResponseSchema, ActionOperationListV1RequestSchema, ActionOperationListV1ResponseSchema, ACTION_OPERATION_RPC_METHODS_V1, ACTION_OPERATION_RPC_METHODS_V2, projectActionOperationSnapshotForV1Reader } from '@happier-dev/protocol/actions/operations/v1';
+import { ActionOperationCancelV1RequestSchema, ActionOperationCancelV1ResponseSchema, ActionOperationGetV1RequestSchema, ActionOperationGetV2RequestSchema, ActionOperationGetV1ResponseSchema, ActionOperationListV1RequestSchema, ActionOperationListV1ResponseSchema, ACTION_OPERATION_RPC_METHODS_V1, ACTION_OPERATION_RPC_METHODS_V2, projectActionOperationSnapshotForV1Reader } from '@happier-dev/protocol/actions/operations/v1';
 import type { ActionOperationCancelV1Response, ActionOperationGetV1Response, ActionOperationListV1Response, ActionOperationSnapshotV1 } from '@happier-dev/protocol/actions';
 
 import type { RpcHandlerContext, RpcHandlerRegistrar } from '@/api/rpc/types';
@@ -72,7 +72,7 @@ export function createActionOperationRpcHandlers(deps: Readonly<{
   };
 
   const get = async (raw: unknown, context: ActionOperationRpcContext | undefined, version: 1 | 2): Promise<ActionOperationGetV1Response> => {
-      const request = ActionOperationGetV1RequestSchema.parse(raw);
+      const request = (version === 2 ? ActionOperationGetV2RequestSchema : ActionOperationGetV1RequestSchema).parse(raw);
       const scope = await resolveScope(context);
       const owner = resolveOwnerForOperation(scope, request.operationId);
       const projected = owner ? await owner.get(scope, request.operationId) : undefined;
@@ -84,8 +84,17 @@ export function createActionOperationRpcHandlers(deps: Readonly<{
       const inspected = deps.store.get(scope, request.operationId);
       if (inspected?.domainRef?.kind === 'projectCommand') deps.onInspection?.(inspected);
       if (version === 2 && inspected?.setupReview && deps.runner.refreshSetupReview) {
-        await deps.runner.refreshSetupReview(scope, request.operationId);
-        await resolveScope(context);
+        const refresh = deps.runner.refreshSetupReview(scope, request.operationId);
+        if (('refreshSetupReview' in request && request.refreshSetupReview) || request.includeSetupReview) {
+          // Human consent needs freshly measured effect facts before its decision.
+          await refresh;
+          await resolveScope(context);
+        } else {
+          // Snapshot reconciliation must not inherit the producer's Home/Sync
+          // wait and expire its own read admission. The retained runner owns
+          // refresh failure, resume and cancellation; concurrent reads join it.
+          void refresh.catch(() => undefined);
+        }
       }
       const operation = request.waitForTerminal && deps.runner.waitForTerminal
         ? await deps.runner.waitForTerminal(scope, request.operationId, context?.signal,

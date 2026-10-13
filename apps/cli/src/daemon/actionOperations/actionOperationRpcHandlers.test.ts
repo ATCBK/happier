@@ -70,13 +70,13 @@ describe('action operation observation RPC handlers', () => {
       currentDigest = 'current';
       expect(await outsider.getV2({ operationId: 'held-script' })).toEqual({ kind: 'not_found' });
       expect(reads).toBe(0);
-      expect(await handlers.getV2({ operationId: 'held-script' }))
+      expect(await handlers.getV2({ operationId: 'held-script', refreshSetupReview: true }))
         .toMatchObject({ kind: 'found', operation: { setupReview: { reviewedEffectDigest: 'current' } } });
       trustedDigest = 'displayed';
-      await handlers.getV2({ operationId: 'held-script' });
+      await handlers.getV2({ operationId: 'held-script', refreshSetupReview: true });
       expect(launches).toBe(0);
       trustedDigest = 'current';
-      await handlers.getV2({ operationId: 'held-script' });
+      await handlers.getV2({ operationId: 'held-script', refreshSetupReview: true });
       await expect.poll(() => launches).toBe(1);
       expect(await runner.waitForTerminal(scope, 'held-script')).toMatchObject({ state: 'succeeded', requestId: 'original' });
       await handlers.getV2({ operationId: 'held-script' });

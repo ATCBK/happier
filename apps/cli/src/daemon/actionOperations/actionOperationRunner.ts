@@ -267,6 +267,22 @@ export function createActionOperationRunner(deps: Readonly<{
             deps.store.cancel(operationId);
           } else if (executionResult.ok) {
             deps.store.succeed(operationId, executionResult.result);
+            const completed = deps.store.get(request.scope, operationId)?.domainRef;
+            if (action.actionId === 'projects.prepare' && completed?.kind === 'projectCommand' && completed.purpose === 'setup') {
+              // Completion is target-local evidence, not remembered consent.
+              // Wake the existing continuation, which joins any in-flight
+              // review and revalidates input, custody and setup success.
+              for (const [heldId, invocation] of active) {
+                const held = deps.store.get(request.scope, heldId);
+                const target = held?.domainRef;
+                if (held?.setupReview && target?.kind === 'projectCommand'
+                  && (target.purpose === 'script' || target.purpose === 'exec')
+                  && target.serverId === completed.serverId && target.machineId === completed.machineId
+                  && target.workspaceRefId === completed.workspaceRefId && target.cwd === completed.cwd) {
+                  invocation.resumeSetupReview();
+                }
+              }
+            }
           } else {
             const failure = { errorCode: executionResult.errorCode, error: executionResult.error };
             // Only named finite Project consent/refusal producers carry public
