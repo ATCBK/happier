@@ -37,6 +37,8 @@ export function useSessionBoardHostVisibility(input: Readonly<{
     presented?: boolean;
     /** The Cockpit's current Session surface, when this shell is the Cockpit. */
     mobileSurface?: 'board' | 'companion' | null;
+    /** A standalone Details destination is controlled by its route rather than pane workspace state. */
+    detailsDestinationKey?: string | null;
 }>): SessionBoardHostVisibility {
     const pane = useAppPaneScope(input.paneScopeId);
     const paneFocusMode = usePaneFocusMode(input.paneScopeId);
@@ -47,25 +49,28 @@ export function useSessionBoardHostVisibility(input: Readonly<{
         paneScopeId: input.paneScopeId,
     });
     const scopeState = pane.scopeState;
+    const details = input.detailsDestinationKey === undefined
+        ? scopeState?.details
+        : { isOpen: true, activeTabKey: input.detailsDestinationKey };
     const previousRef = React.useRef<SessionBoardHostVisibility | null>(null);
 
     const next = resolveSessionBoardHostVisibility({
         foreground,
-        panes: scopeState
+        panes: scopeState || input.detailsDestinationKey !== undefined
             ? {
-                detailsOpen: scopeState.details?.isOpen === true,
+                detailsOpen: details?.isOpen === true,
                 // The typed Details-workspace view, split groups included — not a
                 // guess from "Details is open".
-                detailsShowsBoard: isSessionBoardVisibleInDetails(scopeState.details),
+                detailsShowsBoard: isSessionBoardVisibleInDetails(details),
                 // Only the generic Board grid can draw an arbitrary item; an expanded
                 // `board:<itemId>` tab draws exactly one.
-                detailsShowsGenericBoard: isGenericSessionBoardVisibleInDetails(scopeState.details),
+                detailsShowsGenericBoard: isGenericSessionBoardVisibleInDetails(details),
                 // Which items are ALSO presented in their own expanded destination, so
                 // two visible Details copies of one executable item can be told apart.
-                detailsExpandedItemIds: listVisibleSessionBoardDetailsExpandedItemIds(scopeState.details),
+                detailsExpandedItemIds: listVisibleSessionBoardDetailsExpandedItemIds(details),
                 detailsFocusModeActive: paneFocusMode.active,
-                rightOpen: scopeState.right?.isOpen === true,
-                rightActiveTabId: scopeState.right?.activeTabId ?? null,
+                rightOpen: scopeState?.right?.isOpen === true,
+                rightActiveTabId: scopeState?.right?.activeTabId ?? null,
             }
             : null,
         companionPlacement,
@@ -85,6 +90,7 @@ export function useSessionBoardPrimaryMountResolver(input: Readonly<{
     paneScopeId: string;
     presented?: boolean;
     mobileSurface?: 'board' | 'companion' | null;
+    detailsDestinationKey?: string | null;
 }>): SessionBoardPlacementPrimaryMountResolver {
     const visibility = useSessionBoardHostVisibility(input);
     const { preference } = useSessionCompanionPreference({
