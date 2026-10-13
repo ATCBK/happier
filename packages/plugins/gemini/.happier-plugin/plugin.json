@@ -21,11 +21,41 @@
               "resume"
             ]
           },
+          "skills": {
+            "delivery": "none",
+            "liveReload": "unsupported",
+            "nativeDisable": "unsupported",
+            "nativeRoots": {
+              "project": [
+                [
+                  ".gemini",
+                  "skills"
+                ],
+                [
+                  ".agents",
+                  "skills"
+                ]
+              ],
+              "user": [
+                [
+                  ".gemini",
+                  "skills"
+                ],
+                [
+                  ".agents",
+                  "skills"
+                ]
+              ]
+            }
+          },
           "tools": {
             "delivery": "native_mcp"
           }
         },
         "catalog": {
+          "acpRegistryIds": [
+            "gemini"
+          ],
           "vendorResume": {
             "support": "supported"
           }
@@ -176,6 +206,7 @@
     "projectNativeAdapters": [],
     "promptAssets": [],
     "providers": [],
+    "registrySources": [],
     "requestInterceptors": [],
     "resources": [],
     "roles": [],

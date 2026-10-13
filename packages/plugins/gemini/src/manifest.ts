@@ -118,6 +118,7 @@ export const GEMINI_PLUGIN = definePlugin({
         },
         primary: 'sessions',
         catalog: {
+          acpRegistryIds: [...AGENT_DEFINITION.acpRegistryIds],
           vendorResume: { support: AGENT_DEFINITION.core.resume.vendorResume },
         },
         connectedAccounts: [{
@@ -128,7 +129,13 @@ export const GEMINI_PLUGIN = definePlugin({
           credentialKinds: ['token'],
         }],
         capabilities: projectAgentCapabilitiesV2FromDefinition(AGENT_DEFINITION.core, {
-          skills: { delivery: 'none', nativeDisable: 'unsupported', liveReload: 'unsupported' },
+          skills: {
+            delivery: 'none', nativeDisable: 'unsupported', liveReload: 'unsupported',
+            nativeRoots: {
+              user: [['.gemini', 'skills'], ['.agents', 'skills']],
+              project: [['.gemini', 'skills'], ['.agents', 'skills']],
+            },
+          },
           sessions: {
             open: ['create', 'resume'],
             delivery: ['newTurn', 'followUp'],

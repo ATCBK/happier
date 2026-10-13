@@ -1,5 +1,7 @@
 import type { AgentConnectedAccountRuntimeAuthAdapterV1 } from '@happier-dev/plugin-sdk/agents/runtime';
 
+const GEMINI_ACCOUNT_SERVICE_ID = 'happier.agent.gemini/gemini-account';
+
 function record(value: unknown): Record<string, unknown> | null {
   return value && typeof value === 'object' && !Array.isArray(value)
     ? value as Record<string, unknown>
@@ -12,7 +14,7 @@ function text(value: unknown): string | null {
 
 function exactTarget(selectionValue: unknown) {
   const selection = record(selectionValue);
-  if (!selection || selection.serviceId !== 'gemini') return null;
+  if (!selection || selection.serviceId !== GEMINI_ACCOUNT_SERVICE_ID) return null;
   const revision = typeof selection.credentialRevision === 'string' && selection.credentialRevision.length > 0
     ? selection.credentialRevision
     : null;
@@ -20,7 +22,7 @@ function exactTarget(selectionValue: unknown) {
   if (selection.kind === 'profile') {
     const profileId = text(selection.profileId);
     return profileId ? {
-      serviceId: 'gemini', profileId, groupId: null, groupGeneration: null, credentialRevision: revision,
+      serviceId: GEMINI_ACCOUNT_SERVICE_ID, profileId, groupId: null, groupGeneration: null, credentialRevision: revision,
     } : null;
   }
   if (selection.kind !== 'group') return null;
@@ -30,13 +32,33 @@ function exactTarget(selectionValue: unknown) {
     ? selection.generation
     : null;
   return profileId && groupId && groupGeneration !== null ? {
-    serviceId: 'gemini', profileId, groupId, groupGeneration, credentialRevision: revision,
+    serviceId: GEMINI_ACCOUNT_SERVICE_ID, profileId, groupId, groupGeneration, credentialRevision: revision,
   } : null;
 }
 
 export function createGeminiConnectedServiceRuntimeAuthAdapter(): AgentConnectedAccountRuntimeAuthAdapterV1 {
   return {
-    classifyRuntimeAuthFailure() { return null; },
+    classifyRuntimeAuthFailure(input) {
+      const diagnostic = record(input.error);
+      const details = record(diagnostic?.details);
+      // Gemini CLI v0.60.0 acpSession.ts and v0.8.2 zedIntegration.ts emit
+      // RequestError(429). JSON-RPC internal error codes and prose are not quota evidence.
+      if ((diagnostic?.code !== 'acp_turn_failed' && diagnostic?.code !== 'acp_input_custody_unknown'
+        && diagnostic?.code !== 'acp_input_rejected_before_effect')
+        || details?.requestErrorCode !== 429) return null;
+      const serviceId = GEMINI_ACCOUNT_SERVICE_ID;
+      const selection = record(input.selection);
+      if (selection && selection.serviceId !== serviceId) return null;
+      const target = selection ? exactTarget(selection) : null;
+      return {
+        kind: 'rate_limit', limitCategory: 'rate_limit', quotaScope: 'unknown', serviceId,
+        profileId: target?.profileId ?? null, groupId: target?.groupId ?? null,
+        ...(target?.groupGeneration !== null && target?.groupGeneration !== undefined ? { groupGeneration: target.groupGeneration } : {}),
+        ...(target?.credentialRevision ? { expectedCredentialRevision: target.credentialRevision } : {}),
+        resetsAtMs: null, retryAfterMs: null, planType: null, rateLimits: null,
+        source: 'structured_provider_error',
+      };
+    },
     async materializeActiveProfile() { return { supported: true }; },
     canHotApply() { return { supported: false, recovery: 'restart_rematerialize' }; },
     async hotApply() { return { applied: false, reason: 'hot_apply_unsupported' }; },

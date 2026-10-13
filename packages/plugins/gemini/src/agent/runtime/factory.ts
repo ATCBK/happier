@@ -3,10 +3,14 @@ import {
   type AgentRuntimeFactory,
   type AgentExecutionRunOpenRequest,
   type AgentExecutionRunRuntime,
+  type AgentExecutionRunEvent,
   type AgentExecutionRunRuntimeContextV1,
   type AgentSessionOpenRequest,
   type AgentSessionRuntime,
+  type AgentSessionRuntimeEvent,
+  AgentRuntimeJsonValueSchema,
 } from '@happier-dev/plugin-sdk/agents/runtime';
+import { isRecord } from '@happier-dev/plugin-sdk';
 
 import { GEMINI_ACP_RUNTIME_DEFINITION } from '../acp/definition.js';
 import {
@@ -17,6 +21,20 @@ import {
   resolveGeminiAuthConfig,
 } from '../auth/resolution.js';
 import { prepareGeminiNativeMcpShaping } from '../mcp/shaping.js';
+import { createGeminiConnectedServiceRuntimeAuthAdapter } from '../connectedServices/runtimeAuthAdapter.js';
+
+const geminiRuntimeAuthAdapter = createGeminiConnectedServiceRuntimeAuthAdapter();
+
+function projectGeminiRuntimeAuthFailure<Event extends AgentSessionRuntimeEvent | AgentExecutionRunEvent>(event: Event): Event {
+  if (event.kind !== 'turn-failed' && event.kind !== 'run-failed' && event.kind !== 'input-rejected') return event;
+  const diagnostic = event.diagnostic;
+  if (!diagnostic || !isRecord(diagnostic.details)) return event;
+  const classification = geminiRuntimeAuthAdapter.classifyRuntimeAuthFailure({ target: { agentId: 'gemini' }, error: diagnostic });
+  if (!classification) return event;
+  return { ...event, diagnostic: { ...diagnostic, details: {
+    ...diagnostic.details, runtimeAuthClassification: AgentRuntimeJsonValueSchema.parse(classification),
+  } } };
+}
 
 function buildGeminiLaunchEnvironment(
   values: Readonly<Record<string, string>>,
@@ -38,18 +56,20 @@ async function openGeminiSession(
   request: AgentSessionOpenRequest,
   context: AgentRuntimeContext,
 ): Promise<AgentSessionRuntime> {
-  return await openGeminiAcpRuntime(request, context, (preparedRequest, options) => (
+  const runtime = await openGeminiAcpRuntime(request, context, (preparedRequest, options) => (
     context.protocols.acp.open(preparedRequest as AgentSessionOpenRequest, options)
   ));
+  return { ...runtime, watch(listener) { return runtime.watch(event => listener(projectGeminiRuntimeAuthFailure(event))); } };
 }
 
 async function openGeminiExecutionRun(
   request: AgentExecutionRunOpenRequest,
   context: AgentExecutionRunRuntimeContextV1,
 ): Promise<AgentExecutionRunRuntime> {
-  return await openGeminiAcpRuntime(request, context, (preparedRequest, options) => (
+  const runtime = await openGeminiAcpRuntime(request, context, (preparedRequest, options) => (
     context.protocols.acp.openExecutionRunV1(preparedRequest as AgentExecutionRunOpenRequest, options)
   ));
+  return { ...runtime, watch(listener) { return runtime.watch(event => listener(projectGeminiRuntimeAuthFailure(event))); } };
 }
 
 async function openGeminiAcpRuntime<Runtime extends Readonly<{ dispose(): void | Promise<void> }>>(

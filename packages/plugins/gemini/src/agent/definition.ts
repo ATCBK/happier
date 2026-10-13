@@ -36,6 +36,7 @@ const GEMINI_STATIC_MODELS = [
 // IMPORTANT: this must stay JSON-serializable (data-only).
 export const AGENT_DEFINITION = Object.freeze({
   id: GEMINI_AGENT_ID,
+  acpRegistryIds: ['gemini'] as const,
   core: {
     id: GEMINI_AGENT_ID,
     cliSubcommand: 'gemini',

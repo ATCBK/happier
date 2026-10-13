@@ -1,0 +1,86 @@
+import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
+import { tmpdir } from 'node:os';
+import { join } from 'node:path';
+import { afterAll, expect, it } from 'vitest';
+import type { AgentExecutionRunOpenRequest, AgentExecutionRunRuntimeContextV1, AgentSessionOpenRequest, AgentSessionRuntime, AgentSessionRuntimeContext } from '@happier-dev/plugin-sdk/agents/runtime';
+import { createAgentLaunchObserver, runAgentSkillDeliveryContract, type AgentLaunchObserverBoundaries } from '@happier-dev/plugin-sdk/testing';
+
+import { PLUGIN_MANIFEST } from '../manifest.js';
+import { createGeminiAgentRuntime } from './runtime/factory.js';
+
+const home = mkdtempSync(join(tmpdir(), 'happier-gemini-skill-home-'));
+for (const root of ['.gemini/skills', '.agents/skills']) {
+  mkdirSync(join(home, root, 'retained-native'), { recursive: true });
+  writeFileSync(join(home, root, 'retained-native', 'SKILL.md'), 'Native skill bytes stay unchanged.');
+}
+afterAll(() => rmSync(home, { recursive: true, force: true }));
+const observer = createAgentLaunchObserver({ home });
+const boundaries = observer.boundaries as AgentLaunchObserverBoundaries;
+
+function context() {
+  const recordLaunch = (prepared: AgentSessionOpenRequest | AgentExecutionRunOpenRequest, options: Parameters<AgentSessionRuntimeContext['protocols']['acp']['open']>[1]) => {
+    if (options?.transport.kind !== 'stdio') throw new Error('Gemini requires its actual stdio launch');
+    const env: Record<string, string | undefined> = { ...options.transport.env, ...prepared.launchEnvironment?.values };
+    const unset = new Set(prepared.launchEnvironment?.unset.map((key) => key.toUpperCase()));
+    for (const key of Object.keys(env)) if (unset.has(key.toUpperCase())) delete env[key];
+    boundaries.recordLaunch({ argv: options.transport.args ?? [], env });
+  };
+  // ACP transport and CLI help execution are genuine external boundaries; shaping stays real.
+  return {
+    signal: new AbortController().signal,
+    services: { exec: { run: async () => ({
+      termination: { observed: { kind: 'exit', exitCode: 0 }, requestedBy: { kind: 'none' } },
+      stdout: new TextEncoder().encode('--acp'), stderr: new Uint8Array(), stdoutTruncated: false, stderrTruncated: false,
+    }) } },
+    protocols: { acp: { open: async (prepared: AgentSessionOpenRequest, options: Parameters<AgentSessionRuntimeContext['protocols']['acp']['open']>[1]) => {
+      recordLaunch(prepared, options);
+      // The real ACP composer refuses skills when its definition has no delivery knob.
+      return { skillsDelivered: prepared.skills ? false : undefined,
+        send: async () => ({ status: 'admitted' as const }), watch: () => ({ dispose() {} }), dispose: async () => {} };
+    }, openExecutionRunV1: async (prepared: AgentExecutionRunOpenRequest, options: Parameters<AgentSessionRuntimeContext['protocols']['acp']['open']>[1]) => {
+      recordLaunch(prepared, options);
+      return { send: async () => ({ status: 'admitted' as const }), stop: async () => ({ status: 'notRunning' as const }),
+        watch: () => ({ dispose() {} }), dispose: async () => {} };
+    } } },
+  };
+}
+
+async function openSession(request: AgentSessionOpenRequest): Promise<AgentSessionRuntime> {
+  boundaries.reset();
+  return await createGeminiAgentRuntime().sessions.open({ ...request, launchEnvironment: { values: { HOME: home, GEMINI_API_KEY: 'fixture-gemini-api-key' }, unset: [] } },
+    context() as unknown as AgentSessionRuntimeContext);
+}
+
+const agent = PLUGIN_MANIFEST.contributes.agents.find((candidate) => candidate.id === 'gemini');
+if (!agent) throw new Error('Gemini Agent contribution is missing');
+it('declares native roots while keeping unprobed session delivery unsupported', () => {
+  expect(agent.capabilities.skills).toEqual({ delivery: 'none', nativeDisable: 'unsupported', liveReload: 'unsupported',
+    nativeRoots: { user: [['.gemini', 'skills'], ['.agents', 'skills']], project: [['.gemini', 'skills'], ['.agents', 'skills']] } });
+});
+runAgentSkillDeliveryContract({ agent, openSession, observeLaunch: observer.observeLaunch, variants: [
+  { id: 'create', open: openSession, expect: 'unsupported' },
+  { id: 'resume', open: (request) => openSession({ ...request, kind: 'resume', providerSessionId: 'gemini-checkpoint' }), expect: 'unsupported' },
+] });
+
+it('K10 keeps detached Runs on the index path and preserves native skills in their private home', async () => {
+  boundaries.reset();
+  const run = await createGeminiAgentRuntime().sessions.executionRunContextV1!.open({
+    kind: 'resume', checkpointId: 'gemini-checkpoint', runId: 'gemini-skill-run', cwd: home,
+    profile: { pluginId: 'happier.agent.gemini', localId: 'gemini' },
+    skills: { pluginRoot: '/fixture/session', skillsRoot: '/fixture/session/skills', items: [], nativeDisables: [] },
+    launchEnvironment: { values: { HOME: home, GEMINI_API_KEY: 'fixture-gemini-api-key' }, unset: [] },
+  }, { ...context(), scope: { kind: 'execution_run', executionRunId: 'gemini-skill-run' },
+    executionRun: { id: 'gemini-skill-run', services: {} } } as unknown as AgentExecutionRunRuntimeContextV1);
+  const launch = observer.observeLaunch();
+  const privateHome = launch.env.GEMINI_CLI_HOME!;
+  try {
+    expect(JSON.stringify(launch)).not.toContain('/fixture/session');
+    for (const root of ['.gemini/skills', '.agents/skills']) {
+      expect(readFileSync(join(privateHome, root, 'retained-native', 'SKILL.md'), 'utf8')).toBe('Native skill bytes stay unchanged.');
+    }
+    expect(launch.filesWritten).toEqual([]);
+  } finally {
+    await run.dispose();
+  }
+  expect(existsSync(privateHome)).toBe(false);
+});
