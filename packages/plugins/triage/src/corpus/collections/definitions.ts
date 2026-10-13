@@ -77,8 +77,8 @@ const MARK_DISPLAY_SCHEMA: PluginJsonSchema = {
 
 export const CORPUS_SOURCE_INSTANCES_COLLECTION = defineAccountCollection({
     id: CORPUS_SOURCE_INSTANCES_COLLECTION_ID,
-    schemaVersion: 2,
-    readableSchemaVersions: [1, 2],
+    schemaVersion: 3,
+    readableSchemaVersions: [1, 2, 3],
     schema: {
         type: 'object',
         properties: {
@@ -129,8 +129,8 @@ export const CORPUS_SOURCE_INSTANCES_COLLECTION = defineAccountCollection({
     }],
     uiQueries: [],
     relations: [],
-    // The native source binding widens the configured union; retained v1
-    // configuration already satisfies this schema and must remain unchanged.
+    // Native bindings and reserved host Connected Account services widen the
+    // configured union; retained configuration remains valid without a rewrite.
     migrations: CORPUS_COLLECTION_MIGRATIONS[CORPUS_SOURCE_INSTANCES_COLLECTION_ID],
     migrationArtifact: CORPUS_MIGRATION_ARTIFACT,
 });

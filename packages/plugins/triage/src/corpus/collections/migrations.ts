@@ -11,6 +11,13 @@ export const CORPUS_COLLECTION_MIGRATIONS = {
         fromSchemaVersion: 1,
         toSchemaVersion: 2,
         migrate: (value) => value,
+    }, {
+        id: 'source-instances-v2-to-v3',
+        fromSchemaVersion: 2,
+        toSchemaVersion: 3,
+        // The Connected Account service union now admits happier/mcp-sign-in;
+        // existing source bindings and private configuration stay unchanged.
+        migrate: (value) => value,
     }],
     [CORPUS_SESSION_LINKS_COLLECTION_ID]: [{
         id: 'session-links-v1-to-v2',

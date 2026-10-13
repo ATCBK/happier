@@ -2,6 +2,7 @@
 import { act } from 'react';
 import { createPluginUiTestkit, createSurfaceContextFixture } from '@happier-dev/plugin-sdk/testing';
 import type { PluginUiTestkit } from '@happier-dev/plugin-sdk/testing';
+import { ComposerSnapshotV1Schema, ComposerTransactionV1Schema } from '@happier-dev/plugin-sdk/ui';
 import { createPluginUiRnwSemanticSurfaceAdapter } from '@happier-dev/plugin-ui/testing';
 import type {
     ComposerAttachmentViewV1,
@@ -39,8 +40,10 @@ import { refreshTriageListWindow } from '../ui/window/mountedWindow.js';
 import { createTriageEphemeralSharedScopeFixture } from '../ui/window/ephemeralSharedScope.test-support.js';
 import { renderSurface as renderPickerSurface } from './entryPicker.js';
 import { TRIAGE_UI_TRANSLATIONS } from '../ui/translations.js';
-import { TriageMountedUiInputV1Schema } from '../actions/mountedUiProtocol.js';
-import { invokeTriageMountedUiAction } from '../ui/mountedActions.js';
+import { TRIAGE_MOUNTED_UI_ACTION_LOCAL_ID_V1, TriageMountedUiInputV1Schema, TriageMountedUiResultV1Schema } from '../actions/mountedUiProtocol.js';
+import * as mountedUiActionArtifact from '../actions/mountedUi.js';
+import { PLUGIN_MANIFEST } from '../manifest.js';
+import { TriageComposerEntryAttachmentValueV1Schema } from './attachmentValue.js';
 
 /**
  * The mounted Composer entry picker (`core/COMPOSER.md` §2, §3).
@@ -158,7 +161,7 @@ function createHarness(options: Readonly<{
     let nextAttachmentInstanceId = 1;
     let composerApplyCancelled = false;
 
-    const snapshot = (ref: unknown): ComposerSnapshotV1 => ({
+    const snapshot = (ref: unknown): ComposerSnapshotV1 => ComposerSnapshotV1Schema.parse({
         revision,
         ref,
         text: 'please look at this',
@@ -173,7 +176,7 @@ function createHarness(options: Readonly<{
             submitting: false,
             running: false,
         },
-    }) as ComposerSnapshotV1;
+    });
 
     const applyCanonicalTransaction = (
         transaction: ComposerTransactionV1,
@@ -275,7 +278,7 @@ function createHarness(options: Readonly<{
                     composerApplyCancelled = true;
                     throw new DOMException('The host stopped the request.', 'AbortError');
                 }
-                const outcome = applyCanonicalTransaction(transaction as ComposerTransactionV1);
+                const outcome = applyCanonicalTransaction(ComposerTransactionV1Schema.parse(transaction));
                 return outcome.status === 'conflict'
                     ? { status: 'conflict', currentRevision: revision } as never
                     : { status: 'applied', revision, attachmentInstanceIds: outcome.attachmentInstanceIds } as never;
@@ -372,13 +375,22 @@ describe('the mounted Composer entry picker', () => {
         if (!detail || typeof detail !== 'object' || !('mountedAction' in detail)) throw new Error('Missing address');
         const address = detail.mountedAction;
         if (!address || typeof address !== 'object' || !('mountId' in address)) throw new Error('Missing mount');
+        const declaration = PLUGIN_MANIFEST.contributes.actions.find((action) => action.id === TRIAGE_MOUNTED_UI_ACTION_LOCAL_ID_V1);
+        if (declaration?.execution.target !== 'client') throw new Error('Mounted Action must declare its client artifact');
+        const factory = Reflect.get(mountedUiActionArtifact, declaration.execution.client.exportName);
+        if (typeof factory !== 'function') throw new Error('Declared client Action export is missing');
+        const handler: ReturnType<typeof mountedUiActionArtifact.createTriageMountedUiActionHandler> = factory();
         const entryRef = { source: SOURCE, kindId: 'pull-request', collisionScope: 'example/repository', entryId: '42' };
         const invoke = async (kind: 'attachEntry' | 'removeEntry', ref = entryRef) => {
             const input = TriageMountedUiInputV1Schema.parse({ mountId: address.mountId, operation: { kind, entryRef: ref } });
             let result;
-            await act(async () => { result = await invokeTriageMountedUiAction(harness.ephemeralSharedScope,
-                input.mountId, input.operation, new AbortController().signal); });
-            return result;
+            await act(async () => { result = await handler(input, {
+                plugin: { id: PLUGIN_MANIFEST.id, version: PLUGIN_MANIFEST.version },
+                contribution: { id: declaration.id, qualifiedId: `${PLUGIN_MANIFEST.id}/actions/${declaration.id}` },
+                invocationSurface: 'agent', signal: new AbortController().signal,
+                ui: picker.context.hostApi, ephemeralSharedScope: harness.ephemeralSharedScope,
+            }); });
+            return TriageMountedUiResultV1Schema.parse(result);
         };
         expect(await invoke('attachEntry', { ...entryRef, entryId: 'missing' })).toEqual({ status: 'unavailable' });
         expect(harness.attachments).toHaveLength(0);
@@ -386,6 +398,10 @@ describe('the mounted Composer entry picker', () => {
         expect(harness.attachments).toHaveLength(1);
         expect(harness.attachments[0]?.value).toMatchObject({ v: 1, entryRef,
             sourceInstance: { source: SOURCE, sourceInstanceId: INSTANCE_ID } });
+        const value = TriageComposerEntryAttachmentValueV1Schema.parse(harness.attachments[0]?.value);
+        expect(value.entryRef).toEqual(entryRef);
+        expect(TriageComposerEntryAttachmentValueV1Schema.safeParse({ ...value, providerPayload: {} }).success).toBe(false);
+        expect(ComposerSnapshotV1Schema.parse(harness.snapshot(COMPOSER_A)).attachments).toEqual(harness.attachments);
         expect(harness.applyCalls.at(-1)?.ref).toEqual(COMPOSER_A);
         await expect(picker.findByRole('button', { name: 'Remove Replace the duplicated normalizer' })).resolves.toBeDefined();
         expect(await invoke('attachEntry')).toEqual({ status: 'applied' });

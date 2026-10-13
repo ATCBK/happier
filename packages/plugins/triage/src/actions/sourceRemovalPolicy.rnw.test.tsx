@@ -14,6 +14,7 @@ import {
   TRIAGE_SOURCES_ADMINISTER_ACTION_REF_V1, TRIAGE_SOURCES_READ_CONFIGURED_ACTION_REF_V1,
   TRIAGE_SOURCES_CONTRIBUTION_PROTOCOL_ID_V1, TRIAGE_SOURCES_CONTRIBUTION_PROTOCOL_VERSION_V1,
   TriageSourceAdministrationActionInputV1Schema, TriageSourceInstanceDraftV1Schema,
+  TriageSourceAdministrationActionResultV1Schema, TriageReadConfiguredSourceInstancesResultV1Schema,
 } from '@happier-dev/triage-protocol/v1';
 import { afterEach, describe, expect, it } from 'vitest';
 
@@ -83,9 +84,8 @@ describe('source Remove through the shared Action admission and durable writer',
     } as unknown as PluginInvocationContext;
     const administer = createTriageAdministerSourceInstanceActionHandler({ mintSourceInstanceId: () => INSTANCE_ID, nowMs: () => 1_000 });
     const read = createTriageReadConfiguredSourceInstancesActionHandler();
-    expect(await administer({ v: 1, kind: 'create', draft }, context)).toEqual({ kind: 'active', sourceInstanceId: INSTANCE_ID });
-
     const dialogs: string[] = [];
+    let currentIntentApproved = true;
     const gate = createPluginActionPresentUserGate({
       resolve: () => ({ status: 'resolved', action: descriptor, policy: {
         qualifiedId, occurrenceId: 'triage-1', dangerLevel: descriptor.dangerLevel,
@@ -101,7 +101,7 @@ describe('source Remove through the shared Action admission and durable writer',
       } }),
       requestCurrentIntent: async ({ fingerprint }) => {
         dialogs.push('Action policy');
-        return approved ? { status: 'approved', fingerprint }
+        return currentIntentApproved ? { status: 'approved', fingerprint }
           : { status: 'rejected', code: 'plugin_action_current_intent_rejected' };
       },
     });
@@ -111,6 +111,35 @@ describe('source Remove through the shared Action admission and durable writer',
       occurrenceSignal: context.signal, isCurrent: () => true,
     });
     const admissions: string[] = [];
+    const invoke = async (input: JsonValue, signal = context.signal) => {
+      const result = await invocation.invoke(input, {
+        signal,
+        preDispatch: async ({ input: normalized }) => {
+          const decision = await gate.admit({ input: normalized, surface: 'ui', invocationSurface: 'ui', signal });
+          admissions.push(decision.status);
+          return decision.status === 'admitted' ? null : {
+            status: 'unavailable', code: decision.status === 'deferred' ? 'plugin_action_current_intent_unavailable' : decision.code,
+            message: 'Source change was not approved',
+          };
+        },
+        handler: async ({ input: normalized }) => await administer(TriageSourceAdministrationActionInputV1Schema.parse(normalized), context),
+      });
+      if (result.status !== 'executed') throw new Error(result.message);
+      return TriageSourceAdministrationActionResultV1Schema.parse(result.value);
+    };
+    expect(await invoke({ v: 1, kind: 'create', draft })).toEqual({ kind: 'active', sourceInstanceId: INSTANCE_ID });
+    const revisedDraft = TriageSourceInstanceDraftV1Schema.parse({ ...draft, configuration: { v: 1, token: 'reconfigured' } });
+    expect(await invoke({ v: 1, kind: 'reconfigure', sourceInstanceId: INSTANCE_ID, draft: revisedDraft }))
+      .toEqual({ kind: 'reconfigured', sourceInstanceId: INSTANCE_ID });
+    const configured = TriageReadConfiguredSourceInstancesResultV1Schema.parse(await read({ v: 1 }, context));
+    expect(configured).toMatchObject({ kind: 'read', instances: [
+      { lifecycle: 'active', configured: { configuration: revisedDraft.configuration } },
+    ] });
+    expect(admissions).toEqual(['admitted', 'admitted']);
+    expect(dialogs).toEqual(prompts === 0 ? [] : ['Action policy', 'Action policy']);
+    dialogs.length = 0;
+    admissions.length = 0;
+    currentIntentApproved = approved;
     let page!: PluginUiTestkit;
     await act(async () => {
       page = await createPluginUiTestkit({
@@ -125,20 +154,7 @@ describe('source Remove through the shared Action admission and durable writer',
             if (ref.pluginId === SOURCE.pluginId) return { kind: 'complete', candidates: [draft], failures: [] };
             if (ref.localId === TRIAGE_SOURCES_READ_CONFIGURED_ACTION_REF_V1.localId) return await read({ v: 1 }, context);
             if (ref.localId !== descriptor.id) throw new Error('Unexpected Action');
-            const result = await invocation.invoke(input, {
-              signal,
-              preDispatch: async ({ input: normalized }) => {
-                const decision = await gate.admit({ input: normalized, surface: 'ui', invocationSurface: 'ui', signal });
-                admissions.push(decision.status);
-                return decision.status === 'admitted' ? null : {
-                  status: 'unavailable', code: decision.status === 'deferred' ? 'plugin_action_current_intent_unavailable' : decision.code,
-                  message: 'Source change was not approved',
-                };
-              },
-              handler: async ({ input: normalized }) => await administer(TriageSourceAdministrationActionInputV1Schema.parse(normalized), context),
-            });
-            if (result.status !== 'executed') throw new Error(result.message);
-            return result.value;
+            return await invoke(input, signal);
           },
         },
       });
@@ -147,7 +163,7 @@ describe('source Remove through the shared Action admission and durable writer',
     await act(async () => { await page.press(await page.getByRole('button', { name: 'Remove acme/api from PRs & Issues' })); });
     expect(dialogs).toEqual(prompts === 0 ? [] : ['Action policy']);
     expect(admissions).toEqual([approved ? 'admitted' : 'unavailable']);
-    expect(await read({ v: 1 }, context)).toMatchObject({ kind: 'read', instances: [
+    expect(TriageReadConfiguredSourceInstancesResultV1Schema.parse(await read({ v: 1 }, context))).toMatchObject({ kind: 'read', instances: [
       { lifecycle, configured: { instance: { sourceInstanceId: INSTANCE_ID } } },
     ] });
     expect(await page.getByRole('button', { name: lifecycle === 'retired'

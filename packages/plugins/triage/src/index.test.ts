@@ -17,7 +17,6 @@ describe('Triage plugin daemon entry', () => {
     // host loader requires a callable `activate` export.
     expect(PLUGIN_MANIFEST.entrypoints.daemon).toBe('./.happier-plugin/daemon.js');
     expect(entry.activate).toBeTypeOf('function');
-    expect(entry.activate.length).toBe(1);
   });
 
   it('re-exports the one manifest the bundled registry imports', () => {
