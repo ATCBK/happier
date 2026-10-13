@@ -4,10 +4,22 @@ import { createSessionRecordFixture } from '@/testkit/backends/sessionFixtures';
 import { RPC_METHODS } from '@happier-dev/protocol/rpc/methods';
 import { WorkflowSessionAuthoringSelectionSchema } from '@happier-dev/protocol/workflows/workflowV1';
 import { logger } from '@/ui/logger';
+import fs from 'node:fs/promises';
+import { SpawnDaemonSessionRequestSchema } from '@/rpc/handlers/spawnSessionOptionsContract';
+import { createSpawnConnectedServicesTeamResourceCatalogResolver } from '@/session/services/spawnConnectedServicesDefaults';
+import { createAccountServerActionDeps } from '@/api/accountServerActionDeps';
+import { resolveServerHttpBaseUrl } from '@/api/client/serverHttpBaseUrl';
+import { bindHomeDomainActionHttpRequestV1 } from '@happier-dev/protocol/actions/homeDomainActionFamily';
+import { TeamCredentialResourceEntitledPageV1Schema } from '@happier-dev/protocol/teams/credentials/resourceV1';
 
-const readiness = vi.hoisted(() => ({ get: vi.fn(), post: vi.fn(), callMachineRpc: vi.fn() }));
-vi.mock('axios', () => ({ default: { get: readiness.get, post: readiness.post, isAxiosError: () => false } }));
+const readiness = vi.hoisted(() => ({ get: vi.fn(), post: vi.fn(), request: vi.fn(), callMachineRpc: vi.fn() }));
+vi.mock('axios', () => ({ default: { get: readiness.get, post: readiness.post, request: readiness.request,
+  isAxiosError: () => false, isCancel: () => false } }));
 vi.mock('@/session/transport/rpc/machineRpc', () => ({ callMachineRpc: readiness.callMachineRpc }));
+vi.mock('socket.io-client', async () => {
+  const { createApiSessionSocketStub } = await import('@/testkit/backends/apiSessionSocketHarness');
+  return { io: () => createApiSessionSocketStub() };
+});
 
 import {
   WORKFLOW_CANCEL_REQUESTED_ABORT_REASON,
@@ -22,19 +34,6 @@ import {
 } from './sessionStepExecutor';
 
 
-const sessionCreation = vi.hoisted(() => ({
-  createSpawnedSession: vi.fn(async (_request: Parameters<typeof import('@/session/services/createSpawnedSession').createSpawnedSession>[0]) => ({ sessionId: 'new-session' })),
-  prepareSessionCreationTarget: vi.fn(async () => ({
-    ok: true as const,
-    directory: '/repo',
-    directoryCreationRequired: false,
-    checkout: null,
-  })),
-}));
-vi.mock('@/session/services/createSpawnedSession', () => sessionCreation);
-vi.mock('@/session/creation/prepareSessionCreationTarget', () => ({
-  prepareSessionCreationTarget: sessionCreation.prepareSessionCreationTarget,
-}));
 vi.mock('node:fs', async (importOriginal) => {
   const fs = await importOriginal<typeof import('node:fs')>();
   return {
@@ -46,6 +45,42 @@ vi.mock('node:fs', async (importOriginal) => {
     },
   };
 });
+
+function installSessionCreationTransport() {
+  // Only filesystem readiness, Home HTTP and exact-machine process transport
+  // are replaced. Target preparation, creator, nonce settlement and schemas run.
+  vi.spyOn(fs, 'access').mockResolvedValue(undefined);
+  vi.stubGlobal('fetch', vi.fn(async () => new Response(JSON.stringify({ id: 'account-1' }), { status: 200 })));
+  const launches: ReturnType<typeof SpawnDaemonSessionRequestSchema.parse>[] = [];
+  let readySessionId = 'new-session';
+  readiness.callMachineRpc.mockClear();
+  readiness.callMachineRpc.mockImplementation(async ({ method, request }: Parameters<typeof import('@/session/transport/rpc/machineRpc').callMachineRpc>[0]) => {
+    const organizationPlacement = { folderId: null, tagIds: [] };
+    if (method === RPC_METHODS.SPAWN_HAPPY_SESSION) {
+      if (request && typeof request === 'object' && 'type' in request && request.type === 'resume-session'
+        && 'sessionId' in request && typeof request.sessionId === 'string') {
+        readySessionId = request.sessionId;
+        return { type: 'success', sessionId: readySessionId };
+      }
+      readySessionId = 'new-session';
+      launches.push(SpawnDaemonSessionRequestSchema.parse(request));
+      return { type: 'success', sessionId: readySessionId, sessionCreationOutcome: { disposition: 'created', organizationPlacement } };
+    }
+    if (method === RPC_METHODS.DAEMON_SPAWN_SESSION_RESOLVE_BY_NONCE) {
+      return { status: 'success', sessionId: readySessionId, sessionCreationOutcome: { disposition: 'rejoined', organizationPlacement } };
+    }
+    throw new Error(`Unexpected Session creation transport: ${method}`);
+  });
+  const read = readiness.get.getMockImplementation()!;
+  readiness.get.mockImplementation(async (url: string) => {
+    if (url.endsWith('/v1/machines/machine-1')) return { status: 200, data: { machine: {
+      id: 'machine-1', revokedAt: null, replacedByMachineId: null, operationProtocolCapabilitiesRevision: 1,
+      operationProtocolCapabilities: { sessionSpawn: { protocolVersions: [1, 2] } },
+    } } };
+    return read(url);
+  });
+  return launches;
+}
 
 
 describe('workflow Session step executor', () => {
@@ -216,11 +251,14 @@ describe('workflow Session step executor', () => {
       execution: { agentTarget: reuseSelection.agentTarget }, workspace: { machineId: 'machine-1', directory: '/repo' },
     } as never)).rejects.toMatchObject({ code, details: { reason } });
   });
-  afterEach(() => vi.restoreAllMocks());
+  afterEach(() => { vi.restoreAllMocks(); vi.unstubAllGlobals(); });
   beforeEach(() => {
     // HTTP and machine process launch are the external readiness boundaries;
     // authorization, resume normalization and conversation ownership stay real.
     let readySessionId = '';
+    readiness.request.mockImplementation(async ({ url }: { url: string }) => {
+      throw new Error(`Unexpected Home Action HTTP request: ${url}`);
+    });
     readiness.get.mockImplementation(async (url: string) => {
       if (url.endsWith('/v1/account/encryption/currentness')) return { status: 200, data: {
         mode: 'plain', version: 1, signingKeyFingerprint: null, contentKeyFingerprint: null, updatedAt: 1,
@@ -248,20 +286,18 @@ describe('workflow Session step executor', () => {
     });
   });
   it('records inputless Session creation and rejoins it without fabricating an input', async () => {
-    const creations: unknown[] = [];
+    const launches = installSessionCreationTransport();
     const createdFacts: unknown[] = [];
+    const credentials = { token: 'token', encryption: null };
+    const machineAdmissionTransport = async () => { throw new Error('Inputless creation cannot enqueue'); };
     const execute = createProductionWorkflowSessionStepExecutor({
-      credentials: { token: 'token', encryption: null }, machineId: 'machine-1',
-      machineAdmissionTransport: vi.fn(),
-      createFreshConversation: async (request) => { creations.push(request); return {
-        sessionId: 'created-session', machineId: 'machine-1', directory: '/repo',
-      }; },
+      credentials, machineId: 'machine-1', machineAdmissionTransport,
+      createFreshConversation: createProductionFreshWorkflowSessionConversation({
+        credentials, serverId: 'server-1', machineId: 'machine-1', workDepth: 0,
+        originRunId: 'run-inputless', machineAdmissionTransport,
+      }),
       resolveSharedRunConversation: async () => null, resolveProducerConversation: async () => null,
       resolveExistingSessionConversation: async ({ sessionId, machineId }) => ({ sessionId, machineId, directory: '/repo' }),
-      sessionInput: {
-        enqueue: async () => { throw new Error('Inputless creation cannot enqueue'); },
-        observe: async () => { throw new Error('Inputless creation has no input to observe'); },
-      },
     });
     const base = {
       runId: 'run-inputless', invocationRecordId: 'inv-inputless',
@@ -271,7 +307,8 @@ describe('workflow Session step executor', () => {
         invocationPath: { blockId: 'create', scope: [] }, attempt: '0', logicalInvocationRecordId: 'logical' },
       input: { text: '', references: [], attachments: [], values: [] },
       execution: { conversation: { kind: 'fresh' as const },
-        agentTarget: { kind: 'agent' as const, identity: { pluginId: 'happier.agent.claude', localId: 'claude' } } },
+        agentTarget: { kind: 'agent' as const, identity: { pluginId: 'happier.agent.claude', localId: 'claude' } },
+        connectedServices: { v: 2 as const, bindingsByServiceId: {} } },
       executionTarget: { kind: 'session' as const },
       authorization: { admittedPermissionCeiling: 'default' as const, principal: { kind: 'host' as const } },
       workspace: { machineId: 'machine-1', directory: '/repo', checkoutRootPath: '/repo' },
@@ -280,10 +317,10 @@ describe('workflow Session step executor', () => {
       onSessionReady: async (value: unknown) => { createdFacts.push(value); },
     };
     await expect(execute(base)).resolves.toEqual({ kind: 'completed', result: '' });
-    expect(createdFacts).toEqual([{ kind: 'session_ready', sessionId: 'created-session' }]);
+    expect(createdFacts).toEqual([{ kind: 'session_ready', sessionId: 'new-session' }]);
     await expect(execute({ ...base, invocation: { ...base.invocation,
-      execution: { kind: 'session_ready', sessionId: 'created-session' } } })).resolves.toEqual({ kind: 'completed', result: '' });
-    expect(creations).toHaveLength(1);
+      execution: { kind: 'session_ready', sessionId: 'new-session' } } })).resolves.toEqual({ kind: 'completed', result: '' });
+    expect(launches).toHaveLength(1);
   });
 
   it('recovers inputless creation before its Workflow fact through observation-only Session creation custody', async () => {
@@ -292,10 +329,15 @@ describe('workflow Session step executor', () => {
       workspace: { machineId: 'machine-1', directory: '/repo', checkoutRootPath: '/repo' },
       creationKey: 'workflow:run-inputless:inv-inputless', observationOnly: true,
     };
-    sessionCreation.createSpawnedSession.mockClear();
-    await createProductionFreshWorkflowSessionConversation({ credentials: { token: 'token', encryption: null },
-      serverId: 'server-1', machineId: 'machine-1', workDepth: 0, originRunId: 'run-inputless', machineAdmissionTransport: vi.fn() })(request);
-    expect(sessionCreation.createSpawnedSession.mock.calls[0]?.[0]).toMatchObject({ spawnNonce: request.creationKey, resumeOnly: true });
+    const launches = installSessionCreationTransport();
+    await expect(createProductionFreshWorkflowSessionConversation({ credentials: { token: 'token', encryption: null },
+      serverId: 'server-1', machineId: 'machine-1', workDepth: 0, originRunId: 'run-inputless',
+      machineAdmissionTransport: async () => { throw new Error('Inputless rejoin cannot enqueue an input'); },
+    })(request)).resolves.toMatchObject({ sessionId: 'new-session', origin: { kind: 'run_step', runId: 'run-inputless' }, workDepth: 1 });
+    expect(launches).toEqual([]);
+    expect(readiness.callMachineRpc.mock.calls.map(([call]) => ({ method: call.method, request: call.request })))
+      .toEqual([{ method: RPC_METHODS.DAEMON_SPAWN_SESSION_RESOLVE_BY_NONCE,
+        request: expect.objectContaining({ spawnNonce: request.creationKey }) }]);
   });
 
   it.each([
@@ -751,11 +793,12 @@ describe('workflow Session step executor', () => {
   });
 
   it('titles only freshly created named step Sessions with the authored name and frozen sibling ordinal', async () => {
-    // Session/process creation is the external boundary; conversation binding
-    // and title selection remain the production owner's real internal path.
-    const createFreshConversation = vi.fn(async (_input: Parameters<Parameters<typeof createProductionWorkflowConversationOwner>[0]['createFreshConversation']>[0]) => ({
-      sessionId: 'fresh', machineId: 'machine-1', directory: '/repo',
-    }));
+    // The real creator forwards the title to the process-launch boundary.
+    const launches = installSessionCreationTransport();
+    const createFreshConversation = createProductionFreshWorkflowSessionConversation({
+      credentials: { token: 'token', encryption: null }, serverId: 'server-1', machineId: 'machine-1',
+      workDepth: 0, originRunId: 'run-1', machineAdmissionTransport: vi.fn(),
+    });
     const personallyRenamed = { sessionId: 'shared', machineId: 'machine-1', directory: '/repo', title: 'My own title',
       agentTarget: { kind: 'agent' as const, identity: { pluginId: 'happier.agent.claude', localId: 'claude' } },
       runtimeSelection: { connectedServices: { v: 2 as const, bindingsByServiceId: {} } } };
@@ -782,19 +825,19 @@ describe('workflow Session step executor', () => {
     } satisfies Parameters<WorkflowStepExecutor>[0];
     const fresh = base;
     await conversations.materialize(await conversations.prepare(fresh), fresh);
-    expect(createFreshConversation).toHaveBeenLastCalledWith(expect.objectContaining({ initialTitle: '3 · Implement' }));
+    expect(launches.at(-1)).toMatchObject({ initialTitle: '3 · Implement' });
     const scalarItem = { ...fresh, item: { value: 'parser.ts', index: 3, position: 4, count: 8 } };
     await conversations.materialize(await conversations.prepare(scalarItem), scalarItem);
-    expect(createFreshConversation).toHaveBeenLastCalledWith(expect.objectContaining({ initialTitle: '3 · Implement · parser.ts' }));
+    expect(launches.at(-1)).toMatchObject({ initialTitle: '3 · Implement · parser.ts' });
     const structuredItem = { ...fresh, item: { value: { name: 'Not a label' }, index: 3, position: 4, count: 8 } };
     await conversations.materialize(await conversations.prepare(structuredItem), structuredItem);
-    expect(createFreshConversation).toHaveBeenLastCalledWith(expect.objectContaining({ initialTitle: '3 · Implement · 4' }));
+    expect(launches.at(-1)).toMatchObject({ initialTitle: '3 · Implement · 4' });
     const { name: _name, ...unnamedStep } = fresh.step;
     const empty = { ...scalarItem, step: unnamedStep };
     await conversations.materialize(await conversations.prepare(empty), empty);
-    expect(createFreshConversation).toHaveBeenLastCalledWith(expect.not.objectContaining({ initialTitle: expect.any(String) }));
+    expect(launches.at(-1)).not.toHaveProperty('initialTitle');
     const shared = { ...fresh, execution: { ...fresh.execution, conversation: { kind: 'shared_run' as const } } };
-    createFreshConversation.mockClear();
+    expect(launches).toHaveLength(4);
     await conversations.materialize(await conversations.prepare(shared), shared);
     const fromStep = { ...fresh, execution: { ...fresh.execution,
       conversation: { kind: 'from_step' as const, producer: { blockId: 'prior', scope: { kind: 'current' as const } } } } };
@@ -807,7 +850,7 @@ describe('workflow Session step executor', () => {
       invocation: { ...fresh.invocation, recovery: { conversation: 'same_conversation' as const, input: { kind: 'original' as const } } } };
     expect(await conversations.materialize(await conversations.prepare(retained), retained)).toBe(personallyRenamed);
     expect(personallyRenamed.title).toBe('My own title');
-    expect(createFreshConversation).not.toHaveBeenCalled();
+    expect(launches).toHaveLength(4);
   });
 
 
@@ -1108,23 +1151,27 @@ describe('workflow Session step executor', () => {
   });
 
   it('leaves live Session permission revalidation with canonical input admission', async () => {
-    const enqueue = vi.fn(async () => ({
+    const credentials = { token: 'token', encryption: null };
+    const machineAdmissionTransport = vi.fn(async (_request: Parameters<Parameters<typeof createProductionWorkflowSessionStepExecutor>[0]['machineAdmissionTransport']>[0]) => ({
       status: 'rejected' as const,
       code: 'session_input_permission_ceiling_rejected' as const,
     }));
-    const execute = createWorkflowSessionStepExecutor({
-      credentials: { token: 'token', encryption: null },
-
-      prepareConversation: async () => ({
-        kind: 'workflow_session_conversation', existing: null,
+    const execute = createProductionWorkflowSessionStepExecutor({
+      credentials, machineId: 'machine-1', machineAdmissionTransport,
+      createFreshConversation: createProductionFreshWorkflowSessionConversation({
+        credentials, serverId: 'server-1', machineId: 'machine-1', workDepth: 0,
+        originRunId: 'run-1', machineAdmissionTransport,
       }),
-      materializeConversation: async () => ({ sessionId: 'session-1', machineAdmissionTransport: vi.fn() }),
-      sessionInput: { enqueue, observe: vi.fn() },
+      resolveSharedRunConversation: async () => null, resolveProducerConversation: async () => null,
+      resolveExistingSessionConversation: async () => ({ sessionId: 'session-1', machineId: 'machine-1', directory: '/repo' }),
     });
     await expect(execute({
-      runId: 'run-1', step: {}, invocation: { logicalInvocationRecordId: 'inv-1' },
+      runId: 'run-1',
+      step: { kind: 'step', id: 'work', document: { text: 'work', references: [], attachments: [] }, input: [], result: { kind: 'text' } },
+      invocation: { kind: 'happier.workflow-progress.v1', blockKind: 'step', invocationPath: { blockId: 'work', scope: [] }, attempt: '0', logicalInvocationRecordId: 'inv-1' },
       input: { text: 'work', references: [], attachments: [], values: [] },
-      execution: { permissionMode: 'safe-yolo' },
+      execution: { permissionMode: 'safe-yolo', conversation: { kind: 'existing_session', sessionId: 'session-1', machineId: 'machine-1' } },
+      executionTarget: { kind: 'session' },
       authorization: {
         admittedPermissionCeiling: 'safe-yolo',
         principal: { kind: 'host' },
@@ -1137,19 +1184,24 @@ describe('workflow Session step executor', () => {
       },
       workspace: { machineId: 'machine-1', directory: '/repo', checkoutRootPath: '/repo' },
       beforeInputAdmission: async () => {}, onInputAccepted: vi.fn(),
-    } as never)).resolves.toEqual({
+    })).resolves.toEqual({
       kind: 'failed',
       code: 'session_input_permission_ceiling_rejected',
     });
-    expect(enqueue).toHaveBeenCalledWith(expect.objectContaining({
-      permissionMode: 'safe-yolo',
-      sourceAuthority: {
-        mediatorPluginId: 'happier.channels',
-        sourceRef: 'channels:binding:binding-1',
-        sourceRevisionOrEpoch: '4:7',
-        remoteApprovalMaxScope: 'session',
-      },
-    }));
+    expect(machineAdmissionTransport).toHaveBeenCalledWith(expect.objectContaining({
+      sessionId: 'session-1', targetMachineId: 'machine-1',
+      content: { t: 'plain', v: expect.objectContaining({
+        meta: expect.objectContaining({ happierInputRequestV1: expect.objectContaining({
+          permission: { requestedPermissionCeiling: 'safe-yolo' },
+          sourceAuthority: {
+            mediatorPluginId: 'happier.channels',
+            sourceRef: 'channels:binding:binding-1',
+            sourceRevisionOrEpoch: '4:7',
+            remoteApprovalMaxScope: 'session',
+          },
+        }) }),
+      }) },
+    }), expect.anything());
   });
 
   it('uses the contextual default rather than widening an omitted Session step to the Run ceiling', async () => {
@@ -1380,8 +1432,7 @@ describe('workflow Session step executor', () => {
   });
 
   it('creates fresh conversations through canonical target preparation and Session creation owners', async () => {
-    sessionCreation.createSpawnedSession.mockClear();
-    sessionCreation.prepareSessionCreationTarget.mockClear();
+    const launches = installSessionCreationTransport();
     const create = createProductionFreshWorkflowSessionConversation({
       credentials: { token: 'token', encryption: null },
       serverId: 'server-1',
@@ -1407,12 +1458,7 @@ describe('workflow Session step executor', () => {
       creationKey: 'workflow:run-1:inv-1',
     })).resolves.toEqual({ sessionId: 'new-session', machineId: 'machine-1', directory: '/repo',
       origin: { kind: 'run_step', runId: 'run-1' }, workDepth: 3 });
-    expect(sessionCreation.prepareSessionCreationTarget).toHaveBeenCalledWith({
-      request: {
-        directory: { kind: 'path', path: '/repo' },
-      },
-    });
-    expect(sessionCreation.createSpawnedSession).toHaveBeenCalledWith(expect.objectContaining({
+    expect(launches).toEqual([expect.objectContaining({
       originKind: 'run_step',
       originRunId: 'run-1',
       workDepth: 3,
@@ -1424,11 +1470,11 @@ describe('workflow Session step executor', () => {
       allowedTools: ['mcp__wilson-brief__*'],
       unlistedTools: 'deny',
       sessionConfigOptionOverrides: { v: 1, updatedAt: 1, overrides: {} },
-    }));
+    })]);
   });
 
-  it('resolves fresh Team resource defaults through the injected current Home catalog', async () => {
-    sessionCreation.createSpawnedSession.mockClear();
+  it('resolves fresh Team resource defaults through the current paginated Home catalog', async () => {
+    const launches = installSessionCreationTransport();
     const credentials = { token: `header.${Buffer.from(JSON.stringify({ sub: 'account-1' })).toString('base64url')}.signature`, encryption: null };
     // Account identity/currentness and catalog opening stay real; only persisted
     // credentials and Home HTTP responses are supplied at their boundaries.
@@ -1447,8 +1493,7 @@ describe('workflow Session step executor', () => {
       } };
       return readinessRead(url);
     });
-    const resolveTeamCredentialResourceCatalog = vi.fn(async () => ({
-      serverId: 'server-1', accountId: 'account-1',
+    const resourcePage = TeamCredentialResourceEntitledPageV1Schema.parse({
       resources: [{
         id: 'resource-1', teamId: 'team-1', displayName: 'Shared Codex account',
         resourceRevision: 4, readiness: { kind: 'available' as const }, recoveryAction: null,
@@ -1462,7 +1507,28 @@ describe('workflow Session step executor', () => {
           service: { pluginId: 'happier.agent.codex', localId: 'openai-codex' },
         },
       }],
-    }));
+      nextCursor: null,
+    });
+    const firstPage = bindHomeDomainActionHttpRequestV1('teams.credentials.entitled.list', { teamId: 'team-1' });
+    const nextPage = bindHomeDomainActionHttpRequestV1('teams.credentials.entitled.list', {
+      teamId: 'team-1', cursor: 'resource-page-2',
+    });
+    const serverHttpBaseUrl = resolveServerHttpBaseUrl();
+    // These pages share a POST URL; the cursor lives in the strict request body.
+    // Once-only replies also make an incorrectly repeated page fail, not loop.
+    readiness.request.mockImplementationOnce(async (request: unknown) => {
+      expect(request).toMatchObject({ method: firstPage.method, url: `${serverHttpBaseUrl}${firstPage.path}`, data: firstPage.body });
+      return { status: 200, data: { resources: [], nextCursor: 'resource-page-2' } };
+    }).mockImplementationOnce(async (request: unknown) => {
+      expect(request).toMatchObject({ method: nextPage.method, url: `${serverHttpBaseUrl}${nextPage.path}`, data: nextPage.body });
+      return { status: 200, data: resourcePage };
+    });
+    const resolveTeamCredentialResourceCatalog = createSpawnConnectedServicesTeamResourceCatalogResolver({
+      homeDomainAction: createAccountServerActionDeps({
+        token: credentials.token, credentials, serverId: 'server-1', serverHttpBaseUrl,
+      }).homeDomainAction!,
+      serverId: 'server-1', accountId: 'account-1',
+    });
     const create = createProductionFreshWorkflowSessionConversation({
       credentials,
       serverId: 'server-1',
@@ -1484,8 +1550,7 @@ describe('workflow Session step executor', () => {
       creationKey: 'workflow:run-1:inv-team',
     });
 
-    expect(resolveTeamCredentialResourceCatalog).toHaveBeenCalledWith({ teamIds: ['team-1'] });
-    expect(sessionCreation.createSpawnedSession).toHaveBeenCalledWith(expect.objectContaining({
+    expect(launches).toEqual([expect.objectContaining({
       connectedServices: {
         v: 2,
         bindingsByServiceId: {
@@ -1507,6 +1572,6 @@ describe('workflow Session step executor', () => {
         deliveryMode: 'brokered',
         teamId: 'team-1',
       }],
-    }));
+    })]);
   });
 });

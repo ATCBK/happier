@@ -5,6 +5,7 @@ import type {
 } from '@happier-dev/protocol';
 import type { WorkflowConversationUnavailableDetailsV1 } from '@happier-dev/protocol/workflows/workflowProgressV1';
 import { resolveSessionRuntimeSnapshot } from '@/daemon/sessions/runtimeSnapshot/resolveSessionRuntimeSnapshot';
+import { resolveSessionConfigOptionOverridesFromMetadataSnapshot } from '@/agent/runtime/sessionConfigOptionOverrideSync';
 import { buildQualifiedPluginContributionKey } from '@happier-dev/protocol/plugins/contribution-identity';
 import { pluginSourceCustodyV1Equal } from '@happier-dev/protocol/plugins/runtime/sourceCustody';
 import type { PluginSourceCustodyV1 } from '@happier-dev/protocol';
@@ -181,7 +182,19 @@ export async function resolveWorkflowSessionConversation(params: Readonly<{
   } else {
     delete selection.acpSessionModeId;
   }
-  const config = stateFields.sessionConfigOptionsV1.safeParse(metadata.sessionConfigOptionsV1 ?? metadata.acpConfigOptionsV1);
+  const config = createStoredReadSchema(stateFields.sessionConfigOptionsV1).safeParse(metadata.sessionConfigOptionsV1 ?? metadata.acpConfigOptionsV1);
+  // Reuse compares the retained launch configuration that Session Pending will
+  // carry into the next input. Native Agents may publish models without an ACP
+  // config catalog; absence of that optional catalog must not erase this intent.
+  const configIntent = resolveSessionConfigOptionOverridesFromMetadataSnapshot({ metadata });
+  if (configIntent.length > 0) {
+    selection.sessionConfigOptionOverrides = {
+      v: 1, updatedAt: Math.max(...configIntent.map(option => option.updatedAt)),
+      overrides: Object.fromEntries(configIntent.map(option => [option.configId, {
+        updatedAt: option.updatedAt, value: option.valueId,
+      }])),
+    };
+  }
   if (config.success && config.data && config.data.agentId === backend?.backendId) {
     selection.sessionConfigOptionOverrides = {
       v: 1, updatedAt: config.data.updatedAt,
@@ -189,8 +202,6 @@ export async function resolveWorkflowSessionConversation(params: Readonly<{
         updatedAt: config.data!.updatedAt, value: option.currentValue,
       }])),
     };
-  } else {
-    delete selection.sessionConfigOptionOverrides;
   }
   // Pending capability intent is not applied runtime state; its existing owner retains
   // the exact applied selection when a restart is required.

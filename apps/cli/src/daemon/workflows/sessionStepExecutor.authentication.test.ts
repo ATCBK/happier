@@ -16,7 +16,7 @@ let runtime: Awaited<ReturnType<typeof createAdmittedPluginRuntimeFixture>>;
 beforeAll(async () => {
   runtime = await createAdmittedPluginRuntimeFixture({ controller: pluginReloadController, runtimeOptions: { pluginIds: [] } });
 });
-afterAll(async () => { await runtime.dispose(); });
+afterAll(async () => { await runtime?.dispose(); });
 afterEach(() => { vi.restoreAllMocks(); vi.unstubAllGlobals(); resetInMemoryAccountSettingsContextForTests(); });
 
 it.each(['profile', 'group', 'override', 'native', 'explicit_native'] as const)(

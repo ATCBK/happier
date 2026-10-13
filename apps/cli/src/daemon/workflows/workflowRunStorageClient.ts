@@ -35,45 +35,52 @@ export function createWorkflowRunStorageClient(params: Readonly<{
     observeChanges: (runId: string, onChange: () => void, onError: (error: unknown) => void) =>
       observeAccountChanges({ token: params.token, serverUrl: baseUrl, entityId: `workflow-run:${runId}` }, { onChange, onError }),
     execute: async (operation: WorkflowRunStorageOperation, options: Readonly<{ signal?: AbortSignal; publisherMachineId?: string }> = {}): Promise<unknown> => {
-      const executorOperation = isWorkflowRunExecutorStorageOperationV1(operation.operation);
-      const publisherMachineId = options.publisherMachineId ?? (executorOperation ? params.machineId : undefined);
-      if (executorOperation && !publisherMachineId) {
-        throw Object.assign(new Error('target_unavailable'), { code: 'target_unavailable' });
+      const startedAtMs = Date.now();
+      try {
+        const executorOperation = isWorkflowRunExecutorStorageOperationV1(operation.operation);
+        const publisherMachineId = options.publisherMachineId ?? (executorOperation ? params.machineId : undefined);
+        if (executorOperation && !publisherMachineId) {
+          throw Object.assign(new Error('target_unavailable'), { code: 'target_unavailable' });
+        }
+        const body = { ...operation, ...(publisherMachineId ? { publisherMachineId } : {}) };
+        const publisherHeader = publisherMachineId
+          ? await createPublisherHeader({ method: 'POST', path: WORKFLOW_RUN_STORAGE_HTTP_PATH, body })
+          : null;
+        const authorizationHeaders = params.resolveAuthorizationHeaders
+          ? params.resolveAuthorizationHeaders({ method: 'POST', path: WORKFLOW_RUN_STORAGE_HTTP_PATH, body })
+          : { Authorization: `Bearer ${params.token}` };
+        if (!authorizationHeaders) throw Object.assign(new Error('not_authenticated'), { code: 'not_authenticated' });
+        const request = () => axios.post<unknown>(`${baseUrl}${WORKFLOW_RUN_STORAGE_HTTP_PATH}`, body, {
+          headers: {
+            ...buildCurrentAccountStoredContentCompatibilityHttpHeaders(),
+            ...authorizationHeaders,
+            'Content-Type': 'application/json',
+            ...(publisherHeader ? { [PLUGIN_INSTALLATION_MANIFEST_PUBLISHER_HEADER_V1]: publisherHeader } : {}),
+          },
+          // The wait owner carries the authored observation deadline and abort.
+          // Its exact snapshot read must not impose a competing fixed cutoff.
+          timeout: operation.operation === 'wait' ? 0 : 30_000,
+          ...(options.signal ? { signal: options.signal } : {}),
+        });
+        const response = await request().catch(async (error: unknown) => {
+          const ambiguous = typeof error !== 'object' || error === null
+            || (!(error as { response?: unknown }).response && (error as { code?: unknown }).code !== 'ERR_CANCELED');
+          if (![
+            'admit', 'accepted-snapshot.resolve', 'initialize', 'invocations.admit',
+            'invocations.recover',
+          ].includes(operation.operation) || !ambiguous) throw error;
+          // Direct Run admission, Automation accepted-snapshot attachment,
+          // initialization, and caller-bound row admission/recovery all have an exact
+          // lost-response rejoin contract. Reuse caller ids and sealed bytes
+          // verbatim; never resolve a mutable source again here.
+          return await request();
+        });
+        return response.data;
+      } catch (error) {
+        throw Object.assign(error instanceof Error ? error : new Error('workflow_storage_operation_failed', { cause: error }), {
+          workflowStorageOperation: { operation: operation.operation, durationMs: Date.now() - startedAtMs },
+        });
       }
-      const body = { ...operation, ...(publisherMachineId ? { publisherMachineId } : {}) };
-      const publisherHeader = publisherMachineId
-        ? await createPublisherHeader({ method: 'POST', path: WORKFLOW_RUN_STORAGE_HTTP_PATH, body })
-        : null;
-      const authorizationHeaders = params.resolveAuthorizationHeaders
-        ? params.resolveAuthorizationHeaders({ method: 'POST', path: WORKFLOW_RUN_STORAGE_HTTP_PATH, body })
-        : { Authorization: `Bearer ${params.token}` };
-      if (!authorizationHeaders) throw Object.assign(new Error('not_authenticated'), { code: 'not_authenticated' });
-      const request = () => axios.post<unknown>(`${baseUrl}${WORKFLOW_RUN_STORAGE_HTTP_PATH}`, body, {
-        headers: {
-          ...buildCurrentAccountStoredContentCompatibilityHttpHeaders(),
-          ...authorizationHeaders,
-          'Content-Type': 'application/json',
-          ...(publisherHeader ? { [PLUGIN_INSTALLATION_MANIFEST_PUBLISHER_HEADER_V1]: publisherHeader } : {}),
-        },
-        // The wait owner carries the authored observation deadline and abort.
-        // Its exact snapshot read must not impose a competing fixed cutoff.
-        timeout: operation.operation === 'wait' ? 0 : 30_000,
-        ...(options.signal ? { signal: options.signal } : {}),
-      });
-      const response = await request().catch(async (error: unknown) => {
-        const ambiguous = typeof error !== 'object' || error === null
-          || (!(error as { response?: unknown }).response && (error as { code?: unknown }).code !== 'ERR_CANCELED');
-        if (![
-          'admit', 'accepted-snapshot.resolve', 'initialize', 'invocations.admit',
-          'invocations.recover',
-        ].includes(operation.operation) || !ambiguous) throw error;
-        // Direct Run admission, Automation accepted-snapshot attachment,
-        // initialization, and caller-bound row admission/recovery all have an exact
-        // lost-response rejoin contract. Reuse caller ids and sealed bytes
-        // verbatim; never resolve a mutable source again here.
-        return await request();
-      });
-      return response.data;
     },
   };
 }

@@ -11,7 +11,7 @@ import { resolveSessionCreationAgentTarget } from '@/session/creation/resolveSes
 import { prepareSessionCreationTarget } from '@/session/creation/prepareSessionCreationTarget';
 import { createSpawnedSession } from '@/session/services/createSpawnedSession';
 import { isDefiniteSpawnPreAdmissionRejection } from '@/session/services/spawnPreAdmissionRejection';
-import { SPAWN_SESSION_ERROR_CODES } from '@happier-dev/protocol/spawnSession';
+import { SPAWN_SESSION_ERROR_CODES, SessionLaunchRetiredV1Schema, type SessionLaunchRetiredV1 } from '@happier-dev/protocol/spawnSession';
 import { createAccountServerActionDeps } from '@/api/accountServerActionDeps';
 import { resolveServerHttpBaseUrl } from '@/api/client/serverHttpBaseUrl';
 import { TeamSummaryV1Schema } from '@happier-dev/protocol/teams/projections';
@@ -263,6 +263,18 @@ export function createProductionFreshWorkflowSessionConversation(deps: Readonly<
       machineAdmissionTransport: deps.machineAdmissionTransport,
       ...(signal ? { signal } : {}),
     }).catch((error: unknown) => {
+      if (error instanceof Error && 'code' in error && error.code === SPAWN_SESSION_ERROR_CODES.SPAWN_FAILED
+        && 'details' in error && error.details && typeof error.details === 'object') {
+        // Direct rejection carries the daemon response; nonce settlement
+        // carries its final errorDetail alongside the original pending response.
+        const details = error.details;
+        const response = 'spawnResponse' in details ? details.spawnResponse : undefined;
+        const retired = SessionLaunchRetiredV1Schema.safeParse('errorDetail' in details ? details.errorDetail
+          : response && typeof response === 'object' && 'errorDetail' in response ? response.errorDetail : undefined);
+        if (retired?.success && retired.data.spawnNonce === creationKey) {
+          throw new WorkflowSessionCompositionError(error.code, error.message, undefined, retired.data);
+        }
+      }
       // Only the exact creator's typed private response proves no runner was
       // admitted. Transport loss and nonce observation remain unresolved.
       if (error instanceof Error && 'code' in error && 'details' in error
@@ -288,7 +300,8 @@ export function createProductionFreshWorkflowSessionConversation(deps: Readonly<
 }
 
 export class WorkflowSessionCompositionError extends Error {
-  constructor(readonly code: string, message = code, readonly details?: WorkflowConversationUnavailableDetailsV1) {
+  constructor(readonly code: string, message = code, readonly details?: WorkflowConversationUnavailableDetailsV1,
+    readonly launchFailure?: SessionLaunchRetiredV1) {
     super(message);
     if (details) logger.infoFile(JSON.stringify({ event: 'workflow_conversation_refused', errorCode: code, ...details }));
   }
@@ -579,6 +592,9 @@ export function createWorkflowSessionStepExecutor(deps: Readonly<{
     try {
       conversation = await deps.materializeConversation(prepared, params);
     } catch (error) {
+      if (error instanceof WorkflowSessionCompositionError && error.launchFailure) {
+        return { kind: 'failed', code: error.code, message: error.message };
+      }
       if (params.signal?.aborted) return settleBeforeAdmissionAfterAbort();
       if (error instanceof WorkflowSessionCompositionError) return { kind: 'failed', code: error.code,
         ...(error.details ? { reasonDetails: error.details } : {}),

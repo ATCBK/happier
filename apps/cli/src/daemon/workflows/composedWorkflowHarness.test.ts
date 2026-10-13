@@ -1,5 +1,5 @@
 import { createTestWorkflowCoordinator as createWorkflowCoordinator } from './workflowCoordinator.testkit';
-import { execFile } from 'node:child_process';
+import { execFile, spawn, type ChildProcess } from 'node:child_process';
 import { mkdtemp, mkdir, readFile, rm, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
@@ -13,15 +13,18 @@ import {
   AutomationRunCauseSchema,
   AutomationTriggerIdSchema,
   AutomationStoredWorkflowDefinitionV2Schema,
-  AutomationV3RunMutationResponseSchema,
+  AutomationDefinitionDetailSchema,
   DEFAULT_SESSION_AGENT_SPAWN_POLICY_V1,
   DEFAULT_AUTOMATION_V3_MAX_ACTIVE_RUNS_PER_MACHINE,
   getActionSpec,
   ActionIdSchema,
+  AcpConfigOptionOverridesV1Schema,
   StrictJsonValueSchema,
   zodSchemaToJsonSchemaObject,
   deriveAutomationOccurrenceKeyV1,
   WorkflowProgressEnvelopeV1Schema,
+  WorkflowRunSummaryV1Schema,
+  WorkflowStepSchema,
   openWorkflowAcceptedSnapshotStoredEnvelopeV1,
   openWorkflowCheckpointStoredEnvelopeV1,
   openWorkflowProgressStoredEnvelopeV1,
@@ -44,10 +47,19 @@ import type { AvailableAutomationAccountEncryptionV1 } from '@/plugins/runtime/a
 import type { StoredCredentials } from '@/persistence';
 import type { AutomationDefinitionDetail, AutomationDefinitionReconcileRequest } from '@happier-dev/protocol';
 import { createAccountWorkflowTriggerActions } from '@happier-dev/protocol/actions/executor/workflowTriggerAccountHost';
+import { WorkflowTriggerWriteResultV1Schema } from '@happier-dev/protocol/workflows/triggers/workflowTriggerActionsV1';
 import { AUTOMATION_TEMPLATE_V02_EXISTING_ENCRYPTED, AUTOMATION_TEMPLATE_V02_EXISTING_PLAIN } from '../../../../../packages/protocol/src/automations/automationTemplateV02.testFixtures';
 import { createAccountArtifactStore } from '@/api/artifacts/accountArtifactStore';
 import { createAccountEncryptionCurrentnessFixture, createSessionRecordFixture } from '@/testkit/backends/sessionFixtures';
 import { RPC_METHODS } from '@happier-dev/protocol/rpc/methods';
+
+const nativeLaunchBoundary = vi.hoisted(() => ({ child: null as ChildProcess | null }));
+vi.mock('node:child_process', async importOriginal => {
+  const actual = await importOriginal<typeof import('node:child_process')>();
+  return { ...actual, spawn: (...args: Parameters<typeof actual.spawn>) =>
+    nativeLaunchBoundary.child && args[0] === '/bin/sh'
+      ? nativeLaunchBoundary.child : actual.spawn(...args) };
+});
 
 // Machine RPC is the process-launch boundary. Keep authorization, persisted
 // Agent resume selection and readiness-before-input ownership real.
@@ -57,6 +69,9 @@ vi.mock('@/session/transport/rpc/machineRpc', () => {
   }) => {
     if (method === RPC_METHODS.SPAWN_HAPPY_SESSION && !request.sessionId && freshSessionBoundary) {
       return freshSessionBoundary(request);
+    }
+    if (method === RPC_METHODS.DAEMON_SPAWN_SESSION_RESOLVE_BY_NONCE && freshSessionNonceBoundary) {
+      return freshSessionNonceBoundary(request);
     }
     if (method === RPC_METHODS.SPAWN_HAPPY_SESSION && request.sessionId && request.spawnNonce) {
       const { createSpawnNewSessionLifecycleActionHandler } = await import('@/session/actions/lifecycle/createSpawnNewSessionLifecycleActionHandler');
@@ -88,6 +103,18 @@ import { createWorkflowProducerBinding } from './workflowScopeBinding';
 import { bindAutomationWorkflowInputs, isWorkflowJsonObject } from './input';
 import { createProductionWorkflowRunCoordinator } from './production';
 import { createWorkflowSessionStepExecutor } from './sessionStepExecutor';
+import * as cliSpawn from '@/utils/spawnHappyCLI';
+import { spawnRegularProcessAndWaitForWebhook } from '../spawn/spawnRegularProcessAndWaitForWebhook';
+import { waitForTerminalHostedSessionWebhook } from '../spawn/waitForTerminalHostedSessionWebhook';
+import { createSpawnLifecycleCallbacks } from '../spawn/createSpawnLifecycleCallbacks';
+import { createOnChildExited } from '../sessions/onChildExited';
+import type { TrackedSession } from '../types';
+import type { SpawnSessionResult } from '@/session/shared/spawnSessionContract';
+import { projectSpawnSessionControlErrorResponse, SpawnSessionControlErrorResponseSchema } from '@/session/shared/spawnSessionContract';
+import { isPidPresent } from '@happier-dev/cli-common/process';
+import { SessionLaunchRetiredV1Schema } from '@happier-dev/protocol/spawnSession';
+import { normalizeSpawnSessionNonceResolution } from '@happier-dev/protocol/sessions/spawnSessionNonce';
+import { reloadConfiguration } from '@/configuration';
 import { createSessionOwnerMetadataV1, projectSessionSharedMetadataV1 } from '@happier-dev/protocol/sessions/metadata/sessionMetadataSchemasV1';
 import {
   createWorkflowRunStorageTestkit,
@@ -122,6 +149,7 @@ const temporaryDirectories: string[] = [];
 const authorizedConversations = new Map<string, string>();
 const freshSessionRecords = new Map<string, ReturnType<typeof createSessionRecordFixture>>();
 let freshSessionBoundary: ((request: unknown) => unknown) | null = null;
+let freshSessionNonceBoundary: ((request: unknown) => unknown) | null = null;
 let readinessCurrentness: AvailableAutomationAccountEncryptionV1['witness'] = currentness;
 
 async function readSessionReadiness(url: string) {
@@ -153,12 +181,14 @@ beforeEach(() => {
   authorizedConversations.clear();
   freshSessionRecords.clear();
   freshSessionBoundary = null;
+  freshSessionNonceBoundary = null;
   readinessCurrentness = currentness;
   vi.spyOn(axios, 'get').mockImplementation(readSessionReadiness);
   vi.spyOn(axios, 'post').mockImplementation(writeSessionReadiness);
 });
 
 afterEach(async () => {
+  nativeLaunchBoundary.child = null;
   vi.restoreAllMocks();
   vi.unstubAllGlobals();
   while (temporaryDirectories.length > 0) {
@@ -178,10 +208,10 @@ async function projectDirectory(): Promise<string> {
 }
 
 function step(id: string, overrides: Partial<WorkflowStep> = {}): WorkflowStep {
-  return {
+  return WorkflowStepSchema.parse({
     kind: 'step', id, document: { text: id, references: [], attachments: [] },
     input: [], result: { kind: 'text' }, ...overrides,
-  } as WorkflowStep;
+  });
 }
 
 /** Every composed definition reuses one already-open conversation so the leaf never spawns a real Session. */
@@ -396,13 +426,147 @@ function fanOutDefinition(failurePolicy: 'collect_outcomes' | 'fail_stop'): Work
 }
 
 describe('composed Workflow front door and claimed execution', () => {
+  it.skipIf(process.platform === 'win32').each(['direct', 'nonce', 'foreign_nonce', 'hosted', 'hosted_incomplete', 'hosted_foreign_nonce', 'hosted_miswired'] as const)('requires exact retired launch custody before failing an Agent leaf (%s)', async transport => {
+    vi.stubGlobal('fetch', vi.fn(async () => new Response('{}', { status: 200 })));
+    const runId = '71717171-7171-4171-8171-717171717171';
+    const directory = await projectDirectory();
+    vi.stubEnv('HAPPIER_HOME_DIR', directory);
+    reloadConfiguration();
+    const wrappers = new Map<number, TrackedSession>();
+    const awaiters = new Map<number, (session: TrackedSession) => void>();
+    const resolvers = new Map<number, (result: SpawnSessionResult) => void>();
+    const timeouts = new Map<number, NodeJS.Timeout>();
+    const resources = new Map<number, () => void | Promise<void>>();
+    const attaches = new Map<number, () => Promise<void>>();
+    const onChildExited = createOnChildExited({ pidToTrackedSession: wrappers,
+      spawnResourceCleanupByPid: resources, sessionAttachCleanupByPid: attaches,
+      getApiMachineForSessions: () => null, removeSessionMarkerFn: async () => {} });
+    // Replace only OS launch. The real spawn, retirement, Session creator,
+    // coordinator/fact writer, Stop Action and recovery reader stay composed.
+    const child = spawn(process.execPath, ['-e', 'setInterval(() => {}, 1000)'], {
+      detached: true, stdio: ['ignore', 'pipe', 'pipe'], cwd: directory,
+    });
+    const wrapperPid = child.pid!;
+    nativeLaunchBoundary.child = child;
+    const entrypoint = join(directory, 'index.mjs');
+    await writeFile(entrypoint, 'export {};\n');
+    vi.stubEnv('HAPPIER_CLI_SUBPROCESS_ENTRYPOINT', entrypoint);
+    vi.stubEnv('HAPPIER_CLI_SUBPROCESS_RUNTIME', 'node');
+    vi.spyOn(cliSpawn, 'spawnHappyCLI').mockReturnValue(child);
+    const lifecycle = createSpawnLifecycleCallbacks({ connectedServicesBindingsRaw: null, catalogAgentId: null,
+      materializationKey: 'failed-launch', hasConnectedServiceAuth: () => false,
+      getSpawnResourceCleanupOnExit: () => null, onSpawnResourceCleanupArmed: () => {}, spawnResourceCleanupByPid: resources,
+      getSessionAttachCleanup: () => null, setSessionAttachCleanup: () => {}, sessionAttachCleanupByPid: attaches,
+      persistAcceptedSpawnMarker: async tracked => {
+        // The external marker/readiness callback settles after registration.
+        await Promise.resolve();
+        tracked.spawnStartupReadinessFailure = { type: 'error', errorCode: 'SPAWN_FAILED', errorMessage: 'startup rejected' };
+        resolvers.get(tracked.pid)!(tracked.spawnStartupReadinessFailure);
+      } });
+    freshSessionBoundary = async raw => {
+      if (!raw || typeof raw !== 'object' || !('spawnNonce' in raw) || typeof raw.spawnNonce !== 'string') throw new Error('missing_launch_identity');
+      const result = transport.startsWith('hosted') ? await waitForTerminalHostedSessionWebhook({
+        pid: wrapperPid, label: 'tmux', normalizedExistingSessionId: '', effectiveResume: '', directoryCreated: false,
+        trackedSpawnOptions: { directory, spawnNonce: raw.spawnNonce }, trackedSessionFields: { tmuxSessionId: 'fixture-owned-host' },
+        pidToTrackedSession: wrappers, pidToAwaiter: awaiters, pidToSpawnResultResolver: resolvers,
+        pidToSpawnWebhookTimeout: timeouts, onChildExited, spawnLifecycleCallbacks: lifecycle,
+        cleanupSpawnResources: async () => {}, bindCanonicalSession: async () => {}, logDebug: () => {}, warn: () => {},
+        // The OS/terminal adapter proves physical retirement of this exact
+        // scratch host. A refused disposition deliberately leaves it running.
+        cancelOwnedHost: async () => {
+          if (transport === 'hosted_incomplete') return false;
+          const exited = new Promise<void>(resolve => child.once('exit', () => resolve()));
+          process.kill(-wrapperPid, 'SIGTERM');
+          await exited;
+          return !isPidPresent(wrapperPid);
+        },
+      }) : await spawnRegularProcessAndWaitForWebhook({ args: [], directory,
+        options: { directory, spawnNonce: raw.spawnNonce }, trackedSpawnOptions: { directory, spawnNonce: raw.spawnNonce },
+        normalizedExistingSessionId: '', effectiveResume: '', directoryCreated: false, extraEnvForChildWithMessage: {},
+        processEnv: { PATH: process.env.PATH, HAPPIER_DAEMON_STARTUP_SOURCE: 'test' },
+        pidToTrackedSession: wrappers, pidToAwaiter: awaiters, pidToSpawnResultResolver: resolvers,
+        pidToSpawnWebhookTimeout: timeouts, resolveCanonicalTrackedSessionId: () => '', onChildExited,
+        spawnLifecycleCallbacks: lifecycle, cleanupSpawnResources: async () => {}, logDebug: () => {}, warn: () => {} });
+      if (result.type !== 'error') throw new Error('expected_startup_failure');
+      if (transport === 'hosted_incomplete') {
+        expect(result.errorDetail).toBeUndefined();
+        return SpawnSessionControlErrorResponseSchema.parse(projectSpawnSessionControlErrorResponse(result));
+      }
+      expect(SessionLaunchRetiredV1Schema.parse(result.errorDetail)).toEqual({ kind: 'launch_retired',
+        spawnNonce: raw.spawnNonce, wrapperPid });
+      if (transport === 'nonce') {
+        freshSessionNonceBoundary = () => normalizeSpawnSessionNonceResolution({ status: 'error', ...result });
+        return { type: 'success', spawnNonce: raw.spawnNonce, sessionIdStatus: 'pending' };
+      }
+      return SpawnSessionControlErrorResponseSchema.parse(projectSpawnSessionControlErrorResponse(
+        transport === 'foreign_nonce' || transport === 'hosted_foreign_nonce'
+          ? { ...result, errorDetail: { ...SessionLaunchRetiredV1Schema.parse(result.errorDetail), spawnNonce: 'another-launch' } }
+          : transport === 'hosted_miswired' ? { ...result, errorDetail: undefined } : result));
+    };
+    try {
+      const definition: WorkflowDefinitionV1 = { version: 1, inputs: [], defaults: { agentTarget, connectedServices: null }, blocks: [step('launch')] };
+      const acceptedEnvelope = await sealDirectAccepted({ runId, definition, directory });
+      const kit = createWorkflowRunStorageTestkit({ runId, machineId, origin: { kind: 'direct' }, acceptedEnvelope });
+      const sessionInput = sessionInputBoundary();
+      const coordination = workflowDaemonProcess({ storage: kit, sessionInput, directory })({ runId, attempt: 0,
+        expectedRevision: 0, accountCurrentness: currentness, acceptedEnvelope });
+      if (transport === 'foreign_nonce' || transport === 'hosted_incomplete' || transport === 'hosted_foreign_nonce' || transport === 'hosted_miswired') {
+        await expect(coordination).rejects.toMatchObject({ code: 'SPAWN_FAILED' });
+        const unknown = openRowProgress(kit, rowFor(kit, 'launch')!);
+        expect(rowFor(kit, 'launch')!.lifecycle).not.toBe('failed');
+        const observe = createWorkflowInvocationRecoveryObserver({ credentials: { token: 'token', encryption: null }, machineId,
+          actionExecutor: { execute: async () => { throw new Error('must_not_launch_or_observe_an_input'); } } });
+        expect(await observe({ progress: unknown, terminalParent: true, cancellationRequested: true }))
+          .toEqual({ kind: 'unresolved', code: 'workflow_execution_correspondence_missing' });
+        expect(wrappers.size).toBe(transport === 'hosted_incomplete' ? 1 : 0);
+        expect(isPidPresent(wrapperPid)).toBe(transport === 'hosted_incomplete');
+        expect(sessionInput.enqueue).not.toHaveBeenCalled();
+        return;
+      }
+      await expect(coordination).resolves.toMatchObject({ state: 'interrupted' });
+      const launch = rowFor(kit, 'launch')!;
+      expect(launch.lifecycle).toBe('failed');
+      expect(openRowProgress(kit, launch)).toMatchObject({ reason: { code: 'SPAWN_FAILED' } });
+      expect(wrappers.size).toBe(0);
+      expect(isPidPresent(wrapperPid)).toBe(false);
+      expect(sessionInput.enqueue).not.toHaveBeenCalled();
+      const owner = createWorkflowRunActionOwner({ resolveAccountId: async () => accountId, storage: kit,
+        definitions: { get: async () => { throw new Error('unexpected_definition_read'); } },
+        resolveEncryption: async () => ({ kind: 'available', witness: currentness }) });
+      await owner.execute({ actionId: 'workflow.run.cancel', input: { runId, expectedRevision: kit.run().revision },
+        context: { surface: 'ui', authority: 'present_user' } });
+      const observe = createWorkflowInvocationRecoveryObserver({ credentials: { token: 'token', encryption: null }, machineId,
+        actionExecutor: { execute: async () => { throw new Error('must_not_launch_or_observe_an_input'); } } });
+      await createWorkflowRunRecoveryReader({ accountId, machineId,
+        storage: { execute: async (operation, options) => operation.operation === 'recovery.list'
+          ? { candidates: [{ run: kit.run(), parentAttempt: 0 }] } : kit.execute(operation, options) },
+        resolveAccountEncryption: async () => ({ kind: 'available', witness: currentness }), reconcileInvocation: observe })('reconnect');
+      expect(kit.run()).toMatchObject({ state: 'cancelled', workflowCustodyState: 'settled' });
+      expect(wrappers.size).toBe(0);
+      const { execution: _execution, ...unknown } = openRowProgress(kit, launch);
+      expect(await observe({ progress: unknown, terminalParent: true, cancellationRequested: true }))
+        .toEqual({ kind: 'unresolved', code: 'workflow_execution_correspondence_missing' });
+    } finally {
+      nativeLaunchBoundary.child = null;
+      if (isPidPresent(wrapperPid)) {
+        process.kill(-wrapperPid, 'SIGKILL');
+        await new Promise<void>(resolve => child.once('exit', () => resolve()));
+      }
+      for (const timeout of timeouts.values()) clearTimeout(timeout);
+      vi.unstubAllEnvs();
+      reloadConfiguration();
+    }
+  });
   it.each([
     { label: 'R31 authored controls with current owner metadata', freshThird: false, catalog: false, appliedMode: null, succeeds: true, nativeMetadata: true },
+    { label: 'R36b explicit effort on all three steps', freshThird: false, catalog: false, appliedMode: null, succeeds: true, nativeMetadata: true, effort: 'low' as const },
+    { label: 'R36b incompatible retained effort', freshThird: false, catalog: false, appliedMode: null, succeeds: false, nativeMetadata: true, effort: 'low' as const, retainedEffort: 'high' },
+    { label: 'R36b mis-wired retained reader', freshThird: false, catalog: false, appliedMode: null, succeeds: false, nativeMetadata: true, effort: 'low' as const, miswireReader: true },
     { label: 'native fresh third', freshThird: true, catalog: false, appliedMode: null, succeeds: true },
     { label: 'concrete default applied', freshThird: false, catalog: true, appliedMode: 'default', succeeds: true },
     { label: 'concrete default not applied', freshThird: false, catalog: true, appliedMode: null, succeeds: false },
     { label: 'different concrete mode applied', freshThird: false, catalog: true, appliedMode: 'plan', succeeds: false },
-  ])('continues three Agent steps only with a compatible default mode ($label)', async ({ freshThird, catalog, appliedMode, succeeds, nativeMetadata }) => {
+  ])('continues three Agent steps only with a compatible default mode ($label)', async ({ freshThird, catalog, appliedMode, succeeds, nativeMetadata, effort, retainedEffort, miswireReader }) => {
     vi.stubGlobal('fetch', vi.fn(async () => new Response('{}', { status: 200 })));
     const runId = '15151515-1515-4515-8515-151515151515';
     const directory = await projectDirectory();
@@ -417,10 +581,13 @@ describe('composed Workflow front door and claimed execution', () => {
           agentTargetKey: 'agent:happier.agent.claude/claude', providerConnectionId: null, modelId: 'claude-haiku-4-5',
         }, updatedAt: 1791761380474 },
       } } : { agentTarget, acpSessionModeId: 'default', connectedServices },
-      blocks: [step('one', { name: 'One', ...(nativeMetadata ? { execution: { connectedServices } } : {}) }),
-        step('two', { name: 'Two', ...(nativeMetadata ? { execution: { connectedServices } } : {}) }),
+      blocks: [step('one', { name: 'One', ...(nativeMetadata ? { execution: { connectedServices,
+          ...(effort ? { engine: { agentTarget, effort } } : {}) } } : {}) }),
+        step('two', { name: 'Two', ...(nativeMetadata ? { execution: { connectedServices,
+          ...(effort ? { engine: { agentTarget, effort } } : {}) } } : {}) }),
         step('three', { name: 'Name', ...(freshThird ? { execution: { conversation: { kind: 'fresh' } } }
-          : nativeMetadata ? { execution: { connectedServices } } : {}) })],
+          : nativeMetadata ? { execution: { connectedServices,
+            ...(effort ? { engine: { agentTarget, effort } } : {}) } } : {}) })],
     };
     // R31's saved-source.json pins the authored Haiku/profile choices above.
     // Its private child controls were not captured; this fixture proves the
@@ -430,11 +597,16 @@ describe('composed Workflow front door and claimed execution', () => {
     // authenticated Agent mode catalog must instead match applied mode evidence.
     const titles = new Map<string, string>();
     freshSessionBoundary = raw => {
-      const request = raw as { initialTitle?: string; connectedServices?: unknown };
+      const request = raw as { initialTitle?: string; connectedServices?: unknown; sessionConfigOptionOverrides?: unknown };
       const id = `fresh-${freshSessionRecords.size + 1}`;
       titles.set(id, request.initialTitle ?? '');
+      const launchConfig = request.sessionConfigOptionOverrides === undefined ? undefined
+        : AcpConfigOptionOverridesV1Schema.parse(request.sessionConfigOptionOverrides);
+      if (effort) expect(launchConfig?.overrides.reasoning_effort?.value).toBe(effort);
       const published = { path: directory, machineId, permissionMode: 'default',
         runtimeDescriptorV1: { v: 1, agentId: 'claude', agent: {} }, connectedServices: request.connectedServices,
+        ...(launchConfig ? { sessionConfigOptionOverridesV1: retainedEffort ? { ...launchConfig,
+          overrides: { ...launchConfig.overrides, reasoning_effort: { value: retainedEffort, updatedAt: 2 } } } : launchConfig } : {}),
         ...(catalog ? { sessionModesV2: { v: 2, agentId: 'claude', updatedAt: 1, currentModeId: appliedMode,
           availableModes: [{ id: 'default', name: 'Default' }, { id: 'plan', name: 'Plan' }],
         } } : {}),
@@ -461,16 +633,21 @@ describe('composed Workflow front door and claimed execution', () => {
     });
     const acceptedEnvelope = await sealDirectAccepted({ runId, definition, directory });
     const kit = createWorkflowRunStorageTestkit({ runId, machineId, origin: { kind: 'direct' }, acceptedEnvelope });
-    const result = await workflowDaemonProcess({ storage: kit, sessionInput, directory, readActualConversation: true })({
+    const result = await workflowDaemonProcess({ storage: kit, sessionInput, directory, readActualConversation: !miswireReader })({
       runId, attempt: 0, expectedRevision: 0, accountCurrentness: currentness, acceptedEnvelope,
     });
     if (!succeeds) {
       expect(result).toMatchObject({ state: 'interrupted' });
       expect(destinations).toEqual(['fresh-1']);
       expect(rowFor(kit, 'two')?.lifecycle).toBe('failed');
+      if (miswireReader) {
+        expect(openRowProgress(kit, rowFor(kit, 'two')!)).toMatchObject({ reason: { code: 'workflow_conversation_unavailable' } });
+        expect(rowFor(kit, 'three')).toBeUndefined();
+        return;
+      }
       expect(openRowProgress(kit, rowFor(kit, 'two')!)).toMatchObject({
-        reason: { code: 'workflow_conversation_unavailable', details: { reason: 'acpSessionModeId',
-          expected: { kind: 'string', ids: ['default'] } } },
+        reason: { code: 'workflow_conversation_unavailable', details: { reason: retainedEffort ? 'sessionConfigOptionOverrides' : 'acpSessionModeId',
+          expected: retainedEffort ? { kind: 'object', ids: ['reasoning_effort'] } : { kind: 'string', ids: ['default'] } } },
       });
       expect(rowFor(kit, 'three')).toBeUndefined();
       return;
@@ -640,7 +817,7 @@ describe('composed Workflow front door and claimed execution', () => {
         version: 1,
         inputs: [],
         defaults: retainedConversationDefaults(),
-        blocks: [step('work')],
+        blocks: [step('work', { pauseForReview: true })],
         finalOutput: { kind: 'result', producer: { blockId: 'work', scope: { kind: 'current' } }, path: [] },
       };
       const kit = createWorkflowRunStorageTestkit({ runId, machineId, origin: { kind: 'direct' } });
@@ -715,6 +892,16 @@ describe('composed Workflow front door and claimed execution', () => {
         heartbeatMs: 60_000, leaseDurationMs: 120_000, coordinateWorkflowRun: coordinate as never, claimed,
       });
       await executeClaim();
+      const held = rowFor(kit, 'work')!;
+      expect(WorkflowRunSummaryV1Schema.parse(kit.run())).toMatchObject({
+        state: 'waiting_for_review', heldCount: 1, attentionRequired: true,
+      });
+      expect(WorkflowRunSummaryV1Schema.safeParse({ ...kit.run(), unknown: true }).success).toBe(false);
+      await workflowActions({ actionId: 'workflow.run.invocations.complete_review',
+        input: { runId, invocation: { recordId: held.id }, expectedContentRevision: held.contentRevision,
+          mode: 'use_result', value: 'work' },
+        context: { surface: 'ui', authority: 'present_user', callerPermissionMode: 'safe-yolo' } });
+      expect(WorkflowRunSummaryV1Schema.parse(kit.run())).toMatchObject({ heldCount: 0, attentionRequired: false });
       // A lost claim response reclaims the same Run. The durable completed row
       // is observed, not replayed, so no second Session input is admitted.
       await executeClaim();
@@ -731,6 +918,83 @@ describe('composed Workflow front door and claimed execution', () => {
 });
 
 describe('composed Automation workflow claim and optional receipt', () => {
+  it('adds and claims a scheduled Agent workflow with its connected profile intact at native launch', async () => {
+    const runId = '34343434-3434-4434-8434-343434343434';
+    const directory = await projectDirectory();
+    const connectedServices = { v: 2 as const, bindingsByServiceId: {
+      'happier.agent.claude/claude-subscription': { source: 'connected' as const, selection: 'profile' as const,
+        profileId: '00ae5eea-6286-48bc-b82a-30a5f8492864' },
+    } };
+    const definition: WorkflowDefinitionV1 = { version: 1, inputs: [], defaults: { agentTarget, connectedServices },
+      blocks: [step('connected-work')] };
+    let stored: AutomationDefinitionDetail | undefined;
+    let id = 0;
+    const unexpected = async (): Promise<never> => { throw new Error('unexpected_automation_effect'); };
+    const triggers = createAccountWorkflowTriggerActions({
+      automations: { list: async () => ({ automations: [], nextCursor: null }), get: async () => stored ?? null,
+        create: async input => {
+          // Opaque Home persistence is the boundary. Preserve the real trigger
+          // producer's recipe and validate the stored response with its schema.
+          const trigger = input.triggers[0]!;
+          if (trigger.trigger.kind !== 'schedule') throw new Error('expected_schedule');
+          const { automationId, ...created } = input;
+          stored = AutomationDefinitionDetailSchema.parse({ ...created, id: automationId,
+            targetType: null, existingSessionId: null, templateVersion: 1, lastRunAt: null, createdAt: 1, updatedAt: 1,
+            assignments: input.assignments!.map(assignment => ({ ...assignment, priority: 0, updatedAt: 1 })),
+            triggers: [{ ...trigger.trigger, id: trigger.triggerId, revision: 0, nextRunAt: 60_001,
+              triggerDefinitionEnvelope: null, createdAt: 1, updatedAt: 1 }],
+          });
+          return stored;
+        }, reconcile: unexpected, delete: unexpected },
+      resolveEncryption: async () => ({ kind: 'available', witness: currentness }),
+      resolveSession: unexpected, resolveWorkflow: unexpected,
+      randomBytes: length => new Uint8Array(length).fill(9), newId: () => `connected-${++id}`,
+    });
+    const added = await triggers.add({ target: { kind: 'inline', definition }, project: { machineId, directory },
+      trigger: { kind: 'schedule', enabled: true, schedule: { kind: 'interval', everyMs: 60_000,
+        scheduleExpr: null, timezone: null } } }, { surface: 'ui', authority: 'present_user' });
+    expect(WorkflowTriggerWriteResultV1Schema.parse(added)).toMatchObject({ triggerRevision: 0,
+      set: { health: 'available', target: { kind: 'inline', definition } } });
+    expect(WorkflowTriggerWriteResultV1Schema.safeParse({ ...added, unknown: true }).success).toBe(false);
+    if (!stored?.executionRecipe || stored.executionRecipe.v !== 2 || !added.triggerId) throw new Error('missing_trigger_recipe');
+    const recipe = stored.executionRecipe;
+    const occurrence = AutomationRunCauseSchema.parse({ kind: 'trigger', triggerKind: 'schedule',
+      triggerId: added.triggerId, triggerRevision: 0, occurredAt: 60_001, evidence: { scheduledFor: 60_001 },
+      occurrenceKey: deriveAutomationOccurrenceKeyV1({ triggerId: added.triggerId,
+        evidence: { v: 1, kind: 'schedule', scheduledFor: 60_001 } }) });
+    const row = stored;
+    vi.spyOn(axios, 'post').mockImplementation(async (url, body) => url.endsWith('/v3/automations/runs/claim')
+      ? { status: 200, data: { run: { id: runId, automationId: row.id, attempt: 1, revision: 0,
+        recipeKind: 'workflow-v2', triggerId: added.triggerId, triggerRetired: false, cause: occurrence, causeWorkDepth: 0,
+        executionInputEnvelope: JSON.stringify(recipe.workflow), automationEvidenceEnvelope: null },
+        automation: { id: row.id, name: row.name, enabled: true, scopeSessionId: null }, accountCurrentness: currentness } }
+      : writeSessionReadiness(url, body));
+    const launches: unknown[] = [];
+    freshSessionBoundary = raw => {
+      launches.push(raw);
+      const request = raw as { connectedServices?: unknown };
+      freshSessionRecords.set('connected-child', createSessionRecordFixture({ id: 'connected-child', active: true,
+        encryptionMode: 'plain', machineId, origin: { kind: 'run_step', runId }, workDepth: 1,
+        metadata: JSON.stringify({ path: directory, machineId, connectedServices: request.connectedServices,
+          runtimeDescriptorV1: { v: 1, agentId: 'claude', agent: {} } }),
+      }));
+      return { type: 'success', sessionId: 'connected-child', sessionCreationOutcome: {
+        disposition: 'created', organizationPlacement: { folderId: null, tagIds: [] },
+      } };
+    };
+    const kit = createWorkflowRunStorageTestkit({ runId, machineId, state: 'claimed',
+      origin: { kind: 'automation', automationId: row.id } });
+    const client = createAutomationClaimClient({ token: 'token', createPublisherHeader: async () => 'publisher' });
+    const claimed = await client.claimRun({ machineId, leaseDurationMs: 120_000 });
+    if (!claimed.run) throw new Error('expected_claimed_workflow_run');
+    await executeClaimedRun({ machineId, claimClient: client, claimed, heartbeatMs: 60_000, leaseDurationMs: 120_000,
+      coordinateWorkflowRun: workflowDaemonProcess({ storage: kit, sessionInput: sessionInputBoundary({}, { sessionId: 'connected-child' }),
+        directory, readActualConversation: true }) });
+    expect(launches).toEqual([expect.objectContaining({ connectedServices })]);
+    expect(openRowProgress(kit, rowFor(kit, 'connected-work')!).result).toBe('connected-work');
+    expect(WorkflowRunSummaryV1Schema.parse(kit.run())).toMatchObject({ state: 'succeeded', heldCount: 0, attentionRequired: false });
+  });
+
   it('executes one scoped manual habit into its already-running destination and suppresses Notify me when reported is false', async () => {
     const directory = await projectDirectory();
     const habitRunId = '31313131-3131-4131-8131-313131313131';
@@ -897,7 +1161,7 @@ describe('composed Automation workflow claim and optional receipt', () => {
     // external boundaries. Conversion, consent, sealing and Run execution are real.
     const actions = createAccountWorkflowTriggerActions({
       automations: { list: async () => ({ automations: [row], nextCursor: null }), get: async () => row,
-        create: async () => { throw new Error('must_preserve_automation_id'); }, delete: async () => {},
+        create: async () => { throw new Error('must_preserve_automation_id'); }, delete: async () => ({ ok: true as const }),
         reconcile: async (_id, input) => {
           if (input.expectedTemplateVersion !== row.templateVersion) throw Object.assign(new Error('currentness_conflict'), { code: 'currentness_conflict' });
           writes.push(input);
@@ -944,53 +1208,6 @@ describe('composed Automation workflow claim and optional receipt', () => {
     expect(claimClient.startRun).not.toHaveBeenCalled();
     expect(claimClient.failRun).not.toHaveBeenCalled();
   });
-  it('keeps the exact optional workflowRun receipt bound to the returned Run only when the canonical schema supports it', async () => {
-    // The canonical current schema owns the optional receipt shape. This
-    // composed lane verifies that shape through the real Protocol owner and
-    // does not invent a test-only receipt contract.
-    expect(AutomationV3RunMutationResponseSchema.shape).toHaveProperty('workflowRun');
-    const timestamp = 1_786_257_600_000;
-    const run = {
-      id: 'run-automation-receipt',
-      automationId: 'automation-1',
-      revision: 1,
-      triggerId: null,
-      triggerRetired: false,
-      state: 'queued' as const,
-      cause: { kind: 'manual' as const, invokedAt: timestamp },
-      dueAt: timestamp,
-      claimedAt: null,
-      startedAt: null,
-      finishedAt: null,
-      claimedByMachineId: null,
-      leaseExpiresAt: null,
-      attempt: 0,
-      errorCode: null,
-      producedSessionId: null,
-      executionDispatchState: null,
-      executionAttempt: 0,
-      replyHandoffState: 'none' as const,
-      replyHandoffAttempt: 0,
-      replyHandoffDueAt: null,
-      createdAt: timestamp,
-      updatedAt: timestamp,
-    };
-    expect(AutomationV3RunMutationResponseSchema.parse({ run })).toEqual({ run });
-    const workflowResponse = {
-      run,
-      workflowRun: { recipeKind: 'workflow-v2' as const, workflowRunId: run.id },
-    };
-    expect(AutomationV3RunMutationResponseSchema.parse(workflowResponse)).toEqual(workflowResponse);
-    expect(AutomationV3RunMutationResponseSchema.safeParse({
-      ...workflowResponse,
-      workflowRun: { recipeKind: 'workflow-v2' as const, workflowRunId: 'different-run' },
-    }).success).toBe(false);
-    expect(AutomationV3RunMutationResponseSchema.safeParse({
-      ...workflowResponse,
-      workflowRun: { recipeKind: 'legacy' as const, workflowRunId: run.id },
-    }).success).toBe(false);
-  });
-
   it('reaches the same production Run owner from an Automation claim as from a direct start', async () => {
     const runId = '22222222-2222-4222-8222-222222222222';
     const directory = await projectDirectory();
@@ -1429,7 +1646,7 @@ describe('composed fresh-process reconstruction over durable rows', () => {
       return { ok: true, sessionId, localId: request.localId, result: terminal === 'completed'
         ? { kind: 'final_text', text: 'Finished before stopping' }
         : terminal === 'failed' ? { kind: 'failed', message: 'Provider failed before stopping' }
-          : { kind: 'cancelled' } };
+          : { kind: 'cancelled', message: 'Provider stopped the turn' } };
     });
     sessionInput.cancel.mockImplementation(async () => { stopAccepted.resolve(); return { kind: 'turn_cancel_requested' }; });
     const coordinate = workflowDaemonProcess({ directory, sessionInput,
@@ -1477,7 +1694,8 @@ describe('composed fresh-process reconstruction over durable rows', () => {
       blockId: openRowProgress(kit, row.index).invocationPath.blockId,
       frame: openRowProgress(kit, row.index).frame,
     }))).toEqual([]);
-    expect(kit.run()).toMatchObject({ state: 'cancelled', workflowCustodyState: 'settled' });
+    expect(WorkflowRunSummaryV1Schema.parse(kit.run())).toMatchObject({ state: 'cancelled', workflowCustodyState: 'settled',
+      heldCount: 0, attentionRequired: false });
     expect(rowFor(kit, 'scope')?.lifecycle).toBe('completed');
     expect(rowFor(kit, 'first-hold')?.lifecycle).toBe('completed');
     expect(rowFor(kit, 'late-hold')?.lifecycle).toBe('cancelled');
