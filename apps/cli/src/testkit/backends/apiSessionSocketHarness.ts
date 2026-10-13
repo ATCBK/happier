@@ -6,6 +6,15 @@ import { SessionRuntimeActivityProjectionSchema } from '@happier-dev/protocol/se
 import type { SessionRuntimeActivityProjection, SessionTurnMutationV1 } from '@happier-dev/protocol';
 import { RPC_METHODS } from '@happier-dev/protocol/rpc/methods';
 import { SOCKET_RPC_EVENTS } from '@happier-dev/protocol/socketRpc';
+import {
+    SESSION_TRANSCRIPT_OBSERVATION_CAPABILITY_EVENT_V1,
+    SESSION_TRANSCRIPT_OBSERVATION_CAPABILITY_V2,
+    SESSION_TRANSCRIPT_OBSERVATION_EVENT_V1,
+    SessionTranscriptObservationAckV1Schema,
+    SessionTranscriptObservationCapabilityAckSchema,
+    SessionTranscriptObservationCapabilityRequestSchema,
+    SessionTranscriptObservationInputSchema,
+} from '@happier-dev/protocol/sessions/messages/transcriptObservationV1';
 
 type SocketEventHandler = (...args: unknown[]) => void;
 
@@ -132,6 +141,28 @@ export function createSessionTurnMutationAppliedSocketAck(mutation: SessionTurnM
         applied: true,
         receipt: createSessionTurnMutationAppliedReceipt(mutation),
     };
+}
+
+/** Acknowledge the actual transcript producer, preserving its exact local identity. */
+export function createSessionTranscriptHomeStub() {
+    let sequence = 0;
+    return Object.freeze({
+        answer(event: string, payload: unknown): unknown | null {
+            if (event === SESSION_TRANSCRIPT_OBSERVATION_CAPABILITY_EVENT_V1) {
+                SessionTranscriptObservationCapabilityRequestSchema.parse(payload);
+                return SessionTranscriptObservationCapabilityAckSchema.parse({
+                    ok: true, capability: SESSION_TRANSCRIPT_OBSERVATION_CAPABILITY_V2,
+                });
+            }
+            if (event !== SESSION_TRANSCRIPT_OBSERVATION_EVENT_V1) return null;
+            const observation = SessionTranscriptObservationInputSchema.parse(payload);
+            sequence += 1;
+            return SessionTranscriptObservationAckV1Schema.parse({
+                ok: true, status: 'observed', id: `message-${sequence}`, seq: sequence,
+                localId: observation.localId, didWrite: true, ingestedAt: observation.updatedAt,
+            });
+        },
+    });
 }
 
 export function createSessionTurnMutationAppliedHttpResponse(mutation: SessionTurnMutationV1) {

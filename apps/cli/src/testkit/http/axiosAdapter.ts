@@ -69,16 +69,9 @@ export function installAxiosFastifyAdapter(params: Readonly<{ app: FastifyInstan
   const adapter: AxiosAdapter = async (config: InternalAxiosRequestConfig): Promise<AxiosResponse> => {
     if (!config.url) throw new Error('axios adapter: missing url')
 
-    const requestUrl = new URL(config.url, config.baseURL ?? params.origin)
+    const requestUrl = new URL(axios.getUri(config), params.origin)
     if (requestUrl.origin !== params.origin) {
       throw new Error(`axios adapter: unexpected origin: ${requestUrl.origin}`)
-    }
-
-    if (config.params && typeof config.params === 'object') {
-      for (const [key, value] of Object.entries(config.params as Record<string, unknown>)) {
-        if (value === undefined || value === null) continue
-        requestUrl.searchParams.set(key, String(value))
-      }
     }
 
     const method = toInjectMethod(config.method)
@@ -119,8 +112,8 @@ export function installAxiosFastifyAdapter(params: Readonly<{ app: FastifyInstan
       request: {},
     }
 
-    const validateStatus = config.validateStatus ?? ((status: number) => status >= 200 && status < 300)
-    if (!validateStatus(injectResponse.statusCode)) {
+    const validateStatus = config.validateStatus
+    if (validateStatus && !validateStatus(injectResponse.statusCode)) {
       const errorCode = injectResponse.statusCode >= 500 ? AxiosError.ERR_BAD_RESPONSE : AxiosError.ERR_BAD_REQUEST
       throw new AxiosError(
         `Request failed with status code ${injectResponse.statusCode}`,

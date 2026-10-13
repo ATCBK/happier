@@ -139,6 +139,9 @@ export function createApiSessionClientFixture(options?: {
         async enqueueAgentMessageCommitted() {
             return { persisted: true, delivered: false };
         },
+        async enqueueSessionEventCommitted() {
+            return { persisted: true, delivered: false };
+        },
         async enqueueUserTextMessageCommitted() {
             return { persisted: true, delivered: false };
         },

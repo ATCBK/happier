@@ -1,13 +1,9 @@
-import { afterEach, describe, expect, it } from 'vitest';
+import { describe, expect, it } from 'vitest';
+import * as processHelpers from './spawn';
 
 describe('process spawn helpers', () => {
   it('spawns a child process and exposes its pid', async () => {
-    const processHelpers = await import('@/testkit/process/spawn').catch(() => null);
-
-    expect(processHelpers).not.toBeNull();
-    expect(processHelpers?.spawnTestProcess).toBeTypeOf('function');
-
-    const child = processHelpers!.spawnTestProcess(process.execPath, ['-e', 'process.exit(0)'], {
+    const child = processHelpers.spawnTestProcess(process.execPath, ['-e', 'process.exit(0)'], {
       stdio: 'ignore',
     });
 
@@ -23,7 +19,6 @@ describe('process spawn helpers', () => {
   });
 
   it('tracks pid liveness and waits for exit', async () => {
-    const processHelpers = await import('@/testkit/process/spawn');
     const child = processHelpers.spawnTestProcess(process.execPath, ['-e', 'setTimeout(() => process.exit(0), 50)']);
     const pid = child.pid;
 
@@ -34,7 +29,6 @@ describe('process spawn helpers', () => {
   });
 
   it('spawns detached inline node processes', async () => {
-    const processHelpers = await import('@/testkit/process/spawn');
     const child = processHelpers.spawnDetachedInlineNodeTestProcess('setInterval(() => {}, 1000)');
     const pid = child.pid;
 
@@ -51,7 +45,6 @@ describe('process spawn helpers', () => {
   });
 
   it('spawns a parent node process that reports a child pid', async () => {
-    const processHelpers = await import('@/testkit/process/spawn');
     const { parent, childPid } = await processHelpers.spawnInlineNodeParentWithChild();
 
     expect(parent.pid).toBeTypeOf('number');

@@ -1,5 +1,6 @@
 import { afterEach, describe, expect, it } from 'vitest'
 import { createServer } from 'node:http'
+import { reserveEphemeralPort, waitForHttpReady } from './portUtils'
 
 describe('http port helpers', () => {
   const cleanup: Array<() => Promise<void>> = []
@@ -11,12 +12,7 @@ describe('http port helpers', () => {
   })
 
   it('reserves a bindable ephemeral port', async () => {
-    const httpHelpers = await import('@/testkit/http/portUtils').catch(() => null)
-
-    expect(httpHelpers).not.toBeNull()
-    expect(httpHelpers?.reserveEphemeralPort).toBeTypeOf('function')
-
-    const port = await httpHelpers!.reserveEphemeralPort()
+    const port = await reserveEphemeralPort()
     expect(port).toBeGreaterThan(0)
 
     const server = createServer((_request, response) => {
@@ -42,7 +38,6 @@ describe('http port helpers', () => {
   })
 
   it('waits for a local http endpoint to become ready', async () => {
-    const { reserveEphemeralPort, waitForHttpReady } = await import('@/testkit/http/portUtils')
     const port = await reserveEphemeralPort()
     const server = createServer((_request, response) => {
       response.statusCode = 404
