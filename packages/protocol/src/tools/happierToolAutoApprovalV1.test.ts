@@ -37,10 +37,13 @@ describe('Happier tool Agent-layer auto-approval', () => {
     expect(isHappierToolAutoApprovedByAgentLayerV1(name)).toBe(allowed);
   });
 
-  it('lists only recognized, distinct spellings and normalizes case and surrounding whitespace', () => {
-    const names = listHappierToolAutoApprovedNameSpellingsV1();
-    expect(new Set(names).size).toBe(names.length);
-    for (const name of names) expect(isHappierToolAutoApprovedByAgentLayerV1(name)).toBe(true);
+  it('projects one native spelling per safe tool while host recognition retains its aliases', () => {
+    for (const prefix of ['happier_', 'mcp__happier__', '']) {
+      const spellings = listHappierToolAutoApprovedNameSpellingsV1(prefix);
+      expect(spellings).toEqual(listHappierToolAutoApprovedNamesV1().map((name) => `${prefix}${name}`));
+      for (const name of spellings) expect(isHappierToolAutoApprovedByAgentLayerV1(name)).toBe(true);
+    }
+    expect(listHappierToolAutoApprovedNameSpellingsV1('happier_')).not.toContain('change-title');
     expect(isHappierToolAutoApprovedByAgentLayerV1(' MCP__HAPPIER__ACTION_EXECUTE ')).toBe(true);
   });
 });
