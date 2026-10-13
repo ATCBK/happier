@@ -144,7 +144,11 @@ const styles = StyleSheet.create((theme) => ({
   actions: {
     flexDirection: 'row',
     alignItems: 'center',
+    flexWrap: 'wrap',
+    justifyContent: 'flex-end',
     gap: theme.space.s6,
-    flexShrink: 0,
+    // On a phone the four actions are wider than the bar: they wrap inside it instead of leaving it.
+    flexShrink: 1,
+    minWidth: 0,
   },
 }));

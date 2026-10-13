@@ -1,13 +1,11 @@
 import * as React from 'react';
-import { PixelRatio, StyleSheet as RNStyleSheet, View } from 'react-native';
-import Svg, { Circle } from 'react-native-svg';
+import { StyleSheet as RNStyleSheet, View } from 'react-native';
 import { StyleSheet, useUnistyles } from 'react-native-unistyles';
 import { useWidgetPresentation } from '@happier-dev/plugin-ui';
 import { happierPageTextMetrics } from '@happier-dev/plugin-ui/presentation';
 
 import { useRouter } from '@/components/appShell/workspace/destinationRoute';
 import { useAtmosphereMoment } from '@/components/atmosphere/atmosphereMoments';
-import { PlanetCanvas } from '@/components/atmosphere/PlanetCanvas';
 import { resolveHomeDisplayName } from '@/components/settings/server/homeDisplayName';
 import { MACHINES_ADD_ROUTE } from '@/components/settings/machines/collection/machineCollectionModel';
 import { RoundButton } from '@/components/ui/buttons/RoundButton';
@@ -35,10 +33,12 @@ import {
   type YourHomeModel,
 } from './yourHomeModel';
 import {
-  layoutYourHomeScene,
-  type YourHomeScene,
-  type YourHomeSceneOptions,
-} from './yourHomeScene';
+  layoutHomeOrbitScene,
+  type HomeOrbitBody,
+  type HomeOrbitDotTone,
+  type HomeOrbitOptions,
+} from '@/components/atmosphere/orbit/homeOrbitScene';
+import { HomeOrbitMap } from '@/components/atmosphere/orbit/HomeOrbitMap';
 import { useYourHomeModel } from './useYourHomeModel';
 
 type Size = 'small' | 'medium' | 'wide' | 'full';
@@ -126,20 +126,20 @@ function YourHomeComposition(
     const tall = size === 'medium' || size === 'full';
     const h = tall ? bodyH - 112 : bodyH - 30;
     const k = fit(sw, h, size === 'small' || size === 'medium' ? 262 : 564, tall ? 186 : 88);
-    const scene = layoutYourHomeScene(sw, h, machines, { small: !tall, pr: (tall ? 34 : 18) * k });
+    const scene = layoutHomeOrbitScene(sw, h, orbitBodies(machines), { small: !tall, pr: (tall ? 34 : 18) * k });
     return (
       <View style={styles.fill}>
-        <OrbitScene scene={scene} small={!tall} />
+        <HomeOrbitMap scene={scene} small={!tall} accessibilityLabel={t('homeWidgets.yourHomeOnline', { online: model.online, total: machines.length })} />
         <EmptyHome tall={tall} testID={props.testID} />
       </View>
     );
   }
   if (size === 'small') {
     const h = bodyH - 22;
-    const scene = layoutYourHomeScene(sw, h, machines, { small: true, pr: 18 * fit(sw, h, 262, 96), angles: [-14, 196, 166] });
+    const scene = layoutHomeOrbitScene(sw, h, orbitBodies(machines), { small: true, pr: 18 * fit(sw, h, 262, 96), angles: [-14, 196, 166] });
     return (
       <View style={styles.fill}>
-        <OrbitScene scene={scene} small />
+        <HomeOrbitMap scene={scene} small accessibilityLabel={t('homeWidgets.yourHomeOnline', { online: model.online, total: machines.length })} />
         <View style={styles.foot} testID={`${props.testID}.foot`}>
           <Text style={styles.footText}>
             {t('homeWidgets.yourHomeOnline', { online: model.online, total: machines.length })}
@@ -154,10 +154,10 @@ function YourHomeComposition(
   if (size === 'wide') {
     const w = Math.round(sw * 0.5);
     const pr = 26 * fit(w, bodyH, 282, 118);
-    const scene = layoutYourHomeScene(w, bodyH, machines, { small: true, pr, radii: radii([1.55, 1.95, 2.3], pr), angles: [-14, 196, 166] });
+    const scene = layoutHomeOrbitScene(w, bodyH, orbitBodies(machines), { small: true, pr, radii: radii([1.55, 1.95, 2.3], pr), angles: [-14, 196, 166] });
     return (
       <View style={[styles.fill, styles.row]}>
-        <OrbitScene scene={scene} small />
+        <HomeOrbitMap scene={scene} small accessibilityLabel={t('homeWidgets.yourHomeOnline', { online: model.online, total: machines.length })} />
         <Legend machines={machines} compact height={bodyH} testID={props.testID} />
       </View>
     );
@@ -165,20 +165,20 @@ function YourHomeComposition(
   if (size === 'medium') {
     const h = bodyH - MEDIUM_LEGEND_PX;
     const pr = 40 * fit(sw, h, 262, 196);
-    const scene = layoutYourHomeScene(sw, h, machines, { pr, radii: radii([1.55, 1.97, 2.4], pr), angles: [-38, 214, 128] });
+    const scene = layoutHomeOrbitScene(sw, h, orbitBodies(machines), { pr, radii: radii([1.55, 1.97, 2.4], pr), angles: [-38, 214, 128] });
     return (
       <View style={styles.fill}>
-        <OrbitScene scene={scene} />
+        <HomeOrbitMap scene={scene} accessibilityLabel={t('homeWidgets.yourHomeOnline', { online: model.online, total: machines.length })} />
         <Legend machines={machines} compact column height={MEDIUM_LEGEND_PX} testID={props.testID} />
       </View>
     );
   }
   const w = Math.round(sw * 0.54);
   const pr = 50 * fit(w, bodyH, 305, 298);
-  const scene = layoutYourHomeScene(w, bodyH, machines, { pr, radii: radii([1.62, 2.2, 2.78], pr), angles: [-34, 212, 130] });
+  const scene = layoutHomeOrbitScene(w, bodyH, orbitBodies(machines), { pr, radii: radii([1.62, 2.2, 2.78], pr), angles: [-34, 212, 130] });
   return (
     <View style={[styles.fill, styles.row]}>
-      <OrbitScene scene={scene} />
+      <HomeOrbitMap scene={scene} accessibilityLabel={t('homeWidgets.yourHomeOnline', { online: model.online, total: machines.length })} />
       <Legend machines={machines} height={bodyH} testID={props.testID} />
     </View>
   );
@@ -197,146 +197,21 @@ const fit = (w: number, h: number, labW: number, labH: number) => Math.max(0, Ma
 const radii = (
   ks: readonly number[],
   pr: number,
-): YourHomeSceneOptions['radii'] => ks.map((k) => k * pr);
+): HomeOrbitOptions['radii'] => ks.map((k) => k * pr);
 
-/**
- * Orbits behind, the planet (PlanetCanvas, the brand scene at rest: no re-typing), then the session
- * dots and moons in front. Hidden from assistive technology; it is art at static props.
- */
-const OrbitScene = React.memo(function OrbitScene(
-  props: Readonly<{ scene: YourHomeScene; small?: boolean }>,
-) {
-  const { theme } = useUnistyles();
-  const { scene } = props;
-  const ink = theme.colors.text.primary;
-  const card = theme.colors.edge.cardFill;
-  const amber = workStatusGlyphColor(theme.colors, 'attention');
-  // The lab's lattice: at least 3 device px with crisp dots, never a dithered smudge at widget sizes.
-  const dpr = Math.min(2, PixelRatio.get() || 1);
-  const planet = React.useMemo(
-    () => ({
-      theme: theme.dark ? ('dark' as const) : ('light' as const),
-      R: scene.pr,
-      cx: scene.canvas.size / 2,
-      cy: scene.canvas.size / 2,
-      view: { w: scene.canvas.size, h: scene.canvas.size },
-      time: 0,
-      rate: 0,
-      pitch: Math.max(1.5, 3 / dpr),
-      dpr,
-    }),
-    [dpr, scene.canvas.size, scene.pr, theme.dark],
-  );
-  const f = (value: number) => Number(value.toFixed(1));
-  return (
-    <View
-      pointerEvents="none"
-      aria-hidden
-      accessibilityElementsHidden
-      importantForAccessibility="no-hide-descendants"
-      style={[styles.scene, { width: scene.width, height: scene.height }]}
-    >
-      <Svg
-        width={scene.width}
-        height={scene.height}
-        style={RNStyleSheet.absoluteFill}
-      >
-        {scene.orbits.map((orbit, index) => (
-          <Circle
-            key={index}
-            cx={scene.px}
-            cy={scene.py}
-            r={orbit.r}
-            fill="none"
-            stroke={ink}
-            strokeOpacity={orbit.off ? 0.15 : 0.26}
-            strokeWidth={1.3}
-            strokeLinecap="round"
-            strokeDasharray={orbit.off ? '0 7' : '0 4.2'}
-          />
-        ))}
-      </Svg>
-      <PlanetCanvas
-        width={scene.canvas.size}
-        height={scene.canvas.size}
-        options={planet}
-        style={{
-          position: 'absolute',
-          left: scene.canvas.left,
-          top: scene.canvas.top,
-        }}
-      />
-      <Svg
-        width={scene.width}
-        height={scene.height}
-        style={RNStyleSheet.absoluteFill}
-      >
-        {scene.sessions.map((session, index) =>
-          session.state === 'need' ? (
-            <React.Fragment key={index}>
-              <Circle
-                cx={f(session.x)}
-                cy={f(session.y)}
-                r={6}
-                fill={amber}
-                fillOpacity={0.22}
-              />
-              <Circle
-                cx={f(session.x)}
-                cy={f(session.y)}
-                r={2.7}
-                fill={amber}
-              />
-            </React.Fragment>
-          ) : (
-            <Circle
-              key={index}
-              cx={f(session.x)}
-              cy={f(session.y)}
-              r={session.state === 'work' ? 2.2 : 1.9}
-              fill={ink}
-              fillOpacity={session.state === 'work' ? 0.7 : 0.26}
-            />
-          ),
-        )}
-        {scene.moons.map((moon, index) =>
-          moon.off ? (
-            <Circle
-              key={index}
-              cx={f(moon.x)}
-              cy={f(moon.y)}
-              r={moon.r}
-              fill={card}
-              stroke={ink}
-              strokeOpacity={0.34}
-              strokeWidth={1.1}
-              strokeDasharray="1.4 1.6"
-            />
-          ) : (
-            // The card-coloured ring parts the orbit around the moon; its body is ink over the card.
-            <React.Fragment key={index}>
-              <Circle
-                cx={f(moon.x)}
-                cy={f(moon.y)}
-                r={moon.r}
-                fill={card}
-                stroke={card}
-                strokeWidth={1.5}
-              />
-              <Circle
-                cx={f(moon.x)}
-                cy={f(moon.y)}
-                r={moon.r}
-                fill={ink}
-                fillOpacity={0.62}
-              />
-            </React.Fragment>
-          ),
-        )}
-      </Svg>
-    </View>
-  );
-});
+/** Sessions ride their machine's orbit; an offline machine shows none (its last count is in the legend). */
+const SESSION_TONE: Readonly<Record<YourHomeMachine['shown'][number], HomeOrbitDotTone>> = {
+  need: 'attention',
+  work: 'active',
+  idle: 'quiet',
+};
+function orbitBodies(machines: readonly YourHomeMachine[]): HomeOrbitBody[] {
+  return machines.map((machine) => ({
+    key: machine.id,
+    online: machine.online,
+    dots: machine.online ? machine.shown.map((state, index) => ({ key: String(index), tone: SESSION_TONE[state] })) : [],
+  }));
+}
 
 /** The machines, one row each: glyph, name (and its state line at full size), then what it holds. */
 function Legend(

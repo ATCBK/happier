@@ -8,6 +8,7 @@ import {
 } from '@happier-dev/protocol/widgets';
 
 import { ItemGroup } from '@/components/ui/lists/ItemGroup';
+import { SectionContentRow } from '@/components/ui/lists/SectionContentRow';
 
 import { HubWidgetSection } from './HubWidgetSection';
 import { useHomeWidgetCandidates } from './layout/useHomeWidgetCandidates';
@@ -46,7 +47,9 @@ export const HubBuiltinWidgetSection = React.memo(function HubBuiltinWidgetSecti
     return (
         // The section owns the title and the sheet (lab H1 Usage); the widget's
         // frame is drawn bare inside it at content height, so the same body and states serve Home and here.
+        // The bare frame sits in the sheet like any row content, at the rows' own insets.
         <ItemGroup title={widget.title}>
+            <SectionContentRow showDivider={false}>
             <HubWidgetSection
                 widget={widget}
                 instance={instance}
@@ -60,6 +63,7 @@ export const HubBuiltinWidgetSection = React.memo(function HubBuiltinWidgetSecti
                 tracker={tracker}
                 testID={props.testID}
             />
+            </SectionContentRow>
         </ItemGroup>
     );
 });

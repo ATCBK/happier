@@ -18,16 +18,19 @@ export async function executeHomeHubLayoutIntent(input: Readonly<{
         serverId: input.scope.serverId, expectedAccountId: input.scope.accountId,
         signal: input.signal,
     } as const;
-    const actionId = input.intent.kind === 'widget_size' ? 'widgets.item.size.set' : 'home.hub.layout.update';
+    const actionId = input.intent.kind === 'widget_size' ? 'widgets.item.size.set'
+        : input.intent.kind === 'remove' ? 'widgets.item.remove' : 'home.hub.layout.update';
     const actionInput = input.intent.kind === 'widget_size' ? { ref: {
             surface: { ...input.scope, owner: { kind: 'home' } }, instanceId: input.intent.instanceId,
-        }, size: input.intent.size } : { intent: input.intent };
+        }, size: input.intent.size } : input.intent.kind === 'remove' ? { ref: {
+            surface: { ...input.scope, owner: { kind: 'home' } }, instanceId: input.intent.instanceId,
+        } } : { intent: input.intent };
     const result = await resumeActionExecutionResult({
         result: await input.execute(actionId, actionInput, context), actionId, actionInput,
         scope: input.scope, signal: input.signal, onApprovalPending: input.onApprovalPending,
     });
-    if (input.intent.kind === 'widget_size') {
-        const outcome = classifyWidgetDefinitionCommandResult('widgets.item.size.set', result);
+    if (actionId === 'widgets.item.size.set' || actionId === 'widgets.item.remove') {
+        const outcome = classifyWidgetDefinitionCommandResult(actionId, result);
         if (outcome.kind === 'refused') throw Object.assign(new Error(outcome.errorCode), { code: outcome.errorCode });
         // Universal mutation acknowledgement does not fabricate a native layout revision.
         try {

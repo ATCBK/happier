@@ -13,12 +13,15 @@ import { ConnectedAccountUiProjectionEntryV1Schema } from '@happier-dev/protocol
 import { storage } from '@/sync/domains/state/storageStore';
 import { primeServerFeaturesSnapshot } from '@/sync/api/capabilities/serverFeaturesClient';
 import { getActiveServerId, removeServerProfile, resolveServerProfileScopeIdForIdentifier, setActiveServerId, setServerProfileIdentityForUrl, upsertServerProfile } from '@/sync/domains/server/serverProfiles';
-import { machineAgentInventoryStore } from '@/agents/machineAgents/machineAgentInventoryStore';
 import { serverAccountScopedResourceKey } from '@/sync/domains/scope/serverAccountScope';
+import { prefetchMachineCapabilities } from '@/hooks/server/useMachineCapabilitiesCache';
+import { getMachineContributionRegistryProjectionRevision } from '@/sync/ops/machineContributionRegistryProjectionRevision';
+import { buildMachineAgentsDetectRequest } from '@happier-dev/protocol/capabilities';
 import { profileParse, type Profile } from '@/sync/domains/profiles/profile';
 import { clearDaemonMergedProjectionCacheForTests, loadDaemonMergedProjectionInputs } from '@/agents/backendCatalog/loadDaemonMergedProjectionInputs';
 import { captureActiveServerAccountScopeLifetime } from '@/sync/domains/scope/activeServerAccountScope';
 import { MACHINE_ADMINISTRATION_SELECTION_KEYS_V1 } from '@/sync/domains/machines/administration/selectionPreferences';
+import { resolveFreshMachineAdministrationExecutionTarget } from '@/sync/domains/machines/administration/useTargetSelection';
 import { installDisconnectedServerSocketBoundary, restoreServerAccountForTest } from '@/dev/testkit/harness/serverAccountConnectionHarness';
 import { createHomeHubArtifactHttpBoundary } from '@/dev/testkit/harness/homeHubArtifactHttpBoundary';
 import { loadSyncSingletonForTests } from '@/dev/testkit/harness/syncSingletonLoader';
@@ -31,7 +34,7 @@ const state = vi.hoisted(() => ({
     profile: {} as Partial<Profile>,
     loginState: 'logged_in' as 'logged_in' | 'logged_out',
     push: null as ((route: unknown) => void) | null,
-    pluginCapabilities: null as unknown,
+    pluginCapabilities: null as ReturnType<typeof pluginsAnswer> | null,
     unavailableServerIds: [] as string[],
     serverId: '',
     homeUrl: '',
@@ -52,6 +55,9 @@ const SERVICE_DESCRIPTOR = ConnectedAccountUiProjectionEntryV1Schema.parse({
     authentication: { defaultModeId: 'oauth', modes: [{ id: 'oauth', kind: 'oauthDeviceCode', outcomeReconciliation: 'none' }] },
     capabilities: [], availability: { state: 'available', reason: 'enabled' }, diagnostics: [],
 });
+
+// Collect the real UI closure before a case starts its observable interaction deadline.
+const { HubAttentionSection } = await import('./HubAttentionSection');
 
 vi.mock('react-native', async () => {
     const { createReactNativeWebMock } = await import('@/dev/testkit/mocks/reactNative');
@@ -85,6 +91,12 @@ function pluginsAnswer(pendingChanges: unknown[]) {
     return { protocolVersion: 1, results: { 'tool.plugins': { ok: true, checkedAt: 1, data: { installedPlugins: [], pendingChanges } } } };
 }
 
+function agentFacts(): MachineAgentInventoryItem {
+    return { agentId: 'claude', title: 'Claude', installed: true, version: '1', latestVersion: '1',
+        update: { supported: false, command: null }, signIn: { status: state.loginState === 'logged_out' ? 'signedOut' : 'signedIn', loginSupport: 'status_only' },
+        platform: { supported: true }, install: { available: false, mode: 'manual', sizeBytes: null, guideUrl: null }, dependencies: [] };
+}
+
 const initialStorageState = storage.getState();
 const initialServerId = getActiveServerId();
 const initialHomeView = loadEffectiveHomeViewState();
@@ -100,7 +112,10 @@ beforeEach(async () => {
         if (request.method === RPC_METHODS.DAEMON_MERGED_CONTRIBUTION_REGISTRY_PROJECTION_DESCRIBE) return { protocolVersion: 1,
             projection: PluginProjectionV2Schema.parse({ v: 2, generation: 1, agentsById: { claude: { id: 'claude', title: 'Claude',
                 providerOwnedEnvironmentKeys: [], capabilities: { surfaces: [], sessions: { open: ['create'], delivery: ['newTurn'], cancel: true } } } } }) };
-        if (request.method === RPC_METHODS.CAPABILITIES_DETECT && state.pluginCapabilities) return state.pluginCapabilities;
+        if (request.method === RPC_METHODS.CAPABILITIES_DETECT) return { protocolVersion: 1, results: {
+            'cli.claude': { ok: true, checkedAt: Date.now(), data: agentFacts() },
+            ...state.pluginCapabilities?.results,
+        } };
         throw new Error(`Unexpected Home attention RPC: ${request.method}`);
     });
 });
@@ -129,25 +144,27 @@ function account(accountId: string, status: 'connected' | 'needs_reauth') {
 
 async function renderSection() {
     await upsertServerProfile({ serverUrl: state.homeUrl });
-    const home = await setServerProfileIdentityForUrl(state.homeUrl, `srv_attention_${caseNumber}`);
-    if (!home) throw new Error('The attention fixture Home must exist');
-    state.serverId = home.id;
+    const declaredHome = await setServerProfileIdentityForUrl(state.homeUrl, `srv_attention_${caseNumber}`);
+    if (!declaredHome) throw new Error('The attention fixture Home must exist');
     const artifact = createHomeHubArtifactHttpBoundary('attention-account');
     const baseFeatures = createRootLayoutFeaturesResponse();
     const features = FeaturesResponseSchema.parse({ ...baseFeatures,
         capabilities: { ...baseFeatures.capabilities, connectedServices: { qualifiedAccounts: { protocolVersion: 4 } } } });
-    connection = await restoreServerAccountForTest({ serverUrl: state.homeUrl, accountId: 'attention-account', request: (url, init) => {
+    connection = await restoreServerAccountForTest({ serverUrl: state.homeUrl, serverIdentityId: declaredHome.serverIdentityId!, accountId: 'attention-account', request: (url, init) => {
         const path = new URL(String(url)).pathname;
         return path === '/v1/features' || path === '/v1/features/authenticated' ? Promise.resolve(Response.json(features)) : artifact.request(url, init);
     } });
+    const home = connection.home;
+    state.serverId = home.id;
     const scope = { serverId: resolveServerProfileScopeIdForIdentifier(home.id), accountId: 'attention-account' };
     const machine = createMachineFixture({ id: 'machine-1', active: true, activeAt: Date.now(), daemonStateVersion: 3,
         metadata: { ...createMachineFixture().metadata!, displayName: 'MacBook Pro' } });
     const target = { serverIdentityId: home.serverIdentityId!, machineId: machine.id };
-    storage.setState({ isDataReady: true, profile: profileParse({ ...initialStorageState.profile, ...state.profile, id: scope.accountId }), profileScope: scope, settingsScope: scope,
+    const seedAttentionState = () => storage.setState({ isDataReady: true, profile: profileParse({ ...initialStorageState.profile, ...state.profile, id: scope.accountId }), profileScope: scope, settingsScope: scope,
         settings: { ...initialStorageState.settings, machineAdministrationTargetsLocalV1: {
             [MACHINE_ADMINISTRATION_SELECTION_KEYS_V1.agents]: target, [MACHINE_ADMINISTRATION_SELECTION_KEYS_V1.plugins]: target } },
         machines: { [machine.id]: machine }, machineListByServerId: { [home.id]: [machine] }, machineListStatusByServerId: { [home.id]: 'idle' } });
+    seedAttentionState();
     if (state.unavailableServerIds.length > 0) {
         storage.setState({ machineListStatusByServerId: {
             ...storage.getState().machineListStatusByServerId,
@@ -168,16 +185,31 @@ async function renderSection() {
         { kind: 'ready', descriptors: [SERVICE_DESCRIPTOR], conflicts: [] },
     ), lifetime);
     await loadDaemonMergedProjectionInputs({ machineId: machine.id, serverId: home.id, accountLifetime: lifetime });
+    const revision = getMachineContributionRegistryProjectionRevision({ machineId: machine.id, serverId: home.id });
+    // These are the prior Agents/Plugins page observations beneath their real codec/cache owners.
+    await prefetchMachineCapabilities({ machineId: machine.id, serverId: lifetime.scope.serverId, accountLifetime: lifetime,
+        cacheKeySalt: serverAccountScopedResourceKey(lifetime.scope, 'machine-agents-capabilities', String(revision)),
+        request: buildMachineAgentsDetectRequest({ agents: [{ agentId: 'claude', title: 'Claude' }] }),
+    });
+    if (state.pluginCapabilities) await prefetchMachineCapabilities({ machineId: machine.id, serverId: home.id,
+        cacheKeySalt: '3:1', request: { requests: [{ id: 'tool.plugins' }] },
+    });
+    // Connection bootstrap is asynchronous; install the case's current projection after its reads.
+    seedAttentionState();
+    if (state.unavailableServerIds.length > 0) storage.setState({ machineListStatusByServerId: {
+        ...storage.getState().machineListStatusByServerId,
+        ...Object.fromEntries(state.unavailableServerIds.map(serverId => [serverId, 'error' as const])),
+    } });
+    expect(lifetime.scope).toEqual(scope);
+    expect(resolveFreshMachineAdministrationExecutionTarget(target, { accountScope: lifetime.scope }))
+        .toMatchObject({ machine: { id: machine.id }, serverId: home.id });
     rpc.mockClear();
-    const key = serverAccountScopedResourceKey(scope, 'machine-agents', machine.id);
-    // Home reads a prior observation: a cache-only reader does not create a loading entry.
-    const item: MachineAgentInventoryItem = { agentId: 'claude', title: 'Claude', installed: true, version: '1', latestVersion: '1',
-        update: { supported: false, command: null }, signIn: { status: state.loginState === 'logged_out' ? 'signedOut' : 'signedIn', loginSupport: 'status_only' },
-        platform: { supported: true }, install: { available: false, mode: 'manual', sizeBytes: null, guideUrl: null }, dependencies: [] };
-    machineAgentInventoryStore.publish(key, { status: 'ready', items: [item], lastCheckedAt: 1 });
-    const { HubAttentionSection } = await import('./HubAttentionSection');
     const screen = await renderScreen(<HubAttentionSection />);
     await flushHookEffects({ cycles: 3 });
+    if (state.loginState === 'logged_out') await vi.waitFor(() =>
+        expect(screen.findByTestId('settings-overview-attention.agent:claude.action')).not.toBeNull());
+    if (state.pluginCapabilities) await vi.waitFor(() =>
+        expect(screen.findByTestId('settings-overview-attention.plugins:awaitingReview.action')).not.toBeNull());
     // Reading Home's attention is cache-only: neither the catalog nor the inventory may probe.
     expect(rpc).not.toHaveBeenCalled();
     const actions = screen.findAll((node) => typeof node.props?.testID === 'string'
@@ -247,12 +279,6 @@ describe('HubAttentionSection', () => {
             { kind: 'reviewRequired', reviewKind: 'installation', reason: 'firstInstall', currentVersion: null, authorityExpansion: [], pendingChangeId: 'p-1', review: createPluginInstallationReviewFixture() },
             { kind: 'applying', pendingChangeId: 'p-2' },
         ]);
-        // The Plugins page asked after a transport reconnect (its second freshness generation).
-        const { prefetchMachineCapabilities } = await import('@/hooks/server/useMachineCapabilitiesCache');
-        await prefetchMachineCapabilities({
-            machineId: 'machine-1', serverId: (await upsertServerProfile({ serverUrl: state.homeUrl })).id, cacheKeySalt: '3:1',
-            request: { requests: [{ id: 'tool.plugins' }] } as never, timeoutMs: 1000,
-        });
         const { push, actions } = await renderSection();
 
         const review = actions.find((node) => node.props.testID === 'settings-overview-attention.plugins:awaitingReview.action');

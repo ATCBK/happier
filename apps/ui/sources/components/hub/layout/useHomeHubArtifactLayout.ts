@@ -17,6 +17,10 @@ import { createActionApprovalContinuationObserver } from '@/components/approvals
 import { approvalArtifactBodyMatchesHeaderV1 } from '@happier-dev/protocol/approvals/approvalArtifactHeaderV1';
 import { subscribeHomeAccountChange } from '@/sync/runtime/orchestration/homeAccountChange';
 import { areServerProfileIdentifiersEquivalent } from '@/sync/domains/server/serverProfiles';
+import { router } from 'expo-router';
+import { buildApprovalHref } from '@/components/approvals/approvalNavigation';
+import { publishPresentationNotice, retirePresentationNotice } from '@/components/sessions/presentation/presentationNotices';
+import { t } from '@/text';
 
 type Store = ReturnType<typeof createHomeHubAccountStore> & { retain(): () => void; isCurrent(): boolean };
 const stores = new WeakMap<ActiveServerAccountScopeLifetime, WeakMap<AuthCredentials, Store>>();
@@ -77,8 +81,17 @@ function useHomeHubAccountStore() {
                 }
             });
             const observeApproval = approval.subscribe(() => {
-                if (approval.getSnapshot().settlement) approval.deliverSettlement();
-                else approvalRead.invalidate();
+                const snapshot = approval.getSnapshot();
+                if (snapshot.settlement) {
+                    retirePresentationNotice(`home-layout-approval:${snapshot.settlement.registration.artifactId}`);
+                    approval.deliverSettlement();
+                } else if (snapshot.approval) {
+                    const id = snapshot.approval.artifactId;
+                    publishPresentationNotice({ key: `home-layout-approval:${id}`, severity: 'info',
+                        message: t('approvals.waitingForYou'), undo: { label: t('approvals.review'),
+                            run: () => { if (isCurrent()) router.push(buildApprovalHref(id, scope.serverId) as never); } } });
+                    approvalRead.invalidate();
+                }
             });
             const wakeApproval = subscribeHomeAccountChange(event => {
                 const artifactId = approval.getSnapshot().approval?.artifactId;
@@ -106,6 +119,8 @@ function useHomeHubAccountStore() {
                 return () => { if (references > 0 && --references === 0) { detach?.(); detach = null; } };
             } };
             lifetime.onRetire(() => {
+                const pendingApproval = approval.getSnapshot().approval;
+                if (pendingApproval) retirePresentationNotice(`home-layout-approval:${pendingApproval.artifactId}`);
                 domain.retire();
                 controller.abort(); approvalRead.stop(); observeApproval(); wakeApproval(); approval.dispose();
                 detach?.(); detach = null; if (context) void context.then(account => account.dispose(), () => {});
