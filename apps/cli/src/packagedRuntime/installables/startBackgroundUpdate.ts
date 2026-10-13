@@ -27,7 +27,7 @@ function isBlockedInMemory(installableKey: string, nowMs: number): boolean {
 export async function startBackgroundRuntimeInstallableUpdate(
   params: Readonly<{
     installableKey: string;
-    adapter: RuntimeInstallableAdapter;
+    adapter: Pick<RuntimeInstallableAdapter, 'runBackgroundAutoUpdateCheck'>;
   }>,
   depsOverrides: Partial<Deps> = {},
 ): Promise<void> {

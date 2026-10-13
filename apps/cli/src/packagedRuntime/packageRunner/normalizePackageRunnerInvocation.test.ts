@@ -1,6 +1,6 @@
 import { chmod, mkdtemp, rm, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
-import { join } from 'node:path';
+import { delimiter, dirname, join } from 'node:path';
 import { mkdir } from 'node:fs/promises';
 
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
@@ -25,6 +25,8 @@ describe('normalizePackageRunnerInvocation', () => {
     await chmod(pnpmPath, 0o755);
     processEnv = {
       HAPPIER_PNPM_BIN: pnpmPath,
+      HAPPIER_HOME_DIR: rootDir,
+      HAPPIER_JS_RUNTIME_PATH: process.execPath,
       PATH: '',
     } as NodeJS.ProcessEnv;
   });
@@ -40,7 +42,7 @@ describe('normalizePackageRunnerInvocation', () => {
         args: ['-y', '--prefer-offline', '@scope/server', '--flag'],
         processEnv,
       }),
-    ).resolves.toEqual({
+    ).resolves.toMatchObject({
       command: processEnv.HAPPIER_PNPM_BIN,
       args: ['dlx', '@scope/server', '--flag'],
       cwdPolicy: 'neutral',
@@ -59,6 +61,24 @@ describe('normalizePackageRunnerInvocation', () => {
     })).resolves.toBeNull();
   });
 
+  it('refuses package execution when the selected JavaScript runtime is unavailable', async () => {
+    await expect(normalizePackageRunnerInvocation({ command: 'npx', args: ['fixture'],
+      processEnv: { ...processEnv, HAPPIER_JS_RUNTIME_PATH: join(rootDir, 'missing-node') },
+    })).resolves.toBeNull();
+  });
+
+  it('preserves authored Windows Path through the canonical case-insensitive merge', async () => {
+    const platform = Object.getOwnPropertyDescriptor(process, 'platform')!;
+    try {
+      Object.defineProperty(process, 'platform', { value: 'win32', configurable: true });
+      const normalized = await normalizePackageRunnerInvocation({ command: 'npx.cmd', args: ['fixture'],
+        processEnv: { ...processEnv, PATH: 'inherited-path' }, launchEnv: { Path: 'authored-path' },
+      });
+      expect(normalized?.env?.PATH.split(delimiter)).toEqual([dirname(process.execPath), 'authored-path']);
+      expect(normalized?.env).not.toHaveProperty('Path');
+    } finally { Object.defineProperty(process, 'platform', platform); }
+  });
+
   it('preserves npm exec invocations without package flags for workspace-local binaries', async () => {
     await expect(
       normalizePackageRunnerInvocation({
@@ -66,7 +86,7 @@ describe('normalizePackageRunnerInvocation', () => {
         args: ['exec', '--', '@scope/server', '--flag'],
         processEnv,
       }),
-    ).resolves.toEqual({
+    ).resolves.toMatchObject({
       command: processEnv.HAPPIER_PNPM_BIN,
       args: ['exec', '@scope/server', '--flag'],
       cwdPolicy: 'workspace',
@@ -80,7 +100,7 @@ describe('normalizePackageRunnerInvocation', () => {
         args: ['exec', '--package', '@scope/server', '--', 'server', '--flag'],
         processEnv,
       }),
-    ).resolves.toEqual({
+    ).resolves.toMatchObject({
       command: processEnv.HAPPIER_PNPM_BIN,
       args: ['dlx', '--package', '@scope/server', 'server', '--flag'],
       cwdPolicy: 'neutral',
@@ -94,7 +114,7 @@ describe('normalizePackageRunnerInvocation', () => {
         args: ['exec', '--package=@scope/server', '--', 'server', '--flag'],
         processEnv,
       }),
-    ).resolves.toEqual({
+    ).resolves.toMatchObject({
       command: processEnv.HAPPIER_PNPM_BIN,
       args: ['dlx', '--package=@scope/server', 'server', '--flag'],
       cwdPolicy: 'neutral',
@@ -108,7 +128,7 @@ describe('normalizePackageRunnerInvocation', () => {
         args: ['run', 'dev', '--', '--port', '3000'],
         processEnv,
       }),
-    ).resolves.toEqual({
+    ).resolves.toMatchObject({
       command: processEnv.HAPPIER_PNPM_BIN,
       args: ['run', 'dev', '--', '--port', '3000'],
       cwdPolicy: 'workspace',
@@ -122,7 +142,7 @@ describe('normalizePackageRunnerInvocation', () => {
         args: ['exec', 'tsx', 'server.ts'],
         processEnv,
       }),
-    ).resolves.toEqual({
+    ).resolves.toMatchObject({
       command: processEnv.HAPPIER_PNPM_BIN,
       args: ['exec', 'tsx', 'server.ts'],
       cwdPolicy: 'workspace',
@@ -136,7 +156,7 @@ describe('normalizePackageRunnerInvocation', () => {
         args: ['dlx', '@scope/server', '--flag'],
         processEnv,
       }),
-    ).resolves.toEqual({
+    ).resolves.toMatchObject({
       command: processEnv.HAPPIER_PNPM_BIN,
       args: ['dlx', '@scope/server', '--flag'],
       cwdPolicy: 'neutral',
@@ -150,7 +170,7 @@ describe('normalizePackageRunnerInvocation', () => {
         args: ['dlx', '@scope/server'],
         processEnv,
       }),
-    ).resolves.toEqual({
+    ).resolves.toMatchObject({
       command: processEnv.HAPPIER_PNPM_BIN,
       args: ['dlx', '@scope/server'],
       cwdPolicy: 'neutral',
@@ -188,7 +208,7 @@ describe('normalizePackageRunnerInvocation', () => {
         args: ['@scope/server'],
         processEnv,
       }),
-    ).resolves.toEqual({
+    ).resolves.toMatchObject({
       command: processEnv.HAPPIER_PNPM_BIN,
       args: ['dlx', '@scope/server'],
       cwdPolicy: 'neutral',
@@ -202,7 +222,7 @@ describe('normalizePackageRunnerInvocation', () => {
         args: ['dlx', '@scope/server'],
         processEnv,
       }),
-    ).resolves.toEqual({
+    ).resolves.toMatchObject({
       command: processEnv.HAPPIER_PNPM_BIN,
       args: ['dlx', '@scope/server'],
       cwdPolicy: 'neutral',

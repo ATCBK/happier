@@ -1,13 +1,16 @@
-import { basename } from 'node:path';
+import { basename, delimiter } from 'node:path';
+import { resolveJavaScriptRuntimePathEntries } from '@happier-dev/cli-common/agents';
 
-import { ensureManagedPnpmCommand } from '@/packagedRuntime/managedTools/pnpm/managedPnpm';
+import { buildManagedPnpmEnvironment, ensureManagedPnpmCommand } from '@/packagedRuntime/managedTools/pnpm/managedPnpm';
 import { ensureJavaScriptRuntimeExecutable } from '@/packagedRuntime/js/ensureJavaScriptRuntimeExecutable';
 import { isBun } from '@/utils/runtime';
+import { mergeProcessEnv } from '@/utils/processEnv/buildScopedProcessEnv';
 
 export type NormalizedPackageRunnerInvocation = Readonly<{
   command: string;
   args: string[];
   cwdPolicy: 'neutral' | 'workspace';
+  env?: Readonly<Record<string, string>>;
 }>;
 
 const PACKAGE_RUNNER_COMMANDS = new Set(['node', 'node.exe', 'npx', 'npx.cmd', 'npm', 'npm.cmd', 'pnpm', 'pnpm.cmd', 'yarn', 'yarn.cmd', 'yarnpkg', 'yarnpkg.cmd', 'bunx', 'bunx.cmd']);
@@ -50,6 +53,7 @@ export async function normalizePackageRunnerInvocation(params: Readonly<{
   command: string;
   args: readonly string[];
   processEnv?: NodeJS.ProcessEnv;
+  launchEnv?: Readonly<Record<string, string>>;
 }>): Promise<NormalizedPackageRunnerInvocation | null> {
   const processEnv = params.processEnv ?? process.env;
   const normalized = basename(params.command).toLowerCase();
@@ -60,53 +64,52 @@ export async function normalizePackageRunnerInvocation(params: Readonly<{
     return command ? { command, args, cwdPolicy: 'workspace' } : null;
   }
 
-  const resolvePnpmCommand = async (): Promise<string | null> => {
-    return await ensureManagedPnpmCommand(processEnv);
+  const resolvePnpmInvocation = async (args: string[], cwdPolicy: 'neutral' | 'workspace'): Promise<NormalizedPackageRunnerInvocation | null> => {
+    const command = await ensureManagedPnpmCommand(processEnv);
+    if (!command) return null;
+    const runtimeCommand = await ensureJavaScriptRuntimeExecutable({ isBunRuntime: isBun(), processEnv });
+    if (!runtimeCommand) return null;
+    const packageEnv = buildManagedPnpmEnvironment(processEnv);
+    const launchEnv = mergeProcessEnv({ baseEnv: processEnv, explicitEnv: params.launchEnv });
+    const pathKey = Object.keys(launchEnv).find(key => process.platform === 'win32' ? key.toUpperCase() === 'PATH' : key === 'PATH');
+    const runtimePaths = resolveJavaScriptRuntimePathEntries({ processEnv, runtimeCommand });
+    return { command, args, cwdPolicy, env: {
+      PATH: [...runtimePaths, pathKey ? launchEnv[pathKey] ?? '' : ''].filter(Boolean).join(delimiter),
+      PNPM_HOME: packageEnv.PNPM_HOME!,
+      npm_config_store_dir: packageEnv.npm_config_store_dir!,
+      XDG_CACHE_HOME: packageEnv.XDG_CACHE_HOME!,
+    } };
   };
 
   if (normalized === 'npx' || normalized === 'npx.cmd' || normalized === 'bunx' || normalized === 'bunx.cmd') {
-    const pnpmCommand = await resolvePnpmCommand();
-    if (!pnpmCommand) return null;
-    return { command: pnpmCommand, args: ['dlx', ...normalizeNpxLikeArgs(args)], cwdPolicy: 'neutral' };
+    return resolvePnpmInvocation(['dlx', ...normalizeNpxLikeArgs(args)], 'neutral');
   }
 
   if (normalized === 'npm' || normalized === 'npm.cmd') {
     const subcommand = args[0] ?? '';
     if (subcommand === 'run') {
-      const pnpmCommand = await resolvePnpmCommand();
-      if (!pnpmCommand) return null;
-      return { command: pnpmCommand, args, cwdPolicy: 'workspace' };
+      return resolvePnpmInvocation(args, 'workspace');
     }
     if (subcommand === 'exec') {
-      const pnpmCommand = await resolvePnpmCommand();
-      if (!pnpmCommand) return null;
       const execArgs = args.slice(1);
       if (hasPackageFlag(execArgs)) {
-        return { command: pnpmCommand, args: ['dlx', ...normalizeNpxLikeArgs(execArgs)], cwdPolicy: 'neutral' };
+        return resolvePnpmInvocation(['dlx', ...normalizeNpxLikeArgs(execArgs)], 'neutral');
       }
-      return { command: pnpmCommand, args: ['exec', ...normalizeExecArgs(execArgs)], cwdPolicy: 'workspace' };
+      return resolvePnpmInvocation(['exec', ...normalizeExecArgs(execArgs)], 'workspace');
     }
     return null;
   }
 
   if (normalized === 'yarn' || normalized === 'yarn.cmd' || normalized === 'yarnpkg' || normalized === 'yarnpkg.cmd') {
     if (args[0] === 'dlx') {
-      const pnpmCommand = await resolvePnpmCommand();
-      if (!pnpmCommand) return null;
-      return { command: pnpmCommand, args: ['dlx', ...args.slice(1)], cwdPolicy: 'neutral' };
+      return resolvePnpmInvocation(['dlx', ...args.slice(1)], 'neutral');
     }
     return null;
   }
 
   if (normalized === 'pnpm' || normalized === 'pnpm.cmd') {
-    const pnpmCommand = await resolvePnpmCommand();
-    if (!pnpmCommand) return null;
     const subcommand = args[0] ?? '';
-    return {
-      command: pnpmCommand,
-      args,
-      cwdPolicy: subcommand === 'run' || subcommand === 'exec' ? 'workspace' : 'neutral',
-    };
+    return resolvePnpmInvocation(args, subcommand === 'run' || subcommand === 'exec' ? 'workspace' : 'neutral');
   }
 
   return null;
