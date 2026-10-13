@@ -4,7 +4,7 @@ import { Gesture, GestureDetector } from 'react-native-gesture-handler';
 import type { DragSourceProps, DropTargetProps } from '@happier-dev/plugin-ui';
 import { HAPPIER_CARRIED_SOURCE_OPACITY, describeHappierDropAnnouncement, resolveHappierDropChooserSections, resolveHappierStagedMoveKey } from '@happier-dev/plugin-ui/presentation';
 
-import { DropdownMenu } from '@/components/ui/forms/dropdown/DropdownMenu';
+import { EntityDragGripChooser } from '@/components/ui/treeDragDrop/ui/EntityDragGripChooser';
 import { usePluginUiClientExecutableRegistrationRevision } from '@/components/plugins/reactNative/clientExecutableContributions';
 import { PoliteAccessibilityStatus } from '@/components/ui/accessibility/PoliteAccessibilityStatus';
 import { createEntityDragGestureAdapter, ENTITY_DRAG_ACTIVATION_DISTANCE_PX } from '@/components/ui/treeDragDrop/entityDragGestureAdapter';
@@ -135,10 +135,8 @@ function MountedPluginEntityDragSource(props: DragSourceProps & Readonly<{
     };
     const title = runtime.describeSource(sourceId)?.title ?? '';
     const label = t('entityDragDrop.organize.grip', { item: title });
-    const grip = enabled && !pointerInteraction && props.organizing === true ? <DropdownMenu
-        open={chooserOpen} onOpenChange={setChooserOpen} selectedId={null}
-        items={sections.flatMap(section => section.options.map(option => ({ id: option.id, title: option.label,
-            subtitle: option.detail, disabled: option.disabled, category: section.title })))}
+    const grip = enabled && !pointerInteraction && props.organizing === true ? <EntityDragGripChooser
+        open={chooserOpen} onOpenChange={setChooserOpen} sections={sections}
         onSelect={key => { const destination = destinations[Number(key)]; if (destination) void runtime.perform(sourceId, destination.targetId, destination.destination, 'chooser'); }}
         trigger={({ toggle }) => <GestureDetector gesture={gesture}><EntityDragGripTrigger onPress={toggle} accessibilityLabel={label}
             active={state.active} density="touch" expanded={chooserOpen} /></GestureDetector>} /> : null;

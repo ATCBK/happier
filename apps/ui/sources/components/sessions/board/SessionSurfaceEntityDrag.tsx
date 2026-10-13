@@ -5,7 +5,7 @@ import { Gesture, GestureDetector } from 'react-native-gesture-handler';
 import type { EntityDragItemV1, EntityDragScopeV1 } from '@happier-dev/protocol/plugins/ui';
 import { HAPPIER_CARRIED_SOURCE_OPACITY, describeHappierDropAnnouncement, resolveHappierDropChooserSections, resolveHappierStagedMoveKey } from '@happier-dev/plugin-ui/presentation';
 
-import { DropdownMenu } from '@/components/ui/forms/dropdown/DropdownMenu';
+import { EntityDragGripChooser } from '@/components/ui/treeDragDrop/ui/EntityDragGripChooser';
 import { PoliteAccessibilityStatus } from '@/components/ui/accessibility/PoliteAccessibilityStatus';
 import { EntityDragGripTrigger, EntityStagedMoveDock, useEntityStagedMoveHints, type EntityDragGripKeyEvent } from '@/components/ui/treeDragDrop/ui/EntityReleasePreview';
 import { EntityDropSettledFeedback, type EntityDropSettledMatch } from '@/components/ui/treeDragDrop/ui/EntityDropSettledFeedback';
@@ -178,8 +178,7 @@ export function SessionSurfaceEntityDragHandle(props: Readonly<{ drag: SessionSu
         return true;
     };
     return <>
-        <DropdownMenu open={open} onOpenChange={onOpenChange} selectedId={null} closeOnSelect={false}
-            items={sections.flatMap(section => section.options.map(option => ({ id: option.id, title: option.label, subtitle: option.detail, disabled: option.disabled, category: section.title })))}
+        <EntityDragGripChooser open={open} onOpenChange={onOpenChange} closeOnSelect={false} sections={sections}
             onSelect={id => chooser.select(destinations[Number(id)])}
             trigger={({ toggle }) => {
                 const grip = <GestureDetector gesture={props.drag.gesture}><EntityDragGripTrigger testID={props.testID}

@@ -20,7 +20,7 @@ import { EntityDragGripTrigger, EntityStagedMoveDock, useEntityStagedMoveHints }
 import { describeEntityDropOutcome } from '@/components/ui/treeDragDrop/ui/entityDropOutcome';
 import { EntityDropSettledFeedback } from '@/components/ui/treeDragDrop/ui/EntityDropSettledFeedback';
 import type { EntityDragItemV1 } from '@happier-dev/protocol/plugins/ui';
-import { DropdownMenu } from '@/components/ui/forms/dropdown/DropdownMenu';
+import { EntityDragGripChooser } from '@/components/ui/treeDragDrop/ui/EntityDragGripChooser';
 import { createEntityDragGestureAdapter, useEntityDragSource, useEntityDragSourceState, useEntityDragDomBinding,
     useEntityDropTargetState, type EntityDragCarry } from '@/components/ui/treeDragDrop';
 import { t } from '@/text';
@@ -355,9 +355,7 @@ const CanvasCard = React.memo(function CanvasCard(props: Readonly<{
         const action = MOVE_ACTIONS.find(candidate => candidate.name === event.nativeEvent.actionName);
         if (action) move(action.direction, false);
     };
-    const grip = <DropdownMenu open={chooserOpen} onOpenChange={chooser.onOpenChange} selectedId={null} closeOnSelect={false}
-        items={sections.flatMap(section => section.options.map(option => ({ id: option.id, title: option.label,
-            subtitle: option.detail, disabled: option.disabled, category: section.title })))}
+    const grip = <EntityDragGripChooser open={chooserOpen} onOpenChange={chooser.onOpenChange} closeOnSelect={false} sections={sections}
         onSelect={id => chooser.select(destinations[Number(id)])}
         trigger={({ toggle }) => <GestureDetector gesture={gesture}><EntityDragGripTrigger testID={'board-canvas-organize:' + member.key}
             accessibilityLabel={t('entityDragDrop.organize.grip', { item: member.title })}

@@ -8,7 +8,6 @@ import { entityDragScopesEqualV1, type EntityDragItemV1, type EntityDragKindV1, 
 import { HAPPIER_CARRIED_SOURCE_OPACITY, describeHappierDropAnnouncement, resolveHappierDropChooserSections, resolveHappierStagedMoveKey } from '@happier-dev/plugin-ui/presentation';
 
 import { RoundButton } from '@/components/ui/buttons/RoundButton';
-import { DropdownMenu } from '@/components/ui/forms/dropdown/DropdownMenu';
 import { PoliteAccessibilityStatus } from '@/components/ui/accessibility/PoliteAccessibilityStatus';
 import { usePopoverScrollSourceRef } from '@/components/ui/popover/PopoverScrollSource';
 import { t } from '@/text';
@@ -23,6 +22,7 @@ import { useTreeDropAutoscroll } from '../autoscroll/useTreeDropAutoscroll';
 import { entityFlatPositionAtIndex, resolveEntityFlatRowPosition } from '../geometry/entityFlatListStrategy';
 import { ENTITY_STAGED_MOVE_DOCK_PLACEMENT, EntityDragGripTrigger, EntityStagedMoveDock, useEntityStagedMoveHints, type EntityDragGripKeyEvent } from './EntityReleasePreview';
 import { EntityDropSettledFeedback } from './EntityDropSettledFeedback';
+import { EntityDragGripChooser } from './EntityDragGripChooser';
 import { useEntityDropOutcome } from './entityDropOutcome';
 import { TreeDropIndicatorLine } from './TreeDropIndicatorLine';
 import { resolveActionExecutionFailureMessage } from '@/sync/ops/actions/resolveActionExecutionFailureMessage';
@@ -334,8 +334,7 @@ function MountedFlatRow(props: React.ComponentProps<typeof EntityFlatReorderRow>
         id: String(index), label: destination.label ?? t('entityDragDrop.organize.title'),
         refusedReason: destination.admission.status === 'refused' ? destination.admission.reason.message : null,
     })), unavailableTitle: t('entityDragDrop.chooser.unavailable') });
-    const handle = (testID?: string) => <DropdownMenu open={chooserOpen} onOpenChange={setChooserOpen} selectedId={null}
-        items={sections.flatMap(section => section.options.map(option => ({ id: option.id, title: option.label, subtitle: option.detail, disabled: option.disabled, category: section.title })))}
+    const handle = (testID?: string) => <EntityDragGripChooser open={chooserOpen} onOpenChange={setChooserOpen} sections={sections}
         onSelect={key => { const destination = destinations[Number(key)]; if (destination) void runtime.perform(sourceId, destination.targetId, destination.destination, 'chooser'); }}
         trigger={({ toggle }) => <GestureDetector gesture={handleGesture}><EntityDragGripTrigger testID={testID}
             accessibilityLabel={t('entityDragDrop.organize.grip', { item: context.binding.items.find(item => item.id === id)?.title ?? '' })}
