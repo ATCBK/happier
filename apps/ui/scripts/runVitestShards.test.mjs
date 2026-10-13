@@ -62,60 +62,6 @@ for (const scenario of [
   });
 }
 
-test('Gate partitions run once with disjoint complete filtered coverage and the available-core pool', async () => {
-  const tempRoot = await mkdtemp(join(tmpdir(), 'happier-ui-vitest-gate-'));
-  try {
-    const recordsPath = join(tempRoot, 'runs.jsonl');
-    const executedPath = join(tempRoot, 'executed.jsonl');
-    const reporterPath = join(tempRoot, 'reporter.mjs');
-    const configPath = join(tempRoot, 'vitest.config.mjs');
-    await writeFile(reporterPath, `import { appendFileSync } from 'node:fs';
-export default class {
-  onInit(ctx) { this.ctx = ctx; }
-  onTestRunStart() { appendFileSync(${JSON.stringify(recordsPath)}, JSON.stringify({ pid: process.pid, maxWorkers: this.ctx.config.maxWorkers, minWorkers: this.ctx.config.minWorkers, fileParallelism: this.ctx.config.fileParallelism, isolate: this.ctx.config.isolate }) + '\\n'); }
-}\n`);
-    await writeFile(configPath, `import { resolveVitestWorkers } from ${JSON.stringify(join(packageRoot, '../../scripts/testing/vitestWorkers.ts'))}; export default { root: ${JSON.stringify(tempRoot)}, test: { include: ['*.test.js'], pool: 'forks', isolate: true, ...resolveVitestWorkers({ legacyUiOverride: true }), reporters: [${JSON.stringify(reporterPath)}] } };\n`);
-    const selected = Array.from({ length: 36 }, (_, index) => join(tempRoot, `selected_${index}.test.js`));
-    for (const file of [...selected, join(tempRoot, 'excluded.test.js')]) {
-      await writeFile(file, `import { test } from 'vitest'; import { appendFileSync } from 'node:fs';
-test('executes exactly once', () => appendFileSync(${JSON.stringify(executedPath)}, JSON.stringify(${JSON.stringify(file)}) + '\\n'));\n`);
-    }
-    for (let part = 1; part <= 4; part += 1) {
-      const env = { ...process.env, CI: 'true', HAPPIER_UI_VITEST_PART: String(part), HAPPIER_UI_VITEST_PARTS: '4', HAPPIER_UI_VITEST_SHARDS: '', HAPPIER_UI_VITEST_SHARD_CONCURRENCY: '' };
-      delete env.HAPPIER_VITEST_MAX_WORKERS;
-      delete env.VITEST_UI_MAX_FORKS;
-      if (part === 4) env.HAPPIER_VITEST_MAX_WORKERS = '2';
-      const child = spawn(process.execPath, [runnerPath, '--config', configPath, 'selected_'], {
-        cwd: packageRoot,
-        env,
-        stdio: ['ignore', 'pipe', 'pipe'],
-      });
-      let output = '';
-      child.stdout.on('data', chunk => { output += chunk; });
-      child.stderr.on('data', chunk => { output += chunk; });
-      const code = await new Promise((resolve, reject) => { child.once('error', reject); child.once('exit', resolve); });
-      assert.equal(code, 0, output);
-      // The reporter starts before native sharding; actual executions establish
-      // each bucket's coverage rather than the unpartitioned collection list.
-      const executed = (await readFile(executedPath, 'utf8')).trim().split('\n');
-      assert.equal(executed.length, part * 9, output);
-    }
-    const runs = (await readFile(recordsPath, 'utf8')).trim().split('\n').map(line => JSON.parse(line));
-    assert.equal(runs.length, 4, 'each selected Gate partition must launch one Vitest run');
-    assert.equal(new Set(runs.map(run => run.pid)).size, 4);
-    for (const [index, run] of runs.entries()) {
-      assert.equal(run.maxWorkers, index === 3 ? 2 : Math.max(1, Math.min(4, Math.floor(availableParallelism() / 2))));
-      assert.equal(run.minWorkers, 1);
-      assert.equal(run.fileParallelism, true);
-      assert.equal(run.isolate, true);
-    }
-    const executed = (await readFile(executedPath, 'utf8')).trim().split('\n').map(line => JSON.parse(line));
-    assert.deepEqual(executed.sort(), selected.sort());
-  } finally {
-    await rm(tempRoot, { recursive: true, force: true });
-  }
-});
-
 test('the file-count shard resolver keeps each Vitest process within the file budget', () => {
   assert.equal(resolveVitestShardCountForFileCount({}, 1_264), 79);
   assert.equal(resolveVitestShardCountForFileCount({}, 1), 1);
@@ -124,7 +70,7 @@ test('the file-count shard resolver keeps each Vitest process within the file bu
 });
 
 for (const interruption of ['SIGINT', 'timeout']) {
-  test(`the single Gate invocation cleans its real worker on ${interruption}`, {
+  test(`the selected partition cleans its real worker on ${interruption}`, {
     skip: interruption === 'SIGINT' && process.platform === 'win32',
   }, async () => {
     const tempRoot = await mkdtemp(join(tmpdir(), 'happier-ui-vitest-gate-stop-'));
@@ -185,7 +131,7 @@ test('a bare-name positional filter is not forwarded into the per-shard run', as
       positionalFilters,
       files: ['/abs/a.test.ts'],
     }),
-    ['run', '--config', 'vitest.config.ts', '--no-file-parallelism', '/abs/a.test.ts'],
+    ['run', '--config', 'vitest.config.ts', '--file-parallelism=true', '/abs/a.test.ts'],
   );
 });
 
@@ -198,7 +144,7 @@ test('multiple positional filters are all dropped from the shard run', async () 
       positionalFilters: await resolveVitestPositionalFilters(passthroughArgs),
       files: ['/abs/a.test.ts'],
     }),
-    ['run', '--config', 'vitest.config.ts', '--no-file-parallelism', '/abs/a.test.ts'],
+    ['run', '--config', 'vitest.config.ts', '--file-parallelism=true', '/abs/a.test.ts'],
   );
 });
 
@@ -219,7 +165,7 @@ test('option values are preserved even when spelled like the dropped filter', as
       'run',
       '--config',
       'vitest.config.ts',
-      '--no-file-parallelism',
+      '--file-parallelism=true',
       '--reporter',
       'dot',
       '--testNamePattern',
@@ -238,7 +184,7 @@ test('an unfiltered run (the CI lane shape) carries only its shard files', async
       positionalFilters: [],
       files: ['/abs/a.test.ts'],
     }),
-    ['run', '--config', 'vitest.config.ts', '--no-file-parallelism', '/abs/a.test.ts'],
+    ['run', '--config', 'vitest.config.ts', '--file-parallelism=true', '/abs/a.test.ts'],
   );
 });
 

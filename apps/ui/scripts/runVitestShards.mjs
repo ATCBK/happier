@@ -63,11 +63,11 @@ export function resolveVitestShardCount(env) {
 export function resolveVitestShardCountForFileCount(env, fileCount) {
   const override = parsePositiveInt(env?.HAPPIER_UI_VITEST_SHARDS);
   // The UI suite has a large module graph (React Native stubs + Expo/web shims).
-  // Keep each process small enough to complete inside the canonical shard watchdog even
-  // when its sorted bucket includes one of the route-heavy files. Explicit overrides remain
-  // available for focused diagnosis and constrained CI experiments.
+  // Bound module-graph retention by restarting after small file buckets.
+  // Explicit overrides remain available for focused diagnosis.
   const collectedFileCount = Number.isFinite(fileCount) && fileCount > 0 ? Math.floor(fileCount) : 1;
-  return override ?? Math.ceil(collectedFileCount / DEFAULT_MAX_FILES_PER_SHARD);
+  return override ?? Math.max(parsePositiveInt(env?.HAPPIER_UI_VITEST_PARTS) ?? 1,
+    Math.ceil(collectedFileCount / DEFAULT_MAX_FILES_PER_SHARD));
 }
 
 export function resolveVitestShardRange(env, shardCount) {
@@ -83,7 +83,6 @@ export function resolveVitestShardRange(env, shardCount) {
 
 export function resolveVitestShardTimeoutMs(env) {
   // CI owns the whole job deadline, including restore and test execution.
-  // The twenty-minute performance target is not a subordinate kill timer.
   // Keep an explicit watchdog for focused diagnostics outside that lifecycle.
   return parsePositiveInt(env?.HAPPIER_UI_VITEST_SHARD_TIMEOUT_MS) ?? undefined;
 }
@@ -145,17 +144,7 @@ export async function resolveVitestPositionalFilters(passthroughArgs) {
 }
 
 /** The vitest argv tail for one shard: caller options, minus the path filters, plus its files. */
-export function buildVitestShardRunArgs({ configPath, passthroughArgs, positionalFilters, files, partition }) {
-  if (partition) {
-    // Native sharding hashes and slices the filtered inventory deterministically.
-    // It avoids both repeated list/transform passes and large file-path argv on Windows.
-    const options = partition.options;
-    return [
-      'run', '--config', configPath, ...passthroughArgs,
-      `--shard=${partition.part}/${partition.parts}`,
-      ...(options.fileParallelism === undefined ? ['--file-parallelism'] : []),
-    ];
-  }
+export function buildVitestShardRunArgs({ configPath, passthroughArgs, positionalFilters, files }) {
   const droppable = new Map();
   for (const filter of positionalFilters ?? []) {
     droppable.set(filter, (droppable.get(filter) ?? 0) + 1);
@@ -175,7 +164,7 @@ export function buildVitestShardRunArgs({ configPath, passthroughArgs, positiona
     'run',
     '--config',
     configPath,
-    '--no-file-parallelism',
+    '--file-parallelism=true',
     ...optionArgs,
     ...(files ?? []),
   ];
@@ -276,13 +265,13 @@ async function resolveVitestTestFiles({ vitestCommand, configPath, env, passthro
   }
 }
 
-async function spawnVitestRun({ vitestCommand, configPath, env, passthroughArgs, positionalFilters, files, partition, timeoutMs, onTimeout }) {
+async function spawnVitestRun({ vitestCommand, configPath, env, passthroughArgs, positionalFilters, files, timeoutMs, onTimeout }) {
   let operatorSignal = null;
   const result = await runManagedChildCommand({
     command: vitestCommand.command,
     args: [
       ...vitestCommand.argsPrefix,
-      ...buildVitestShardRunArgs({ configPath, passthroughArgs, positionalFilters, files, partition }),
+      ...buildVitestShardRunArgs({ configPath, passthroughArgs, positionalFilters, files }),
     ],
     spawnOptions: {
       env,
@@ -453,24 +442,7 @@ async function main(argv) {
     delete vitestEnv.VITEST_MIN_FORKS;
     delete vitestEnv.VITEST_MIN_THREADS;
   }
-  const part = parsePositiveInt(process.env.HAPPIER_UI_VITEST_PART);
-  const parts = parsePositiveInt(process.env.HAPPIER_UI_VITEST_PARTS);
   const vitestCommand = resolveVitestNodeCommand();
-  if (part !== null && parts !== null && part <= parts) {
-    const shardSpec = `${part}/${parts}`;
-    console.log(`[vitest] partition ${shardSpec}`);
-    const result = await spawnVitestRun({
-      vitestCommand, configPath, env: vitestEnv, passthroughArgs,
-      partition: { part, parts, options }, timeoutMs: shardTimeoutMs,
-      onTimeout: () => console.error(`[vitest] partition ${shardSpec} timed out after ${shardTimeoutMs}ms; terminating its process tree`),
-    });
-    if (!result.ok) throw result.error;
-    const termination = classifyVitestShardTermination(result);
-    const summary = summarizeVitestShardOutcomes({ shardCount: 1, outcomes: [{ ...termination, shardSpec }] });
-    for (const line of summary.lines) console.log(line);
-    if (summary.exitCode !== 0) process.exit(summary.exitCode);
-    return;
-  }
   // The list pass keeps the caller's filters (they are what selects the files); the shard runs
   // drop exactly those filters, because the resolved file list already carries them.
   const positionalFilters = await resolveVitestPositionalFilters(passthroughArgs);
