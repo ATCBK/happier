@@ -130,9 +130,19 @@ remote, Agent SDK, and unified-terminal runners use that same owner. The retired
 tasks are recorded at the default `info` file-log level. Closing an SDK stream or
 transport alone does not prove process exit: its owned child must actually exit,
 and the remote query finishes that cleanup before a replacement query can reuse
-the ledger. Unverified owned cleanup or an abrupt native launcher exit whose
-provider termination cannot be confirmed ends the runner instead of retrying into
-the same ledger; unresolved task identities remain unknown.
+the ledger. Native launchers report the native child's actual exit over their
+private IPC channel; the owner drains that channel before deciding whether the
+provider stopped. A launcher exit code or signal alone cannot establish that fact.
+Unverified owned cleanup or an unexpected native launcher exit whose provider
+termination cannot be confirmed ends the runner instead of retrying into the same
+ledger; unresolved task identities remain unknown. Native children may keep stream
+pipes open after launcher death, so unverified exit reporting does not wait for
+those pipes to close.
+
+An external terminal host's pane death or clean exit status does not supply the
+private native-exit proof. Its lost observation retains task identities as unknown;
+an expected prompt-input exit remains a normal session end, while unexpected host
+death takes the fatal runtime path.
 
 Losing only observation, such as the transcript feed, retains task identities and
 demotes their activity to unknown. Fresh native evidence can confirm a task again;

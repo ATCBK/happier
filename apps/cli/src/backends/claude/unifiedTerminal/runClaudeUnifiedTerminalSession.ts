@@ -1,4 +1,5 @@
 import { createUnreadTerminalArtifactsCleanup } from '@/terminal/runtime/terminalLaunchSpec';
+import { ClaudeNativeProviderExitUnverifiedError } from '../sdk/types';
 
 import type {
   ClaudeUnifiedTerminalHost,
@@ -1214,6 +1215,18 @@ export async function runClaudeUnifiedTerminalSession<Mode extends EnhancedMode 
     ...(opts.signal ? [opts.signal] : []),
   ]);
   let fatalRuntimeError: unknown = null;
+  const observeUnverifiedProviderExit = (runtimeError?: unknown): void => {
+    if (!(fatalRuntimeError instanceof ClaudeNativeProviderExitUnverifiedError)) {
+      const unverifiedExit = new ClaudeNativeProviderExitUnverifiedError();
+      const priorError = fatalRuntimeError ?? runtimeError;
+      fatalRuntimeError = priorError
+        ? new AggregateError([priorError, unverifiedExit], 'Claude runtime failed with unverified provider exit', { cause: priorError })
+        : unverifiedExit;
+    }
+    void opts.runtimeActivityAdapter?.handleRuntimeLoss('claude_process_exit').catch((error) => {
+      logger.debug('[unified]: Claude process-exit activity observation failed', error);
+    });
+  };
   const expectedProviderResumeSessionId =
     typeof opts.expectedProviderResumeSessionId === 'string'
     && opts.expectedProviderResumeSessionId.trim().length > 0
@@ -1327,9 +1340,10 @@ export async function runClaudeUnifiedTerminalSession<Mode extends EnhancedMode 
       spawnArtifactsHandedOff = true;
       const ownedProcess = currentTerminalProcess;
       void ownedProcess.whenExited.then(
-        () => {
+        (exit) => {
           if (currentTerminalProcess !== ownedProcess) return;
-          observeProviderProcessExit();
+          if (exit.nativeExited === true || exit.processTreeStopped === true) observeProviderProcessExit();
+          else observeUnverifiedProviderExit();
           runtimeAbortController.abort('claude-unified-current-terminal-process-exited');
         },
         (error) => {
@@ -2652,13 +2666,19 @@ export async function runClaudeUnifiedTerminalSession<Mode extends EnhancedMode 
             startupGraceActive: () => startupHostLivenessGraceActive,
             isExpectedHostExit: (liveness) => expectedPromptInputExit && isCleanTerminalExit(liveness),
             onHostExited: () => {
-              observeProviderProcessExit();
+              if (!currentTerminalProcess) {
+                void opts.runtimeActivityAdapter?.handleRuntimeLoss('claude_process_exit').catch((error) => {
+                  logger.debug('[unified]: Claude process-exit activity observation failed', error);
+                });
+              }
               if (!runtimeAbortController.signal.aborted) {
                 runtimeAbortController.abort('claude-unified-terminal-graceful-exit');
               }
             },
             onHostDead: (error) => {
-              observeProviderProcessExit();
+              if (!currentTerminalProcess) {
+                observeUnverifiedProviderExit(error);
+              }
               void publishHostDeadHealth(activeHandle, error.liveness);
               fatalRuntimeError ??= error;
               runtimeAbortController.abort(error);
@@ -2672,8 +2692,8 @@ export async function runClaudeUnifiedTerminalSession<Mode extends EnhancedMode 
       await controller.run();
     } catch (error) {
       if (error instanceof ClaudeUnifiedTerminalHostDeadError) {
-        if (error.liveness?.paneAlive === false && error.liveness.probeInconclusive !== true) {
-          observeProviderProcessExit();
+        if (!currentTerminalProcess && error.liveness?.paneAlive === false && error.liveness.probeInconclusive !== true) {
+          if (!fatalRuntimeError) observeUnverifiedProviderExit(error);
         }
         await publishHostDeadHealth(activeHandle, error.liveness);
         emitClaudeUnifiedHostDead(telemetry, {
@@ -2682,6 +2702,10 @@ export async function runClaudeUnifiedTerminalSession<Mode extends EnhancedMode 
           paneId: activeHandle.paneId,
           liveness: error.liveness,
         });
+      }
+      if (fatalRuntimeError && fatalRuntimeError !== error) {
+        if (error instanceof ClaudeUnifiedTerminalHostDeadError) throw fatalRuntimeError;
+        throw new AggregateError([error, fatalRuntimeError], 'Claude runtime failed with unverified provider exit', { cause: error });
       }
       throw error;
     }

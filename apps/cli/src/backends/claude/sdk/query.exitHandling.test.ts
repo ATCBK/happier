@@ -16,6 +16,8 @@ import { killProcessTree } from '@/agent/runtime/process/killProcessTree';
 import { writeExecutableShimSync } from '@/testkit/fs/executableShim';
 import { createDeferred } from '@/testkit/async/deferred';
 import { logger } from '@/ui/logger';
+import { resolveCliRuntimeAssetPath } from '@/runtime/assets/resolveCliRuntimeAssetPath';
+import { ClaudeNativeProviderExitUnverifiedError } from './types';
 
 // Record real OS children so cleanup assertions wait for the actual close boundary.
 vi.mock('node:child_process', async (importOriginal) => {
@@ -51,6 +53,62 @@ describe('claude sdk query exit handling', () => {
     if (tmpRoot) {
       rmSync(tmpRoot, { recursive: true, force: true });
       tmpRoot = '';
+    }
+  });
+
+  it.runIf(process.platform !== 'win32').each(['native-exit', 'wrapper-operation-error'] as const)('requires positive native exit proof when the legacy wrapper exits normally (%s)', async (outcome) => {
+    tmpRoot = mkdtempSync(join(tmpdir(), 'happier-claude-query-native-proof-'));
+    const pidPath = join(tmpRoot, 'native-pid');
+    const provider = writeExecutableShimSync({ dir: tmpRoot, fileName: 'provider', contents: `#!${process.execPath}
+      require('node:fs').writeFileSync(${JSON.stringify(pidPath)}, String(process.pid));
+      console.log(JSON.stringify({ type: 'system', subtype: 'init', session_id: 'owned-session' }));
+      process.on('SIGUSR1', () => process.exit(0));
+      setInterval(() => {}, 1000);
+    ` });
+    const preload = join(tmpRoot, 'os-spawn-error.cjs');
+    // Inject a post-spawn operation failure only at the real native child OS adapter.
+    writeFileSync(preload, `const cp = require('node:child_process'); const spawn = cp.spawn;
+      cp.spawn = (...args) => { const child = spawn(...args);
+        child.once('spawn', () => process.nextTick(() => child.emit('error', new Error('owned native operation failed'))));
+        return child; };
+    `);
+    const ledger = createClaudeProviderActivityLedger();
+    ledger.apply({ type: 'started', sessionId: 'owned-session', taskId: 'native-child' });
+    const adapter = createClaudeProviderRuntimeActivityAdapter({ providerActivityLedger: ledger,
+      contributionHandle: { report: async () => {}, markUnknown: async () => {}, dispose: async () => {} } });
+    const spawnIndex = vi.mocked(spawn).mock.results.length;
+    const q = query({ prompt: 'hi', options: {
+      cwd: tmpRoot, executable: process.execPath,
+      executableArgs: outcome === 'wrapper-operation-error' ? ['--require', preload] : [],
+      pathToClaudeCodeExecutable: resolveCliRuntimeAssetPath('scripts', 'claude_remote_launcher.cjs'),
+      env: { HAPPIER_CLAUDE_PATH: provider },
+    }, onProcessExited: async ({ nativeExited, processTreeStopped }) => {
+      const providerStopped = nativeExited || processTreeStopped;
+      await adapter.handleRuntimeLoss('claude_process_exit', { providerStopped });
+      if (!providerStopped) throw new ClaudeNativeProviderExitUnverifiedError();
+    } });
+    const wrapperResult = vi.mocked(spawn).mock.results[spawnIndex];
+    if (wrapperResult?.type !== 'return') throw new Error('Expected actual owned wrapper');
+    const exited = once(wrapperResult.value, 'exit');
+    let nativePid: number | undefined;
+    let returned: ReturnType<typeof q.return> | undefined;
+    try {
+      await vi.waitFor(() => { nativePid = Number(readFileSync(pidPath, 'utf8')); });
+      if (outcome === 'native-exit') process.kill(nativePid!, 'SIGUSR1');
+      expect((await exited)[1]).toBeNull();
+      returned = q.return();
+      if (outcome === 'native-exit') {
+        await expect(withTimeout(returned, 5000, 'proven native exit')).resolves.toMatchObject({ done: true });
+        expect(ledger.getActiveProviderTaskCount()).toBe(0);
+      } else {
+        await expect(withTimeout(returned, 5000, 'unverified normal wrapper exit with pipes open')).rejects.toMatchObject({ code: 'claude_native_provider_exit_unverified' });
+        expect(isPidAlive(nativePid!)).toBe(true);
+        expect(ledger.getActiveProviderTaskCount()).toBe(1);
+      }
+    } finally {
+      await killProcessTree({ pid: nativePid });
+      await killProcessTree(wrapperResult.value);
+      await returned?.catch(() => undefined);
     }
   });
 
@@ -278,7 +336,6 @@ describe('claude sdk query exit handling', () => {
       console.log(JSON.stringify({ type: 'system', subtype: 'init', session_id: 'owned-session', pid: process.pid }));
       process.stdin.once('data', () => {
         console.log(JSON.stringify({ type: 'result', subtype: 'success' }));
-        process.stdout.end(); process.stderr.end();
       });
       setInterval(() => {}, 1000);
     ` });
@@ -320,7 +377,7 @@ describe('claude sdk query exit handling', () => {
           if ('pid' in message && typeof message.pid === 'number') nativePid = message.pid;
         }, isAborted: () => false, canCallTool: async () => ({ behavior: 'allow', updatedInput: {} }),
       });
-      await expect(result).rejects.toMatchObject({ code: 'claude_native_provider_exit_unverified' });
+      await expect(withTimeout(result, 5000, 'native wrapper exit with inherited streams open')).rejects.toMatchObject({ code: 'claude_native_provider_exit_unverified' });
     } finally {
       await killProcessTree({ pid: nativePid });
       env.restore();
@@ -345,7 +402,6 @@ describe('claude sdk query exit handling', () => {
     const script = writeExecutableShimSync({ dir: tmpRoot, fileName: 'provider', contents: `#!${process.execPath}
       console.log(JSON.stringify({ type: 'system', subtype: 'init', session_id: 'owned-session', pid: process.pid }));
       process.stdin.once('data', () => console.log(JSON.stringify({ type: 'result', subtype: 'success' })));
-      process.on('SIGUSR1', () => { process.stdout.end(); process.stderr.end(); });
       setInterval(() => {}, 1000);
     ` });
     const hookSettingsPath = join(tmpRoot, 'hooks.json');
@@ -386,8 +442,7 @@ describe('claude sdk query exit handling', () => {
       await new Promise<void>((resolve) => setImmediate(resolve));
       if (nativePid === undefined) throw new Error('Expected actual native provider PID');
       expect(isPidAlive(nativePid)).toBe(true);
-      process.kill(nativePid, 'SIGUSR1');
-      const error = await withTimeout(settled, 5000, 'native wrapper close observation');
+      const error = await withTimeout(settled, 5000, 'native wrapper exit observation with pipes open');
       expect(ledger.getActiveProviderTaskCount()).toBe(1);
       expect(error).toMatchObject({ errors: [runtimeError, { code: 'claude_native_provider_exit_unverified' }] });
     } finally {

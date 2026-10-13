@@ -4,6 +4,7 @@ import { mkdtemp, readFile, rm, stat, unlink } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import * as childProcess from 'child_process';
+import { spawn } from 'node:child_process';
 
 import type {
   TerminalAttachmentId,
@@ -100,6 +101,54 @@ function baseOptions(
 }
 
 describe('runClaudeUnifiedTerminalSession launch disposition', () => {
+  it.runIf(process.platform !== 'win32')('retains provider tasks when the same-pane launcher dies with its native provider alive', async () => {
+    const directory = await mkdtemp(join(tmpdir(), 'happier-claude-unified-wrapper-death-'));
+    const nativePidPath = join(directory, 'native-pid');
+    const prepared = await prepareOwnedTerminalSpawn({ command: process.execPath,
+      args: ['-e', `require('node:fs').writeFileSync(${JSON.stringify(nativePidPath)},String(process.pid));setInterval(()=>{},1000)`],
+      cwd: directory, env: { PATH: process.env.PATH ?? '' } });
+    const ledger = createClaudeProviderActivityLedger();
+    ledger.apply({ type: 'started', sessionId: 'claude-resume-id', taskId: 'native-child' });
+    const states: string[] = [];
+    const runtimeActivityAdapter = createClaudeProviderRuntimeActivityAdapter({ providerActivityLedger: ledger,
+      contributionHandle: { report: async snapshot => { states.push(snapshot.state); },
+        markUnknown: async () => { states.push('unknown'); }, dispose: async () => {} } });
+    await runtimeActivityAdapter.activateObservation('fixture-native-provider');
+    const abortController = new AbortController();
+    let launcher: ReturnType<typeof spawn> | undefined;
+    let nativePid: number | undefined;
+    const spawnProcess = ((...args: Parameters<typeof spawn>) => {
+      launcher = spawn(...args);
+      return launcher;
+    }) as typeof spawn;
+    const session = runClaudeUnifiedTerminalSession({
+      ...baseOptions(createAdapter(), abortController), path: directory, createController: undefined,
+      currentTerminalHost: { handle: existingHandle, lifecycle: 'borrowed' },
+      providerActivityLedger: ledger, runtimeActivityAdapter,
+      launchCurrentTerminalProcess: async () => launchOwnedTerminalProcess({ spawn: prepared, cwd: directory, spawnProcess }),
+      persistTerminalHostAttachmentInfo: async () => {},
+      onTerminalHostReady: async () => {
+        await vi.waitFor(async () => { nativePid = Number(await readFile(nativePidPath, 'utf8')); });
+        launcher!.kill('SIGKILL');
+      },
+    });
+    const settled = session.then(() => undefined, (error: unknown) => error);
+    try {
+      const error = await settled;
+      expect(nativePid, String(error)).toBeDefined();
+      expect(isPidAlive(nativePid!)).toBe(true);
+      expect(ledger.getActiveProviderTaskCount()).toBe(1);
+      expect(states.at(-1)).toBe('unknown');
+      expect(error).toMatchObject({ code: 'claude_native_provider_exit_unverified' });
+    } finally {
+      abortController.abort();
+      await killProcessTree({ pid: nativePid });
+      if (launcher) await killProcessTree(launcher);
+      await settled;
+      await prepared.cleanupUnreadArtifacts?.();
+      await rm(directory, { recursive: true, force: true });
+    }
+  });
   it('retires provider tasks after the owned provider exits inside a borrowed terminal', async () => {
     const directory = await mkdtemp(join(tmpdir(), 'happier-claude-provider-task-exit-'));
     const prepared = await prepareOwnedTerminalSpawn({ command: process.execPath,
@@ -118,7 +167,7 @@ describe('runClaudeUnifiedTerminalSession launch disposition', () => {
     const exitAllowed = new Promise<void>((resolve) => { allowExit = resolve; });
     let terminationRequested!: () => void;
     const requested = new Promise<void>((resolve) => { terminationRequested = resolve; });
-    let physicalTermination: Promise<void> | undefined;
+    let physicalTermination: ReturnType<typeof killProcessTree> | undefined;
     try {
       await runClaudeUnifiedTerminalSession({
         ...baseOptions(createAdapter(), abortController), path: directory, createController: undefined,
@@ -126,10 +175,11 @@ describe('runClaudeUnifiedTerminalSession launch disposition', () => {
         runtimeActivityAdapter, providerActivityLedger: ledger,
         launchCurrentTerminalProcess: async () => {
           ownedProcess = await launchOwnedTerminalProcess({ spawn: prepared, cwd: directory,
-            // The OS termination boundary acknowledges the request before the child actually exits.
+            // Hold the actual OS termination boundary until the test releases this child.
             terminateProcess: async (child) => {
-              physicalTermination = exitAllowed.then(async () => { await killProcessTree(child); });
+              physicalTermination = exitAllowed.then(() => killProcessTree(child));
               terminationRequested();
+              return await physicalTermination;
             },
           });
           return ownedProcess;
@@ -164,7 +214,7 @@ describe('runClaudeUnifiedTerminalSession launch disposition', () => {
     }
   });
   it.each(['expected-exit', 'confirmed-death', 'inconclusive'] as const)(
-    'retires provider tasks only after conclusive host exit (%s)',
+    'retains provider tasks when host exit cannot prove native provider exit (%s)',
     async (outcome) => {
       vi.stubEnv('HAPPIER_CLAUDE_UNIFIED_TERMINAL_HOST_LIVENESS_POLL_MS', '1000');
       reloadConfiguration();
@@ -205,9 +255,11 @@ describe('runClaudeUnifiedTerminalSession launch disposition', () => {
           abortController.abort();
         }
         const error = await settled;
-        if (outcome === 'confirmed-death') expect(error).toMatchObject({ code: 'claude_unified_terminal_host_dead' });
+        if (outcome === 'confirmed-death') expect(error).toMatchObject({ errors: [
+          { code: 'claude_unified_terminal_host_dead' }, { code: 'claude_native_provider_exit_unverified' },
+        ] });
         else expect(error).toBeUndefined();
-        expect(ledger.getActiveProviderTaskCount()).toBe(outcome === 'inconclusive' ? 1 : 0);
+        expect(ledger.getActiveProviderTaskCount()).toBe(1);
       } finally {
         abortController.abort();
         await settled;
@@ -235,7 +287,7 @@ describe('runClaudeUnifiedTerminalSession launch disposition', () => {
             launcherPid = child.pid;
             attempts += 1;
             if (attempts === 1) throw failure;
-            await killProcessTree(child);
+            return await killProcessTree(child);
           } }),
         persistTerminalHostAttachmentInfo: async ({ sessionId, attachmentId, handle, terminal }) => {
           storedAttachment = { version: 3, lifecycle: 'borrowed', sessionId, attachmentId,

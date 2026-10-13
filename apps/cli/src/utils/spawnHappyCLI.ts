@@ -86,6 +86,7 @@ const PINNED_RUNNER_DIST_DIR = '.runner-snapshots';
 const PINNED_RUNNER_REQUIRED_ASSET_RELATIVE_PATHS = [
   ['scripts', 'terminal_launch_spec_runner.cjs'],
   ['scripts', 'process_tree.cjs'],
+  ['scripts', 'native_process_exit.cjs'],
   ['scripts', 'claude_local_launcher.cjs'],
   ['scripts', 'claude_remote_launcher.cjs'],
   ['scripts', 'claude_launcher_runtime.cjs'],

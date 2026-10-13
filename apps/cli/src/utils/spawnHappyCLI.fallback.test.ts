@@ -75,6 +75,7 @@ function writeTinyRuntimeAssets(root: string, { includeDevCommandWrapper = true 
   for (const scriptName of [
     'terminal_launch_spec_runner.cjs',
     'process_tree.cjs',
+    'native_process_exit.cjs',
     'claude_local_launcher.cjs',
     'claude_remote_launcher.cjs',
     'claude_launcher_runtime.cjs',
@@ -245,6 +246,7 @@ describe('spawnHappyCLI fallback invocation', () => {
       for (const relativeAssetPath of [
         ['scripts', 'terminal_launch_spec_runner.cjs'],
         ['scripts', 'process_tree.cjs'],
+        ['scripts', 'native_process_exit.cjs'],
         ['scripts', 'claude_local_launcher.cjs'],
         ['scripts', 'env-wrapper.cjs'],
         ['scripts', 'ripgrep_launcher.cjs'],
@@ -258,6 +260,10 @@ describe('spawnHappyCLI fallback invocation', () => {
       const reused = mod.buildHappyCliSubprocessInvocation(['claude', '--started-by', 'daemon']);
       expect(reused.argv).toEqual(inv.argv);
       expect(existsSync(join(snapshotRoot, 'scripts', 'process_tree.cjs'))).toBe(true);
+      rmSync(join(snapshotRoot, 'scripts', 'native_process_exit.cjs'));
+      const withExitProof = mod.buildHappyCliSubprocessInvocation(['claude', '--started-by', 'daemon']);
+      expect(withExitProof.argv).toEqual(inv.argv);
+      expect(existsSync(join(snapshotRoot, 'scripts', 'native_process_exit.cjs'))).toBe(true);
     });
   });
 

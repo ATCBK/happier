@@ -5,6 +5,7 @@ const { pathToFileURL } = require('url');
 
 const { expandHomeDirPath } = require('@happier-dev/cli-common/expandHomeDirPath');
 const { withWindowsHide } = require('./childProcessOptions.cjs');
+const { reportNativeProcessExited } = require('./native_process_exit.cjs');
 
 function resolvePathSafe(filePath) {
     if (!fs.existsSync(filePath)) return null;
@@ -125,7 +126,8 @@ function runClaudeCli(cliPath) {
     }));
 
     attachChildSignalForwarding(child);
-    child.on('exit', (code) => {
+    child.on('exit', async (code, signal) => {
+        await reportNativeProcessExited(process, code, signal);
         process.exit(code || 0);
     });
 }

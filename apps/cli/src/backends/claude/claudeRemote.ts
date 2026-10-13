@@ -329,12 +329,11 @@ export async function claudeRemote(opts: {
             logger.debugLargeJson(`[claudeRemote] Message ${message.type}`, message);
             opts.onMessage(message);
         },
-        onProcessExited: async ({ signal, processTreeStopped }) => {
+        onProcessExited: async ({ nativeExited, processTreeStopped }) => {
             if (!ownsQuery) return;
-            // Native launchers spawn Claude beneath the wrapper and forward ordinary signals.
-            // An abruptly signaled wrapper alone does not establish native provider death.
+            // Native provider exit requires the launcher's positive IPC fact or owned tree cleanup.
             const providerStopped = isClaudeCliJavaScriptFile(resolvedClaudeCliPath)
-                || signal === null
+                || nativeExited
                 || processTreeStopped;
             try {
                 await opts.runtimeActivityAdapter?.handleRuntimeLoss('claude_process_exit', { providerStopped });

@@ -35,6 +35,8 @@ import { resolveExistingManagedJavaScriptRuntimeCommand } from '@happier-dev/cli
 import { killProcessTree } from '@/agent/runtime/process/killProcessTree'
 import { logClaudeRuntimeAuthEnvDiagnostic } from '@/backends/claude/spawn/logClaudeRuntimeAuthEnvDiagnostic'
 import { readNonBlankOpaqueIdentifier } from '@/utils/opaqueIdentifiers'
+import { resolveCliRuntimeAssetPath } from '@/runtime/assets/resolveCliRuntimeAssetPath'
+import { isNativeProcessExited } from '../../../../scripts/native_process_exit.cjs'
 
 /**
  * Query class manages Claude Code process interaction
@@ -296,10 +298,11 @@ export function query(config: {
     prompt: QueryPrompt
     options?: QueryOptions
     onMessageReceived?: (message: SDKMessage) => void
-    /** Fires after an actual child exit and stdout/stderr closure, never a spawn/transport error. */
+    /** Fires after actual child exit and private IPC drainage, never a spawn/transport error. */
     onProcessExited?: (evidence: Readonly<{
         signal: NodeJS.Signals | null
         processTreeStopped: boolean
+        nativeExited: boolean
     }>) => void | Promise<void>
 }): Query {
 	    const {
@@ -382,6 +385,7 @@ export function query(config: {
     // - If it's a full path to binary → spawn(path, args)
     const isJsFile = pathToClaudeCodeExecutable.endsWith('.js') || pathToClaudeCodeExecutable.endsWith('.cjs')
     const isCommandOnly = pathToClaudeCodeExecutable === 'claude'
+    const isFirstPartyWrapper = pathToClaudeCodeExecutable === resolveCliRuntimeAssetPath('scripts', 'claude_remote_launcher.cjs')
     const isBunRuntime = typeof process.versions.bun === 'string'
     const resolvedExecutable =
       executable === 'node'
@@ -426,7 +430,7 @@ export function query(config: {
 
     const child = spawn(invocation.command, invocation.args, {
         cwd,
-        stdio: ['pipe', 'pipe', 'pipe'],
+        stdio: isFirstPartyWrapper ? ['pipe', 'pipe', 'pipe', 'ipc'] : ['pipe', 'pipe', 'pipe'],
         signal: config.options?.abort,
         env: spawnEnv,
         windowsHide: true,
@@ -434,6 +438,13 @@ export function query(config: {
         ...(invocation.windowsVerbatimArguments ? { windowsVerbatimArguments: true } : {}),
     }) as ChildProcessWithoutNullStreams
     const managedChild = createManagedChildProcess(child)
+    let nativeExited = false
+    child.on('message', (message: unknown) => {
+        if (isNativeProcessExited(message)) nativeExited = true
+    })
+    const processChannelClosedPromise = isFirstPartyWrapper && child.connected
+        ? new Promise<void>((resolve) => { child.once('disconnect', resolve) })
+        : Promise.resolve()
 
     // Handle stdin
     let childStdin: Writable | null = null
@@ -511,33 +522,37 @@ export function query(config: {
     process.on('SIGINT', cleanupOnSigint)
     process.on('exit', cleanupOnExit)
 
-    let processExit: Readonly<{ signal: NodeJS.Signals | null }> | null = null
     let processExitObservationError: Error | null = null
-    child.once('exit', (_code, signal) => { processExit = { signal } })
     const processClosedPromise = new Promise<void>((resolve) => {
-        child.once('close', () => {
-            void (async () => {
-                if (!processExit) return
-                const processTreeStopped = cleanupPromise
-                    ? await cleanupPromise.then((result) => result.rootObservedAlive, () => false)
-                    : false
-                try {
-                    await config.onProcessExited?.({ signal: processExit.signal, processTreeStopped })
-                } catch (error) {
-                    processExitObservationError = error instanceof Error ? error : new Error(String(error))
-                    if (!(error instanceof ClaudeNativeProviderExitUnverifiedError)) {
-                        logger.debug('[claude-sdk-query] Provider process-exit observation failed', error)
-                    }
-                    query.setError(processExitObservationError)
-                }
-            })().finally(resolve)
-        })
+        child.once('close', resolve)
+    })
+    // A native descendant can keep inherited pipes open after its wrapper exits. Observe
+    // ownership at exit, independently of stream drainage, so unverified death can fail closed.
+    const processExitObservationPromise = managedChild.waitForTermination().then(async (event) => {
+        if (event.type === 'spawn_error') return
+        await processChannelClosedPromise
+        const processTreeStopped = cleanupPromise
+            ? await cleanupPromise.then((result) => result.rootObservedAlive, () => false)
+            : false
+        // Proven normal/tree exits still drain buffered messages before retiring activity.
+        // Only an unverified abrupt exit must surface before inherited pipes close.
+        if ((event.type === 'exited' && !isFirstPartyWrapper) || nativeExited || processTreeStopped) await processClosedPromise
+        try {
+            await config.onProcessExited?.({ signal: event.type === 'signaled' ? event.signal : null, processTreeStopped, nativeExited })
+        } catch (error) {
+            processExitObservationError = error instanceof Error ? error : new Error(String(error))
+            if (!(error instanceof ClaudeNativeProviderExitUnverifiedError)) {
+                logger.debug('[claude-sdk-query] Provider process-exit observation failed', error)
+            }
+            query.setError(processExitObservationError)
+        }
     })
 
     // Handle process exit
     const processExitPromise = managedChild.waitForTermination().then(async (event) => {
-        await processClosedPromise
+        await processExitObservationPromise
         if (processExitObservationError) return
+        await processClosedPromise
         if (config.options?.abort?.aborted) {
             query.setError(new AbortError('Claude Code process aborted by user'))
             return
@@ -571,8 +586,9 @@ export function query(config: {
             }
             throw error
         }
-        await processClosedPromise
+        await processExitObservationPromise
         if (processExitObservationError) throw processExitObservationError
+        await processClosedPromise
     })
 
     // Keep the stdin pump inside the Query failure lifecycle. A rejected transport must surface
