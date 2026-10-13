@@ -21,6 +21,7 @@ import { HAPPIER_SPAWN_EXPLICIT_ENV_KEYS_JSON_ENV_VAR } from './spawnExplicitEnv
 import { stripDaemonOwnedChildEnvOverrides } from './stripDaemonOwnedChildEnvOverrides';
 import type { ConnectedServicesMaterializationDiagnostic } from '@/daemon/connectedServices/materialize/providerMaterializerTypes';
 import { resolveExistingSessionHandoffStateThroughCatalog } from '@/backends/catalog';
+import { ExistingSessionStateUnavailableError } from '@/session/handoff/sessionHandoffErrors';
 
 function sanitizeCodexAcpFallbackDetail(detail: string): string {
   const normalized = detail.replace(/[\r\n]+/g, ' ').replace(/\s+/g, ' ').trim();
@@ -275,7 +276,9 @@ export async function resolveSpawnChildEnvironment(params: {
       params.logWarn(`[DAEMON RUN] Existing-state handoff resume validation failed: ${errorMessage}`);
       return {
         ok: false,
-        errorCode: SPAWN_SESSION_ERROR_CODES.SPAWN_VALIDATION_FAILED,
+        errorCode: error instanceof ExistingSessionStateUnavailableError
+          ? SPAWN_SESSION_ERROR_CODES.EXISTING_SESSION_STATE_UNAVAILABLE
+          : SPAWN_SESSION_ERROR_CODES.SPAWN_VALIDATION_FAILED,
         errorMessage,
         cleanupOnFailure,
         cleanupOnExit,

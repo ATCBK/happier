@@ -303,7 +303,8 @@ that selection disables workspace transfer. Both peer capabilities must prove su
 before the option can be turned off, and the shared Agent handoff policy must admit the
 native-state mode. Source admission also requires the actual catalog resolver before it
 stops the session. Missing target-native state is checked after that stop and produces
-`existing_session_state_unavailable` through immediate and persisted prepare results. That refusal is
+`existing_session_state_unavailable` through immediate and persisted prepare results and
+launch-time revalidation. That refusal is
 kept inline in the same picker, without retrying transfer automatically; turning the toggle
 on and submitting again is a new explicit choice. Same-machine moves hide the toggle and
 retain default transfer. The current 0.3 V3 capability is not a V2 compatibility proof.

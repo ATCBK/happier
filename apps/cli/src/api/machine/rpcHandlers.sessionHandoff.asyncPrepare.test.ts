@@ -50,6 +50,10 @@ describe('rpcHandlers (session handoff async prepare)', () => {
       const metadata = { path: targetPath, flavor: 'claude', machineId: 'source', claudeSessionId: 'native-1' };
       let environmentReady: Promise<void> | undefined;
       let environmentRequested = false;
+      let removeNativeStateBeforeLaunch = false;
+      let runnerLaunches = 0;
+      let launchFailure: unknown;
+      const { resolveSpawnChildEnvironment } = await import('../../daemon/spawn/resolveSpawnChildEnvironment');
       const createHandlers = () => {
         const manager = new RpcHandlerManager({ scopePrefix: 'test', encryptionKey: new Uint8Array(32), encryptionVariant: 'dataKey', encryptionMode: 'plain' });
         registerMachineSessionHandoffRpcHandlers({
@@ -58,7 +62,22 @@ describe('rpcHandlers (session handoff async prepare)', () => {
           probeHandoffCapability: async () => ({ protocolVersion: 2, existingState: true, atomicTargetResume: true, targetCleanup: true }),
           // Runner launch is the process boundary; durable resume/confirm/commit stay real.
           spawnSessionForHandoff: async (_options, hooks) => {
+            if (removeNativeStateBeforeLaunch) {
+              // Lose only the synthetic native transcript after real preparation has resolved it.
+              expect(await readFile(transcriptPath, 'utf8')).toBe(transcript);
+              await rm(transcriptPath);
+            }
+            const environment = await resolveSpawnChildEnvironment({
+              options: _options, existingSessionMetadata: metadata,
+              profileEnvironmentVariables: {}, daemonSpawnHooks: null, processEnv: process.env,
+              logDebug: () => {}, logInfo: () => {}, logWarn: () => {},
+            });
+            if (!environment.ok) {
+              launchFailure = { type: 'error', errorCode: environment.errorCode, errorMessage: environment.errorMessage };
+              return { type: 'error', errorCode: environment.errorCode, errorMessage: environment.errorMessage };
+            }
             await hooks.onBeforeRunnerLaunchAccepted?.();
+            runnerLaunches += 1;
             return { type: 'success', sessionId: 'session-1', runnerAcceptance: 'newly_accepted' };
           },
           stopSessionForHandoff: async () => 'already_inactive',
@@ -194,8 +213,11 @@ describe('rpcHandlers (session handoff async prepare)', () => {
           return (await coordinator.admit(input)).execute(context);
         },
       });
+      await writeFile(transcriptPath, transcript);
+      removeNativeStateBeforeLaunch = true;
+      const launchesBeforeNativeLoss = runnerLaunches;
       const admission = await trackedStart({
-        requestId: 'existing-missing-composed', sessionId: request.sessionId,
+        requestId: 'existing-launch-missing-composed', sessionId: request.sessionId,
         sourceMachineId: request.sourceMachineId, targetMachineId: request.targetMachineId,
         sessionStorageMode: 'persisted', stateTransfer: 'existing', preferredTransportStrategies: ['direct_peer'],
       });
@@ -203,8 +225,9 @@ describe('rpcHandlers (session handoff async prepare)', () => {
       await vi.waitFor(() => expect(snapshots.at(-1)).toMatchObject({
         state: 'failed', error: { errorCode: 'existing_session_state_unavailable', error: 'Claude existing native session is unreachable' },
       }), { timeout: 10_000 });
+      expect(runnerLaunches).toBe(launchesBeforeNativeLoss);
       const outputPath = process.env.HAPPIER_HANDOFF_FAILURE_TEST_OUTPUT;
-      if (outputPath) await writeFile(outputPath, JSON.stringify({ admission, terminal: snapshots.at(-1), prepareResult: missingResult }));
+      if (outputPath) await writeFile(outputPath, JSON.stringify({ admission, terminal: snapshots.at(-1), prepareResult: missingResult, launchFailure }));
     } finally {
       if (previousClaudeHome === undefined) delete process.env.CLAUDE_CONFIG_DIR;
       else process.env.CLAUDE_CONFIG_DIR = previousClaudeHome;
