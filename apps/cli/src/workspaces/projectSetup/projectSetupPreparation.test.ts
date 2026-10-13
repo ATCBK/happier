@@ -247,6 +247,9 @@ describe('current Project setup effect and preparation admission', () => {
         expect(await store.read(target)).toBeNull();
         await store.recordCompletion(target, { v: 1, workspaceRefId: 'workspace', completedAtMs: 1, ...plan.successBasis });
         expect(await prepareProjectSetup({ ...input, successHomeDir })).toMatchObject({ kind: 'prepared', previousSuccess: true });
+        post.mockResolvedValue({ status: 200, data: { status: 'absent' } });
+        expect(await prepareProjectSetup({ ...input, successHomeDir }))
+            .toMatchObject({ kind: 'prepared', consent: 'completed', previousSuccess: true });
         expect(await prepareProjectSetup({ ...input, skipForInvocation: true, successHomeDir })).toMatchObject({ kind: 'skippedForInvocation' });
         await writeFile(join(root, '.happier/project.json'), '{"version":1,"workspace":{"setup":[{"kind":"command","command":"echo changed"}]}}');
         expect(await prepareProjectSetup({ ...input, expectedEffectDigest: plan.reviewedEffectDigest })).toMatchObject({ kind: 'pendingApproval', code: 'project_setup_effect_changed' });

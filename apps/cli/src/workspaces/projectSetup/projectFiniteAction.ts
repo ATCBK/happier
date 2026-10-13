@@ -184,13 +184,13 @@ export function createProjectFiniteAction(runtime: ProjectFiniteActionRuntime, i
         const resolveAccepted = async () => {
             await assertCurrent();
             const association = await resolveProjectSetupAcceptedWorkspace({ address: request.input.workspace,
-                ...projectRuntimeAccountRowsInput(runtime, request.actionId), serverId: runtime.serverId, serverHttpBaseUrl: runtime.serverHttpBaseUrl, signal });
+                ...projectRuntimeAccountRowsInput(runtime), serverId: runtime.serverId, serverHttpBaseUrl: runtime.serverHttpBaseUrl, signal });
             await assertCurrent();
             if (!workerBasis) return association;
             if (association.workspace.id !== workerBasis.source.id || association.workspace.machineId !== workerBasis.source.machineId
                 || association.workspace.rootPath !== workerBasis.source.rootPath || association.workspace.projectKey !== workerBasis.source.projectKey) throw coded('project_workspace_changed');
             const target = await resolveProjectSetupAcceptedWorkspace({ address: { serverId: workerBasis.target.serverId, workspaceId: workerBasis.target.id,
-                machineId: workerBasis.target.machineId, rootPath: workerBasis.target.rootPath }, ...projectRuntimeAccountRowsInput(runtime, request.actionId),
+                machineId: workerBasis.target.machineId, rootPath: workerBasis.target.rootPath }, ...projectRuntimeAccountRowsInput(runtime),
                 serverId: runtime.serverId, serverHttpBaseUrl: runtime.serverHttpBaseUrl, signal });
             await assertCurrent();
             if (target.workspace.machineId !== runtime.machineId || target.workspace.projectKey !== association.workspace.projectKey) throw coded('project_workspace_changed');
@@ -368,7 +368,7 @@ export function createProjectFiniteAction(runtime: ProjectFiniteActionRuntime, i
         let secretEnvironment = runtime.secretEnvironment;
         const preparation = (): Parameters<typeof prepareProjectSetup>[0] => ({ workspace: association.workspace, projectAssociation: association,
             approvalContext: args.context,
-            requester: { ...projectRuntimeAccountRowsInput(runtime, request.actionId), serverHttpBaseUrl: runtime.serverHttpBaseUrl },
+            requester: { ...projectRuntimeAccountRowsInput(runtime), serverHttpBaseUrl: runtime.serverHttpBaseUrl },
             purpose: request.actionId === 'projects.prepare' ? request.input.phase : 'setup',
             platform: { os: (runtime.platform ?? process.platform) === 'win32' ? 'windows' : runtime.platform ?? process.platform, arch: runtime.arch ?? process.arch },
             nativeIo: runtime.nativeIo, signal: nativeExecutionSignal(),
@@ -379,6 +379,10 @@ export function createProjectFiniteAction(runtime: ProjectFiniteActionRuntime, i
             ...(runtime.plugins ? { plugins: runtime.plugins } : {}),
             ...(request.actionId === 'projects.compute.exec' && request.input.environmentBindings ? { environmentBindings: request.input.environmentBindings } : {}),
             ...(request.actionId === 'projects.prepare' ? { expectedEffectDigest: request.input.expectedEffectDigest, skipForInvocation: request.input.skipForInvocation } : {}),
+            ...(request.actionId === 'projects.prepare' && request.input.consentScope === 'thisTime'
+                && request.input.expectedEffectDigest && args.context.authority === 'present_user'
+                ? { effectDecision: { authority: args.context.authority, project: association.project,
+                    reviewedEffectDigest: request.input.expectedEffectDigest } } : {}),
         });
         const reviewPath = (value: string) => {
             const root = association.workspace.rootPath;

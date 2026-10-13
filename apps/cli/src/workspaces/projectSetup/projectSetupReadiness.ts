@@ -28,12 +28,12 @@ export async function inspectProjectSetupReadinessFromRuntime(input: Readonly<{
         if (!await current()) return unknown('project_requester_credentials_unavailable');
         releaseRequester = readRequesterAccountActionContext(runtime.accountAuthorization)?.retain();
         const association = await resolveProjectSetupAcceptedWorkspace({ address: input.workspace,
-            ...projectRuntimeAccountRowsInput(runtime, 'projects.inspect'), serverId: runtime.serverId,
+            ...projectRuntimeAccountRowsInput(runtime), serverId: runtime.serverId,
             serverHttpBaseUrl: runtime.serverHttpBaseUrl, signal });
         const secretEnvironment = await resolveProjectRequesterSecretEnvironment(runtime, undefined, signal);
         if (!await current()) return unknown('project_requester_credentials_unavailable');
         const readiness = await inspectProjectSetupReadiness({ workspace: association.workspace, projectAssociation: association,
-            requester: { ...projectRuntimeAccountRowsInput(runtime, 'projects.inspect'), serverHttpBaseUrl: runtime.serverHttpBaseUrl },
+            requester: { ...projectRuntimeAccountRowsInput(runtime), serverHttpBaseUrl: runtime.serverHttpBaseUrl },
             purpose: 'setup', platform: { os: (runtime.platform ?? process.platform) === 'win32' ? 'windows' : runtime.platform ?? process.platform,
                 arch: runtime.arch ?? process.arch }, nativeIo: runtime.nativeIo, signal,
             ...(secretEnvironment ? { secretEnvironment } : {}), ...(runtime.configEnvironment ? { configEnvironment: runtime.configEnvironment } : {}),

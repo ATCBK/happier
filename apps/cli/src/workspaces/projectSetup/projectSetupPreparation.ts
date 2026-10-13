@@ -113,7 +113,7 @@ export type ProjectSetupPreparationOutcome = ProjectSetupPreparationRefusal
     | Readonly<{ kind: 'notRequired'; plan: PreparedProjectSetupPlan }>
     | Readonly<{ kind: 'skippedForInvocation'; plan: PreparedProjectSetupPlan }>
     | Readonly<{ kind: 'pendingApproval'; code: 'project_setup_consent_required' | 'project_setup_effect_changed'; plan: PreparedProjectSetupPlan }>
-    | Readonly<{ kind: 'prepared'; plan: PreparedProjectSetupPlan; consent: 'trusted' | 'thisTime'; previousSuccess: boolean }>;
+    | Readonly<{ kind: 'prepared'; plan: PreparedProjectSetupPlan; consent: 'trusted' | 'thisTime' | 'completed'; previousSuccess: boolean }>;
 
 const refuse = (code: string): ProjectSetupPreparationRefusal => ({ kind: 'refused', code });
 const hash = (value: string | Buffer) => createHash('sha256').update(value).digest('hex');
@@ -416,7 +416,11 @@ export async function prepareProjectSetup(input: ProjectSetupPreparationInput & 
     if (input.skipForInvocation) return { kind: 'skippedForInvocation', plan };
     if (plan.commands.length === 0 && plan.environment.kind === 'host') return { kind: 'notRequired', plan };
     try {
-        let consent: 'trusted' | 'thisTime';
+        const previousSuccess = input.purpose === 'setup' && input.successHomeDir !== undefined
+            ? await createProjectSetupSuccessStore({ homeDir: input.successHomeDir }).matches({
+                serverId: plan.workspace.serverId, machineId: plan.workspace.machineId, workspaceRefId: plan.workspace.id,
+            }, plan.successBasis) : false;
+        let consent: 'trusted' | 'thisTime' | 'completed';
         if (input.effectDecision !== undefined) {
             const decision = input.effectDecision;
             if (decision.authority !== 'present_user') return { kind: 'pendingApproval', code: 'project_setup_consent_required', plan };
@@ -424,6 +428,11 @@ export async function prepareProjectSetup(input: ProjectSetupPreparationInput & 
             if (!project.success || project.data.serverId !== plan.project.serverId || project.data.projectId !== plan.project.projectId) return refuse('project_setup_consent_invalid');
             if (decision.reviewedEffectDigest !== plan.reviewedEffectDigest) return { kind: 'pendingApproval', code: 'project_setup_effect_changed', plan };
             consent = 'thisTime';
+        } else if (previousSuccess) {
+            // Exact target completion skips setup effects; it is not a remembered
+            // grant to run them again or on another target. This also releases a
+            // Script held while a separately reviewed This time setup completed.
+            consent = 'completed';
         } else {
             const settings = readProjectActionApprovalSettings(input);
             if (!isApprovalRequiredByActionsSettings('projects.prepare', settings, input.approvalContext)) {
@@ -436,10 +445,6 @@ export async function prepareProjectSetup(input: ProjectSetupPreparationInput & 
                 consent = 'trusted';
             }
         }
-        const previousSuccess = input.purpose === 'setup' && input.successHomeDir !== undefined
-            ? await createProjectSetupSuccessStore({ homeDir: input.successHomeDir }).matches({
-                serverId: plan.workspace.serverId, machineId: plan.workspace.machineId, workspaceRefId: plan.workspace.id,
-            }, plan.successBasis) : false;
         if (input.signal?.aborted) return refuse('project_setup_cancelled');
         if (plan.environmentAdapterLease && !plan.environmentAdapterLease.isCurrent()
             || plan.commands.some(command => (command.kind === 'pluginNative' || command.kind === 'pluginNativeReference') && !command.lease.isCurrent())) return refuse('native_adapter_retired');

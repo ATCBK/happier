@@ -28,6 +28,15 @@ import { resolveAccountSettingsScopeKey } from '@/settings/accountSettings/accou
 import { resolveWorkspaceRefById } from '@/workspaces/workspaceRefsV1';
 import { resolveWorkspaceRefV1 } from '@happier-dev/protocol/workspaces/workspaceRefResolutionV1';
 import type { ExternalActionExecutionAuthorizationV1 } from '@happier-dev/protocol/actions/externalActionApi';
+import type { PromptStackEntryV1 } from '@happier-dev/protocol/prompts/library/promptStacksV1';
+import { isPromptStackSystemAppendPlacementV1 } from '@happier-dev/protocol/prompts/library/promptPlacementV1';
+import { migrateStackSkillRulesV1, readStackSkillIdsV1, unconsumedStackSkillEntriesV1 } from '@happier-dev/protocol/prompts/library/skills/convertStackSkillEntriesV1';
+import { readPromptLibraryCatalogRecordV1 } from '@happier-dev/protocol/prompts/library/promptLibraryCatalogV1';
+import { withCliPromptLibraryArtifactReader } from '@/agent/prompts/library/resolveCliPromptStackSystemAppendBlocks';
+import { createCliPromptLibraryStore } from '@/settings/prompts/promptLibraryStore';
+import { refreshActivePromptLibraryCatalogAfterChange } from '@/settings/prompts/hydratePromptLibraryCatalog';
+import { getActiveAccountSettingsSnapshotLifetimeToken } from '@/settings/accountSettings/activeAccountSettingsSnapshot';
+import type { SavedSecretOperationContextV1 } from '@/settings/secrets/hydrateSavedSecretCatalog';
 
 export type OpenedProjectAccountRow = Readonly<{ key: ProjectAccountRowKeyV1; revision: number; payload: ProjectAccountRowPayloadV1 | null }>;
 export type ActiveProjectAccountRowsSnapshot = ProjectAccountSnapshotV1 & Readonly<{
@@ -82,9 +91,10 @@ export type ProjectAccountRowsInput = Readonly<({ credentials: StoredCredentials
 export type ProjectRuntimeAccountAccess = Readonly<{ credentials: StoredCredentials; accountAuthorization?: never }>
   | Readonly<{ credentials?: never; accountAuthorization: ExternalActionExecutionAuthorizationV1 }>;
 
-/** Adapts captured Account custody to this owner's existing row/trust access contract. */
-export function projectRuntimeAccountRowsInput(runtime: ProjectRuntimeAccountAccess, effectActionId: string): ProjectAccountRowsInput {
-  return runtime.accountAuthorization ? { authorization: runtime.accountAuthorization, effectActionId }
+/** Preparation reads spend the captured root, which may enclose an approved unsigned effect. */
+export function projectRuntimeAccountRowsInput(runtime: ProjectRuntimeAccountAccess): ProjectAccountRowsInput {
+  return runtime.accountAuthorization ? { authorization: runtime.accountAuthorization,
+    effectActionId: runtime.accountAuthorization.binding.actionId }
     : { credentials: runtime.credentials };
 }
 type ReadInput = ProjectAccountRowsInput;
@@ -253,16 +263,70 @@ function applyAcknowledgedRows(snapshot: ActiveProjectAccountRowsSnapshot, rows:
 }
 export async function readProjectAccountRows(input: ReadInput): Promise<ActiveProjectAccountRowsSnapshot> {
   const bound = { ...input, serverId: input.serverId ?? input.authorization?.requesterAccountProjection?.serverId ?? configuration.activeServerId };
-  return await runWithServerHttpBaseUrl(resolveServerHttpBaseUrl(), async () => {
+  return await runWithServerHttpBaseUrl(baseUrl(bound), async () => {
     try {
       input.signal?.throwIfAborted();
       const snapshot = await fetchSnapshot(bound, await readMode(bound));
+      // Source-backed Projects take their current context from shared attachments;
+      // the personal organization remains stored but is not their context layer.
+      if (bound.credentials && !bound.sessionCustody) {
+        for (const organization of snapshot.organizations) {
+          if (snapshot.workspaceRefs.some(ref => ref.serverId === organization.key.serverId
+            && ref.projectKey === organization.key.projectKey && ref.source)) continue;
+          await migrateProjectPromptStackSkillRules({ credentials: bound.credentials, serverId: organization.key.serverId,
+            projectKey: organization.key.projectKey, entries: organization.value.promptStack ?? [],
+            serverHttpBaseUrl: baseUrl(bound), signal: bound.signal });
+        }
+      }
       input.signal?.throwIfAborted();
       return acceptSnapshot(input, snapshot);
     } catch (error) {
       if (!input.authorization && !input.sessionCustody && (!active || active.scopeKey === scopeKey(bound))) withdrawActiveProjectAccountRowsSnapshot();
       throw error;
     }
+  });
+}
+
+export type ProjectStackSkillMigrationResult = Readonly<{ status: 'ready' | 'unavailable' }>;
+
+/** Add a viewer's rules through the existing Account CAS; retained entries keep Session exclusion custody. */
+export async function migrateProjectPromptStackSkillRules(input: Readonly<{
+  credentials: StoredCredentials; serverId: string; serverHttpBaseUrl: string; projectKey: string;
+  entries: readonly PromptStackEntryV1[]; signal?: AbortSignal; operationContext?: SavedSecretOperationContextV1;
+}>): Promise<ProjectStackSkillMigrationResult> {
+  input.signal?.throwIfAborted();
+  if (!input.entries.some(entry => entry.ref.kind === 'bundle' && isPromptStackSystemAppendPlacementV1(entry.placement))) return { status: 'ready' };
+  return await runWithServerHttpBaseUrl(input.serverHttpBaseUrl, async (): Promise<ProjectStackSkillMigrationResult> => {
+    try {
+      const store = createCliPromptLibraryStore(input);
+      const scopeKey = resolveAccountSettingsScopeKey(input.credentials);
+      const lifetimeToken = getActiveAccountSettingsSnapshotLifetimeToken();
+      const catalog = await store.readPromptLibraryCatalog();
+      const rules = readPromptLibraryCatalogRecordV1({ catalog, key: 'skill-rules' });
+      if (rules.status !== 'ready' || rules.record.key !== 'skill-rules') return { status: 'unavailable' };
+      const layer = { kind: 'project' as const, projectKey: input.projectKey };
+      const entries = unconsumedStackSkillEntriesV1(input.entries, layer, rules.record.value.consumedLegacyEntryIds);
+      if (entries.length === 0) return { status: 'ready' };
+      const resolved = await withCliPromptLibraryArtifactReader(reader => readStackSkillIdsV1(entries,
+        { readArtifact: reader.readArtifact }), input);
+      if (resolved.status !== 'ready') return { status: 'unavailable' };
+      const next = migrateStackSkillRulesV1(rules.record.value, entries, layer, { skillIds: resolved.skillIds, nowMs: Date.now() });
+      if (next === rules.record.value) return { status: 'ready' };
+      const result = await store.writeRecord({ record: { key: 'skill-rules', value: next },
+        expectedRevision: rules.revision });
+      if (result.status !== 'updated') return { status: 'unavailable' };
+      if (input.operationContext) {
+        const catalog = await store.readPromptLibraryCatalog();
+        const snapshot = input.operationContext.readSnapshot();
+        if (!snapshot || !await input.operationContext.commitPromptLibraryCatalog({ expectedSettingsVersion: snapshot.settingsVersion, catalog })) {
+          return { status: 'unavailable' };
+        }
+      } else {
+        const catalog = await refreshActivePromptLibraryCatalogAfterChange({ credentials: input.credentials, scopeKey, lifetimeToken });
+        if (readPromptLibraryCatalogRecordV1({ catalog, key: 'skill-rules' }).status !== 'ready') return { status: 'unavailable' };
+      }
+      return { status: 'ready' };
+    } catch { input.signal?.throwIfAborted(); return { status: 'unavailable' }; }
   });
 }
 

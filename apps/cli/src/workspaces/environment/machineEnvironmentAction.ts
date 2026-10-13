@@ -111,7 +111,9 @@ export function createMachineEnvironmentAction(params: Readonly<{
         return fail(code);
       } finally { custody.dispose(); secretContext?.withdrawCatalog(); }
     };
-    const result = context.operationOwnerUpdate ? await run({ ...context, signal: context.signal ?? lifetime, operationOwnerUpdate: context.operationOwnerUpdate,
+    // Detached replay has no retained operation. Bind observation once, as the
+    // managed native adapter does; an update port alone is not acceptance.
+    const result = context.operationAcceptance && context.operationOwnerUpdate ? await run({ ...context, signal: context.signal ?? lifetime, operationOwnerUpdate: context.operationOwnerUpdate,
       operationProgress: context.operationProgress ?? { update() {} } })
       : await params.apiMachine.observeActionExecution({ actionId: 'machines.environment.apply', input, actionRequestId: context.actionRequestId,
         rpcContext: context, execute: run });

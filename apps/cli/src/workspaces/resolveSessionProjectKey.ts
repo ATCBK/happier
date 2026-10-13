@@ -5,9 +5,12 @@ import { resolveSessionWorkspaceRootForMachine } from '@happier-dev/protocol/ses
 import type { StoredCredentials } from '@/persistence';
 import { configuration } from '@/configuration';
 import { readProjectAccountRows } from './projectAccountRows';
+import type { SavedSecretOperationContextV1 } from '@/settings/secrets/hydrateSavedSecretCatalog';
+import { readAccountIdFromToken } from '@/cloud/decodeJwtPayload';
 
 export type SessionProjectPromptStackInput = Readonly<{
   credentials: StoredCredentials; metadata: unknown; signal?: AbortSignal; machineId: string; directory?: string; serverId?: string;
+  operationContext?: SavedSecretOperationContextV1;
 }>;
 export type SessionProjectKeyResolution = Readonly<{ kind: 'none' }>
   | Readonly<{ kind: 'resolved'; projectKey: string; workspaceRef: WorkspaceRefV1; promptStack: readonly PromptStackEntryV1[] }>
@@ -25,10 +28,16 @@ export async function resolveSessionProjectKey(input: SessionProjectPromptStackI
   if (typeof workspaceId !== 'string' || !workspaceId.trim()) return pending;
   const path: unknown = input.directory ?? Reflect.get(metadata, 'path');
   if (typeof path !== 'string' || !path.trim()) return pending;
-  const serverId = input.serverId ?? configuration.activeServerId;
+  const serverId = input.serverId ?? input.credentials.requesterSessionCredentialScope?.serverId ?? configuration.activeServerId;
   const root = resolveSessionWorkspaceRootForMachine({ metadata, machineId: input.machineId, candidatePath: path });
   let snapshot: Awaited<ReturnType<typeof readProjectAccountRows>>;
-  try { snapshot = await readProjectAccountRows({ credentials: input.credentials, serverId, signal: input.signal }); }
+  try {
+    const accountId = input.operationContext ? readAccountIdFromToken(input.credentials.token) : null;
+    if (input.operationContext && (!accountId || input.operationContext.credentials.token !== input.credentials.token)) return pending;
+    snapshot = await readProjectAccountRows({ credentials: input.credentials, serverId, signal: input.signal,
+      ...(input.operationContext && accountId ? { sessionCustody: { serverId, accountId,
+        serverHttpBaseUrl: input.operationContext.serverHttpBaseUrl, isCurrent: input.operationContext.isCurrent } } : {}) });
+  }
   catch { input.signal?.throwIfAborted(); return pending; }
   const resolved = resolveWorkspaceRefV1(snapshot.workspaceRefs, {
     serverId, workspaceId, machineId: input.machineId, rootPath: root.machinePath,

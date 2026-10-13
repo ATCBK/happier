@@ -29,7 +29,7 @@ import { computeWorkspaceSyncPolicyDigest, type WorkspaceSyncRelationshipV1, typ
 import { createWorkspaceSyncWorkerPreparation, resolveWorkspaceSyncWorkerTarget, prepareWorkspaceSyncBetween } from '@/workspaces/sync/workspaceSyncPreparation';
 import { createHostActionOperationRuntime } from '@/daemon/actionOperations/createHostActionOperationRuntime';
 import { createDaemonAdmissionDrain } from '@/daemon/lifecycle/admissionDrain';
-import { createProjectWorkerAdmission } from '@/workspaces/execution/projectWorkerAdmission';
+import { createProjectWorkerAdmission, type ProjectWorkerMemoryObservation } from '@/workspaces/execution/projectWorkerAdmission';
 import { createTerminalPtySessionManager } from '@/terminal/pty/sessions';
 import type { PtyExitEvent, PtyProcess, PtySpawnParams } from '@/terminal/pty/provider';
 import { createProjectFiniteAction, type ProjectFiniteActionRuntime } from './projectFiniteAction';
@@ -128,7 +128,9 @@ describe('authenticated finite Project Action owner', () => {
                 } } }), mutate: async () => { throw new Error('read only'); },
             } });
         let accepting = true;
+        let availableMemory: ProjectWorkerMemoryObservation | null = null;
         const workerAdmission = createProjectWorkerAdmission({ machineId: 'machine', admissionDrain: createDaemonAdmissionDrain(),
+            readMemory: () => availableMemory,
             readPolicy: async () => ({ status: 'ready', policy: { accepting, runAtMost }, source: 'stored', metadataVersion: 1 }) });
         const context: RpcHandlerContext = { signal: new AbortController().signal, transportRequestId: 'transport',
             machineAdmission: { actorAccountId: 'owner', custodianAccountId: 'owner', machineId: 'machine', installationId: 'installation', role: 'manage', encryptionMode: 'plain' },
@@ -236,6 +238,7 @@ describe('authenticated finite Project Action owner', () => {
             return { status: 200, data: { status: 'present', revision: 1, content: { t: 'plain', v: { ...preference.preference, services: {} } } } };
         });
         return { root, runtime, context, address, workspaceRefs, relationships, invoke, rpcInvoke, spawned, operationRuntime, workspaceExecutionConfig, get, post, allowAdHoc: () => { allowAdHoc = true; },
+            observeMemory: (observation: ProjectWorkerMemoryObservation) => { availableMemory = observation; },
             setToolExecutable: (path: string) => { nativeExecutablePath = path; }, refuseAdmission: () => { accepting = false; },
             setToolRelativeExecutable: (path: string) => { nativeExecutableRelativePath = path; },
             setConfigEnvironment: (name: string, value: string) => { configEnvironment[name] = value; },
@@ -1231,6 +1234,7 @@ describe('authenticated finite Project Action owner', () => {
         } };
         const h = await harness(manifest, placement === 'queued' ? 1 : null,
             placement === 'queued' ? 'machine' : 'source-machine');
+        h.observeMemory({ totalBytes: 4096, availableBytes: 4096 });
         if (placement !== 'queued') await h.addWorkerTarget();
         const input = { workspace: h.address,
             selection: { kind: 'named', name: 'checked' },
@@ -1426,6 +1430,7 @@ describe('authenticated finite Project Action owner', () => {
         const source = { kind: 'native', tool: 'make', file: 'Makefile', target: 'check' } as const;
         const h = await harness({ version: 1, scripts: { checked: { execution: 'portable', memoryDemand: { bytes: 1024, basis: { kind: 'declared' } },
             source } } }, null, 'source-machine');
+        h.observeMemory({ totalBytes: 4096, availableBytes: 4096 });
         const target = await h.addWorkerTarget();
         expect(await h.rpcInvoke('projects.script.run', { workspace: h.address, selection: { kind: 'named', name: 'checked' },
             ...(explicit ? { choice: { kind: 'workers', destination: { kind: 'machine', machineId: 'machine' } } } : {}),
@@ -1680,14 +1685,14 @@ describe('authenticated finite Project Action owner', () => {
         expect(h.operationRuntime.store.get(scope, 'operation')).toMatchObject({ setupReview: { code: 'project_setup_consent_required' } });
         const firstDigest = h.operationRuntime.store.get(scope, 'operation')!.setupReview!.reviewedEffectDigest;
         await writeFile(join(h.root, '.happier/project.json'), JSON.stringify({ ...portableNativeManifest, workspace: { setup: [{ kind: 'command', command: 'echo changed setup' }] } }));
-        expect(await h.operationRuntime.handlers.getV2({ operationId: 'operation' }))
+        expect(await h.operationRuntime.handlers.getV2({ operationId: 'operation', refreshSetupReview: true }))
             .toMatchObject({ kind: 'found', operation: { operationId: 'operation', setupReview: {
                 reviewedEffectDigest: expect.not.stringMatching(new RegExp(`^${firstDigest}$`)),
             } } });
         // The producer must expose the new effect before any Trust write, not
         // only discover it after granting the stale displayed target effect.
         await h.rememberSetup(firstDigest);
-        await h.operationRuntime.handlers.getV2({ operationId: 'operation' });
+        await h.operationRuntime.handlers.getV2({ operationId: 'operation', refreshSetupReview: true });
         await expect.poll(() => {
             const snapshot = h.operationRuntime.store.get(scope, 'operation');
             return { reviewChanged: Boolean(snapshot?.setupReview && snapshot.setupReview.reviewedEffectDigest !== firstDigest),
