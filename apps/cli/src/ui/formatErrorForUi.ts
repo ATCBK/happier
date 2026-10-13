@@ -9,7 +9,7 @@ export function formatErrorForUi(error: unknown, opts?: { maxChars?: number }): 
   const maxChars = Math.max(1000, opts?.maxChars ?? 50_000);
 
   const msg = (() => {
-    if (error instanceof Error) {
+    if (error instanceof Error && !(error instanceof AggregateError) && error.cause === undefined) {
       return error.stack || error.message || String(error);
     }
 
@@ -19,18 +19,20 @@ export function formatErrorForUi(error: unknown, opts?: { maxChars?: number }): 
         return JSON.stringify(
           error,
           (_key, value) => {
+            if (typeof value === 'object' && value !== null) {
+              if (seen.has(value)) return '[Circular]';
+              seen.add(value);
+            }
             if (value instanceof Error) {
               return {
                 name: value.name,
                 message: value.message,
                 stack: value.stack,
+                ...(value instanceof AggregateError ? { errors: value.errors } : {}),
+                cause: value.cause,
               };
             }
             if (typeof value === 'bigint') return value.toString();
-            if (typeof value === 'object' && value !== null) {
-              if (seen.has(value)) return '[Circular]';
-              seen.add(value);
-            }
             return value;
           },
           2,

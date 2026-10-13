@@ -74,11 +74,18 @@ function runStoppedProcessFixture(child: ControlledProcess, evidence: ReturnType
 }
 
 describe('claudeRemoteAgentSdk owned process exit', () => {
-    it.each([false, true])('settles an owned OS child ignoring SIGTERM only when cleanup is verified (OS denies signals: %s)', async (denySignals) => {
+    it.each([
+        { denySignals: false, runtimeFails: false },
+        { denySignals: true, runtimeFails: false },
+        { denySignals: true, runtimeFails: true },
+    ])('settles an owned OS child ignoring SIGTERM only when cleanup is verified (OS denies signals: $denySignals, runtime fails: $runtimeFails)', async ({ denySignals, runtimeFails }) => {
         const ready = createDeferred();
         const closeRequested = createDeferred();
         const childCreated = createDeferred<ChildProcess>();
         const evidence = createClaudeRuntimeActivityEvidence();
+        const runtimeError = Object.assign(new Error('provider stream failed'), {
+            happierClaudeCodeArtifacts: { debugTail: 'provider-debug-evidence', stderrTail: 'provider-stderr-evidence' },
+        });
         const activity = createSessionRuntimeActivity('supported');
         const publish = vi.fn(async () => {});
         await activity.bindPublisher({ publish, close: async () => {} });
@@ -141,6 +148,7 @@ describe('claudeRemoteAgentSdk owned process exit', () => {
                         await ready.promise;
                         yield { type: 'system', subtype: 'init', session_id: 'owned-session' };
                         yield { type: 'system', subtype: 'task_started', session_id: 'owned-session', task_id: 'background-task', task_type: 'local_agent', is_backgrounded: true };
+                        if (runtimeFails) throw runtimeError;
                         yield { type: 'result', subtype: 'success', session_id: 'owned-session' };
                     },
                     // SDK 0.2.123 skips its delayed SIGKILL path once killed is true.
@@ -166,7 +174,18 @@ describe('claudeRemoteAgentSdk owned process exit', () => {
             if (!child.pid) throw new Error('Expected owned child pid');
             expect(child.killed).toBe(true);
             if (denySignals) {
-                await expect(run).rejects.toMatchObject({ code: 'process_tree_termination_incomplete' });
+                const failure: unknown = await run.catch((error: unknown) => error);
+                if (runtimeFails) {
+                    expect(failure).toBeInstanceOf(AggregateError);
+                    if (!(failure instanceof AggregateError)) throw new Error('Expected runtime and cleanup failures together');
+                    expect(failure.cause).toBe(runtimeError);
+                    expect(failure.errors[0]).toBe(runtimeError);
+                    expect(failure.errors[1]).toMatchObject({ code: 'process_tree_termination_incomplete' });
+                    expect(failure.cause).toHaveProperty('happierClaudeCodeArtifacts', runtimeError.happierClaudeCodeArtifacts);
+                } else {
+                    expect(failure).not.toBeInstanceOf(AggregateError);
+                    expect(failure).toMatchObject({ code: 'process_tree_termination_incomplete' });
+                }
                 expect(evidence.providerActivityLedger.hasActiveProviderTasks()).toBe(true);
                 expect(publish).toHaveBeenLastCalledWith({ state: 'unknown', activeCount: 0 });
             } else {

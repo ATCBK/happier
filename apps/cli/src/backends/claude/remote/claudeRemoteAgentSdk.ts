@@ -371,6 +371,7 @@ export async function claudeRemoteAgentSdk(opts: {
 
         let mode = initial.mode;
         let response: any;
+        let runtimeFailure: { error: unknown } | null = null;
         let didSettleRuntimeActivityForCurrentTurn = false;
 		    let latestClaudeSessionId: string | null =
 		        typeof opts.sessionId === 'string' && opts.sessionId.trim().length > 0 ? opts.sessionId.trim() : startFrom ?? null;
@@ -2329,6 +2330,7 @@ export async function claudeRemoteAgentSdk(opts: {
 	            logger.debug('[claudeRemoteAgentSdk] Aborted');
 	            return;
 	        }
+        runtimeFailure = { error: e };
         if (e && typeof e === 'object') {
             const err = e as any;
             const existing = err.happierClaudeCodeArtifacts;
@@ -2400,6 +2402,15 @@ export async function claudeRemoteAgentSdk(opts: {
                     providerStopped: true,
                 });
             }
+        } catch (cleanupError) {
+            if (runtimeFailure) {
+                throw new AggregateError(
+                    [runtimeFailure.error, cleanupError],
+                    'Claude Agent SDK runtime failed and process cleanup failed',
+                    { cause: runtimeFailure.error },
+                );
+            }
+            throw cleanupError;
         } finally {
             await repairTranscriptAfterAbort();
             await stderrAppender?.close().catch(() => {});
