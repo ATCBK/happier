@@ -1,4 +1,5 @@
 export const PI_HAPPIER_TOOLS_CONFIG_FLAG = 'happier-tools-config';
+export const PI_MCP_APPROVAL_CALL_PREFIX = 'happier:mcp-approval:';
 
 export function buildPiHappierToolsExtensionSource(): string {
   return `// Happier Pi native tools extension. Generated; tool policy is host-owned.
@@ -7,11 +8,16 @@ import { readFileSync } from "node:fs";
 import { createInterface } from "node:readline";
 
 const CONFIG_FLAG = ${JSON.stringify(PI_HAPPIER_TOOLS_CONFIG_FLAG)};
+const MCP_APPROVAL_CALL_PREFIX = ${JSON.stringify(PI_MCP_APPROVAL_CALL_PREFIX)};
 const BRIDGE_OUTPUT_MAX_BYTES = 1024 * 1024;
 const BRIDGE_OUTPUT_MAX_LINES = 4000;
 const TOOL_OUTPUT_MAX_BYTES = 50 * 1024;
 const TOOL_OUTPUT_MAX_LINES = 2000;
 const TOOL_OUTPUT_NOTICE_RESERVE_BYTES = 256;
+
+function isToolDecision(value) {
+  return value === "off" || value === "deny" || value === "ask" || value === "allow";
+}
 
 function isStringRecord(value) {
   return value && typeof value === "object" && !Array.isArray(value)
@@ -21,7 +27,6 @@ function isStringRecord(value) {
 function isConfig(value) {
   return Boolean(
     value && value.v === 1
-    && typeof value.sessionId === "string" && value.sessionId.trim()
     && typeof value.directory === "string" && value.directory.trim()
     && typeof value.systemPrompt === "string"
     && Array.isArray(value.tools)
@@ -32,11 +37,17 @@ function isConfig(value) {
       && typeof tool.description === "string"
       && tool.inputSchema && typeof tool.inputSchema === "object" && !Array.isArray(tool.inputSchema)
     ))
-    && value.launch && typeof value.launch === "object"
+    && ((value.launch === undefined && value.tools.length === 0) || (value.launch && typeof value.launch === "object"
     && typeof value.launch.executablePath === "string" && value.launch.executablePath.trim()
     && Array.isArray(value.launch.argsPrefix)
     && value.launch.argsPrefix.every((entry) => typeof entry === "string")
-    && (value.launch.env === undefined || isStringRecord(value.launch.env))
+    && (value.launch.env === undefined || isStringRecord(value.launch.env))))
+    && (value.mcpToolPolicy === undefined || (value.mcpToolPolicy && typeof value.mcpToolPolicy === "object"
+      && !Array.isArray(value.mcpToolPolicy) && Object.values(value.mcpToolPolicy).every((policy) => (
+        policy && (policy.unlisted === "allow" || policy.unlisted === "ask" || policy.unlisted === "deny")
+        && policy.tools && typeof policy.tools === "object" && !Array.isArray(policy.tools)
+        && Object.values(policy.tools).every(isToolDecision)
+      ))))
     && (value.mcpServers === undefined || (value.mcpServers && typeof value.mcpServers === "object"
       && !Array.isArray(value.mcpServers) && Object.values(value.mcpServers).every((server) => (
         server && typeof server.command === "string" && server.command.trim()
@@ -315,13 +326,18 @@ export default function happierPiToolsExtension(pi) {
           const catalog = await connection.request("tools/list", cursor ? { cursor } : {});
           for (const tool of catalog.tools) {
             if (server.enabledTools && !server.enabledTools.includes(tool.name)) continue;
+            const policy = config.mcpToolPolicy && Object.hasOwn(config.mcpToolPolicy, serverName)
+              ? config.mcpToolPolicy[serverName] : undefined;
+            const decision = policy && Object.hasOwn(policy.tools, tool.name) ? policy.tools[tool.name] : policy?.unlisted;
+            if (decision === "off" || decision === "deny") continue;
             const name = "mcp__" + serverName + "__" + tool.name;
             names.push(name);
             pi.registerTool({ name, label: tool.title || tool.name,
               description: tool.description || "", parameters: tool.inputSchema,
-              async execute(_callId, args, signal, _onUpdate, ctx) {
+              async execute(callId, args, signal, _onUpdate, ctx) {
                 if (signal?.aborted) throw new Error("MCP tool call cancelled");
-                const approved = await ctx?.ui?.confirm(name, JSON.stringify(args ?? {}), { signal });
+                if (typeof callId !== "string" || !callId) throw new Error("MCP tool call has no native identity");
+                const approved = await ctx?.ui?.confirm(MCP_APPROVAL_CALL_PREFIX + callId, "", { signal });
                 if (!approved) throw new Error("MCP tool call denied");
                 const result = await connection.request("tools/call", { name: tool.name, arguments: args ?? {} }, signal);
                 if (result.isError) throw new Error((result.content || []).map((item) => item.text || "").join("\\n") || "MCP tool call failed");

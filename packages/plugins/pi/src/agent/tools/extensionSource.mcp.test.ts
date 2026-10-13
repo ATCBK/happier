@@ -4,6 +4,7 @@ import { join } from 'node:path';
 import { pathToFileURL } from 'node:url';
 import { describe, expect, it } from 'vitest';
 import { buildPiHappierToolsExtensionSource } from './extensionSource.js';
+import type { AgentSessionOpenRequest } from '@happier-dev/plugin-sdk/agents/runtime';
 
 type Tool = Readonly<{
   name: string;
@@ -23,7 +24,7 @@ lines.on('line', (line) => {
   if (message.method === 'initialize') result = { protocolVersion: '2024-11-05', capabilities: { tools: {} }, serverInfo: { name: 'fixture', version: '1' } };
   else if (message.method === 'tools/list') result = message.params.cursor
     ? { tools: [{ name: 'echo', description: 'Echo', inputSchema: { type: 'object', properties: { text: { type: 'string' } } } }] }
-    : { tools: [{ name: 'hidden', inputSchema: { type: 'object' } }], nextCursor: 'second' };
+    : { tools: [{ name: 'toString', inputSchema: { type: 'object' } }], nextCursor: 'second' };
   else if (message.method === 'tools/call') {
     calls++;
     result = message.params.arguments.text === 'fail'
@@ -37,7 +38,14 @@ lines.on('close', () => process.exit(0));
 `;
 
 describe('Pi extension user MCP', () => {
-  it('lists and calls a materialized stdio server, asks before calling, and closes it on shutdown', async () => {
+  it.each([
+    { enabledTools: ['echo'], mcpToolPolicy: undefined },
+    { enabledTools: undefined, mcpToolPolicy: { fixture: { unlisted: 'ask', tools: { toString: 'off', echo: 'allow' } } } },
+    { enabledTools: undefined, mcpToolPolicy: { fixture: { unlisted: 'deny', tools: { echo: 'ask' } } } },
+  ] satisfies readonly Readonly<{
+    enabledTools: string[] | undefined;
+    mcpToolPolicy: AgentSessionOpenRequest['mcpToolPolicy'];
+  }>[])('filters unavailable tools, keeps confirmation for Allow, and closes the real stdio server ($mcpToolPolicy)', async ({ enabledTools, mcpToolPolicy }) => {
     const root = mkdtempSync(join(tmpdir(), 'happier-pi-user-mcp-'));
     const handlers = new Map<string, Array<(...args: unknown[]) => unknown>>();
     const tools: Tool[] = [];
@@ -50,7 +58,8 @@ describe('Pi extension user MCP', () => {
       writeFileSync(configPath, JSON.stringify({
         v: 1, sessionId: 'session', directory: root, systemPrompt: '', tools: [],
         launch: { executablePath: process.execPath, argsPrefix: [] },
-        mcpServers: { fixture: { command: process.execPath, args: [serverPath], env: { MCP_FIXTURE_PREFIX: 'user:' }, enabledTools: ['echo'] } },
+        mcpServers: { fixture: { command: process.execPath, args: [serverPath], env: { MCP_FIXTURE_PREFIX: 'user:' }, enabledTools } },
+        mcpToolPolicy,
       }));
       const module = await import(pathToFileURL(extensionPath).href);
       let activeTools = ['read'];

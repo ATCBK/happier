@@ -93,18 +93,19 @@ async function openPiSession(
         async (latePreparation) => await latePreparation.dispose(),
       );
       const { models, happierTools } = context.session.services;
-      if (happierTools) {
-        const nativeBridgeResolution = happierTools.resolveNativeBridge({
+      if (happierTools || Object.keys(request.mcpServers ?? {}).length > 0) {
+        const nativeBridgeResolution = happierTools?.resolveNativeBridge({
           systemPrompt: request.startupInstructions?.instructions,
         }, { signal: lifecycle.signal });
-        const config = await lifecycle.waitFor(
-          nativeBridgeResolution,
-          'Happier tools bridge resolution',
-        );
+        const config = nativeBridgeResolution ? await lifecycle.waitFor(
+          nativeBridgeResolution, 'Happier tools bridge resolution',
+        ) : undefined;
         const launchEnv = prepared.launchEnvironment.values;
         const agentDir = launchEnv.PI_CODING_AGENT_DIR?.trim()
           || join(resolveHomeDirFromEnvironment(launchEnv), '.pi', 'agent');
-        const toolPreparation = preparePiHappierToolsExtension({ agentDir, config, mcpServers: request.mcpServers });
+        const toolPreparation = preparePiHappierToolsExtension({ agentDir,
+          ...(config ? { config } : { directory: request.cwd }),
+          mcpServers: request.mcpServers, mcpToolPolicy: request.mcpToolPolicy });
         preparedTools = await lifecycle.waitFor(
           toolPreparation,
           'Happier tools extension preparation',
@@ -116,6 +117,7 @@ async function openPiSession(
       }
       runtime = await lifecycle.waitFor(
         createPiRuntimeOperations({
+          skills: request.skills,
           services: context.services,
           models,
           logger: context.services.logger,
@@ -217,6 +219,7 @@ async function openPiExecutionRun(
         },
       });
       let prepared: PreparedPiQualifiedConnectedAccounts | null = null;
+      let preparedTools: PreparedPiHappierToolsExtension | null = null;
       let conversation: Awaited<ReturnType<typeof createPiExecutionRunConversation>> | null = null;
       try {
         prepared = await lifecycle.waitFor(
@@ -230,8 +233,18 @@ async function openPiExecutionRun(
         if (prepared.isInvalidated()) {
           throw new Error('Pi qualified Connected Account launch was invalidated before opening the runtime.');
         }
+        if (Object.keys(request.mcpServers ?? {}).length > 0) {
+          const launchEnv = prepared.launchEnvironment.values;
+          const agentDir = launchEnv.PI_CODING_AGENT_DIR?.trim()
+            || join(resolveHomeDirFromEnvironment(launchEnv), '.pi', 'agent');
+          preparedTools = await lifecycle.waitFor(preparePiHappierToolsExtension({
+            agentDir, directory: request.cwd,
+            mcpServers: request.mcpServers, mcpToolPolicy: request.mcpToolPolicy,
+          }), 'MCP tools extension preparation', async lateTools => await lateTools.dispose());
+        }
         conversation = await lifecycle.waitFor(
           createPiExecutionRunConversation({
+            skills: request.skills,
             services: context.services,
             logger: context.services.logger,
             cwd: request.cwd,
@@ -242,10 +255,19 @@ async function openPiExecutionRun(
             resumeProviderSessionId: request.kind === 'resume' ? request.checkpointId : null,
             eagerStart: true,
             sessionOpenLifecycle: lifecycle,
+            ...(preparedTools ? { happierToolsExtension: preparedTools } : {}),
           }),
           'provider runtime startup',
           async (lateRuntime) => await lateRuntime.dispose(),
         );
+        if (preparedTools) {
+          const inner = conversation;
+          const tools = preparedTools;
+          conversation = { ...inner, async dispose() {
+            try { await inner.dispose(); }
+            finally { await tools.dispose(); }
+          } };
+        }
         conversation = prepared.bindExecutionRun(conversation);
         if (request.configuration !== undefined) {
           const result = await lifecycle.waitFor(
@@ -264,6 +286,7 @@ async function openPiExecutionRun(
           await Promise.all([
             conversation?.dispose(),
             prepared?.dispose(),
+            conversation ? undefined : preparedTools?.dispose(),
           ]);
         } catch (disposeError) {
           throw new AggregateError([error, disposeError], 'Pi execution-run preparation failed');

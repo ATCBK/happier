@@ -10,6 +10,7 @@ import type {
   AgentSessionRuntimeEvent,
   AgentSessionSendRequest,
   AgentSessionModelsService,
+  AgentSessionOpenRequest,
 } from '@happier-dev/plugin-sdk/agents/runtime';
 import { AgentSessionRuntimeEventSchema } from '@happier-dev/plugin-sdk/agents/runtime';
 import type { PluginDiagnosticData } from '@happier-dev/plugin-sdk';
@@ -67,7 +68,9 @@ import {
   buildPiExtensionUiResponse,
   parsePiBlockingExtensionUiRequest,
   type PiBlockingExtensionUiRequest,
+  type PiExtensionUiResponse,
 } from './extensionUi.js';
+import { PI_MCP_APPROVAL_CALL_PREFIX } from '../../tools/extensionSource.js';
 
 const PI_VERSION_PROBE_TIMEOUT_MS = 30_000;
 // Session opening is one provider-lifecycle operation. Keep every RPC in that
@@ -165,8 +168,9 @@ export function createPiSessionOpenLifecycle(params: Readonly<{
 }
 
 type PiRuntimeOperationsParams = Readonly<{
+  skills?: AgentSessionOpenRequest['skills'];
   services: Pick<PluginServices, 'exec'> & Readonly<{
-    interactions: Pick<PluginServices['interactions'], 'askQuestions'>;
+    interactions: Pick<PluginServices['interactions'], 'askQuestions' | 'requestApproval'>;
   }>;
   models?: AgentSessionModelsService;
   logger: PluginLoggerService;
@@ -446,6 +450,7 @@ function createPiExecSpec(
     launch: {
       executable,
       args: buildPiRpcArgs({
+        skillsRoot: params.skills?.skillsRoot,
         modelDiscoveryExtensionPath,
         permissionMode: params.permissionMode,
         thinkingLevel,
@@ -1074,6 +1079,7 @@ function createRuntimeOperations(params: Readonly<{
 export type PiSessionRuntime = AgentSessionRuntime;
 
 export type PiExecutionRunConversationParams = Readonly<{
+  skills?: AgentSessionOpenRequest['skills'];
   services: PiRuntimeOperationsParams['services'];
   logger: PluginLoggerService;
   cwd: string;
@@ -1374,10 +1380,17 @@ async function createPiConversationRuntimeOperations(
   let malformedRuntimeEventPublished = false;
   let terminalRuntimeEventPublished = false;
   let sequence = 0;
+  const activeMcpCalls = new Map<string, Extract<PiRuntimeEvent, { kind: 'tool-call' }> | null>();
   const publishParsedRuntimeEvent = (event: PiRuntimeEvent): void => {
     if (terminalRuntimeEventPublished) return;
     if (event.kind === 'available-commands') retainedAvailableCommandsEvent = event;
     if (event.kind === 'provider-session-id') retainedProviderSessionIdEvent = event;
+    if (event.kind === 'tool-call') {
+      activeMcpCalls.set(event.toolCallId,
+        activeMcpCalls.has(event.toolCallId) || !event.toolName.startsWith('mcp__') ? null : event);
+    }
+    if (event.kind === 'tool-result') activeMcpCalls.delete(event.toolCallId);
+    if (event.kind === 'turn-complete' || event.kind === 'runtime-ended') activeMcpCalls.clear();
     for (const subscriber of subscribers) {
       subscriber(event);
     }
@@ -1443,12 +1456,29 @@ async function createPiConversationRuntimeOperations(
     if (blockingExtensionUiRequests.has(request.id)) return;
     const controller = new AbortController();
     const task = (async (): Promise<void> => {
-      let result: unknown;
+      let response: PiExtensionUiResponse | undefined;
       try {
-        result = await params.services.interactions.askQuestions(
-          buildPiExtensionUiQuestionRequest(request),
-          { signal: controller.signal },
-        );
+        if (request.method === 'confirm' && request.title.startsWith(PI_MCP_APPROVAL_CALL_PREFIX)) {
+          // The dialog carries only a native correlation id. Tool authority and
+          // input come from the preceding structured Pi execution event.
+          const call = activeMcpCalls.get(request.title.slice(PI_MCP_APPROVAL_CALL_PREFIX.length));
+          if (call) {
+            const approval = await params.services.interactions.requestApproval({
+              kind: 'approval', title: 'Allow Pi to use an MCP tool?',
+              subject: { kind: 'tool', name: call.toolName, input: call.input },
+              allowSessionPersistence: true,
+            }, { signal: controller.signal });
+            response = { type: 'extension_ui_response', id: request.id,
+              confirmed: approval.status === 'approved' && activeMcpCalls.get(call.toolCallId) === call };
+          } else {
+            response = { type: 'extension_ui_response', id: request.id, confirmed: false };
+          }
+        } else {
+          response = buildPiExtensionUiResponse(request, await params.services.interactions.askQuestions(
+            buildPiExtensionUiQuestionRequest(request),
+            { signal: controller.signal },
+          ));
+        }
       } catch (error) {
         if (!controller.signal.aborted) {
           params.logger.warn('[PiRuntime] Extension dialog interaction failed', {
@@ -1457,7 +1487,7 @@ async function createPiConversationRuntimeOperations(
         }
       }
       try {
-        await rpc.write(buildPiExtensionUiResponse(request, result));
+        await rpc.write(response ?? { type: 'extension_ui_response', id: request.id, cancelled: true });
       } catch (error) {
         params.logger.warn('[PiRuntime] Extension dialog response failed', {
           error: error instanceof Error ? error.message : String(error),
@@ -1594,6 +1624,7 @@ async function createPiConversationRuntimeOperations(
     resumeSessionSelector: readString(params.resumeSessionSelector),
     resumeProviderSessionId: readString(params.resumeProviderSessionId),
     clearSubscribers: () => {
+      activeMcpCalls.clear();
       modelsBinding?.dispose();
       modelsBinding = null;
       modelsSource?.dispose();

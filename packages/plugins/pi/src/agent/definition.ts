@@ -11,6 +11,7 @@ const PI_AGENT_ID = 'pi';
 // IMPORTANT: this must stay JSON-serializable (data-only).
 export const AGENT_DEFINITION = Object.freeze({
   id: PI_AGENT_ID,
+  acpRegistryIds: ['pi-acp'] as const,
   core: {
     id: PI_AGENT_ID,
     cliSubcommand: 'pi',
@@ -46,7 +47,8 @@ export const AGENT_DEFINITION = Object.freeze({
       inFlightSteerSupported: true,
       terminalPromptInjectionSupported: false,
     },
-    tools: { delivery: 'native_extension', support: 'experimental' },
+    tools: { delivery: 'native_extension', support: 'experimental',
+      mcpToolControl: { off: 'hidden', approval: 'host' } },
   },
   sessionModeDescriptor: { source: 'none', semantics: 'none', runtimeSwitch: 'none' },
   sessionModesKind: 'none',

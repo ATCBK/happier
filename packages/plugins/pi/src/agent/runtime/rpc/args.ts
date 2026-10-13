@@ -74,6 +74,7 @@ function resolvePiRequestAuthExtensionArgs(env: Readonly<Record<string, string |
 }
 
 export function buildPiRpcArgs(opts?: Readonly<{
+  skillsRoot?: string;
   modelDiscoveryExtensionPath?: string;
   permissionMode?: PiPermissionMode;
   thinkingLevel?: string | null;
@@ -116,6 +117,7 @@ export function buildPiRpcArgs(opts?: Readonly<{
     'rpc',
     '--approve',
   ];
+  if (opts?.skillsRoot) args.push('--skill', opts.skillsRoot);
   if (tools) args.push('--tools', tools.join(','));
   const thinking = normalizePiThinkingLevel(opts?.thinkingLevel);
   if (thinking) args.push('--thinking', thinking);

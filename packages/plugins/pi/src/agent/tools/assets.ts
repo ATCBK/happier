@@ -1,7 +1,7 @@
 import { rm } from 'node:fs/promises';
 import { dirname, join } from 'node:path';
 
-import type { AgentSessionMcpLaunchConfig, AgentSessionNativeToolBridgeConfig } from '@happier-dev/plugin-sdk/agents/runtime';
+import type { AgentSessionMcpLaunchConfig, AgentSessionNativeToolBridgeConfig, AgentSessionOpenRequest } from '@happier-dev/plugin-sdk/agents/runtime';
 import { writeAtomicTextFileIfChanged, writeSecureTempTextFileSync } from '@happier-dev/plugin-sdk/fs';
 
 import { buildPiHappierToolsExtensionSource } from './extensionSource.js';
@@ -15,9 +15,11 @@ export type PreparedPiHappierToolsExtension = Readonly<{
 
 export async function preparePiHappierToolsExtension(params: Readonly<{
   agentDir: string;
-  config: AgentSessionNativeToolBridgeConfig;
   mcpServers?: Readonly<Record<string, AgentSessionMcpLaunchConfig>>;
-}>): Promise<PreparedPiHappierToolsExtension> {
+  mcpToolPolicy?: AgentSessionOpenRequest['mcpToolPolicy'];
+}> & (Readonly<{ config: AgentSessionNativeToolBridgeConfig; directory?: never }>
+  | Readonly<{ config?: never; directory: string }>)): Promise<PreparedPiHappierToolsExtension> {
+  const config = params.config ?? { v: 1, directory: params.directory, systemPrompt: '', tools: [] };
   const extensionPath = join(
     params.agentDir,
     'extensions',
@@ -32,12 +34,13 @@ export async function preparePiHappierToolsExtension(params: Readonly<{
   const configPath = writeSecureTempTextFileSync({
     prefix: 'happier-pi-tools',
     suffix: '.json',
-    contents: `${JSON.stringify({ ...params.config, mcpServers: params.mcpServers ?? {} })}\n`,
+    contents: `${JSON.stringify({ ...config, mcpServers: params.mcpServers ?? {},
+      ...(params.mcpToolPolicy ? { mcpToolPolicy: params.mcpToolPolicy } : {}) })}\n`,
   });
   return Object.freeze({
     extensionPath,
     configPath,
-    toolNames: Object.freeze(params.config.tools.map((tool) => tool.name)),
+    toolNames: Object.freeze(config.tools.map((tool) => tool.name)),
     async dispose() {
       await rm(dirname(configPath), { recursive: true, force: true });
     },

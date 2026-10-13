@@ -59,6 +59,13 @@ describe('buildPiToolsForPermissionMode', () => {
 });
 
 describe('buildPiRpcArgs', () => {
+  it('adds the session-private skills root without disabling native skills', () => {
+    const args = buildPiRpcArgs({ skillsRoot: '/session/skills' });
+    expect(args.filter((argument) => argument === '--skill')).toHaveLength(1);
+    expect(args[args.indexOf('--skill') + 1]).toBe('/session/skills');
+    expect(args).not.toContain('--no-skills');
+    expect(buildPiRpcArgs()).not.toContain('--skill');
+  });
   it('trusts the user-selected project for fresh and resumed launches', () => {
     expect(buildPiRpcArgs()).toContain('--approve');
     expect(buildPiRpcArgs({ resumeSessionId: 'existing-session' })).toContain('--approve');

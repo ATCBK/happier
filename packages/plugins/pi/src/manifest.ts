@@ -96,6 +96,7 @@ export const PI_PLUGIN = definePlugin({
         },
         primary: 'sessions',
         catalog: {
+          acpRegistryIds: [...AGENT_DEFINITION.acpRegistryIds],
           vendorResume: { support: AGENT_DEFINITION.core.resume.vendorResume },
           agentCliSystemTool: { toolId: 'pi-cli' },
         },
@@ -106,7 +107,13 @@ export const PI_PLUGIN = definePlugin({
           credentialKinds: [...declaration.credentialKinds],
         })),
         capabilities: projectAgentCapabilitiesV2FromDefinition(AGENT_DEFINITION.core, {
-          skills: { delivery: 'none', nativeDisable: 'unsupported', liveReload: 'unsupported' },
+          skills: {
+            delivery: 'session_dir', nativeDisable: 'unsupported', liveReload: 'unsupported',
+            nativeRoots: {
+              user: [['.pi', 'agent', 'skills'], ['.agents', 'skills']],
+              project: [['.pi', 'skills'], ['.agents', 'skills']],
+            },
+          },
           surfaces: ['externalSessions'],
           sessions: {
             open: ['create', 'resume'],

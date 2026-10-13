@@ -14,6 +14,7 @@ import type {
   AgentSessionModelsSource,
 } from '@happier-dev/plugin-sdk/agents/runtime';
 import { AgentSessionRuntimeEventSchema } from '@happier-dev/plugin-sdk/agents/runtime';
+import { InteractionTransientAuthorRequestV1Schema } from '@happier-dev/plugin-sdk/interactions';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 
 import {
@@ -49,6 +50,7 @@ type Capture = {
   questionRequests?: unknown[];
   questionResult?: unknown;
   questionHandler?: (request: unknown, options?: Readonly<{ signal?: AbortSignal }>) => Promise<unknown>;
+  approvalRequests?: unknown[];
   systemToolGate?: Promise<void>;
   systemToolSignal?: AbortSignal;
   spawnGate?: Promise<void>;
@@ -123,6 +125,10 @@ function createRuntimeContext(capture: Capture) {
     },
     services: {
       interactions: {
+        requestApproval: async (request: unknown) => {
+          capture.approvalRequests?.push(request);
+          return { requestId: 'host-approval', kind: 'approval' as const, status: 'approved' as const, persistence: 'once' as const };
+        },
         askQuestions: async (request: unknown, options?: Readonly<{ signal?: AbortSignal }>) => {
           capture.questionRequests?.push(request);
           if (capture.questionHandler) return await capture.questionHandler(request, options);
@@ -544,6 +550,42 @@ describe('createPiRuntimeOperations', () => {
       value: 'Workspace',
     }));
 
+    await runtime.dispose();
+  });
+
+  it('binds MCP confirmations to native call identity and fails closed after that call ends', async () => {
+    const capture: Capture = { specs: [], written: [], approvalRequests: [], questionRequests: [] };
+    const runtime = await createRuntime(capture);
+    const prompt = sendPrompt(runtime, 'Use MCP');
+    await waitForWrittenCount(capture, 1);
+    await ackLastCommand(capture);
+    await prompt;
+    await emit(capture, { type: 'tool_execution_start', toolCallId: 'native-a', toolName: 'mcp__a__echo', args: { text: 'actual-a' } });
+    await emit(capture, { type: 'tool_execution_start', toolCallId: 'native-b', toolName: 'mcp__b__echo', args: { text: 'actual-b' } });
+    await emit(capture, { type: 'extension_ui_request', id: 'dialog-b', method: 'confirm',
+      title: 'happier:mcp-approval:native-b', message: '{"text":"untrusted-dialog-text"}' });
+    await vi.waitFor(() => expect(capture.approvalRequests).toHaveLength(1));
+    expect(capture.approvalRequests?.[0]).toMatchObject({ kind: 'approval',
+      subject: { kind: 'tool', name: 'mcp__b__echo', input: { text: 'actual-b' } } });
+    expect(capture.questionRequests).toEqual([]);
+    await vi.waitFor(() => expect(capture.written).toContainEqual({ type: 'extension_ui_response', id: 'dialog-b', confirmed: true }));
+    await emit(capture, { type: 'tool_execution_end', toolCallId: 'native-b', toolName: 'mcp__b__echo', result: {} });
+    await emit(capture, { type: 'extension_ui_request', id: 'retired', method: 'confirm', title: 'happier:mcp-approval:native-b', message: '' });
+    await vi.waitFor(() => expect(capture.written).toContainEqual({ type: 'extension_ui_response', id: 'retired', confirmed: false }));
+    expect(capture.approvalRequests).toHaveLength(1);
+    expect(capture.questionRequests).toEqual([]);
+    await emit(capture, { type: 'tool_execution_start', toolCallId: 'native-a', toolName: 'bash', args: { command: 'duplicate' } });
+    await emit(capture, { type: 'extension_ui_request', id: 'duplicate', method: 'confirm', title: 'happier:mcp-approval:native-a', message: '' });
+    await vi.waitFor(() => expect(capture.written).toContainEqual({ type: 'extension_ui_response', id: 'duplicate', confirmed: false }));
+    expect(capture.approvalRequests).toHaveLength(1);
+    // Over the old Interaction subject limit, but within the existing strict
+    // runtime event's 512-code-unit tool-name contract.
+    const longName = `mcp__a__${'工具'.repeat(96)}`;
+    await emit(capture, { type: 'tool_execution_start', toolCallId: 'long-native', toolName: longName, args: { text: 'long' } });
+    await emit(capture, { type: 'extension_ui_request', id: 'long-dialog', method: 'confirm', title: 'happier:mcp-approval:long-native', message: '' });
+    await vi.waitFor(() => expect(capture.approvalRequests).toHaveLength(2));
+    const admitted = InteractionTransientAuthorRequestV1Schema.parse(capture.approvalRequests?.[1]);
+    expect(admitted).toMatchObject({ kind: 'approval', subject: { name: longName, input: { text: 'long' } } });
     await runtime.dispose();
   });
 
