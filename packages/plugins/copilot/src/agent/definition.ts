@@ -3,6 +3,7 @@ const COPILOT_AGENT_ID = 'copilot';
 // IMPORTANT: this must stay JSON-serializable (data-only).
 export const AGENT_DEFINITION = Object.freeze({
   id: COPILOT_AGENT_ID,
+  acpRegistryIds: ['github-copilot-cli'] as const,
   core: {
     id: COPILOT_AGENT_ID,
     cliSubcommand: 'copilot',

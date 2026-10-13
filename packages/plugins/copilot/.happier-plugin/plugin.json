@@ -21,11 +21,45 @@
               "resume"
             ]
           },
+          "skills": {
+            "delivery": "none",
+            "liveReload": "unsupported",
+            "nativeDisable": "unsupported",
+            "nativeRoots": {
+              "project": [
+                [
+                  ".github",
+                  "skills"
+                ],
+                [
+                  ".agents",
+                  "skills"
+                ],
+                [
+                  ".claude",
+                  "skills"
+                ]
+              ],
+              "user": [
+                [
+                  ".copilot",
+                  "skills"
+                ],
+                [
+                  ".agents",
+                  "skills"
+                ]
+              ]
+            }
+          },
           "tools": {
             "delivery": "native_mcp"
           }
         },
         "catalog": {
+          "acpRegistryIds": [
+            "github-copilot-cli"
+          ],
           "vendorResume": {
             "support": "supported"
           }
@@ -109,6 +143,7 @@
     "projectNativeAdapters": [],
     "promptAssets": [],
     "providers": [],
+    "registrySources": [],
     "requestInterceptors": [],
     "resources": [],
     "roles": [],
