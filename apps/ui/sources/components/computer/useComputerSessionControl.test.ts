@@ -110,6 +110,94 @@ async function renderControl(machine: ComputerMachineRpc) {
 }
 
 describe('useComputerSessionControl', () => {
+    it('keeps the admitted cached Machine identity when Computer discovery fails and withdraws it on Account retirement', async () => {
+        const { storage } = await import('@/sync/domains/state/storageStore');
+        const { activateStorageAccountScope } = await import('@/dev/testkit/runtime/storageRuntime');
+        const { createMachineFixture } = await import('@/dev/testkit/fixtures/machineFixtures');
+        const { captureActiveServerAccountScopeLifetime } = await import('@/sync/domains/scope/activeServerAccountScope');
+        const accountScope = { serverId: 'computer-identity-home', accountId: 'computer-identity-account' };
+        const previousProfile = storage.getState().profile;
+        const previousLists = storage.getState().machineListByServerId;
+        const previousStatuses = storage.getState().machineListStatusByServerId;
+        const owner = await activateStorageAccountScope(accountScope);
+        const accountLifetime = captureActiveServerAccountScopeLifetime();
+        if (!accountLifetime) throw new Error('Expected the canonical Computer Account lifetime');
+        const cachedMachine = createMachineFixture({ id: 'computer-identity-machine', active: false,
+            metadata: { ...createMachineFixture().metadata!, host: 'cached-host', displayName: 'Cached studio' } });
+        storage.setState({ machineListByServerId: { ...previousLists, [accountScope.serverId]: [cachedMachine] },
+            machineListStatusByServerId: { ...previousStatuses, [accountScope.serverId]: 'idle' } });
+        let reachable = false;
+        const executor = executorWith(async ({ actionId }) => {
+            if (!reachable) return { ok: false, errorCode: 'machine_unreachable', error: 'Machine is unreachable' };
+            if (actionId === 'computer.target.get') return selection;
+            if (actionId === 'computer.targets.list') return targetList;
+            return status('human');
+        });
+        const scope = { serverId: accountScope.serverId, sessionId: 'computer-identity-session', machineId: cachedMachine.id };
+        let enabled = true;
+        let renders = 0;
+        const hook = await renderHook(() => {
+            renders += 1;
+            return useComputerSessionControl({ scope, execute: executor.execute, accountLifetime, enabled });
+        });
+        try {
+            expect(hook.getCurrent().failure).toBe('machine_unreachable');
+            expect(hook.getCurrent().selection).toBeNull();
+            expect(hook.getCurrent().machineName).toBe('Cached studio');
+            await act(async () => storage.setState({ machineListByServerId: { ...previousLists,
+                [accountScope.serverId]: [{ ...cachedMachine, metadata: { ...cachedMachine.metadata, displayName: 'Renamed studio' } }] } }));
+            expect(hook.getCurrent().machineName).toBe('Renamed studio');
+            enabled = false;
+            await hook.rerender();
+            const parkedRenders = renders;
+            await act(async () => storage.setState({ machineListByServerId: { ...previousLists,
+                [accountScope.serverId]: [{ ...cachedMachine, metadata: { ...cachedMachine.metadata, displayName: 'Resumed studio' } }] } }));
+            expect(renders).toBe(parkedRenders);
+            expect(hook.getCurrent().machineName).toBe('Renamed studio');
+            enabled = true;
+            await hook.rerender();
+            expect(hook.getCurrent().machineName).toBe('Resumed studio');
+            reachable = true;
+            await act(async () => { hook.getCurrent().refresh(); });
+            expect(hook.getCurrent().machineName).toBe(selection.approvalDisplay.machineDisplayName);
+            enabled = false;
+            await hook.rerender();
+            await act(async () => { storage.getState().activateProfileScope({ ...accountScope, accountId: 'replacement-account' }); });
+            expect(hook.getCurrent().machineName).toBeNull();
+        } finally {
+            await hook.unmount();
+            storage.setState({ profile: previousProfile, machineListByServerId: previousLists, machineListStatusByServerId: previousStatuses });
+            owner.dispose();
+        }
+    });
+
+    it.each(['absent', 'foreign_home', 'unadmitted'] as const)('does not borrow a cached Machine identity from %s data', async inputClass => {
+        const { storage } = await import('@/sync/domains/state/storageStore');
+        const { activateStorageAccountScope } = await import('@/dev/testkit/runtime/storageRuntime');
+        const { createMachineFixture } = await import('@/dev/testkit/fixtures/machineFixtures');
+        const { captureActiveServerAccountScopeLifetime } = await import('@/sync/domains/scope/activeServerAccountScope');
+        const accountScope = { serverId: `identity-${inputClass}-home`, accountId: 'identity-account' };
+        const previousLists = storage.getState().machineListByServerId;
+        const previousStatuses = storage.getState().machineListStatusByServerId;
+        const owner = await activateStorageAccountScope(accountScope);
+        const accountLifetime = captureActiveServerAccountScopeLifetime();
+        const machine = createMachineFixture({ id: 'identity-machine', metadata: { ...createMachineFixture().metadata!, host: 'private-host', displayName: 'Private studio' } });
+        storage.setState({ machineListByServerId: { ...previousLists, [accountScope.serverId]: inputClass === 'absent' ? [] : [machine] },
+            machineListStatusByServerId: { ...previousStatuses, [accountScope.serverId]: 'idle' } });
+        const executor = executorWith(async () => ({ ok: false, errorCode: 'machine_unreachable', error: 'Machine is unreachable' }));
+        const hook = await renderHook(() => useComputerSessionControl({
+            scope: { serverId: inputClass === 'foreign_home' ? 'another-home' : accountScope.serverId,
+                sessionId: `identity-${inputClass}-session`, machineId: machine.id },
+            execute: executor.execute, accountLifetime: inputClass === 'unadmitted' ? null : accountLifetime,
+        }));
+        try { expect(hook.getCurrent().machineName).toBeNull(); }
+        finally {
+            await hook.unmount();
+            storage.setState({ machineListByServerId: previousLists, machineListStatusByServerId: previousStatuses });
+            owner.dispose();
+        }
+    });
+
     it.each(['stale_capture', 'human_input_interruption_uncertain'] as const)('retains the exact source but blocks input after %s until capture is confirmed', async code => {
         const { machine, calls } = createMachine();
         const scope = { sessionId: 'input-refusal', machineId: 'machine_1' };
