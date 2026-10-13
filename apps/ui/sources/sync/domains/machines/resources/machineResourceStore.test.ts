@@ -38,6 +38,17 @@ async function settle() { for (let turn = 0; turn < 8; turn++) await Promise.res
 describe('machine resources subscription owner', () => {
     afterEach(() => { vi.useRealTimers(); });
 
+    it('retains the typed read refusal for diagnosis and clears it after recovery', async () => {
+        const h = harness();
+        h.snapshotClient.mockResolvedValueOnce({ ok: false, reason: 'request_failed', errorCode: 'action_disabled' });
+        await h.store.read(key);
+        expect(h.store.getState(key)).toMatchObject({ status: 'error', errorCode: 'action_disabled' });
+        await h.store.retry(key);
+        expect(h.store.getState(key).status).toBe('ready');
+        expect(h.store.getState(key)).not.toHaveProperty('errorCode');
+        h.store.reset();
+    });
+
     it('retries retained summary and history failures after reachability removed live demand', async () => {
         const h = harness();
         const historyKey = { ...key, range: '1h' as const };

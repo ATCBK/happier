@@ -22,7 +22,7 @@ export type MachineVitalsRange = MachineVitalsHistoryV1['range'];
 export type MachineVitalsReadInput = MachineResourceKey & Readonly<{ view: MachineVitalsView; signal?: AbortSignal }>;
 export type MachineVitalsHistoryReadInput = MachineResourceKey & Readonly<{ range: MachineVitalsRange; signal?: AbortSignal }>;
 export type MachineVitalsWatchInput = MachineVitalsReadInput & Readonly<{ sinceSampledAt?: number }>;
-export type MachineResourceRpcResult<T> = Readonly<{ ok: true; value: T }> | Readonly<{ ok: false; reason: 'older_happier' | 'request_failed' | 'invalid_response' }>;
+export type MachineResourceRpcResult<T> = Readonly<{ ok: true; value: T }> | Readonly<{ ok: false; reason: 'older_happier' | 'request_failed' | 'invalid_response'; errorCode?: string }>;
 
 let actionExecute: FrontDoorActionExecute | undefined;
 async function execute(input: MachineResourceKey & Readonly<{ signal?: AbortSignal }>, actionId: MachineVitalsActionId, payload: Readonly<Record<string, unknown>>): Promise<unknown> {
@@ -43,8 +43,10 @@ async function read<T>(input: MachineResourceKey & Readonly<{ signal?: AbortSign
         const parsed = parse(raw);
         return parsed.success ? { ok: true, value: parsed.data } : { ok: false, reason: 'invalid_response' };
     } catch (error) {
-        return { ok: false, reason: isRpcMethodNotFoundError(error) || isRpcMethodNotAvailableError(error) ? 'older_happier'
-            : readRpcErrorCode(error) === 'invalid_action_output' ? 'invalid_response' : 'request_failed' };
+        if (isRpcMethodNotFoundError(error) || isRpcMethodNotAvailableError(error)) return { ok: false, reason: 'older_happier' };
+        const errorCode = readRpcErrorCode(error);
+        return { ok: false, reason: errorCode === 'invalid_action_output' ? 'invalid_response' : 'request_failed',
+            ...(errorCode ? { errorCode } : {}) };
     }
 }
 

@@ -10,6 +10,10 @@ import { createLinuxMachineVitalsReader } from '@/daemon/vitals/readers/linux';
 import type { MachineVitalsReader, MachineVitalsReaderInput } from '@/daemon/vitals/readers/types';
 import { MachineVitalsSnapshotV1Schema, MachineVitalsWatchResultV1Schema } from '@happier-dev/protocol/machines/vitals/machineVitalsRpcV1';
 import { registerDaemonMachineVitalsRpcHandlers } from './daemonMachineVitals';
+import { RpcHandlerManager } from '@/api/rpc/RpcHandlerManager';
+import { authorizeMachineRpcRequest } from '@/api/machine/machineRpcAuthorization';
+import { createLinuxVitalsFixture } from '@/daemon/vitals/readers/linux.testkit';
+import { SocketRpcMachineAdmissionContextV1Schema } from '@happier-dev/protocol/socketRpc';
 
 describe('Machine vitals Machine admission', () => {
     const directories: string[] = [];
@@ -77,6 +81,30 @@ describe('Machine vitals Machine admission', () => {
         await vi.advanceTimersByTimeAsync(ms);
         await sampler.start();
     }
+    it('composes native vitals through the real RPC manager, route registration and current Machine admission', async () => {
+        const native = await createLinuxVitalsFixture();
+        let current = true;
+        const { sampler } = await setup({ readers: createLinuxMachineVitalsReader({ root: native.root }) });
+        const manager = new RpcHandlerManager({ scopePrefix: 'm', localMachineId: 'm', encryptionMode: 'plain', logger: () => {},
+            authorizeRequest: request => authorizeMachineRpcRequest(request, {
+                machineId: 'm', resolveCustodianAccountId: async () => 'owner', resolveInstallationId: () => 'i',
+                // Current Home access verification is the network boundary. Local
+                // target matching, authorization, dispatch and schemas remain real.
+                verifyMachineAdmission: async () => current,
+            }) });
+        registerDaemonMachineVitalsRpcHandlers(manager, { sampler, target: () => identity });
+        const request = { method: `m:${RPC_METHODS.MACHINES_VITALS_GET}`, params: { machineId: 'm', view: 'summary' },
+            callerAuthority: 'present_user' as const,
+            machineAdmission: SocketRpcMachineAdmissionContextV1Schema.parse(context('owner', 'manage').machineAdmission) };
+        try {
+            await sampler.start();
+            const response = await manager.handleRequest(request);
+            expect(MachineVitalsSnapshotV1Schema.parse(response)).toEqual(response);
+            expect(response).toMatchObject({ state: 'reporting', sample: { memory: { totalBytes: 102_400_000, availableBytes: 40_960_000 } } });
+            current = false;
+            expect(await manager.handleRequest(request)).toMatchObject({ errorCode: 'RPC_FORBIDDEN' });
+        } finally { await sampler.stop(); await native.cleanup(); }
+    });
     it('admits custodians and Use recipients to content-free machine facts', async () => {
         const { handlers } = await setup();
         for (const admitted of [context('owner', 'manage'), context('recipient', 'use')]) {

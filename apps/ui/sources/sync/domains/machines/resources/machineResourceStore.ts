@@ -16,9 +16,11 @@ export type MachineResourceState = Readonly<{
     /** Cadence-derived freshness last observed at a read/watch answer; no client clock loop. */
     stale: boolean;
     samples: readonly MachineVitalsSampleV1[];
+    /** The admitted Action/RPC refusal, retained without replacing its stable state category. */
+    errorCode?: string;
 }>;
 export type MachineResourceStoreInput = MachineResourceKey & Readonly<{ view: MachineVitalsView }>;
-export type MachineResourceHistoryState = Readonly<{ status: MachineResourceState['status']; history: MachineVitalsHistoryV1 | null }>;
+export type MachineResourceHistoryState = Readonly<{ status: MachineResourceState['status']; history: MachineVitalsHistoryV1 | null; errorCode?: string }>;
 export type MachineResourceClients = Readonly<{
     snapshotClient: (input: MachineVitalsReadInput) => Promise<MachineResourceRpcResult<MachineVitalsSnapshotV1>>;
     watchClient: (input: MachineVitalsWatchInput) => Promise<MachineResourceRpcResult<MachineVitalsWatchResultV1>>;
@@ -35,7 +37,7 @@ type ResourceUpdate =
     | Readonly<{ kind: 'samples'; samples: readonly MachineVitalsSampleV1[]; retainDetails?: boolean }>
     | Readonly<{ kind: 'published_attention'; attention: MachineResourceAttentionV1 }>
     | Readonly<{ kind: 'freshness' }>
-    | Readonly<{ kind: 'error' | 'not_reported' }>;
+    | Readonly<{ kind: 'error' | 'not_reported'; errorCode?: string }>;
 type HistoryInput = MachineResourceKey & Readonly<{ range: MachineVitalsRange }>;
 
 function machineKey(input: MachineResourceKey): string { return JSON.stringify([input.serverId ?? null, input.machineId]); }
@@ -109,7 +111,11 @@ function applyUpdate(state: MachineResourceState, update: ResourceUpdate, now: n
         const attention = retain(state.snapshot.attention, update.attention);
         return attention === state.snapshot.attention ? state : applySnapshot(state, { ...state.snapshot, attention }, now);
     }
-    if (update.kind !== 'samples') return retain(state, { ...state, status: update.kind, stale: isMachineResourceStateStale(state, now) });
+    if (update.kind !== 'samples') {
+        const { errorCode: _previousErrorCode, ...retained } = state;
+        return retain(state, { ...retained, status: update.kind, stale: isMachineResourceStateStale(state, now),
+            ...(update.errorCode ? { errorCode: update.errorCode } : {}) });
+    }
     if (!state.snapshot) return state;
     let result = state;
     for (const incoming of update.samples) {
@@ -180,7 +186,8 @@ export function createMachineResourceStore(clients: MachineResourceClients, nowM
                 return applySnapshot(current, result.value, nowMs());
             }
             if (result.reason === 'older_happier') markUnsupported(input);
-            return applyUpdate(current, { kind: result.reason === 'older_happier' ? 'not_reported' : 'error' }, nowMs());
+            return applyUpdate(current, { kind: result.reason === 'older_happier' ? 'not_reported' : 'error',
+                ...(result.errorCode ? { errorCode: result.errorCode } : {}) }, nowMs());
         },
         failRefresh: (_state, input) => applyUpdate(getHeldState(input), { kind: 'error' }, nowMs()),
         applySnapshot: (state, update) => applyUpdate(state, update, nowMs()),
@@ -191,7 +198,7 @@ export function createMachineResourceStore(clients: MachineResourceClients, nowM
             if (signal?.aborted) return { status: 'unavailable' };
             if (!result.ok) {
                 if (result.reason === 'older_happier') markUnsupported(input);
-                else store.publish(input, { kind: 'error' });
+                else store.publish(input, { kind: 'error', ...(result.errorCode ? { errorCode: result.errorCode } : {}) });
                 return { status: 'unavailable' };
             }
             if (result.value.changed) {
@@ -220,9 +227,14 @@ export function createMachineResourceStore(clients: MachineResourceClients, nowM
             if (signal?.aborted) return state;
             if (result.ok) return retain(state, { status: 'ready', history: retain(state.history, result.value) });
             if (result.reason === 'older_happier') markUnsupported(input);
-            return retain(state, { ...state, status: result.reason === 'older_happier' ? 'not_reported' : 'error' });
+            const { errorCode: _previousErrorCode, ...retained } = state;
+            return retain(state, { ...retained, status: result.reason === 'older_happier' ? 'not_reported' : 'error',
+                ...(result.errorCode ? { errorCode: result.errorCode } : {}) });
         },
-        failRefresh: state => retain(state, { ...state, status: 'error' }),
+        failRefresh: state => {
+            const { errorCode: _previousErrorCode, ...retained } = state;
+            return retain(state, { ...retained, status: 'error' });
+        },
         applySnapshot: (state, history) => retain(state, { status: 'ready', history: retain(state.history, history) }),
     });
     function getHeldState(input: MachineResourceStoreInput): MachineResourceState {
