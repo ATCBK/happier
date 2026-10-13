@@ -48,7 +48,6 @@ export const COMMAND_HELP_RELEASE_INTERNALS = {
       '--bump-cli-override <preset>      (default: preset).',
       '--bump-stack-override <preset>    (default: preset).',
       '--deploy-targets <csv>            Optional.',
-      '--force-deploy <bool>             Rebuild selected deployment artifacts (default: false).',
       '--changed-ui <bool>',
       '--changed-cli <bool>',
       '--changed-stack <bool>',

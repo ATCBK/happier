@@ -4,7 +4,6 @@ import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
 import { execFileSync } from 'node:child_process';
-import { createAndroidAabFixture } from './fixtures/android-elf.mjs';
 
 const repoRoot = path.resolve(import.meta.dirname, '..', '..', '..');
 
@@ -41,7 +40,7 @@ test('prepares a dependency-free Android submit project from canonical app ident
     });
 
     const artifactPath = path.join(outputDir, 'candidate.aab');
-    createAndroidAabFixture(outputDir, { aabPath: artifactPath });
+    fs.writeFileSync(artifactPath, 'fixture');
     const submitOutput = execFileSync(
       process.execPath,
       [
