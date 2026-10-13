@@ -8,7 +8,7 @@ import type { AutomationWorkerHandle } from '../automation/automationWorker';
 import type { DaemonSessionMutationCustody } from '../connectedServices/usageLimitRecovery/createDaemonUsageLimitRecoveryMutationCustody';
 import type { MemoryWorkerHandle } from '../memory/memoryWorker';
 import { createPromptAssetAdapterRegistry } from '@/prompts/assets/createPromptAssetAdapterRegistry';
-import { createPromptRegistryAdapterRegistry } from '@/prompts/registries/createPromptRegistryAdapterRegistry';
+import { createCliRegistryHostV1 } from '@/registries/createCliRegistryHost';
 import { DEFAULT_MEMORY_SETTINGS } from '@/settings/memorySettings';
 
 import { ensureMachineRegistered } from '@/api/machine/ensureMachineRegistered';
@@ -206,7 +206,7 @@ describe('startDaemonMachineRegistration', () => {
         requestShutdown: vi.fn(),
         directPeerServerLifecycle: null,
         directTransferPromptAssetAdapterRegistry: createPromptAssetAdapterRegistry(),
-        directTransferPromptRegistryRegistry: createPromptRegistryAdapterRegistry(),
+        directTransferRegistryHost: createCliRegistryHostV1(),
         connectedServiceRefreshLoopHandle: null,
         connectedServiceQuotasLoopHandle: null,
         daemonServerWorkScheduler: {} as never,
@@ -416,7 +416,7 @@ describe('startDaemonMachineRegistration', () => {
         requestShutdown: vi.fn(),
         directPeerServerLifecycle: null,
         directTransferPromptAssetAdapterRegistry: createPromptAssetAdapterRegistry(),
-        directTransferPromptRegistryRegistry: createPromptRegistryAdapterRegistry(),
+        directTransferRegistryHost: createCliRegistryHostV1(),
         connectedServiceRefreshLoopHandle: null,
         connectedServiceQuotasLoopHandle: null,
         daemonServerWorkScheduler: {} as never,

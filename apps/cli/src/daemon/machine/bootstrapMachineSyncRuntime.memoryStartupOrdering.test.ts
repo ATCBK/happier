@@ -2,7 +2,7 @@ import { describe, expect, it, vi } from 'vitest';
 
 import type { Machine } from '@/api/types';
 import { createPromptAssetAdapterRegistry } from '@/prompts/assets/createPromptAssetAdapterRegistry';
-import { createPromptRegistryAdapterRegistry } from '@/prompts/registries/createPromptRegistryAdapterRegistry';
+import { createCliRegistryHostV1 } from '@/registries/createCliRegistryHost';
 import { DEFAULT_MEMORY_SETTINGS } from '@/settings/memorySettings';
 import { createDeferred } from '@/testkit/async/deferred';
 import { createApiMachineTransportFixture } from '@/testkit/apiMachineTransport';
@@ -121,7 +121,7 @@ describe('bootstrapMachineSyncRuntime memory startup ordering', () => {
       requestShutdown: vi.fn(),
       directPeerServerLifecycle: null,
       directTransferPromptAssetAdapterRegistry: createPromptAssetAdapterRegistry(),
-      directTransferPromptRegistryRegistry: createPromptRegistryAdapterRegistry(),
+      directTransferRegistryHost: createCliRegistryHostV1(),
       connectedServiceRefreshLoopHandle: null,
       connectedServiceQuotasLoopHandle: null,
       daemonServerWorkScheduler: {} as never,

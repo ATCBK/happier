@@ -4,6 +4,18 @@ import { describe, expect, it, vi } from 'vitest';
 import { initialMachineMetadata, refreshMachineMetadataForCurrentDaemon } from './metadata';
 
 describe('initialMachineMetadata', () => {
+  it('publishes new install observations even when the other daemon fields are unchanged', () => {
+    const current = { ...initialMachineMetadata, displayName: 'Build box' };
+    const fields = { host: current.host, platform: current.platform, happyCliVersion: current.happyCliVersion,
+      homeDir: current.homeDir, happyHomeDir: current.happyHomeDir, happyLibDir: current.happyLibDir,
+      agentInventory: { checkedAt: 2, installedAgentIds: ['codex'] } };
+    const published = refreshMachineMetadataForCurrentDaemon(current, fields);
+    expect(published).toMatchObject({ displayName: 'Build box', agentInventory: fields.agentInventory });
+    expect(refreshMachineMetadataForCurrentDaemon(published, fields)).toBe(published);
+    const removed = refreshMachineMetadataForCurrentDaemon(published, { ...fields,
+      agentInventory: { checkedAt: 3, installedAgentIds: [] } });
+    expect(removed).toMatchObject({ agentInventory: { checkedAt: 3, installedAgentIds: [] } });
+  });
   it('reads the fallback host name when metadata is consumed, not at module load', () => {
     const hostname = vi.spyOn(os, 'hostname').mockReturnValue('renamed-host.local');
     try {

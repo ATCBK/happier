@@ -53,7 +53,7 @@ import { ApiMachineClient } from '@/api/apiMachine';
 import { createLocalServicePreviewRoutes } from '@/daemon/local/services/preview/routes';
 import { createLocalServicePreviewRegistry } from '@/daemon/local/services/preview/registry';
 import { createPromptAssetAdapterRegistry } from '@/prompts/assets/createPromptAssetAdapterRegistry';
-import { createPromptRegistryAdapterRegistry } from '@/prompts/registries/createPromptRegistryAdapterRegistry';
+import { createCliRegistryHostV1 } from '@/registries/createCliRegistryHost';
 import { DEFAULT_MEMORY_SETTINGS } from '@/settings/memorySettings';
 
 import { buildUnavailableMemoryEmbeddingsDiagnostics } from '../memory/resolveOperationalMemoryEmbeddingsSettings';
@@ -74,7 +74,7 @@ import { createApiMachineTransportFixture } from '@/testkit/apiMachineTransport'
 import { createSessionRecordFixture } from '@/testkit/backends/sessionFixtures';
 import { buildUsageLimitIssueFingerprint } from '@/session/usageLimitRecoveryControls/buildUsageLimitIssueFingerprint';
 import { installAxiosFastifyAdapter } from '@/testkit/http/axiosAdapter';
-import { resolveServerHttpBaseUrl } from '@/api/client/serverHttpBaseUrl';
+import { resolveServerHttpBaseUrl, runWithServerHttpBaseUrl } from '@/api/client/serverHttpBaseUrl';
 import { setActiveAccountSettingsSnapshot, resetActiveAccountSettingsSnapshotForTests } from '@/settings/accountSettings/activeAccountSettingsSnapshot';
 import { resolveAccountSettingsScopeKey } from '@/settings/accountSettings/accountSettingsScopeKey';
 
@@ -225,9 +225,26 @@ function createProviderServerFeatures(enabled: boolean): FeaturesResponse {
 }
 
 describe('bootstrapMachineSyncRuntime', () => {
-    it('starts machine sync with token-only credentials before Account settings are admitted', async ({ onTestFinished }) => {
+    it('starts machine sync with token-only credentials through the admitted Home route before Account settings are admitted', async ({ onTestFinished }) => {
         usageLimitRecoveryMutationCustodyMocks.create.mockClear();
         runtimeLeaseMocks.tryAcquireAuthoritativePluginRuntimeRegistryLease.mockReset();
+        const featureRequests: string[] = [];
+        const home = fastify();
+        home.get('/v1/features', async request => {
+            featureRequests.push(request.url);
+            return createPeerMediationServerFeatures({ rpcDirectPeerEnabled: false, tunnelServerRoutedEnabled: true });
+        });
+        const runtimeOrigin = await home.listen({ port: 0, host: '127.0.0.1' });
+        onTestFinished(() => home.close());
+        const nativeFetch = globalThis.fetch;
+        // External network boundary: canonical identity is unreachable on this device;
+        // requests to the admitted runtime route still use a real HTTP server and parser.
+        vi.stubGlobal('fetch', ((input, init) => {
+            const url = input instanceof Request ? input.url : String(input);
+            if (!url.startsWith(`${runtimeOrigin}/`)) return Promise.reject(new TypeError('canonical_home_unreachable'));
+            return nativeFetch(input, init);
+        }) satisfies typeof fetch);
+        onTestFinished(() => vi.unstubAllGlobals());
         const token = [
             Buffer.from('{}').toString('base64url'),
             Buffer.from(JSON.stringify({ sub: 'account-token-only' })).toString('base64url'),
@@ -286,7 +303,7 @@ describe('bootstrapMachineSyncRuntime', () => {
             daemonStateVersion: 0,
         };
 
-        const result = await bootstrapMachineSyncRuntime({
+        const result = await runWithServerHttpBaseUrl(runtimeOrigin, () => bootstrapMachineSyncRuntime({
             cliVersion: '0.0.0-test',
             machineId: machine.id,
             machine,
@@ -311,7 +328,7 @@ describe('bootstrapMachineSyncRuntime', () => {
             requestShutdown: vi.fn(),
             directPeerServerLifecycle: null,
             directTransferPromptAssetAdapterRegistry: createPromptAssetAdapterRegistry(),
-            directTransferPromptRegistryRegistry: createPromptRegistryAdapterRegistry(),
+            directTransferRegistryHost: createCliRegistryHostV1(),
             connectedServiceRefreshLoopHandle: null,
             connectedServiceQuotasLoopHandle: null,
             daemonServerWorkScheduler: {} as never,
@@ -321,17 +338,14 @@ describe('bootstrapMachineSyncRuntime', () => {
                 features: createProviderServerFeatures(true),
             }),
             peerMediationMachineRpc: {
-                serverFeatures: createPeerMediationServerFeatures({
-                    rpcDirectPeerEnabled: false,
-                    tunnelDirectPeerEnabled: false,
-                    tunnelServerRoutedEnabled: false,
-                    liveStreamDirectPeerEnabled: false,
-                }),
+                accountId: 'account-token-only',
+                nowMs: () => 1_000,
             },
-        });
+        }));
 
         expect(result.apiMachine).toBe(connectedApiMachine);
         onTestFinished(() => retireMachineSyncRuntimeAttempt(result));
+        expect(featureRequests).toContain('/v1/features');
         expect(fakeConnectedApiMachine.connect).toHaveBeenCalledOnce();
         expect(startAutomationWorkerForMachine).toHaveBeenCalledWith(machine.id);
         expect(startMemoryWorkerForMachine).toHaveBeenCalledWith(machine.id);
@@ -609,7 +623,7 @@ describe('bootstrapMachineSyncRuntime', () => {
             requestShutdown: vi.fn(),
             directPeerServerLifecycle: null,
             directTransferPromptAssetAdapterRegistry: createPromptAssetAdapterRegistry(),
-            directTransferPromptRegistryRegistry: createPromptRegistryAdapterRegistry(),
+            directTransferRegistryHost: createCliRegistryHostV1(),
             connectedServiceRefreshLoopHandle: null,
             connectedServiceQuotasLoopHandle: null,
             daemonServerWorkScheduler: {} as never,
@@ -698,7 +712,7 @@ describe('bootstrapMachineSyncRuntime', () => {
             requestShutdown: vi.fn(),
             directPeerServerLifecycle: null,
             directTransferPromptAssetAdapterRegistry: createPromptAssetAdapterRegistry(),
-            directTransferPromptRegistryRegistry: createPromptRegistryAdapterRegistry(),
+            directTransferRegistryHost: createCliRegistryHostV1(),
             connectedServiceRefreshLoopHandle: null,
             connectedServiceQuotasLoopHandle: null,
             daemonServerWorkScheduler: {} as never,
@@ -748,7 +762,7 @@ describe('bootstrapMachineSyncRuntime', () => {
             requestShutdown: vi.fn(),
             directPeerServerLifecycle: null,
             directTransferPromptAssetAdapterRegistry: createPromptAssetAdapterRegistry(),
-            directTransferPromptRegistryRegistry: createPromptRegistryAdapterRegistry(),
+            directTransferRegistryHost: createCliRegistryHostV1(),
             connectedServiceRefreshLoopHandle: null,
             connectedServiceQuotasLoopHandle: null,
             daemonServerWorkScheduler: {} as never,
@@ -825,7 +839,7 @@ describe('bootstrapMachineSyncRuntime', () => {
             requestShutdown: vi.fn(),
             directPeerServerLifecycle: null,
             directTransferPromptAssetAdapterRegistry: createPromptAssetAdapterRegistry(),
-            directTransferPromptRegistryRegistry: createPromptRegistryAdapterRegistry(),
+            directTransferRegistryHost: createCliRegistryHostV1(),
             connectedServiceRefreshLoopHandle: null,
             connectedServiceQuotasLoopHandle: null,
             daemonServerWorkScheduler: {} as never,
@@ -953,7 +967,7 @@ describe('bootstrapMachineSyncRuntime', () => {
             requestShutdown: vi.fn(),
             directPeerServerLifecycle: null,
             directTransferPromptAssetAdapterRegistry: createPromptAssetAdapterRegistry(),
-            directTransferPromptRegistryRegistry: createPromptRegistryAdapterRegistry(),
+            directTransferRegistryHost: createCliRegistryHostV1(),
             connectedServiceRefreshLoopHandle: null,
             connectedServiceQuotasLoopHandle: null,
             daemonServerWorkScheduler: {} as never,
@@ -1124,7 +1138,7 @@ describe('bootstrapMachineSyncRuntime', () => {
             requestShutdown: vi.fn(),
             directPeerServerLifecycle: null,
             directTransferPromptAssetAdapterRegistry: createPromptAssetAdapterRegistry(),
-            directTransferPromptRegistryRegistry: createPromptRegistryAdapterRegistry(),
+            directTransferRegistryHost: createCliRegistryHostV1(),
             connectedServiceRefreshLoopHandle: null,
             connectedServiceQuotasLoopHandle: null,
             daemonServerWorkScheduler: {} as never,
@@ -1401,7 +1415,7 @@ describe('bootstrapMachineSyncRuntime', () => {
             requestShutdown: vi.fn(),
             directPeerServerLifecycle: null,
             directTransferPromptAssetAdapterRegistry: createPromptAssetAdapterRegistry(),
-            directTransferPromptRegistryRegistry: createPromptRegistryAdapterRegistry(),
+            directTransferRegistryHost: createCliRegistryHostV1(),
             connectedServiceRefreshLoopHandle: null,
             connectedServiceQuotasLoopHandle: null,
             daemonServerWorkScheduler: {} as never,
@@ -1601,7 +1615,7 @@ describe('bootstrapMachineSyncRuntime', () => {
             requestShutdown: vi.fn(),
             directPeerServerLifecycle: null,
             directTransferPromptAssetAdapterRegistry: createPromptAssetAdapterRegistry(),
-            directTransferPromptRegistryRegistry: createPromptRegistryAdapterRegistry(),
+            directTransferRegistryHost: createCliRegistryHostV1(),
             connectedServiceRefreshLoopHandle: null,
             connectedServiceQuotasLoopHandle: null,
             daemonServerWorkScheduler: {} as never,
@@ -1783,7 +1797,7 @@ describe('bootstrapMachineSyncRuntime', () => {
             requestShutdown: vi.fn(),
             directPeerServerLifecycle: null,
             directTransferPromptAssetAdapterRegistry: createPromptAssetAdapterRegistry(),
-            directTransferPromptRegistryRegistry: createPromptRegistryAdapterRegistry(),
+            directTransferRegistryHost: createCliRegistryHostV1(),
             connectedServiceRefreshLoopHandle: null,
             connectedServiceQuotasLoopHandle: null,
             daemonServerWorkScheduler: {} as never,
@@ -2030,7 +2044,7 @@ describe('bootstrapMachineSyncRuntime', () => {
             acquireLocalServicePreviewApplication: previewRoutes.acquireNativeApplication,
             acquireWorkspaceSyncMachineIngress,
             directTransferPromptAssetAdapterRegistry: createPromptAssetAdapterRegistry(),
-            directTransferPromptRegistryRegistry: createPromptRegistryAdapterRegistry(),
+            directTransferRegistryHost: createCliRegistryHostV1(),
             connectedServiceRefreshLoopHandle: null,
             connectedServiceQuotasLoopHandle: null,
             daemonServerWorkScheduler: {} as never,
@@ -2299,7 +2313,7 @@ describe('bootstrapMachineSyncRuntime', () => {
             directPeerServerLifecycle: null,
             machineIrohRuntime: loopbackStarts ? machineIrohRuntime : undefined,
             directTransferPromptAssetAdapterRegistry: createPromptAssetAdapterRegistry(),
-            directTransferPromptRegistryRegistry: createPromptRegistryAdapterRegistry(),
+            directTransferRegistryHost: createCliRegistryHostV1(),
             connectedServiceRefreshLoopHandle: null,
             connectedServiceQuotasLoopHandle: null,
             daemonServerWorkScheduler: {} as never,
@@ -2417,7 +2431,7 @@ describe('bootstrapMachineSyncRuntime', () => {
             requestShutdown: vi.fn(),
             directPeerServerLifecycle: null,
             directTransferPromptAssetAdapterRegistry: createPromptAssetAdapterRegistry(),
-            directTransferPromptRegistryRegistry: createPromptRegistryAdapterRegistry(),
+            directTransferRegistryHost: createCliRegistryHostV1(),
             connectedServiceRefreshLoopHandle: null,
             connectedServiceQuotasLoopHandle: null,
             daemonServerWorkScheduler: {} as never,
@@ -2510,7 +2524,7 @@ describe('bootstrapMachineSyncRuntime', () => {
             requestShutdown: vi.fn(),
             directPeerServerLifecycle: null,
             directTransferPromptAssetAdapterRegistry: createPromptAssetAdapterRegistry(),
-            directTransferPromptRegistryRegistry: createPromptRegistryAdapterRegistry(),
+            directTransferRegistryHost: createCliRegistryHostV1(),
             connectedServiceRefreshLoopHandle: null,
             connectedServiceQuotasLoopHandle: null,
             daemonServerWorkScheduler: {} as never,
@@ -2626,7 +2640,7 @@ describe('bootstrapMachineSyncRuntime', () => {
             requestShutdown: vi.fn(),
             directPeerServerLifecycle: null,
             directTransferPromptAssetAdapterRegistry: createPromptAssetAdapterRegistry(),
-            directTransferPromptRegistryRegistry: createPromptRegistryAdapterRegistry(),
+            directTransferRegistryHost: createCliRegistryHostV1(),
             connectedServiceRefreshLoopHandle: null,
             connectedServiceQuotasLoopHandle: null,
             daemonServerWorkScheduler: {} as never,

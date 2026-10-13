@@ -8,6 +8,7 @@ import type { CurrentMachineExecutionOriginContext } from '@/api/machine/resolve
 
 import type { ApiMachineClient } from '@/api/apiMachine';
 import type { MachineRpcHandlerDeps } from '@/api/machine/rpcHandlers';
+import type { RpcHandlerContext } from '@/api/rpc/types';
 import type { ReadinessProbeResult } from '@happier-dev/connection-supervisor';
 import type { CliUpdateFacts } from '@happier-dev/protocol';
 import type { DaemonState, Machine, MachineMetadata } from '@/api/types';
@@ -16,8 +17,9 @@ import type { SessionHandoffDirectPeerTransferHandle } from '@/api/machine/sessi
 import { createFileTransferPayloadSource } from '@/machines/transfer/transferPayloadSource';
 import type { DirectTransferServerLifecycle } from '@/machines/transfer/directTransferServerLifecycle';
 import type { PreparedFilesystemTransferScope } from '@/machines/transfer/preparedFilesystemTransferScope';
-import { resolvePromptAssetDownloadSource } from '@/transfers/targets/resolvePromptAssetDownloadSource';
-import { resolvePromptRegistryItemDownloadSource } from '@/transfers/targets/resolvePromptRegistryItemDownloadSource';
+import { resolveFoundSkillDownloadSource } from '@/prompts/skills/native/resolveFoundSkillDownloadSource';
+import { resolveRegistryItemDownloadSource } from '@/registries/registryTransferPayload';
+import { createCliRegistryHostV1 } from '@/registries/createCliRegistryHost';
 import { prepareWorkspaceFileExport } from '@/machines/transfer/prepareWorkspaceFileExport';
 import { prepareWorkspaceSyncSeedExport } from '@/machines/transfer/prepareWorkspaceSyncSeedExport';
 import { resolveComposerMediaStageDownloadSource } from '@/transfers/targets/resolveComposerMediaStageDownloadSource';
@@ -25,8 +27,6 @@ import { createActiveDaemonComposerMediaStageStore } from '@/transfers/staging/c
 import type {
   ComposerContentHandleV1,
   MachineLiveStreamControlLeaseV1,
-  PromptAssetReadRequest,
-  PromptRegistryFetchItemRequestV1,
 } from '@happier-dev/protocol';
 import { createProviderErrorV1 } from '@happier-dev/protocol/providers/errors';
 import {
@@ -65,7 +65,6 @@ import type { DaemonServerWorkScheduler } from '../serverWork';
 import { createDaemonConnectivityCoordinator } from '../connection/createDaemonConnectivityCoordinator';
 import type { ConnectedServiceQuotasLoopHandle } from '../connectedServices/quotas/startConnectedServiceQuotasLoop';
 import { logger } from '@/ui/logger';
-import type { PromptRegistryRegistry } from '@/prompts/registries/createPromptRegistryAdapterRegistry';
 import { createPromptAssetAdapterRegistry } from '@/prompts/assets/createPromptAssetAdapterRegistry';
 import type { FilesystemAccessPolicy } from '@/rpc/handlers/fileSystem/accessPolicy/filesystemAccessPolicy';
 import { bindPluginDaemonConnectionStateSource } from '@/agent/runtime/registry/pluginConnectionStateSource';
@@ -88,6 +87,8 @@ import { resolveAccountSettingsScopeKey } from '@/settings/accountSettings/accou
 import { createRuntimeProviderConnectionServices } from '@/providers/connections/runtimeServices';
 import type { ResolveSharedManagedProviderGatewayBinding } from '@/plugins/runtime/invocation/services/managedServicesAdapter';
 import { readCurrentManagedChildMachineMetadata, refreshMachineMetadataForCurrentDaemon } from './metadata';
+import { projectMachineAgentInventoryFromCliSnapshot } from '@/capabilities/snapshots/machineAgentInventory';
+import { detectCliSnapshotOnDaemonPath } from '@/capabilities/snapshots/cliSnapshot';
 import { resolveServerHttpBaseUrl } from '@/api/client/serverHttpBaseUrl';
 import { createLegacyProfileMigrationRpcServices } from '@/providers/migrations/rpc';
 import {
@@ -314,7 +315,7 @@ async function resolvePeerMediationMachineRpcServerFeatures(
     return config.serverFeatures;
   }
   const snapshot = await fetchServerFeaturesSnapshot({
-    serverUrl: configuration.serverUrl,
+    serverUrl: resolveServerHttpBaseUrl(),
     timeoutMs: PEER_MEDIATION_MACHINE_RPC_FEATURES_TIMEOUT_MS,
   });
   return snapshot.status === 'ready' ? snapshot.features : null;
@@ -678,7 +679,7 @@ export type BootstrapMachineSyncRuntimeParams = Readonly<{
     close(): Promise<void>;
   }>>;
   directTransferPromptAssetAdapterRegistry: ReturnType<typeof createPromptAssetAdapterRegistry>;
-  directTransferPromptRegistryRegistry: PromptRegistryRegistry;
+  directTransferRegistryHost: ReturnType<typeof createCliRegistryHostV1>;
   connectedServiceRefreshLoopHandle: ConnectedServiceRefreshLoopHandle | null;
   connectedServiceQuotasLoopHandle: ConnectedServiceQuotasLoopHandle | null;
   daemonServerWorkScheduler: DaemonServerWorkScheduler;
@@ -903,15 +904,14 @@ export async function bootstrapMachineSyncRuntime(
           input:
             | Readonly<{
                 t: 'prompt_asset_download_v1';
-                assetTypeId: string;
-                scope: PromptAssetReadRequest['scope'];
-                externalRef: PromptAssetReadRequest['externalRef'];
+                path: string;
               }>
             | Readonly<{
                 t: 'prompt_registry_download_v1';
+                kind: 'skill';
                 sourceId: string;
                 itemId: string;
-                configuredSources: PromptRegistryFetchItemRequestV1['configuredSources'];
+                version: string;
               }>
             | Readonly<{
                 t: 'workspace_file_download_v1';
@@ -937,6 +937,7 @@ export async function bootstrapMachineSyncRuntime(
                 maxBytes: number;
               }>,
           filesystemScope?: PreparedFilesystemTransferScope,
+          context?: RpcHandlerContext,
         ) => {
           if (input.t === 'workspace_file_download_v1') {
             return await prepareWorkspaceFileExport({ lifecycle: directPeerServerLifecycle,
@@ -967,21 +968,20 @@ export async function bootstrapMachineSyncRuntime(
           }
           const resolvedSource =
             input.t === 'prompt_asset_download_v1'
-              ? await resolvePromptAssetDownloadSource({
-                  adapterRegistry: params.directTransferPromptAssetAdapterRegistry,
-                  request: {
-                    assetTypeId: input.assetTypeId,
-                    scope: input.scope,
-                    externalRef: input.externalRef,
-                  },
+              ? await resolveFoundSkillDownloadSource({
+                  request: { path: input.path },
+                  ...(context ? { signal: context.signal } : {}),
                 })
               : input.t === 'prompt_registry_download_v1'
-                ? await resolvePromptRegistryItemDownloadSource({
-                    registry: params.directTransferPromptRegistryRegistry,
+                ? await resolveRegistryItemDownloadSource({
+                    host: context?.machineAdmission
+                      ? createCliRegistryHostV1({credentials:params.credentials,signal:context.signal,machineAdmission:context.machineAdmission})
+                      : params.directTransferRegistryHost,
                     request: {
+                      kind: input.kind,
                       sourceId: input.sourceId,
                       itemId: input.itemId,
-                      configuredSources: input.configuredSources,
+                      version: input.version,
                     },
                   })
                 : input.t === 'composer_media_stage_inspect_v1'
@@ -995,7 +995,9 @@ export async function bootstrapMachineSyncRuntime(
                       })
                   : { success: false as const, error: 'Unsupported direct transfer export request' };
           if (!resolvedSource.success) {
-            throw new Error(resolvedSource.error);
+            throw Object.assign(new Error(resolvedSource.error), {
+              ...('code' in resolvedSource ? { code: resolvedSource.code } : {}),
+            });
           }
           const sourceOffsetBytes = 'sourceOffsetBytes' in resolvedSource.source
             && typeof resolvedSource.source.sourceOffsetBytes === 'number'
@@ -1359,6 +1361,7 @@ export async function bootstrapMachineSyncRuntime(
           : {}),
       },
       {
+        createRegistryHost:(signal,context)=>createCliRegistryHostV1({credentials:params.credentials,signal,machineAdmission:context?.machineAdmission}),
         ...(params.sessionRunnerStatus ? { sessionRunnerStatus: params.sessionRunnerStatus } : {}),
         sessionPendingResetStartInstalled: pendingResetStartPorts !== null,
         npmRegistryProfiles: {
@@ -1964,6 +1967,8 @@ export async function bootstrapMachineSyncRuntime(
       const operation = (async () => {
         try {
           const cliUpdate = params.readCliUpdateFacts?.();
+          const cliSnapshot = await detectCliSnapshotOnDaemonPath({});
+          const agentInventoryCheckedAt = Date.now();
           let devcontainerChild: MachineMetadata['devcontainerChild'] | null = undefined;
           if (params.machine.metadata?.devcontainerChild && params.credentials) {
             const origin = await params.resolveCurrentMachineExecutionOriginContext?.();
@@ -1984,6 +1989,8 @@ export async function bootstrapMachineSyncRuntime(
               happyHomeDir: params.happyHomeDir,
               happyLibDir: params.happyLibDir,
               ...(cliUpdate ? { cliUpdate } : {}),
+              agentInventory: projectMachineAgentInventoryFromCliSnapshot({ snapshot: cliSnapshot,
+                checkedAt: agentInventoryCheckedAt, current: base.agentInventory }),
               ...(devcontainerChild !== undefined ? { devcontainerChild } : {}),
             });
           });
