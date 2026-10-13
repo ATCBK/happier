@@ -8,11 +8,6 @@ import { createWebViewFindEngine } from '../xterm/webview/findBridge';
 import { useTerminalFind } from './useTerminalFind';
 vi.mock('react-native', async () => (await import('@/dev/testkit/mocks/reactNative')).createReactNativeWebMock({ Platform: { OS: 'ios', select: <T,>(values: { ios?: T; native?: T; default?: T }) => values.ios ?? values.native ?? values.default } }));
 vi.mock('react-native-unistyles', async () => (await import('@/dev/testkit/mocks/unistyles')).createUnistylesMock());
-vi.mock('@/sync/domains/state/storage', async () => {
-    const { settingsDefaults } = await import('@/sync/domains/settings/settings');
-    const storage = Object.assign((selector: (value: { settings: typeof settingsDefaults }) => unknown) => selector({ settings: settingsDefaults }), { getState: () => ({ settings: settingsDefaults }) });
-    return (await import('@/dev/testkit/mocks/storage')).createStorageModuleStub({ storage });
-});
 vi.mock('@/modal', async () => (await import('@/dev/testkit/mocks/modal')).createModalModuleMock().module);
 describe('mounted terminal Find presentation', () => {
     it('routes Find only to the focused split and cannot address a hidden leaf', async () => {

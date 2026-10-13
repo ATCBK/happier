@@ -523,9 +523,9 @@ export const XtermTerminalView = React.forwardRef<XtermTerminalHandle, XtermTerm
         resizeObserver?.observe(container);
 
         return () => {
+            onFindEngineRef.current?.(null);
             find.dispose();
             findRef.current = null;
-            onFindEngineRef.current?.(null);
             dataDisposable.dispose();
             cursorDisposable.dispose();
             scrollDisposable.dispose();

@@ -8,16 +8,45 @@ import { usePluginSurfaceFocusEligibility } from '@/components/ui/presentation/P
 import { useFindSurfaceRegistration } from '@/keyboard/KeyboardShortcutProvider';
 import { t } from '@/text';
 import type { EmbeddedTerminalRendererHandle, FindEngine } from './embeddedTerminalRendererHandle';
+import { readTerminalSurfaceState, updateTerminalSurfaceState } from '@/components/sessions/terminal/terminalSurfaceStateCache';
 
 const NO_SUBSCRIPTION = () => () => {};
 /** Mount state subscribes only to open/close; query and counts stay local to the bar. */
-export function useTerminalFind(props: Readonly<{ title: string; focused?: boolean; findSurfaceId?: string; terminalRef: React.MutableRefObject<EmbeddedTerminalRendererHandle | null> }>, seatedInFlow: boolean) {
-    const [engine, onFindEngine] = React.useState<FindEngine | null>(null);
+export function useTerminalFind(props: Readonly<{ title: string; focused?: boolean; findSurfaceId?: string; nativeSurfaceKey?: string | null; terminalRef: React.MutableRefObject<EmbeddedTerminalRendererHandle | null> }>, seatedInFlow: boolean) {
+    const [engine, setEngine] = React.useState<FindEngine | null>(null);
+    const handoffSubscription = React.useRef<(() => void) | null>(null);
     const rootRef = React.useRef<View | null>(null);
     const inputRef = React.useRef<TextInput | null>(null);
     const [inputFocused, setInputFocused] = React.useState(false);
     const { capture, clear, restore } = useFindSurfaceFocusReturn();
     const eligible = usePluginSurfaceFocusEligibility() && props.focused !== false;
+    const eligibleRef = React.useRef(eligible); eligibleRef.current = eligible;
+    const onFindEngine = React.useCallback((next: FindEngine | null) => {
+        handoffSubscription.current?.(); handoffSubscription.current = null;
+        const key = props.nativeSurfaceKey;
+        if (next && key) {
+            const seed = readTerminalSurfaceState(key)?.find;
+            if (seed) {
+                next.setOptions(seed.options); next.setQuery(seed.query);
+                if (seed.open && eligibleRef.current) next.open();
+            }
+            const remember = () => {
+                const { open, query, options } = next.getSnapshot();
+                const saved = readTerminalSurfaceState(key)?.find;
+                if (saved?.open === open && saved.query === query
+                    && saved.options.regex === options.regex && saved.options.matchCase === options.matchCase) return;
+                updateTerminalSurfaceState(key, current => ({ ...current, find: { open, query, options } }));
+            };
+            handoffSubscription.current = next.subscribe(remember);
+            remember();
+        }
+        setEngine(next);
+    }, [props.nativeSurfaceKey]);
+    // Detach before the renderer's disposal closes its engine. A resize must
+    // hand off user intent, not the disposed renderer's final closed snapshot.
+    React.useLayoutEffect(() => () => {
+        handoffSubscription.current?.(); handoffSubscription.current = null;
+    }, []);
     const id = React.useId();
     const open = React.useSyncExternalStore(engine?.subscribe ?? NO_SUBSCRIPTION, () => engine?.getSnapshot().open ?? false, () => false);
     const close = React.useCallback(() => {

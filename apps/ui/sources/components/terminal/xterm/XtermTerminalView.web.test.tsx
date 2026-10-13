@@ -13,6 +13,7 @@ import type { XtermTerminalHandle } from './XtermTerminalView.web';
 import './XtermTerminalView.web';
 import { EmbeddedTerminalPane } from '../embedded/EmbeddedTerminalPane.web';
 import type { EmbeddedTerminalPaneController } from '../embedded/types';
+import { PluginSurfaceFocusEligibilityProvider } from '@/components/ui/presentation/PluginSurfaceFocusEligibility';
 
 (globalThis as typeof globalThis & { IS_REACT_ACT_ENVIRONMENT?: boolean }).IS_REACT_ACT_ENVIRONMENT = true;
 
@@ -175,11 +176,28 @@ vi.mock('@xterm/addon-webgl', () => ({
     WebglAddon: class {},
 }));
 
+// The external renderer boundary has no parsed xterm cells. Matching remains
+// in the real Find engine; this addon fixture only supplies the widget API.
+vi.mock('@xterm/addon-search', () => ({
+    SearchAddon: class {
+        activate() {}
+        onDidChangeResults() { return { dispose() {} }; }
+        findNext() { return false; }
+        findPrevious() { return false; }
+        clearDecorations() {}
+        dispose() {}
+    },
+}));
+
 vi.mock('@xterm/xterm/css/xterm.css', () => ({}));
 
 vi.mock('react-native', async () => {
     const { createReactNativeWebMock } = await import('@/dev/testkit/mocks/reactNative');
-    return createReactNativeWebMock();
+    // This is a DOM-composed test: RN's style arrays need its real web host
+    // conversion when the Find bar becomes visible, not string host stubs.
+    const web = await vi.importActual<typeof import('react-native')>('react-native-web');
+    return createReactNativeWebMock({ View: web.View, Text: web.Text, TextInput: web.TextInput,
+        Pressable: web.Pressable, ScrollView: web.ScrollView, Animated: web.Animated });
 });
 
 vi.mock('react-native-unistyles', async () => {
@@ -289,6 +307,48 @@ describe('XtermTerminalView.web', () => {
         onDataSpy('continued input');
         expect(nextInput).toHaveBeenCalledWith('continued input');
         expect(onInput).not.toHaveBeenCalled();
+    });
+
+    it('hands Find to the replacement phone renderer only for the same logical terminal surface', async () => {
+        const ref = React.createRef<XtermTerminalHandle>();
+        const controller: EmbeddedTerminalPaneController = {
+            status: 'connected', error: null, detectedUrl: null,
+            onInput: () => {}, onPaste: () => {}, onResize: () => {}, onReady: () => {},
+            onWriteComplete: () => {}, clearTerminal: () => {}, requestRestart: () => {},
+            retryConnect: () => {}, dismissDetectedUrl: () => {},
+        };
+        const pane = (mount: string, surface: string, phone: boolean) => <PluginSurfaceFocusEligibilityProvider active><EmbeddedTerminalPane key={mount}
+            title="Shell" nativeSurfaceKey={surface} controller={controller} terminalRef={ref}
+            chrome="none" showQuickKeys={phone} focused testIdPrefix="handoff-terminal" /></PluginSurfaceFocusEligibilityProvider>;
+        await act(async () => {
+            root.render(pane('classic', 'resize-terminal', false));
+            await vi.dynamicImportSettled();
+        });
+        const oldEngine = requireTerminalHandle(ref).find;
+        await act(async () => {
+            oldEngine?.setQuery('amber orchard');
+            oldEngine?.setOptions({ regex: false, matchCase: true });
+            oldEngine?.open();
+        });
+        await act(async () => {
+            root.render(pane('cockpit', 'resize-terminal', true));
+            await vi.dynamicImportSettled();
+        });
+        const replacement = requireTerminalHandle(ref).find;
+        expect(replacement).not.toBe(oldEngine);
+        expect(replacement?.getSnapshot()).toMatchObject({ open: true, query: 'amber orchard',
+            options: { regex: false, matchCase: true } });
+        await act(async () => {
+            replacement?.close();
+            root.render(pane('classic-again', 'resize-terminal', false));
+            await vi.dynamicImportSettled();
+        });
+        expect(requireTerminalHandle(ref).find?.getSnapshot()).toMatchObject({ open: false, query: 'amber orchard' });
+        await act(async () => {
+            root.render(pane('other', 'another-terminal', true));
+            await vi.dynamicImportSettled();
+        });
+        expect(requireTerminalHandle(ref).find?.getSnapshot()).toMatchObject({ open: false, query: '' });
     });
 
     it('allows the content material to clear the terminal background without fading foreground text', async () => {

@@ -201,9 +201,9 @@ export const XtermWebViewSurface = React.forwardRef<XtermWebViewSurfaceHandle, X
         }));
         const onFindEngineRef = React.useRef(props.onFindEngine); onFindEngineRef.current = props.onFindEngine;
         React.useEffect(() => {
-            findBridge.retire();
             onFindEngineRef.current?.(null);
-            return () => { findBridge.retire(); onFindEngineRef.current?.(null); };
+            findBridge.retire();
+            return () => { onFindEngineRef.current?.(null); findBridge.retire(); };
         }, [findBridge, html, reloadNonce]);
         React.useEffect(() => {
             if (readyRef.current) postEnvelope({ v: 1, type: 'find.keybindings', payload: { signatures: findKeyboard.signatures } });
@@ -271,8 +271,8 @@ export const XtermWebViewSurface = React.forwardRef<XtermWebViewSurfaceHandle, X
                 return;
             }
             readyRef.current = false;
-            findBridge.retire();
             onFindEngineRef.current?.(null);
+            findBridge.retire();
             clearBootReadyTimeout();
             if (bootRetryCountRef.current < XTERM_WEBVIEW_BOOT_RETRY_LIMIT) {
                 bootRetryCountRef.current += 1;
