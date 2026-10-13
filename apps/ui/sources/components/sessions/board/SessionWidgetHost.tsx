@@ -45,6 +45,7 @@ import { publishPresentationNotice } from '@/components/sessions/presentation/pr
 import { WidgetSnapshotCaptureContext } from '@/components/widgets/definitions/widgetSnapshotCapture';
 import type { WidgetSetupSubmitResult } from '@/components/widgets/add/widgetSetupModel';
 import { useWidgetFrameRename } from '@/components/widgets/frame/useWidgetFrameRename';
+import { WIDGET_MENU_MAX_HEIGHT_PX } from '@/components/widgets/frame/widgetFrameMenu';
 import { readWidgetDescriptor } from '@/components/widgets/widgetCatalog';
 import { resolveWidgetSizeChoicesV1, canPromoteSessionWidgetDefinitionSourceV1, projectWidgetDefinitionPromotionBindingsV1, type WidgetInputBindingsV1, type WidgetSizeV1 } from '@happier-dev/protocol/widgets';
 import { renderWidgetSizeMenuSection, stepWidgetSizeControl, type WidgetSizeControl } from '@/components/widgets/frame/WidgetSizeControl';
@@ -794,6 +795,7 @@ export function SessionWidgetHost(props: SessionWidgetHostProps): React.ReactEle
                     overflowTriggerAccessibilityLabel={t('common.moreActions')}
                     onOverflowTriggerKeyDown={key => stepWidgetSizeControl(sizeControl, key)}
                     renderOverflowSection={({ id }) => renderWidgetSizeMenuSection(sizeControl, id, `${testID}.size`)}
+                    overflowMaxHeightCap={WIDGET_MENU_MAX_HEIGHT_PX}
                     iconSize={18}
                     gap={8}
                 />
