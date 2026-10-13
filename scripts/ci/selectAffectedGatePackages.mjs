@@ -9,6 +9,15 @@ import {
 
 const gatePackages = ['cli', 'plugins', 'protocol', 'server', 'ui'];
 
+export function resolveGatePackageForWorkspaceDirectory(directory) {
+  if (directory.startsWith('packages/plugins/')) return 'plugins';
+  if (directory === 'packages/protocol') return 'protocol';
+  if (directory === 'apps/cli') return 'cli';
+  if (directory === 'apps/ui') return 'ui';
+  if (directory === 'apps/server') return 'server';
+  return null;
+}
+
 export async function selectAffectedGatePackages({ rootDir = process.cwd(), changedPaths }) {
   const paths = await collectWorkspacePackageJsonPaths(rootDir);
   const workspaces = await Promise.all(paths.map(async (path) => ({
@@ -49,11 +58,8 @@ export async function selectAffectedGatePackages({ rootDir = process.cwd(), chan
   }
   for (const { directory, manifest } of workspaces) {
     if (!affected.has(manifest.name)) continue;
-    if (directory.startsWith('packages/plugins/')) selected.add('plugins');
-    else if (directory === 'packages/protocol') selected.add('protocol');
-    else if (directory === 'apps/cli') selected.add('cli');
-    else if (directory === 'apps/ui') selected.add('ui');
-    else if (directory === 'apps/server') selected.add('server');
+    const gatePackage = resolveGatePackageForWorkspaceDirectory(directory);
+    if (gatePackage) selected.add(gatePackage);
   }
   return [...selected].sort();
 }
@@ -65,15 +71,13 @@ if (process.argv[1] && pathToFileURL(resolve(process.argv[1])).href === import.m
   const packages = await selectAffectedGatePackages({ changedPaths });
   if (process.env.GITHUB_OUTPUT) {
     const serverDbContract = changedPaths.some((path) => path.startsWith('apps/server/prisma/'));
-    // Four UI ranges retain all canonical sub-shards. Group the other suites
-    // while CLI keeps its native preparation, within the temporary 10-job cap.
-    // P3 still owns duration validation against GitHub's execution window.
-    const groupedPackages = packages.filter((packageName) => packageName !== 'cli' && packageName !== 'ui');
+    // Eight disjoint UI ranges reduce per-job retention and share preparation.
+    // Host suites retain their existing grouped runner and terminal verdict.
+    const groupedPackages = packages.filter((packageName) => packageName !== 'ui');
     const unitMatrix = { include: [
-      ...(packages.includes('cli') ? [{ package: 'cli', packages: ['cli'], part: 1, parts: 1 }] : []),
       ...(groupedPackages.length ? [{ package: 'group', packages: groupedPackages, part: 1, parts: 1 }] : []),
-      ...(packages.includes('ui') ? Array.from({ length: 4 }, (_, index) => ({
-        package: 'ui', packages: ['ui'], part: index + 1, parts: 4,
+      ...(packages.includes('ui') ? Array.from({ length: 8 }, (_, index) => ({
+        package: 'ui', packages: ['ui'], part: index + 1, parts: 8,
       })) : []),
     ] };
     await appendFile(process.env.GITHUB_OUTPUT,
