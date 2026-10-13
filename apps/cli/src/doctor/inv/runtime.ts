@@ -1,5 +1,7 @@
 import { readDaemonStatusSnapshot } from '@/daemon/statusSnapshot';
 import { readSettings, readStoredCredentials } from '@/persistence';
+import { daemonPost } from '@/daemon/controlHttp';
+import { DoctorSnapshotResourceVitalsSchema, type DoctorSnapshotResourceVitals } from '@happier-dev/protocol/diagnostics/doctorSnapshot';
 
 import { readDoctorInstallations } from './installs';
 import { readDoctorRelays } from './relays';
@@ -14,6 +16,7 @@ export type DoctorRuntimeInventory = Readonly<{
   services: Awaited<ReturnType<typeof readDoctorServices>>;
   warnings: Awaited<ReturnType<typeof readDoctorWarnings>>;
   localRelays: Awaited<ReturnType<typeof readDoctorRelays>>;
+  resourceVitals?: DoctorSnapshotResourceVitals;
 }>;
 
 export async function readDoctorRuntimeInventory(): Promise<DoctorRuntimeInventory> {
@@ -29,6 +32,8 @@ export async function readDoctorRuntimeInventory(): Promise<DoctorRuntimeInvento
   const warnings = await readDoctorWarnings({
     ...(daemonStatus ? { daemonStatus } : {}),
   });
+  const resourceVitals = daemonStatus?.daemon.running
+    ? DoctorSnapshotResourceVitalsSchema.safeParse(await daemonPost('/doctor/vitals', {})) : null;
 
   return {
     settings,
@@ -38,5 +43,6 @@ export async function readDoctorRuntimeInventory(): Promise<DoctorRuntimeInvento
     services,
     warnings,
     localRelays,
+    ...(resourceVitals?.success ? { resourceVitals: resourceVitals.data } : {}),
   };
 }

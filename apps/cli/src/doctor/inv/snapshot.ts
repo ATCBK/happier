@@ -254,6 +254,7 @@ export function buildDoctorSnapshotFromInventory(params: Readonly<{
     serviceHealth: buildServiceHealth({ daemonStatus, report: doctorRepairReport }),
     warnings: [...warnings],
     ...(daemonStatus ? { daemonStatus } : {}),
+    ...(params.inventory.resourceVitals ? { resourceVitals: params.inventory.resourceVitals } : {}),
   };
 
   const parsed = DoctorSnapshotSchema.safeParse(candidate);
@@ -276,6 +277,7 @@ export function buildDoctorSnapshotFromInventory(params: Readonly<{
       serviceHealth: candidate.serviceHealth,
       warnings: candidate.warnings,
       ...(candidate.daemonStatus ? { daemonStatus: candidate.daemonStatus } : {}),
+      ...(candidate.resourceVitals ? { resourceVitals: candidate.resourceVitals } : {}),
     });
   }
 
